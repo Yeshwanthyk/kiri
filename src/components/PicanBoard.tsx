@@ -17,6 +17,9 @@ import {
   Circle,
   Command,
   Copy,
+  Eye,
+  EyeOff,
+  FolderOpen,
   GitPullRequest,
   ImagePlus,
   Maximize2,
@@ -46,17 +49,29 @@ import type {
 } from '~/lib/contracts'
 import { thinkingLevelSchema } from '~/lib/contracts'
 import {
+  applyPicanTheme,
+  defaultThemeSelection,
+  normalizeThemeSelection,
+  picanThemeNames,
+  type PicanThemeName,
+  type ThemeMode,
+  type ThemeSelection,
+} from '~/theme/pican-themes'
+import {
   addProjectMutation,
+  chooseProjectDirectoryMutation,
   deleteProjectMutation,
   deleteSessionMutation,
   fetchWorkspaceSnapshot,
   forkSessionMutation,
+  hideProjectMutation,
   interruptMessageMutation,
   resetSessionMutation,
   sendMessageMutation,
   setThinkingLevelMutation,
   startSessionMutation,
   steerMessageMutation,
+  unhideProjectMutation,
 } from '~/server/workspace'
 
 type SidebarTab = 'chat' | 'diffs'
@@ -114,6 +129,8 @@ type CommandPaletteAction = {
   run: () => void
 }
 
+const sessionThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
+
 const defaultKeymap: KeymapSettings = {
   projectPrev: 'k',
   projectNext: 'j',
@@ -140,6 +157,7 @@ const keyOptions = [
   'arrowright',
 ]
 const keymapStorageKey = 'pican:keymap:v1'
+const themeStorageKey = 'pican:theme:v1'
 
 export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [workspace, setWorkspace] = React.useState(snapshot)
@@ -147,15 +165,20 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [tab, setTab] = React.useState<SidebarTab>('chat')
   const [hydrated, setHydrated] = React.useState(false)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [projectManagerOpen, setProjectManagerOpen] = React.useState(false)
   const [sessionLauncherOpen, setSessionLauncherOpen] = React.useState(false)
+  const [agentSwitcherOpen, setAgentSwitcherOpen] = React.useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
   const [keymap, setKeymap] = React.useState<KeymapSettings>(defaultKeymap)
+  const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(defaultThemeSelection)
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
   const [chatDrafts, setChatDrafts] = React.useState<Record<string, string>>({})
   const addProject = useServerFn(addProjectMutation)
+  const chooseProjectDirectory = useServerFn(chooseProjectDirectoryMutation)
   const deleteProject = useServerFn(deleteProjectMutation)
   const deleteSession = useServerFn(deleteSessionMutation)
   const forkSession = useServerFn(forkSessionMutation)
+  const hideProject = useServerFn(hideProjectMutation)
   const refreshWorkspace = useServerFn(fetchWorkspaceSnapshot)
   const resetSession = useServerFn(resetSessionMutation)
   const sendMessage = useServerFn(sendMessageMutation)
@@ -163,6 +186,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const steerMessage = useServerFn(steerMessageMutation)
   const interruptMessage = useServerFn(interruptMessageMutation)
   const startSession = useServerFn(startSessionMutation)
+  const unhideProject = useServerFn(unhideProjectMutation)
 
   const selectedProject =
     workspace.projects.find((project) => project.id === selection.projectId) ??
@@ -186,7 +210,12 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   React.useEffect(() => {
     setHydrated(true)
     setKeymap(readStoredKeymap())
+    setThemeSelection(readStoredThemeSelection())
   }, [])
+
+  React.useEffect(() => {
+    applyPicanTheme(document.documentElement, themeSelection)
+  }, [themeSelection])
 
   React.useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -195,17 +224,19 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         event.preventDefault()
         setSettingsOpen(false)
         setSessionLauncherOpen(false)
+        setAgentSwitcherOpen(false)
         setCommandPaletteOpen((open) => !open)
         return
       }
 
-      if (event.key === 'Escape' && commandPaletteOpen) {
+      if (event.key === 'Escape' && (commandPaletteOpen || agentSwitcherOpen)) {
         event.preventDefault()
         setCommandPaletteOpen(false)
+        setAgentSwitcherOpen(false)
         return
       }
 
-      if (commandPaletteOpen || !event.shiftKey || isEditableTarget(event.target)) return
+      if (commandPaletteOpen || agentSwitcherOpen || !event.shiftKey || isEditableTarget(event.target)) return
 
       const action = actionForKey(keymap, key)
       if (!action) return
@@ -214,6 +245,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       if (action === 'focusChat') {
         setSettingsOpen(false)
         setSessionLauncherOpen(false)
+        setAgentSwitcherOpen(false)
         setCommandPaletteOpen(false)
         setTab('chat')
         setChatFocusRequest((request) => request + 1)
@@ -227,6 +259,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
       if (action === 'startSession') {
         setSettingsOpen(false)
+        setAgentSwitcherOpen(false)
         setCommandPaletteOpen(false)
         setSessionLauncherOpen(true)
         return
@@ -263,16 +296,35 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [commandPaletteOpen, keymap, workspace.projects])
+  }, [agentSwitcherOpen, commandPaletteOpen, keymap, workspace.projects])
 
   async function handleAddProject(input: { id?: string; name: string; cwd: string }) {
     const next = await addProject({ data: input })
     setWorkspace(next)
+    const project = next.projects.find((item) => item.cwd === input.cwd) ?? next.projects.at(-1)
+    if (project) setSelection({ projectId: project.id, agentId: project.agents[0]?.id ?? '' })
   }
 
   async function handleDeleteProject(projectId: string) {
     const next = await deleteProject({ data: { id: projectId } })
     setWorkspace(next)
+  }
+
+  async function handleHideProject(projectId: string) {
+    const next = await hideProject({ data: { id: projectId } })
+    setWorkspace(next)
+    if (selection.projectId === projectId) setSelection(next.selected)
+  }
+
+  async function handleUnhideProject(projectId: string) {
+    const next = await unhideProject({ data: { id: projectId } })
+    setWorkspace(next)
+    const project = next.projects.find((item) => item.id === projectId)
+    if (project) setSelection({ projectId: project.id, agentId: project.agents[0]?.id ?? '' })
+  }
+
+  async function handleChooseProjectDirectory() {
+    return chooseProjectDirectory()
   }
 
   async function handleDeleteSession(agentId: string) {
@@ -373,6 +425,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     runtime: RuntimeKind
     model?: string
     title?: string
+    thinkingLevel: ThinkingLevel
   }) {
     const next = await startSession({ data: input })
     setWorkspace(next)
@@ -385,7 +438,25 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       setChatFocusRequest(0)
       setSelection({ projectId: project.id, agentId: agent.id })
     }
+    setAgentSwitcherOpen(false)
     setSessionLauncherOpen(false)
+  }
+
+  function selectAgent(projectId: string, agentId: string) {
+    setChatFocusRequest(0)
+    setSelection({ projectId, agentId })
+    setAgentSwitcherOpen(false)
+  }
+
+  function openSessionLauncher(projectId = selectedProject?.id) {
+    const project = workspace.projects.find((item) => item.id === projectId)
+    if (project) {
+      setSelection({ projectId: project.id, agentId: project.agents[0]?.id ?? '' })
+    }
+    setSettingsOpen(false)
+    setCommandPaletteOpen(false)
+    setAgentSwitcherOpen(false)
+    setSessionLauncherOpen(true)
   }
 
   const commandActions = React.useMemo(
@@ -396,11 +467,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         detail: selectedProject?.name ?? 'Current project',
         icon: Plus,
         disabled: false,
-        run: () => {
-          setSettingsOpen(false)
-          setCommandPaletteOpen(false)
-          setSessionLauncherOpen(true)
-        },
+        run: () => openSessionLauncher(),
       },
       {
         id: 'end-session',
@@ -417,27 +484,54 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       {
         id: 'settings',
         title: 'Open settings',
-        detail: 'Keymaps and projects',
+        detail: 'Keymaps and theme',
         icon: Settings2,
         disabled: false,
         run: () => {
           setSessionLauncherOpen(false)
+          setAgentSwitcherOpen(false)
           setCommandPaletteOpen(false)
+          setProjectManagerOpen(false)
           setSettingsOpen(true)
         },
       },
       {
         id: 'add-project',
         title: 'Add project',
-        detail: 'Project settings',
-        icon: Plus,
+        detail: 'Choose or paste a directory',
+        icon: FolderOpen,
         disabled: false,
         run: () => {
           setSessionLauncherOpen(false)
+          setAgentSwitcherOpen(false)
           setCommandPaletteOpen(false)
-          setSettingsOpen(true)
+          setSettingsOpen(false)
+          setProjectManagerOpen(true)
         },
       },
+      {
+        id: 'hide-project',
+        title: `Hide ${selectedProject?.name ?? 'current project'}`,
+        detail: 'Keep sessions, remove from board',
+        icon: EyeOff,
+        disabled: workspace.projects.length <= 1,
+        run: () => {
+          if (!selectedProject) return
+          setCommandPaletteOpen(false)
+          void handleHideProject(selectedProject.id)
+        },
+      },
+      ...workspace.hiddenProjects.map((project) => ({
+        id: `unhide-project-${project.id}`,
+        title: `Unhide ${project.name}`,
+        detail: 'Hidden project',
+        icon: Eye,
+        disabled: false,
+        run: () => {
+          setCommandPaletteOpen(false)
+          void handleUnhideProject(project.id)
+        },
+      })),
       ...workspace.projects.map((project) => ({
 
         id: `delete-project-${project.id}`,
@@ -461,6 +555,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
             const agentId = project.agents[0]?.id ?? ''
             setChatFocusRequest(0)
             setSelection({ projectId: project.id, agentId })
+            setAgentSwitcherOpen(false)
             setCommandPaletteOpen(false)
           },
         },
@@ -473,12 +568,13 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           run: () => {
             setChatFocusRequest(0)
             setSelection({ projectId: project.id, agentId: agent.id })
+            setAgentSwitcherOpen(false)
             setCommandPaletteOpen(false)
           },
         })),
       ]),
     ],
-    [selectedAgent, selectedProject, workspace.projects],
+    [selectedAgent, selectedProject, workspace.hiddenProjects, workspace.projects],
   )
 
   if (!selectedProject) {
@@ -488,14 +584,13 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   if (settingsOpen) {
     return (
       <SettingsScreen
-        workspace={workspace}
         keymap={keymap}
+        themeSelection={themeSelection}
         onKeymapChange={(action, value) =>
           setKeymap((current) => updateKeymap(current, action, value))
         }
         onKeymapReset={() => setKeymap(saveKeymap(defaultKeymap))}
-        onAddProject={handleAddProject}
-        onDeleteProject={handleDeleteProject}
+        onThemeChange={(next) => setThemeSelection(saveThemeSelection(next))}
         onClose={() => setSettingsOpen(false)}
       />
     )
@@ -503,6 +598,68 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
   return (
     <main className="pican-shell">
+      <MobileTopBar
+        project={selectedProject}
+        agent={selectedAgent}
+        tab={tab}
+        onTabChange={setTab}
+        onOpenAgentSwitcher={() => setAgentSwitcherOpen(true)}
+        onStartSession={() => openSessionLauncher()}
+        onOpenProjects={() => {
+          setSessionLauncherOpen(false)
+          setAgentSwitcherOpen(false)
+          setCommandPaletteOpen(false)
+          setSettingsOpen(false)
+          setProjectManagerOpen(true)
+        }}
+        onOpenSettings={() => {
+          setSessionLauncherOpen(false)
+          setAgentSwitcherOpen(false)
+          setCommandPaletteOpen(false)
+          setProjectManagerOpen(false)
+          setSettingsOpen(true)
+        }}
+      />
+
+      {commandPaletteOpen ? (
+        <CommandPalette
+          actions={commandActions}
+          onClose={() => setCommandPaletteOpen(false)}
+        />
+      ) : null}
+
+      {agentSwitcherOpen ? (
+        <AgentSwitcherSheet
+          projects={workspace.projects}
+          selectedProjectId={selection.projectId}
+          selectedAgentId={selection.agentId}
+          onSelectAgent={selectAgent}
+          onStartSession={openSessionLauncher}
+          onClose={() => setAgentSwitcherOpen(false)}
+        />
+      ) : null}
+
+      {sessionLauncherOpen ? (
+        <InlineSessionLauncher
+          project={selectedProject}
+          settings={workspace.settings}
+          onStartSession={handleStartSession}
+          onCancel={() => setSessionLauncherOpen(false)}
+        />
+      ) : null}
+
+      {projectManagerOpen ? (
+        <ProjectManagerDialog
+          projects={workspace.projects}
+          hiddenProjects={workspace.hiddenProjects}
+          onAdd={handleAddProject}
+          onChooseDirectory={handleChooseProjectDirectory}
+          onHide={handleHideProject}
+          onUnhide={handleUnhideProject}
+          onClose={() => setProjectManagerOpen(false)}
+        />
+      ) : null}
+
       <section
         className="board-pane"
         aria-label="Projects and agents"
@@ -511,32 +668,33 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       >
         <header className="topbar">
           <h1 className="pican-mark">PICAN</h1>
-          <button
-            type="button"
-            className="settings-trigger"
-            aria-expanded={settingsOpen}
-            onClick={() => setSettingsOpen((open) => !open)}
-          >
-            <Settings2 size={14} />
-            Settings
-          </button>
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className="settings-trigger"
+              aria-expanded={projectManagerOpen}
+              onClick={() => {
+                setSettingsOpen(false)
+                setProjectManagerOpen((open) => !open)
+              }}
+            >
+              <FolderOpen size={14} />
+              Projects
+            </button>
+            <button
+              type="button"
+              className="settings-trigger"
+              aria-expanded={settingsOpen}
+              onClick={() => {
+                setProjectManagerOpen(false)
+                setSettingsOpen((open) => !open)
+              }}
+            >
+              <Settings2 size={14} />
+              Settings
+            </button>
+          </div>
         </header>
-
-        {commandPaletteOpen ? (
-          <CommandPalette
-            actions={commandActions}
-            onClose={() => setCommandPaletteOpen(false)}
-          />
-        ) : null}
-
-        {sessionLauncherOpen ? (
-          <InlineSessionLauncher
-            project={selectedProject}
-            settings={workspace.settings}
-            onStartSession={handleStartSession}
-            onCancel={() => setSessionLauncherOpen(false)}
-          />
-        ) : null}
 
         <div className="board-grid">
           {workspace.projects.map((project) => (
@@ -604,7 +762,13 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
                 onForkSession={handleForkSession}
               />
             ) : null}
-            {tab === 'diffs' ? <DiffPanel key={selectedAgent.id} agent={selectedAgent} /> : null}
+            {tab === 'diffs' ? (
+              <DiffPanel
+                key={selectedAgent.id}
+                agent={selectedAgent}
+                themeMode={themeSelection.mode}
+              />
+            ) : null}
           </>
         ) : (
           <EmptySessionPanel
@@ -618,20 +782,18 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 }
 
 function SettingsScreen({
-  workspace,
   keymap,
+  themeSelection,
   onKeymapChange,
   onKeymapReset,
-  onAddProject,
-  onDeleteProject,
+  onThemeChange,
   onClose,
 }: {
-  workspace: WorkspaceSnapshot
   keymap: KeymapSettings
+  themeSelection: ThemeSelection
   onKeymapChange: (action: KeymapAction, value: string) => void
   onKeymapReset: () => void
-  onAddProject: (input: { id?: string; name: string; cwd: string }) => Promise<void>
-  onDeleteProject: (projectId: string) => Promise<void>
+  onThemeChange: (selection: ThemeSelection) => void
   onClose: () => void
 }) {
   return (
@@ -648,7 +810,7 @@ function SettingsScreen({
           <p className="settings-kicker">Settings</p>
           <h2>Workspace controls</h2>
         </div>
-        <p>Keymaps and project rows stay here. Session work stays on the board.</p>
+        <p>Keymaps and theme stay here. Project rows are managed from the board.</p>
       </section>
 
       <div className="settings-layout">
@@ -661,11 +823,7 @@ function SettingsScreen({
         </section>
 
         <section className="settings-section">
-          <ProjectSettingsPanel
-            projects={workspace.projects}
-            onAdd={onAddProject}
-            onDelete={onDeleteProject}
-          />
+          <ThemeSettingsPanel selection={themeSelection} onChange={onThemeChange} />
         </section>
       </div>
     </main>
@@ -685,12 +843,14 @@ function InlineSessionLauncher({
     runtime: RuntimeKind
     model?: string
     title?: string
+    thinkingLevel: ThinkingLevel
   }) => Promise<void>
   onCancel: () => void
 }) {
   const [runtime, setRuntime] = React.useState<RuntimeKind>('pi')
   const [model, setModel] = React.useState(settings.runtimes.pi.defaultModel)
   const [title, setTitle] = React.useState('')
+  const [thinkingLevel, setThinkingLevel] = React.useState<ThinkingLevel>('medium')
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const titleRef = React.useRef<HTMLInputElement>(null)
@@ -716,6 +876,7 @@ function InlineSessionLauncher({
         runtime,
         model,
         title: title || undefined,
+        thinkingLevel,
       })
       setTitle('')
     } catch (cause) {
@@ -801,6 +962,21 @@ function InlineSessionLauncher({
               ))}
             </select>
           </label>
+          <label>
+            <span>Thinking</span>
+            <select
+              value={thinkingLevel}
+              disabled={pending || (runtime !== 'pi' && runtime !== 'codex')}
+              data-testid="session-thinking-level"
+              onChange={(event) => setThinkingLevel(event.currentTarget.value as ThinkingLevel)}
+            >
+              {sessionThinkingLevels.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
         <div className="session-dialog-actions">
@@ -815,20 +991,33 @@ function InlineSessionLauncher({
   )
 }
 
-function ProjectSettingsPanel({
+function ProjectManagerDialog({
   projects,
+  hiddenProjects,
   onAdd,
-  onDelete,
+  onChooseDirectory,
+  onHide,
+  onUnhide,
+  onClose,
 }: {
   projects: ProjectRow[]
+  hiddenProjects: ProjectRow[]
   onAdd: (input: { id?: string; name: string; cwd: string }) => Promise<void>
-  onDelete: (projectId: string) => Promise<void>
+  onChooseDirectory: () => Promise<string>
+  onHide: (projectId: string) => Promise<void>
+  onUnhide: (projectId: string) => Promise<void>
+  onClose: () => void
 }) {
   const [id, setId] = React.useState('')
   const [name, setName] = React.useState('')
   const [cwd, setCwd] = React.useState('')
+  const [showHidden, setShowHidden] = React.useState(hiddenProjects.length > 0)
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    if (hiddenProjects.length > 0) setShowHidden(true)
+  }, [hiddenProjects.length])
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -846,11 +1035,37 @@ function ProjectSettingsPanel({
     }
   }
 
-  async function removeProject(projectId: string) {
+  async function chooseDirectory() {
     setPending(true)
     setError(null)
     try {
-      await onDelete(projectId)
+      const nextCwd = await onChooseDirectory()
+      setCwd(nextCwd)
+      setName((current) => current || projectNameFromPath(nextCwd))
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  async function hide(projectId: string) {
+    setPending(true)
+    setError(null)
+    try {
+      await onHide(projectId)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  async function unhide(projectId: string) {
+    setPending(true)
+    setError(null)
+    try {
+      await onUnhide(projectId)
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {
@@ -859,69 +1074,171 @@ function ProjectSettingsPanel({
   }
 
   return (
-    <section className="project-settings" aria-label="Project settings">
-      <div className="project-settings-head">
-        <div>
-          <p className="settings-kicker">Projects</p>
-          <strong>Manage board rows</strong>
-        </div>
-        <span>{projects.length} total</span>
-      </div>
-      {error ? <span className="settings-error" role="status">{error}</span> : null}
-      <form className="project-add-form" onSubmit={submit}>
-        <label>
-          <span>Name</span>
-          <input
-            value={name}
-            onChange={(event) => setName(event.currentTarget.value)}
-            placeholder="Project name"
-            required
-            data-testid="project-name-input"
-          />
-        </label>
-        <label>
-          <span>Cwd</span>
-          <input
-            value={cwd}
-            onChange={(event) => setCwd(event.currentTarget.value)}
-            placeholder="/absolute/path"
-            required
-            data-testid="project-cwd-input"
-          />
-        </label>
-        <label>
-          <span>Id</span>
-          <input
-            value={id}
-            onChange={(event) => setId(event.currentTarget.value)}
-            placeholder="optional"
-            data-testid="project-id-input"
-          />
-        </label>
-        <button type="submit" disabled={pending}>
-          <Plus size={14} />
-          Add
-        </button>
-      </form>
-      <div className="project-list" data-testid="project-settings-list">
-        {projects.map((project) => (
-          <div key={project.id} className="project-settings-row">
-            <div>
-              <strong>{project.name}</strong>
-              <span>{project.id}</span>
-              <small>{project.cwd}</small>
-            </div>
-            <button
-              type="button"
-              disabled={pending || projects.length <= 1}
-              onClick={() => removeProject(project.id)}
-              aria-label={`Delete ${project.name}`}
-            >
-              <Trash2 size={14} />
-            </button>
+    <div className="project-manager-overlay" role="dialog" aria-modal="true">
+      <section className="project-settings project-manager" aria-label="Project manager">
+        <div className="project-manager-head">
+          <div>
+            <h2>Projects</h2>
+            <p>Add, hide, and restore board rows.</p>
           </div>
-        ))}
+          <button type="button" className="settings-close" onClick={onClose}>
+            Done
+          </button>
+        </div>
+        {error ? <span className="settings-error" role="status">{error}</span> : null}
+        <form className="project-add-form" onSubmit={submit}>
+          <label className="project-name-field">
+            <span>Name</span>
+            <input
+              value={name}
+              onChange={(event) => setName(event.currentTarget.value)}
+              placeholder="Project name"
+              required
+              data-testid="project-name-input"
+            />
+          </label>
+          <label className="project-cwd-field">
+            <span>Directory</span>
+            <input
+              value={cwd}
+              onChange={(event) => setCwd(event.currentTarget.value)}
+              placeholder="/absolute/path"
+              required
+              data-testid="project-cwd-input"
+            />
+          </label>
+          <button
+            type="button"
+            className="project-folder-button"
+            disabled={pending}
+            onClick={chooseDirectory}
+          >
+            <FolderOpen size={14} />
+            Choose
+          </button>
+          <label className="project-id-field">
+            <span>Id</span>
+            <input
+              value={id}
+              onChange={(event) => setId(event.currentTarget.value)}
+              placeholder="optional"
+              data-testid="project-id-input"
+            />
+          </label>
+          <button type="submit" className="project-add-button" disabled={pending}>
+            <Plus size={14} />
+            Add project
+          </button>
+        </form>
+        <div className="project-section-head">
+          <span>Visible</span>
+          <small>{projects.length} on board</small>
+        </div>
+        <div className="project-list" data-testid="project-settings-list">
+          {projects.map((project) => (
+            <div key={project.id} className="project-settings-row">
+              <div>
+                <strong>{project.name}</strong>
+                <span>{projectSummary(project)}</span>
+              </div>
+              <button
+                type="button"
+                disabled={pending || projects.length <= 1}
+                onClick={() => hide(project.id)}
+                aria-label={`Hide ${project.name}`}
+              >
+                <EyeOff size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="project-section-head">
+          <span>Hidden</span>
+          <small>{hiddenProjects.length} tucked away</small>
+          <button
+              type="button"
+              className="project-hidden-toggle"
+              onClick={() => setShowHidden((visible) => !visible)}
+              aria-expanded={showHidden}
+          >
+            {showHidden ? 'Hide list' : 'Show list'}
+          </button>
+        </div>
+        {showHidden ? <div className="project-list" data-testid="hidden-project-list">
+          {hiddenProjects.length === 0 ? (
+            <div className="project-settings-row project-empty-row">No hidden projects.</div>
+          ) : null}
+          {hiddenProjects.map((project) => (
+            <div key={project.id} className="project-settings-row">
+              <div>
+                <strong>{project.name}</strong>
+                <span>{projectSummary(project)}</span>
+              </div>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => unhide(project.id)}
+                aria-label={`Unhide ${project.name}`}
+              >
+                <Eye size={14} />
+              </button>
+            </div>
+          ))}
+        </div> : null}
+      </section>
+    </div>
+  )
+}
+
+function ThemeSettingsPanel({
+  selection,
+  onChange,
+}: {
+  selection: ThemeSelection
+  onChange: (selection: ThemeSelection) => void
+}) {
+  return (
+    <section className="settings-panel" aria-label="Theme settings">
+      <div>
+        <p className="settings-kicker">Theme</p>
+        <strong>Board palette</strong>
       </div>
+      <label className="key-select">
+        <span>Name</span>
+        <select
+          value={selection.name}
+          onChange={(event) =>
+            onChange({ ...selection, name: event.currentTarget.value as PicanThemeName })
+          }
+          data-testid="theme-name"
+        >
+          {picanThemeNames.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="key-select">
+        <span>Mode</span>
+        <select
+          value={selection.mode}
+          onChange={(event) =>
+            onChange({ ...selection, mode: event.currentTarget.value as ThemeMode })
+          }
+          data-testid="theme-mode"
+        >
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <button
+        type="button"
+        className="reset-keymap"
+        onClick={() => onChange(defaultThemeSelection)}
+      >
+        Reset
+      </button>
     </section>
   )
 }
@@ -1147,6 +1464,167 @@ function Keycap({ value }: { value: string }) {
   return <kbd>{formatKey(value)}</kbd>
 }
 
+function MobileTopBar({
+  project,
+  agent,
+  tab,
+  onTabChange,
+  onOpenAgentSwitcher,
+  onStartSession,
+  onOpenProjects,
+  onOpenSettings,
+}: {
+  project: ProjectRow
+  agent: AgentCell | undefined
+  tab: SidebarTab
+  onTabChange: (tab: SidebarTab) => void
+  onOpenAgentSwitcher: () => void
+  onStartSession: () => void
+  onOpenProjects: () => void
+  onOpenSettings: () => void
+}) {
+  return (
+    <header className="mobile-topbar" aria-label="Mobile navigation">
+      <div className="mobile-topbar-main">
+        <div className="mobile-brand">
+          <span>PICAN</span>
+          <small>{project.name}</small>
+        </div>
+        <button
+          type="button"
+          className="mobile-agent-trigger"
+          onClick={onOpenAgentSwitcher}
+          aria-label="Switch agent"
+        >
+          <span className={`status-dot ${agent?.status ?? ''}`} aria-hidden="true" />
+          <span>
+            <strong>{agent?.title ?? 'No session'}</strong>
+            <small>{agent ? `${agent.runtime} · ${agent.model}` : 'Choose or start an agent'}</small>
+          </span>
+          <ChevronDown size={16} aria-hidden="true" />
+        </button>
+        <div className="mobile-actions">
+          <button type="button" onClick={onStartSession} aria-label="Start session">
+            <Plus size={18} />
+          </button>
+          <button type="button" onClick={onOpenProjects} aria-label="Projects">
+            <FolderOpen size={18} />
+          </button>
+          <button type="button" onClick={onOpenSettings} aria-label="Open settings">
+            <Settings2 size={18} />
+          </button>
+        </div>
+      </div>
+      <div className="mobile-view-tabs" role="tablist" aria-label="Selected agent view">
+        <button
+          type="button"
+          className={tab === 'chat' ? 'active' : ''}
+          onClick={() => onTabChange('chat')}
+          role="tab"
+          aria-selected={tab === 'chat'}
+        >
+          <MessageSquareText size={15} />
+          Chat
+        </button>
+        <button
+          type="button"
+          className={tab === 'diffs' ? 'active' : ''}
+          onClick={() => onTabChange('diffs')}
+          role="tab"
+          aria-selected={tab === 'diffs'}
+        >
+          <GitPullRequest size={15} />
+          Diffs
+        </button>
+      </div>
+    </header>
+  )
+}
+
+function AgentSwitcherSheet({
+  projects,
+  selectedProjectId,
+  selectedAgentId,
+  onSelectAgent,
+  onStartSession,
+  onClose,
+}: {
+  projects: ProjectRow[]
+  selectedProjectId: string
+  selectedAgentId: string
+  onSelectAgent: (projectId: string, agentId: string) => void
+  onStartSession: (projectId: string) => void
+  onClose: () => void
+}) {
+  return (
+    <>
+      <div className="agent-switcher-scrim" onClick={onClose} />
+      <section
+        className="agent-switcher-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agent-switcher-title"
+      >
+        <div className="agent-switcher-head">
+          <div>
+            <p className="settings-kicker">Switch agent</p>
+            <h2 id="agent-switcher-title">Sessions</h2>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close agent switcher">
+            ×
+          </button>
+        </div>
+        <div className="agent-switcher-list">
+          {projects.map((project) => (
+            <section key={project.id} className="agent-switcher-project">
+              <div className="agent-switcher-project-head">
+                <strong>{project.name}</strong>
+                <button type="button" onClick={() => onStartSession(project.id)}>
+                  <Plus size={14} />
+                  New
+                </button>
+              </div>
+              {project.agents.length === 0 ? (
+                <button
+                  type="button"
+                  className="agent-switcher-empty"
+                  onClick={() => onStartSession(project.id)}
+                >
+                  No sessions yet. Start one.
+                </button>
+              ) : null}
+              {project.agents.map((agent) => {
+                const selected =
+                  project.id === selectedProjectId && agent.id === selectedAgentId
+                return (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    className={`agent-switcher-row ${selected ? 'selected' : ''}`}
+                    onClick={() => onSelectAgent(project.id, agent.id)}
+                    aria-current={selected ? 'true' : undefined}
+                  >
+                    <span className={`status-dot ${agent.status}`} aria-hidden="true" />
+                    <span>
+                      <strong>{agent.title}</strong>
+                      <small>{agent.preview}</small>
+                    </span>
+                    <span className="agent-switcher-meta">
+                      <RuntimeBadge runtime={agent.runtime} />
+                      <small>{agent.messageCount} msg</small>
+                      <small>{agent.diffCount} diff</small>
+                    </span>
+                  </button>
+                )
+              })}
+            </section>
+          ))}
+        </div>
+      </section>
+    </>
+  )
+}
+
 function ProjectLane({
   project,
   selectedProjectId,
@@ -1167,7 +1645,7 @@ function ProjectLane({
     >
       <div className="project-label">
         <strong>{project.name}</strong>
-        <span>{project.cwd}</span>
+        <span>{projectSummary(project)}</span>
       </div>
       <div className="agent-row">
         {project.agents.length === 0 ? (
@@ -1365,9 +1843,13 @@ function ChatPanel({
   const [images, setImages] = React.useState<SendMessageImage[]>([])
   const [error, setError] = React.useState<string | null>(null)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
-  const isRunning = agent.status === 'running' || localRunning
+  const isBackendRunning = agent.status === 'running'
+  const isRunning = isBackendRunning || localRunning
   const hasDraftContent = draft.trim().length > 0 || images.length > 0
-  const canSubmit = !pending && (hasDraftContent || isRunning)
+  const canInterrupt = isBackendRunning && !hasDraftContent
+  const canSteer = isBackendRunning && hasDraftContent
+  const canSend = !isRunning && hasDraftContent
+  const canSubmit = !pending && (canSend || canSteer || canInterrupt)
   const pendingMessage = React.useMemo<BoardMessage | null>(
     () => {
       if (pendingPrompt === null) return null
@@ -1447,7 +1929,7 @@ function ChatPanel({
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!canSubmit) return
-    if (isRunning && !hasDraftContent) {
+    if (canInterrupt) {
       setPending(true)
       setError(null)
       try {
@@ -1496,7 +1978,7 @@ function ChatPanel({
     onDraftChange('')
     setImages([])
 
-    if (!isRunning) {
+    if (!isBackendRunning) {
       setLocalRunning(true)
       void onSend(agent.id, prompt, promptImages)
         .catch((cause) => setError(errorMessage(cause)))
@@ -1587,12 +2069,12 @@ function ChatPanel({
         <ContextUsageChip usage={agent.contextUsage} />
         <button
           type="submit"
-          className={`composer-submit${isRunning && !hasDraftContent ? ' interrupt' : ''}${isRunning && hasDraftContent ? ' steer' : ''}`}
+          className={`composer-submit${canInterrupt ? ' interrupt' : ''}${canSteer ? ' steer' : ''}`}
           disabled={!canSubmit}
-          aria-label={isRunning && !hasDraftContent ? 'Stop generation' : isRunning ? 'Steer agent' : 'Send prompt'}
-          title={isRunning && !hasDraftContent ? 'Stop generation' : isRunning ? 'Steer this turn' : 'Send prompt'}
+          aria-label={canInterrupt ? 'Stop generation' : canSteer ? 'Steer agent' : 'Send prompt'}
+          title={canInterrupt ? 'Stop generation' : canSteer ? 'Steer this turn' : localRunning ? 'Starting turn' : 'Send prompt'}
         >
-          {isRunning && !hasDraftContent ? <Square size={13} fill="currentColor" /> : <Send size={15} />}
+          {canInterrupt ? <Square size={13} fill="currentColor" /> : <Send size={15} />}
         </button>
       </form>
     </div>
@@ -1673,11 +2155,14 @@ function WorkTimelineRow({
   const [expanded, setExpanded] = React.useState(false)
   const visibleEntries = expanded ? row.entries : row.entries.slice(0, 6)
   const hiddenCount = row.entries.length - visibleEntries.length
+  const title = row.entries.some((entry) => entry.kind !== 'tool_execution_start')
+    ? 'Activity'
+    : 'Tool calls'
 
   return (
     <section className="timeline-row work-row" aria-label="Runtime activity">
       <div className="work-row-header">
-        <span>Tool calls ({row.entries.length})</span>
+        <span>{title} ({row.entries.length})</span>
         {hiddenCount > 0 ? (
           <button type="button" onClick={() => setExpanded((value) => !value)}>
             <ChevronDown size={13} className={expanded ? 'expanded' : ''} />
@@ -1781,7 +2266,7 @@ async function runSlashCommand(
     return
   }
   if (command.name === 'thinking') {
-    if (agent.runtime !== 'pi') {
+    if (agent.runtime !== 'pi' && agent.runtime !== 'codex') {
       throw new Error(`${agent.runtime} sessions do not support /thinking yet`)
     }
     await actions.onThinkingCommand(agent.id, command.level)
@@ -1937,6 +2422,7 @@ function eventToWorkEntry(event: TimelineEvent): TimelineWorkEntry | null {
 }
 
 function shouldShowRuntimeEvent(event: TimelineEvent) {
+  if (event.kind === 'codex_context_compacted') return true
   if (event.kind !== 'tool_execution_start') return false
   return event.label.toLowerCase() !== 'taskupdate'
 }
@@ -1960,7 +2446,7 @@ function toolMessageToWorkEntry(message: BoardMessage): TimelineWorkEntry {
   }
 }
 
-function DiffPanel({ agent }: { agent: AgentCell }) {
+function DiffPanel({ agent, themeMode }: { agent: AgentCell; themeMode: ThemeMode }) {
   const [selectedDiffId, setSelectedDiffId] = React.useState<string | null>(null)
   const [diffStyle, setDiffStyle] = React.useState<DiffStyle>('unified')
   const [fullscreen, setFullscreen] = React.useState(false)
@@ -2179,13 +2665,13 @@ function DiffPanel({ agent }: { agent: AgentCell }) {
       </div>
       <div className="pierre-host" ref={diffBodyRef}>
         <PatchDiff
-          key={`${diff.id}:${diffStyle}`}
+          key={`${diff.id}:${diffStyle}:${themeMode}`}
           patch={diff.patch}
           disableWorkerPool
           options={{
             diffStyle,
             overflow: 'wrap',
-            themeType: 'light',
+            themeType: themeMode,
           }}
         />
       </div>
@@ -2321,6 +2807,21 @@ function saveKeymap(keymap: KeymapSettings): KeymapSettings {
   return keymap
 }
 
+function readStoredThemeSelection(): ThemeSelection {
+  try {
+    const stored = window.localStorage.getItem(themeStorageKey)
+    if (!stored) return defaultThemeSelection
+    return normalizeThemeSelection(JSON.parse(stored))
+  } catch {
+    return defaultThemeSelection
+  }
+}
+
+function saveThemeSelection(selection: ThemeSelection): ThemeSelection {
+  window.localStorage.setItem(themeStorageKey, JSON.stringify(selection))
+  return selection
+}
+
 function formatKey(key: string) {
   if (key.startsWith('arrow')) return key.replace('arrow', 'Arrow ')
   return key.toUpperCase()
@@ -2329,6 +2830,15 @@ function formatKey(key: string) {
 function pendingPromptText(text: string, images: SendMessageImage[]) {
   if (!images.length) return text
   return `${text}\n\nAttached images:\n${images.map((image) => `- ${image.name}`).join('\n')}`
+}
+
+function projectNameFromPath(path: string) {
+  return path.replace(/\/+$/g, '').split('/').filter(Boolean).at(-1) ?? ''
+}
+
+function projectSummary(project: ProjectRow) {
+  const sessions = project.agents.length
+  return `${project.id} · ${sessions} ${sessions === 1 ? 'session' : 'sessions'}`
 }
 
 async function readImageFile(file: File): Promise<SendMessageImage> {
