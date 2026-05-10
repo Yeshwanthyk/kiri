@@ -89,7 +89,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
         FROM messages m
         INNER JOIN threads t ON t.id = m.thread_id
         WHERE t.active = 1
-        ORDER BY timestamp ASC, id ASC
+        ORDER BY m.timestamp ASC, m.id ASC
       `,
     )
     .all() as Array<{

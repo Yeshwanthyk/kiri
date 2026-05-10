@@ -1,3 +1,5 @@
+'use client'
+
 import { PatchDiff } from '@pierre/diffs/react'
 import {
   Activity,
@@ -25,6 +27,7 @@ type Selection = {
 export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [selection, setSelection] = React.useState<Selection>(snapshot.selected)
   const [tab, setTab] = React.useState<SidebarTab>('chat')
+  const [hydrated, setHydrated] = React.useState(false)
 
   const selectedProject =
     snapshot.projects.find((project) => project.id === selection.projectId) ??
@@ -34,6 +37,8 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     selectedProject?.agents[0]
 
   React.useEffect(() => {
+    setHydrated(true)
+
     function onKeyDown(event: KeyboardEvent) {
       if (!event.shiftKey || isEditableTarget(event.target)) return
 
@@ -67,7 +72,12 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
   return (
     <main className="pican-shell">
-      <section className="board-pane" aria-label="Projects and agents">
+      <section
+        className="board-pane"
+        aria-label="Projects and agents"
+        data-hydrated={hydrated ? 'true' : 'false'}
+        data-testid="board-pane"
+      >
         <header className="topbar">
           <div>
             <p className="eyebrow">pican</p>
@@ -103,13 +113,18 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         </div>
       </section>
 
-      <aside className="sidebar-pane" aria-label="Selected chat">
+      <aside
+        className="sidebar-pane"
+        aria-label="Selected chat"
+        data-testid="sidebar-pane"
+      >
         <SidebarHeader project={selectedProject} agent={selectedAgent} />
         <div className="sidebar-tabs" role="tablist">
           <button
             type="button"
             className={tab === 'chat' ? 'active' : ''}
             onClick={() => setTab('chat')}
+            data-testid="tab-chat"
           >
             <MessageSquareText size={15} />
             Chat
@@ -118,6 +133,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
             type="button"
             className={tab === 'diffs' ? 'active' : ''}
             onClick={() => setTab('diffs')}
+            data-testid="tab-diffs"
           >
             <GitPullRequest size={15} />
             Diffs
@@ -126,6 +142,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
             type="button"
             className={tab === 'artifacts' ? 'active' : ''}
             onClick={() => setTab('artifacts')}
+            data-testid="tab-artifacts"
           >
             <PanelRight size={15} />
             Artifacts
@@ -173,6 +190,12 @@ function ProjectLane({
                 : ''
             }`}
             onClick={() => onSelect(agent.id)}
+            data-agent-id={agent.id}
+            data-project-id={project.id}
+            data-selected={
+              isProjectSelected && agent.id === selectedAgentId ? 'true' : 'false'
+            }
+            data-testid="agent-cell"
           >
             <div className="agent-cell-top">
               <span className={`status-dot ${agent.status}`} />
@@ -206,8 +229,8 @@ function SidebarHeader({
           <Bot size={18} />
         </div>
         <div>
-          <p>{project.name}</p>
-          <h2>{agent.title}</h2>
+          <p data-testid="selected-project">{project.name}</p>
+          <h2 data-testid="selected-agent">{agent.title}</h2>
         </div>
       </div>
       <div className="sidebar-stats">
@@ -224,7 +247,7 @@ function SidebarHeader({
 
 function ChatPanel({ agent }: { agent: AgentCell }) {
   return (
-    <div className="chat-panel">
+    <div className="chat-panel" data-testid="chat-panel">
       <div className="message-list">
         {agent.messages.map((message) => (
           <article key={message.id} className={`message ${message.role}`}>
@@ -251,13 +274,13 @@ function DiffPanel({ agent }: { agent: AgentCell }) {
     return (
       <div className="empty-panel">
         <GitPullRequest size={18} />
-        No diffs for this agent yet.
+        <span>No diffs for this agent yet.</span>
       </div>
     )
   }
 
   return (
-    <div className="diff-panel">
+    <div className="diff-panel" data-testid="diff-panel">
       <div className="diff-header">
         <strong>{diff.title}</strong>
         <span>{diff.path}</span>
@@ -279,7 +302,7 @@ function DiffPanel({ agent }: { agent: AgentCell }) {
 
 function ArtifactsPanel({ agent }: { agent: AgentCell }) {
   return (
-    <div className="empty-panel">
+    <div className="empty-panel" data-testid="artifacts-panel">
       <Activity size={18} />
       {agent.sessionFile
         ? `Session file: ${agent.sessionFile}`
@@ -300,10 +323,18 @@ function moveProject(
   const index = projects.findIndex((project) => project.id === current.projectId)
   const nextIndex = clamp(index + delta, 0, projects.length - 1)
   const project = projects[nextIndex]
+  const currentProject = projects[index]
   if (!project) return current
   const agent =
     project.agents.find((item) => item.id === current.agentId) ??
-    project.agents[0]
+    project.agents[
+      clamp(
+        currentProject?.agents.findIndex((item) => item.id === current.agentId) ??
+          0,
+        0,
+        project.agents.length - 1,
+      )
+    ]
   return {
     projectId: project.id,
     agentId: agent?.id ?? current.agentId,
