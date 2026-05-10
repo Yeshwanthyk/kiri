@@ -1,15 +1,25 @@
 import { expect, test } from '@playwright/test'
+import { resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 test.describe.configure({ mode: 'serial' })
 
-test.beforeEach(() => {
-  const database = new DatabaseSync('.pican/pican.sqlite')
+const testDbPath = resolve(process.env.PICAN_DB_PATH ?? '.pican/pican.e2e.sqlite')
+const projectRoot = process.cwd()
+
+test.beforeEach(async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+
+  const database = new DatabaseSync(testDbPath)
   database.exec(`
     PRAGMA foreign_keys = ON;
-    INSERT OR IGNORE INTO projects (id, name, cwd, position)
-    VALUES ('pi-mono', 'Pi Runtime Reference', '/Users/yesh/Documents/personal/reference/pi-mono', 1);
     DELETE FROM agent_slots;
+    DELETE FROM projects;
+    INSERT INTO projects (id, name, cwd, position)
+    VALUES ('pican', 'Pican Orchestrator', '${projectRoot.replaceAll("'", "''")}', 0);
+    INSERT INTO projects (id, name, cwd, position)
+    VALUES ('test-reference', 'Test Reference', '/Users/yesh/Documents/personal/reference/test', 1);
   `)
   database.close()
 })
@@ -137,6 +147,50 @@ test('sidebar switches between chat, diffs, and artifacts', async ({ page }, tes
   await expect(page.getByTestId('artifacts-panel')).toContainText(
     'Reserved session dir:',
   )
+
+  await pressShiftKey(page, 'KeyC')
+  await expect(page.getByTestId('chat-panel')).toBeVisible()
+  await expect(page.getByTestId('chat-input')).toBeFocused()
+})
+
+test('escape leaves chat composer so board keymaps work', async ({ page }, testInfo) => {
+  const title = `Escape Session ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+
+  const firstProject = await page.getByTestId('selected-project').textContent()
+  await page.getByTestId('chat-input').focus()
+  await expect(page.getByTestId('chat-input')).toBeFocused()
+
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('chat-input')).not.toBeFocused()
+
+  await page.keyboard.down('Shift')
+  await page.keyboard.press('KeyJ')
+  await page.keyboard.up('Shift')
+  await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
+})
+
+test('agent switching does not refocus chat after explicit chat focus', async ({ page }, testInfo) => {
+  const firstTitle = `First Session ${testInfo.project.name}`
+  const secondTitle = `Second Session ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, firstTitle)
+  await createSession(page, secondTitle)
+
+  await pressShiftKey(page, 'KeyC')
+  await expect(page.getByTestId('chat-input')).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('chat-input')).not.toBeFocused()
+
+  await page.keyboard.down('Shift')
+  await page.keyboard.press('KeyH')
+  await page.keyboard.up('Shift')
+
+  await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
+  await expect(page.getByTestId('chat-input')).not.toBeFocused()
 })
 
 test('mobile layout keeps board and sidebar usable', async ({ page, isMobile }) => {
