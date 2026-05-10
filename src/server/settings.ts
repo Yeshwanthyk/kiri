@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { PicanSettings, RuntimeKind } from '~/lib/contracts'
-import { picanSettingsSchema } from '~/lib/contracts'
+import type { AetherSettings, RuntimeKind } from '~/lib/contracts'
+import { aetherSettingsSchema } from '~/lib/contracts'
 
 const settingsPath = join(process.cwd(), 'settings.json')
 
-export function getSettings(): PicanSettings {
-  const parsed = picanSettingsSchema.parse(
+export function getSettings(): AetherSettings {
+  const parsed = aetherSettingsSchema.parse(
     JSON.parse(readFileSync(settingsPath, 'utf8')),
   )
 

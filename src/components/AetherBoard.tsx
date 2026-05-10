@@ -49,14 +49,14 @@ import type {
 } from '~/lib/contracts'
 import { thinkingLevelSchema } from '~/lib/contracts'
 import {
-  applyPicanTheme,
+  applyAetherTheme,
   defaultThemeSelection,
   normalizeThemeSelection,
-  picanThemeNames,
-  type PicanThemeName,
+  aetherThemeNames,
+  type AetherThemeName,
   type ThemeMode,
   type ThemeSelection,
-} from '~/theme/pican-themes'
+} from '~/theme/aether-themes'
 import {
   addProjectMutation,
   chooseProjectDirectoryMutation,
@@ -156,10 +156,10 @@ const keyOptions = [
   'arrowleft',
   'arrowright',
 ]
-const keymapStorageKey = 'pican:keymap:v1'
-const themeStorageKey = 'pican:theme:v1'
+const keymapStorageKey = 'aether:keymap:v1'
+const themeStorageKey = 'aether:theme:v1'
 
-export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
+export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [workspace, setWorkspace] = React.useState(snapshot)
   const [selection, setSelection] = React.useState<Selection>(snapshot.selected)
   const [tab, setTab] = React.useState<SidebarTab>('chat')
@@ -214,7 +214,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }, [])
 
   React.useEffect(() => {
-    applyPicanTheme(document.documentElement, themeSelection)
+    applyAetherTheme(document.documentElement, themeSelection)
   }, [themeSelection])
 
   React.useEffect(() => {
@@ -597,7 +597,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   return (
-    <main className="pican-shell">
+    <main className="aether-shell">
       <MobileTopBar
         project={selectedProject}
         agent={selectedAgent}
@@ -667,7 +667,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         data-testid="board-pane"
       >
         <header className="topbar">
-          <h1 className="pican-mark">PICAN</h1>
+          <h1 className="aether-mark">AETHER</h1>
           <div className="topbar-actions">
             <button
               type="button"
@@ -799,7 +799,7 @@ function SettingsScreen({
   return (
     <main className="settings-shell" data-testid="settings-page">
       <header className="settings-hero">
-        <h1 className="pican-mark">PICAN</h1>
+        <h1 className="aether-mark">AETHER</h1>
         <button type="button" className="settings-close" onClick={onClose}>
           Back to board
         </button>
@@ -1208,11 +1208,11 @@ function ThemeSettingsPanel({
         <select
           value={selection.name}
           onChange={(event) =>
-            onChange({ ...selection, name: event.currentTarget.value as PicanThemeName })
+            onChange({ ...selection, name: event.currentTarget.value as AetherThemeName })
           }
           data-testid="theme-name"
         >
-          {picanThemeNames.map((name) => (
+          {aetherThemeNames.map((name) => (
             <option key={name} value={name}>
               {name}
             </option>
@@ -1373,6 +1373,10 @@ function CommandPalette({
     setSelectedIndex(0)
   }, [query])
 
+  React.useEffect(() => {
+    if (selectedIndex >= visibleActions.length) setSelectedIndex(0)
+  }, [selectedIndex, visibleActions.length])
+
   function moveSelection(delta: number) {
     const enabledIndexes = visibleActions
       .map((action, index) => (action.disabled ? -1 : index))
@@ -1388,8 +1392,10 @@ function CommandPalette({
   }
 
   function submit(action: CommandPaletteAction | undefined) {
-    if (!action || action.disabled) return
-    action.run()
+    const fallbackAction = visibleActions.find((item) => !item.disabled)
+    const actionToRun = action && !action.disabled ? action : fallbackAction
+    if (!actionToRun) return
+    actionToRun.run()
   }
 
   return (
@@ -1487,7 +1493,7 @@ function MobileTopBar({
     <header className="mobile-topbar" aria-label="Mobile navigation">
       <div className="mobile-topbar-main">
         <div className="mobile-brand">
-          <span>PICAN</span>
+          <span>AETHER</span>
           <small>{project.name}</small>
         </div>
         <button

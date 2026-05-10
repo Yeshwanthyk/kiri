@@ -188,7 +188,7 @@ async function waitForLivePiAdapter(config: ReturnType<typeof getAgentLaunchConf
     await sleep(100)
   }
 
-  throw new Error('This session is not currently running in this Pican server process')
+  throw new Error('This session is not currently running in this Aether server process')
 }
 
 function sleep(ms: number) {
@@ -263,7 +263,7 @@ function savePromptImage(agentId: string, image: SendMessageImage, index: number
     throw new Error(`Image "${image.name}" is larger than 5MB`)
   }
 
-  const dir = join(process.cwd(), '.pican', 'attachments', safePathSegment(agentId))
+  const dir = join(process.cwd(), '.aether', 'attachments', safePathSegment(agentId))
   mkdirSync(dir, { recursive: true })
   const extension = imageExtension(image)
   const path = join(
@@ -340,7 +340,7 @@ function untrackedFiles(cwd: string) {
 }
 
 function shouldSkipDiffPath(path: string) {
-  return ['.pi/', '.pican/', 'node_modules/', 'dist/'].some((prefix) =>
+  return ['.pi/', '.aether/', 'node_modules/', 'dist/'].some((prefix) =>
     path.startsWith(prefix),
   )
 }

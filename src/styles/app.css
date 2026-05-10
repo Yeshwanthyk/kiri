@@ -60,7 +60,7 @@ button {
   color: inherit;
 }
 
-.pican-shell {
+.aether-shell {
   display: grid;
   grid-template-columns: minmax(420px, 1fr) minmax(420px, 1fr);
   min-height: 100vh;
@@ -264,7 +264,7 @@ button {
   font-weight: 760;
 }
 
-.pican-mark {
+.aether-mark {
   font-size: 22px;
   line-height: 1;
   letter-spacing: 0.08em;
@@ -2186,7 +2186,7 @@ h1 {
 }
 
 @media (max-width: 980px) {
-  .pican-shell {
+  .aether-shell {
     display: flex;
     height: 100dvh;
     min-height: 100dvh;

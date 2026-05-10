@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { PicanBoard } from '~/components/PicanBoard'
+import { AetherBoard } from '~/components/AetherBoard'
 import { workspaceQueryOptions } from '~/server/workspace'
 
 export const Route = createFileRoute('/')({
@@ -10,5 +10,5 @@ export const Route = createFileRoute('/')({
 
 function Home() {
   const snapshot = Route.useLoaderData()
-  return <PicanBoard snapshot={snapshot} />
+  return <AetherBoard snapshot={snapshot} />
 }

@@ -20,7 +20,7 @@ export const Route = createRootRouteWithContext<{
         content: 'width=device-width, initial-scale=1',
       },
       ...seo({
-        title: 'pican',
+        title: 'aether',
         description: 'Keyboard-first kanban orchestrator for project sessions.',
       }),
     ],

@@ -92,7 +92,7 @@ export class CodexAppServerAdapter {
       throw new Error('Codex app-server websocket is not connected')
     }
 
-    const id = `pican-codex-${++this.requestId}`
+    const id = `aether-codex-${++this.requestId}`
     const payload = JSON.stringify({ id, method, params })
     return new Promise<unknown>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -129,7 +129,7 @@ export class CodexAppServerAdapter {
   async initialize() {
     const result = await this.request('initialize', {
       clientInfo: {
-        name: 'Pican',
+        name: 'Aether',
         version: '0.0.0',
       },
       capabilities: {
@@ -359,7 +359,7 @@ export class CodexAppServerAdapter {
 }
 
 export function defaultCodexWebsocketUrl() {
-  return process.env.PICAN_CODEX_APP_SERVER_URL ?? `ws://127.0.0.1:${defaultCodexPort}`
+  return process.env.AETHER_CODEX_APP_SERVER_URL ?? `ws://127.0.0.1:${defaultCodexPort}`
 }
 
 export function runtimeSupportsManagedAppServer(runtime: RuntimeKind) {

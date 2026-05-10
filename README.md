@@ -1,4 +1,4 @@
-# pican
+# aether
 
 Keyboard-first kanban orchestrator for Pi agent sessions.
 
@@ -18,16 +18,16 @@ pnpm build
 ## Projects
 
 ```sh
-pnpm pican:projects list [--all]
-pnpm pican:projects add --name "Pican Orchestrator" --cwd /path/to/repo --id pican
-pnpm pican:projects hide --id pican
-pnpm pican:projects unhide --id pican
-pnpm pican:projects delete --id pican --yes
+pnpm aether:projects list [--all]
+pnpm aether:projects add --name "Aether Orchestrator" --cwd /path/to/repo --id aether
+pnpm aether:projects hide --id aether
+pnpm aether:projects unhide --id aether
+pnpm aether:projects delete --id aether --yes
 ```
 
 Adding a project creates a project row with no sessions. Hiding removes a
 project from the board while preserving its sessions and metadata. Deleting a
-project removes pican metadata for that project; it does not delete the project
+project removes aether metadata for that project; it does not delete the project
 working directory.
 
 ## Settings
@@ -40,7 +40,7 @@ session model through `--model ...`.
 ## Shape
 
 - TanStack Start app shell.
-- SQLite read model under `.pican/pican.sqlite`.
+- SQLite read model under `.aether/aether.sqlite`.
 - Pi is the first runtime via `pi --mode rpc`.
 - Pi JSONL is parsed as a transcript/read-model source, not the live command channel.
 - Pierre diffs render review artifacts.

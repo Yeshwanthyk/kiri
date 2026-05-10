@@ -5,9 +5,9 @@ import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 const root = process.cwd()
-const dbPath = process.env.PICAN_DB_PATH
-  ? resolve(process.env.PICAN_DB_PATH)
-  : join(root, '.pican', 'pican.sqlite')
+const dbPath = process.env.AETHER_DB_PATH
+  ? resolve(process.env.AETHER_DB_PATH)
+  : join(root, '.aether', 'aether.sqlite')
 main()
 
 function main() {
@@ -318,11 +318,11 @@ function usage(error) {
   if (error) console.error(error)
   console.error(`
 Usage:
-  pnpm pican:projects list [--all]
-  pnpm pican:projects add --name "Project Name" --cwd /path/to/project [--id project-id]
-  pnpm pican:projects hide --id project-id
-  pnpm pican:projects unhide --id project-id
-  pnpm pican:projects delete --id project-id --yes
+  pnpm aether:projects list [--all]
+  pnpm aether:projects add --name "Project Name" --cwd /path/to/project [--id project-id]
+  pnpm aether:projects hide --id project-id
+  pnpm aether:projects unhide --id project-id
+  pnpm aether:projects delete --id project-id --yes
 `)
   process.exit(error ? 1 : 0)
 }

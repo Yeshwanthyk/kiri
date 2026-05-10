@@ -244,8 +244,8 @@ function getOrCreateCodexAdapter(websocketUrl: string | undefined) {
   if (!adapter) {
     adapter = new CodexAppServerAdapter({
       websocketUrl: url,
-      spawnIfMissing: !process.env.PICAN_CODEX_APP_SERVER_URL,
-      codexHome: process.env.PICAN_CODEX_HOME,
+      spawnIfMissing: !process.env.AETHER_CODEX_APP_SERVER_URL,
+      codexHome: process.env.AETHER_CODEX_HOME,
     })
     adapters.set(url, adapter)
   }
@@ -278,7 +278,7 @@ function handleCodexServerMessage(adapter: CodexAppServerAdapter, message: Codex
     if (response) {
       adapter.respond(message.id, response)
     } else {
-      adapter.reject(message.id, `Pican cannot handle ${message.method} yet`)
+      adapter.reject(message.id, `Aether cannot handle ${message.method} yet`)
     }
     return
   }
@@ -443,7 +443,7 @@ function savePromptImage(agentId: string, image: SendMessageImage, index: number
     throw new Error(`Image "${image.name}" is larger than 5MB`)
   }
 
-  const dir = join(process.cwd(), '.pican', 'attachments', safePathSegment(agentId))
+  const dir = join(process.cwd(), '.aether', 'attachments', safePathSegment(agentId))
   mkdirSync(dir, { recursive: true })
   const path = join(
     dir,
@@ -530,7 +530,7 @@ function automaticServerRequestResponse(method: string) {
   }
   if (method === 'item/tool/call') {
     return {
-      contentItems: [{ type: 'inputText', text: 'Pican cannot run client dynamic tools yet.' }],
+      contentItems: [{ type: 'inputText', text: 'Aether cannot run client dynamic tools yet.' }],
       success: false,
     }
   }

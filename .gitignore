@@ -10,7 +10,7 @@ yarn.lock
 .output
 /build/
 /dist/
-/.pican/
+/.aether/
 /artifacts/
 /api/
 /server/build

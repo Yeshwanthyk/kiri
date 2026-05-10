@@ -113,7 +113,7 @@ export const runtimeSettingsSchema = z.object({
 })
 export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>
 
-export const picanSettingsSchema = z.object({
+export const aetherSettingsSchema = z.object({
   runtimes: z.object({
     pi: runtimeSettingsSchema,
     codex: runtimeSettingsSchema,
@@ -121,7 +121,7 @@ export const picanSettingsSchema = z.object({
     opencode: runtimeSettingsSchema,
   }),
 })
-export type PicanSettings = z.infer<typeof picanSettingsSchema>
+export type AetherSettings = z.infer<typeof aetherSettingsSchema>
 
 export const projectRowSchema = z.object({
   id: z.string(),
@@ -134,7 +134,7 @@ export const projectRowSchema = z.object({
 export type ProjectRow = z.infer<typeof projectRowSchema>
 
 export const workspaceSnapshotSchema = z.object({
-  settings: picanSettingsSchema,
+  settings: aetherSettingsSchema,
   projects: z.array(projectRowSchema),
   hiddenProjects: z.array(projectRowSchema),
   selected: z.object({

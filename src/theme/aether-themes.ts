@@ -1,5 +1,5 @@
-export const picanThemeNames = [
-  'pican',
+export const aetherThemeNames = [
+  'aether',
   'vesper',
   'github',
   'tokyonight',
@@ -8,11 +8,11 @@ export const picanThemeNames = [
   'rosepine',
 ] as const
 
-export type PicanThemeName = (typeof picanThemeNames)[number]
+export type AetherThemeName = (typeof aetherThemeNames)[number]
 export type ThemeMode = 'dark' | 'light'
 
 export type ThemeSelection = {
-  name: PicanThemeName
+  name: AetherThemeName
   mode: ThemeMode
 }
 
@@ -31,18 +31,18 @@ type ThemeTokens = {
   success: string
 }
 
-type PicanTheme = Record<ThemeMode, ThemeTokens>
+type AetherTheme = Record<ThemeMode, ThemeTokens>
 
-export const defaultThemeSelection: ThemeSelection = { name: 'pican', mode: 'light' }
+export const defaultThemeSelection: ThemeSelection = { name: 'aether', mode: 'light' }
 
-export function isPicanThemeName(value: string): value is PicanThemeName {
-  return (picanThemeNames as readonly string[]).includes(value)
+export function isAetherThemeName(value: string): value is AetherThemeName {
+  return (aetherThemeNames as readonly string[]).includes(value)
 }
 
 export function normalizeThemeSelection(value: unknown): ThemeSelection {
   if (!value || typeof value !== 'object') return defaultThemeSelection
   const record = value as Record<string, unknown>
-  const name = typeof record.name === 'string' && isPicanThemeName(record.name)
+  const name = typeof record.name === 'string' && isAetherThemeName(record.name)
     ? record.name
     : defaultThemeSelection.name
   const mode = record.mode === 'dark' || record.mode === 'light'
@@ -51,8 +51,8 @@ export function normalizeThemeSelection(value: unknown): ThemeSelection {
   return { name, mode }
 }
 
-export function resolvePicanTheme(selection: ThemeSelection): Record<`--${string}`, string> {
-  const theme = picanThemes[selection.name][selection.mode]
+export function resolveAetherTheme(selection: ThemeSelection): Record<`--${string}`, string> {
+  const theme = aetherThemes[selection.name][selection.mode]
   const vars: Record<`--${string}`, string> = {
     '--paper': theme.paper,
     '--panel': theme.panel,
@@ -88,8 +88,8 @@ export function resolvePicanTheme(selection: ThemeSelection): Record<`--${string
   return vars
 }
 
-export function applyPicanTheme(element: HTMLElement, selection: ThemeSelection): void {
-  const vars = resolvePicanTheme(selection)
+export function applyAetherTheme(element: HTMLElement, selection: ThemeSelection): void {
+  const vars = resolveAetherTheme(selection)
   element.dataset.theme = selection.name
   element.dataset.themeMode = selection.mode
   element.style.colorScheme = selection.mode
@@ -102,8 +102,8 @@ function mix(color: string, percent: number, target: string): string {
   return `color-mix(in oklab, ${color} ${percent}%, ${target})`
 }
 
-const picanThemes: Record<PicanThemeName, PicanTheme> = {
-  pican: {
+const aetherThemes: Record<AetherThemeName, AetherTheme> = {
+  aether: {
     light: {
       paper: 'oklch(0.965 0.008 84)',
       panel: 'oklch(0.988 0.006 84)',

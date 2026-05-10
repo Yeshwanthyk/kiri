@@ -206,7 +206,7 @@ export class PiRpcProcessAdapter {
       throw new Error('Pi RPC process is stopping')
     }
 
-    const id = `pican-${++this.requestId}`
+    const id = `aether-${++this.requestId}`
     const command = JSON.stringify({ id, type, ...body }) + '\n'
 
     return new Promise<unknown>((resolve, reject) => {

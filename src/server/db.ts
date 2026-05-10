@@ -28,9 +28,9 @@ import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
 
-const dbPath = process.env.PICAN_DB_PATH
-  ? resolve(process.env.PICAN_DB_PATH)
-  : join(process.cwd(), '.pican', 'pican.sqlite')
+const dbPath = process.env.AETHER_DB_PATH
+  ? resolve(process.env.AETHER_DB_PATH)
+  : join(process.cwd(), '.aether', 'aether.sqlite')
 
 let db: DatabaseSync | undefined
 
@@ -519,7 +519,7 @@ export function createForkedSession(input: {
   const suffix = Math.random().toString(36).slice(2, 8)
   const slot = `session-${Date.now().toString(36)}-${suffix}`
   const id = `${source.projectId}-${slot}`
-  const sessionDir = join(process.cwd(), '.pican', 'pi-sessions', source.projectId, slot)
+  const sessionDir = join(process.cwd(), '.aether', 'pi-sessions', source.projectId, slot)
   mkdirSync(sessionDir, { recursive: true })
   const sessionFile = join(sessionDir, basename(input.sessionFile))
   if (resolve(sessionFile) !== resolve(input.sessionFile)) {
@@ -1208,8 +1208,8 @@ function widenRuntimeCheck(database: DatabaseSync) {
 }
 
 function runtimeSessionDir(runtime: string, projectId: string, slot: string) {
-  if (runtime === 'pi') return join(process.cwd(), '.pican', 'pi-sessions', projectId, slot)
-  return join(process.cwd(), '.pican', 'runtime-sessions', runtime, projectId, slot)
+  if (runtime === 'pi') return join(process.cwd(), '.aether', 'pi-sessions', projectId, slot)
+  return join(process.cwd(), '.aether', 'runtime-sessions', runtime, projectId, slot)
 }
 
 function repairAgentSlotReferences(database: DatabaseSync) {
@@ -1274,7 +1274,7 @@ function hydratePersistedPiSessions(database: DatabaseSync) {
   const piSettings = getRuntimeSettings('pi')
 
   for (const project of projects) {
-    const projectSessionRoot = join(process.cwd(), '.pican', 'pi-sessions', project.id)
+    const projectSessionRoot = join(process.cwd(), '.aether', 'pi-sessions', project.id)
     if (!existsSync(projectSessionRoot)) continue
     const deletedSlots = new Set(
       database
@@ -1796,7 +1796,7 @@ function seed(database: DatabaseSync) {
     VALUES (?, ?, ?, ?)
   `)
 
-  const projects = [['pican', 'Pican Orchestrator', root, 0]] as const
+  const projects = [['aether', 'Aether Orchestrator', root, 0]] as const
 
   for (const project of projects) {
     insertProject.run(...project)
