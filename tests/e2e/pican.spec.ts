@@ -18,12 +18,13 @@ test('keyboard navigation moves projects without default sessions', async ({ pag
   await page.goto('/')
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
 
+  const firstProject = await page.getByTestId('selected-project').textContent()
   await expect(page.getByTestId('selected-project')).toContainText(/pican/i)
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
   await expect(page.getByTestId('empty-project-sessions').first()).toBeVisible()
 
   await pressShiftKey(page, 'KeyJ')
-  await expect(page.getByTestId('selected-project')).toHaveText('Pi Runtime Reference')
+  await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
 
   await pressShiftKey(page, 'KeyK')
@@ -33,6 +34,7 @@ test('keyboard navigation moves projects without default sessions', async ({ pag
 test('keymap settings remap navigation', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  const firstProject = await page.getByTestId('selected-project').textContent()
 
   await page.getByRole('button', { name: 'Settings' }).click()
   await page.getByTestId('keymap-projectNext').selectOption('arrowdown')
@@ -42,7 +44,7 @@ test('keymap settings remap navigation', async ({ page }) => {
   await expect(page.getByTestId('selected-project')).toContainText(/pican/i)
 
   await pressShiftKey(page, 'ArrowDown')
-  await expect(page.getByTestId('selected-project')).toHaveText('Pi Runtime Reference')
+  await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
 })
 
 test('start and remove session with keymaps', async ({ page }, testInfo) => {

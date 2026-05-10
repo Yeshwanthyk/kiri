@@ -555,23 +555,31 @@ h1 {
 }
 
 .sidebar-pane {
+  display: flex;
   min-width: 0;
+  min-height: 0;
+  max-height: 100vh;
+  overflow: hidden;
+  flex-direction: column;
   border-left: 1px solid var(--line);
   background: var(--panel);
   box-shadow: var(--shadow);
 }
 
 .sidebar-header {
+  flex: 0 0 auto;
   padding: 22px 22px 16px;
   border-bottom: 1px solid var(--line);
 }
 
 .sidebar-title-row {
+  min-width: 0;
   gap: 12px;
 }
 
 .sidebar-title-row > div:nth-child(2) {
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .runtime-icon {
@@ -582,6 +590,13 @@ h1 {
   border-radius: 8px;
   background: oklch(0.92 0.032 166);
   color: var(--accent);
+}
+
+.sidebar-title-row p,
+.sidebar-title-row h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-title-row p {
@@ -654,6 +669,8 @@ h1 {
 }
 
 .sidebar-stats {
+  min-width: 0;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
   color: var(--muted);
@@ -663,18 +680,31 @@ h1 {
 .sidebar-stats span,
 .status-pill {
   display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 5px;
   min-height: 24px;
+  overflow: hidden;
   padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-tabs {
+  min-width: 0;
+  flex: 0 0 auto;
   gap: 6px;
+  overflow-x: auto;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line);
+  scrollbar-width: none;
+}
+
+.sidebar-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .sidebar-tabs button {
@@ -698,16 +728,25 @@ h1 {
 .chat-panel,
 .diff-panel {
   display: flex;
-  flex-direction: column;
-  height: calc(100vh - 155px);
   min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .message-list {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   padding: 14px;
+}
+
+.chat-error {
+  margin: 0 14px 10px;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .message {
@@ -726,6 +765,7 @@ h1 {
 }
 
 .message p {
+  overflow-wrap: anywhere;
   color: oklch(0.28 0.018 255);
   font-size: 13px;
   line-height: 1.48;
@@ -799,9 +839,11 @@ h1 {
 .empty-panel,
 .empty-shell {
   display: grid;
+  min-width: 0;
   min-height: 220px;
   place-items: center;
   gap: 8px;
+  overflow-wrap: anywhere;
   padding: 24px;
   color: var(--muted);
   text-align: center;
@@ -852,6 +894,8 @@ h1 {
   }
 
   .sidebar-pane {
+    max-height: none;
+    overflow: visible;
     border-top: 1px solid var(--line);
     border-left: 0;
   }
@@ -866,8 +910,9 @@ h1 {
 
   .chat-panel,
   .diff-panel {
-    height: auto;
     min-height: 0;
+    flex: 0 0 auto;
+    overflow: visible;
   }
 
   .message-list {

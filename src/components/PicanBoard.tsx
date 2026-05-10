@@ -892,6 +892,7 @@ function ChatPanel({
   const [draft, setDraft] = React.useState('')
   const [pending, setPending] = React.useState(false)
   const [pendingPrompt, setPendingPrompt] = React.useState<string | null>(null)
+  const [error, setError] = React.useState<string | null>(null)
   const canSend = draft.trim().length > 0 && !pending
   const visibleMessages =
     pendingPrompt === null
@@ -912,9 +913,12 @@ function ChatPanel({
     const prompt = draft.trim()
     setPending(true)
     setPendingPrompt(prompt)
+    setError(null)
     setDraft('')
     try {
       await onSend(agent.id, prompt)
+    } catch (cause) {
+      setError(errorMessage(cause))
     } finally {
       setPendingPrompt(null)
       setPending(false)
@@ -934,6 +938,7 @@ function ChatPanel({
           </article>
         ))}
       </div>
+      {error ? <span className="chat-error" role="status">{error}</span> : null}
       <form className="composer" onSubmit={submit}>
         <TerminalSquare size={16} />
         <input
