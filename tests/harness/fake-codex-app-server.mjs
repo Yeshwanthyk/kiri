@@ -78,7 +78,7 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
           instructionSources: [],
           approvalPolicy: message.params?.approvalPolicy ?? 'never',
           approvalsReviewer: 'user',
-          sandbox: { type: 'workspaceWrite', writableRoots: [thread.cwd], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
+          sandbox: sandboxPolicy(message.params?.sandbox, thread.cwd),
           reasoningEffort: 'medium',
         },
       })
@@ -100,7 +100,7 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
           instructionSources: [],
           approvalPolicy: 'never',
           approvalsReviewer: 'user',
-          sandbox: { type: 'workspaceWrite', writableRoots: [thread.cwd], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
+          sandbox: sandboxPolicy(message.params?.sandbox, thread.cwd),
           reasoningEffort: 'medium',
         },
       })
@@ -227,6 +227,17 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
       })
     })
   })
+}
+
+function sandboxPolicy(mode, cwd) {
+  if (mode === 'danger-full-access') return { type: 'dangerFullAccess' }
+  return {
+    type: 'workspaceWrite',
+    writableRoots: [cwd],
+    networkAccess: true,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false,
+  }
 }
 
 function makeThread(id, cwd = '/') {

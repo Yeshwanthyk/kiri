@@ -38,6 +38,8 @@ const threadAgents = new Map<string, string>()
 const agentThreads = new Map<string, string>()
 const queues = new Map<string, Promise<void>>()
 const sessionGenerations = new Map<string, number>()
+const CODEX_SANDBOX_MODE = 'danger-full-access'
+const CODEX_SANDBOX_POLICY = { type: 'dangerFullAccess' } as const
 
 export async function promptCodexAgent(input: {
   agentId: string
@@ -162,6 +164,7 @@ async function promptCodexAgentNow(
       threadId,
       input: textInput(text),
       model: config.model,
+      sandboxPolicy: CODEX_SANDBOX_POLICY,
       ...codexReasoningOptions(getAgentThinkingLevel(config.id)),
     }))
     const turn = objectValue(turnResponse.turn)
@@ -212,6 +215,8 @@ async function ensureCodexThread(input: {
       threadId: input.state.threadId,
       cwd: input.config.cwd,
       model: input.config.model,
+      approvalPolicy: 'never',
+      sandbox: CODEX_SANDBOX_MODE,
     })
     return input.state.threadId
   }
@@ -220,7 +225,7 @@ async function ensureCodexThread(input: {
     cwd: input.config.cwd,
     model: input.config.model,
     approvalPolicy: 'never',
-    sandbox: 'workspace-write',
+    sandbox: CODEX_SANDBOX_MODE,
   }))
   const thread = objectValue(response.thread)
   const threadId = stringValue(thread.id)

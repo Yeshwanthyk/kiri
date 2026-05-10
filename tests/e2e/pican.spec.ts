@@ -223,10 +223,14 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
     /123 \/ 258,000 tokens used/,
   )
 
-  const requests = fakeCodexServer.requests as Array<{ method: string }>
+  const requests = fakeCodexServer.requests as CodexHarnessRequest[]
   expect(requests.some((request) => request.method === 'initialize')).toBe(true)
   expect(requests.some((request) => request.method === 'thread/start')).toBe(true)
   expect(requests.some((request) => request.method === 'turn/start')).toBe(true)
+  expect(requests.find((request) => request.method === 'thread/start')?.params?.sandbox)
+    .toBe('danger-full-access')
+  expect(turnStartRequests(requests).at(-1)?.params.sandboxPolicy)
+    .toEqual({ type: 'dangerFullAccess' })
   expect(turnStartRequests(requests).at(-1)?.params.effort).toBe('low')
 
   const compactWithoutUsageText = `compact without usage ${testInfo.project.name}`
@@ -350,8 +354,19 @@ async function createSession(
   await expect(page.getByTestId('selected-agent')).toHaveText(title)
 }
 
-function turnStartRequests(requests: Array<{ method: string }>) {
-  return requests.filter((request): request is { method: string; params: { effort?: string } } => (
+type CodexHarnessRequest = {
+  method: string
+  params?: {
+    effort?: string
+    sandbox?: string
+    sandboxPolicy?: { type: string }
+  }
+}
+
+function turnStartRequests(requests: CodexHarnessRequest[]) {
+  return requests.filter((request): request is CodexHarnessRequest & {
+    params: NonNullable<CodexHarnessRequest['params']>
+  } => (
     request.method === 'turn/start' && 'params' in request
   ))
 }
