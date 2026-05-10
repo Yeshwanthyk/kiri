@@ -18,14 +18,17 @@ pnpm build
 ## Projects
 
 ```sh
-pnpm pican:projects list
+pnpm pican:projects list [--all]
 pnpm pican:projects add --name "Pican Orchestrator" --cwd /path/to/repo --id pican
+pnpm pican:projects hide --id pican
+pnpm pican:projects unhide --id pican
 pnpm pican:projects delete --id pican --yes
 ```
 
-Adding a project creates a project row with no sessions. Deleting a project
-removes pican metadata for that project; it does not delete the project working
-directory.
+Adding a project creates a project row with no sessions. Hiding removes a
+project from the board while preserving its sessions and metadata. Deleting a
+project removes pican metadata for that project; it does not delete the project
+working directory.
 
 ## Settings
 

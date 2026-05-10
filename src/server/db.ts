@@ -11,13 +11,16 @@ import type {
   DeleteSessionInput,
   StartSessionInput,
   MessageRole,
+  ThinkingLevel,
   TimelineEventTone,
+  BoardMessage,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import {
   agentStatusSchema,
   messageRoleSchema,
   runtimeKindSchema,
+  thinkingLevelSchema,
   timelineEventToneSchema,
   workspaceSnapshotSchema,
 } from '~/lib/contracts'
@@ -36,6 +39,7 @@ const projectDbRowSchema = z.object({
   name: z.string(),
   cwd: z.string(),
   position: z.number().int().nonnegative(),
+  hiddenAt: z.string().nullable(),
 })
 
 const agentDbRowSchema = z.object({
@@ -98,6 +102,7 @@ const agentLaunchConfigSchema = z.object({
   sessionFile: z.string().nullable(),
   model: z.string(),
   cwd: z.string(),
+  runtimeStateJson: z.string().nullable().default(null),
 })
 
 const idDbRowSchema = z.object({
@@ -137,7 +142,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   const projects = database
     .prepare(
       `
-        SELECT id, name, cwd, position
+        SELECT id, name, cwd, position, hidden_at AS hiddenAt
         FROM projects
         ORDER BY position ASC
       `,
@@ -247,7 +252,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   )
   const agentsByProject = groupBy(agents, (agent) => agent.projectId)
 
-  const snapshotProjects = projects.map((project) => ({
+  const snapshotProjectRows = projects.map((project) => ({
     ...project,
     agents: (agentsByProject.get(project.id) ?? []).map((agent) => {
       const messages = (messagesByAgent.get(agent.id) ?? []).map(
@@ -286,12 +291,15 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
       }
     }),
   }))
+  const snapshotProjects = snapshotProjectRows.filter((project) => !project.hiddenAt)
+  const hiddenProjects = snapshotProjectRows.filter((project) => project.hiddenAt)
   const selectedProject = snapshotProjects[0]
   const selectedAgent = selectedProject?.agents[0]
 
   const snapshot = {
     settings,
     projects: snapshotProjects,
+    hiddenProjects,
     selected: {
       projectId: selectedProject?.id ?? '',
       agentId: selectedAgent?.id ?? '',
@@ -356,6 +364,7 @@ export function startSession(input: StartSessionInput) {
   const id = `${projectId}-${slot}`
   const title = input.title?.trim() || `Session ${nextPosition.position + 1}`
   const now = new Date().toISOString()
+  const sessionDir = runtimeSessionDir(runtime, projectId, slot)
 
   database.exec('BEGIN')
   try {
@@ -375,7 +384,7 @@ export function startSession(input: StartSessionInput) {
         title,
         runtime,
         model,
-        join(process.cwd(), '.pican', 'pi-sessions', projectId, slot),
+        sessionDir,
         nextPosition.position,
       )
     database
@@ -386,6 +395,13 @@ export function startSession(input: StartSessionInput) {
         `,
       )
       .run(`thread-${id}`, id, now)
+    insertAgentInfoEvent(database, {
+      agentId: id,
+      kind: 'thinking_level',
+      label: 'Thinking level changed',
+      detail: input.thinkingLevel,
+      timestamp: now,
+    })
     database.exec('COMMIT')
   } catch (error) {
     database.exec('ROLLBACK')
@@ -594,6 +610,42 @@ export function deleteProject(id: string) {
   return getWorkspaceSnapshot()
 }
 
+export function hideProject(id: string) {
+  const database = getDb()
+  const projectId = id.trim()
+  if (!projectId) throw new Error('Project id is required')
+
+  const visibleCount = database
+    .prepare('SELECT COUNT(*) AS count FROM projects WHERE hidden_at IS NULL')
+    .get() as { count: number }
+  if (visibleCount.count <= 1) throw new Error('Cannot hide the last visible project')
+
+  const existing = database
+    .prepare('SELECT id FROM projects WHERE id = ?')
+    .get(projectId)
+  if (!existing) throw new Error(`Project not found: ${projectId}`)
+
+  database
+    .prepare('UPDATE projects SET hidden_at = ? WHERE id = ?')
+    .run(new Date().toISOString(), projectId)
+
+  return getWorkspaceSnapshot()
+}
+
+export function unhideProject(id: string) {
+  const database = getDb()
+  const projectId = id.trim()
+  if (!projectId) throw new Error('Project id is required')
+
+  const existing = database
+    .prepare('SELECT id FROM projects WHERE id = ?')
+    .get(projectId)
+  if (!existing) throw new Error(`Project not found: ${projectId}`)
+
+  database.prepare('UPDATE projects SET hidden_at = NULL WHERE id = ?').run(projectId)
+  return getWorkspaceSnapshot()
+}
+
 export function getAgentLaunchConfig(agentId: string) {
   const row = getDb()
     .prepare(
@@ -604,6 +656,7 @@ export function getAgentLaunchConfig(agentId: string) {
           a.session_dir AS sessionDir,
           a.session_file AS sessionFile,
           a.model,
+          a.runtime_state_json AS runtimeStateJson,
           p.cwd
         FROM agent_slots a
         INNER JOIN projects p ON p.id = a.project_id
@@ -613,6 +666,33 @@ export function getAgentLaunchConfig(agentId: string) {
     .get(agentId)
   if (!row) throw new Error(`Agent not found: ${agentId}`)
   return agentLaunchConfigSchema.parse(row)
+}
+
+export function getAgentRuntimeState(agentId: string) {
+  const row = getDb()
+    .prepare('SELECT runtime_state_json AS runtimeStateJson FROM agent_slots WHERE id = ?')
+    .get(agentId) as { runtimeStateJson: string | null } | undefined
+  if (!row?.runtimeStateJson) return {}
+  try {
+    const parsed = JSON.parse(row.runtimeStateJson)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+export function setAgentRuntimeState(agentId: string, state: Record<string, unknown>) {
+  getDb()
+    .prepare('UPDATE agent_slots SET runtime_state_json = ? WHERE id = ?')
+    .run(JSON.stringify(state), agentId)
+}
+
+export function clearAgentRuntimeState(agentId: string) {
+  getDb()
+    .prepare('UPDATE agent_slots SET runtime_state_json = NULL WHERE id = ?')
+    .run(agentId)
 }
 
 export function setAgentStatus(agentId: string, status: AgentStatus) {
@@ -651,6 +731,95 @@ export function appendUserMessage(input: { agentId: string; text: string }) {
     database.exec('ROLLBACK')
     throw error
   }
+}
+
+export function recordRuntimeMessage(input: {
+  agentId: string
+  id: string
+  role: BoardMessage['role']
+  text: string
+  timestamp?: string
+}) {
+  const text = input.text.trim()
+  if (!text) return
+
+  const database = getDb()
+  const threadId = ensureThreadForAgent(database, input.agentId, undefined)
+  const timestamp = input.timestamp ?? new Date().toISOString()
+  database.exec('BEGIN')
+  try {
+    database
+      .prepare(
+        `
+          INSERT INTO messages (id, thread_id, role, text, timestamp)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            role = excluded.role,
+            text = excluded.text,
+            timestamp = excluded.timestamp
+        `,
+      )
+      .run(input.id, threadId, input.role, text, timestamp)
+    updateThreadSummary(database, threadId, input.role === 'assistant' ? text : null, timestamp)
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+}
+
+export function recordRuntimeTimelineEvent(input: {
+  agentId: string
+  kind: string
+  tone: TimelineEventTone
+  label: string
+  detail?: string | null
+  payload?: unknown
+  timestamp?: string
+}) {
+  const database = getDb()
+  const threadId = ensureThreadForAgent(database, input.agentId, undefined)
+  const timestamp = input.timestamp ?? new Date().toISOString()
+  const payload = {
+    ...(input.payload && typeof input.payload === 'object' && !Array.isArray(input.payload)
+      ? input.payload as Record<string, unknown>
+      : {}),
+    type: input.kind,
+    label: input.label,
+    detail: input.detail ?? null,
+    timestamp,
+  } as Record<string, unknown> & { type: string }
+  database
+    .prepare(
+      `
+        INSERT OR IGNORE INTO timeline_events (
+          id, thread_id, kind, tone, label, detail, timestamp, payload_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      eventId(input.agentId, payload),
+      threadId,
+      input.kind,
+      input.tone,
+      input.label,
+      input.detail ?? null,
+      timestamp,
+      JSON.stringify(payload),
+    )
+}
+
+export function recordRuntimeContextUsage(input: {
+  agentId: string
+  usedTokens: number | undefined
+  updatedAt?: string
+}) {
+  upsertAgentContextUsage(getDb(), input)
+}
+
+export function clearRuntimeContextUsage(agentId: string) {
+  getDb().prepare('DELETE FROM agent_context_usage WHERE agent_id = ?').run(agentId)
 }
 
 export function recordPiMessages(input: {
@@ -797,18 +966,46 @@ export function recordAgentInfoEvent(input: {
   label: string
   detail?: string | null
 }) {
-  const database = getDb()
+  insertAgentInfoEvent(getDb(), { ...input, timestamp: new Date().toISOString() })
+}
+
+export function getAgentThinkingLevel(agentId: string): ThinkingLevel | null {
+  const row = getDb()
+    .prepare(
+      `
+        SELECT e.detail
+        FROM timeline_events e
+        INNER JOIN threads t ON t.id = e.thread_id
+        WHERE t.agent_id = ? AND t.active = 1 AND e.kind = 'thinking_level'
+        ORDER BY e.timestamp DESC, e.id DESC
+        LIMIT 1
+      `,
+    )
+    .get(agentId) as { detail: string | null } | undefined
+  const parsed = thinkingLevelSchema.safeParse(row?.detail)
+  return parsed.success ? parsed.data : null
+}
+
+function insertAgentInfoEvent(
+  database: DatabaseSync,
+  input: {
+    agentId: string
+    kind: string
+    label: string
+    detail?: string | null
+    timestamp: string
+  },
+) {
   const thread = database
     .prepare('SELECT id FROM threads WHERE agent_id = ? AND active = 1')
     .get(input.agentId) as { id: string } | undefined
   if (!thread) throw new Error(`No active thread for agent: ${input.agentId}`)
 
-  const timestamp = new Date().toISOString()
   const payload = {
     type: input.kind,
     label: input.label,
     detail: input.detail ?? null,
-    timestamp,
+    timestamp: input.timestamp,
   }
   database
     .prepare(
@@ -825,7 +1022,7 @@ export function recordAgentInfoEvent(input: {
       input.kind,
       input.label,
       input.detail ?? null,
-      timestamp,
+      input.timestamp,
       JSON.stringify(payload),
     )
 }
@@ -870,7 +1067,8 @@ function migrate(database: DatabaseSync) {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       cwd TEXT NOT NULL,
-      position INTEGER NOT NULL
+      position INTEGER NOT NULL,
+      hidden_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS agent_slots (
@@ -883,6 +1081,7 @@ function migrate(database: DatabaseSync) {
       status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
       session_dir TEXT NOT NULL,
       session_file TEXT,
+      runtime_state_json TEXT,
       position INTEGER NOT NULL
     );
 
@@ -945,8 +1144,26 @@ function migrate(database: DatabaseSync) {
     );
   `)
   widenRuntimeCheck(database)
+  addProjectHiddenAtColumn(database)
+  addRuntimeStateColumn(database)
   repairAgentSlotReferences(database)
   removeLegacyDefaultAgentSlots(database)
+}
+
+function addProjectHiddenAtColumn(database: DatabaseSync) {
+  const columns = database
+    .prepare('PRAGMA table_info(projects)')
+    .all() as Array<{ name: string }>
+  if (columns.some((column) => column.name === 'hidden_at')) return
+  database.exec('ALTER TABLE projects ADD COLUMN hidden_at TEXT')
+}
+
+function addRuntimeStateColumn(database: DatabaseSync) {
+  const columns = database
+    .prepare('PRAGMA table_info(agent_slots)')
+    .all() as Array<{ name: string }>
+  if (columns.some((column) => column.name === 'runtime_state_json')) return
+  database.exec('ALTER TABLE agent_slots ADD COLUMN runtime_state_json TEXT')
 }
 
 function removeLegacyDefaultAgentSlots(database: DatabaseSync) {
@@ -974,19 +1191,25 @@ function widenRuntimeCheck(database: DatabaseSync) {
       status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
       session_dir TEXT NOT NULL,
       session_file TEXT,
+      runtime_state_json TEXT,
       position INTEGER NOT NULL
     );
 
     INSERT INTO agent_slots (
-      id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
+      id, project_id, slot, title, runtime, model, status, session_dir, session_file, runtime_state_json, position
     )
-    SELECT id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
+    SELECT id, project_id, slot, title, runtime, model, status, session_dir, session_file, NULL, position
     FROM agent_slots_old;
 
     DROP TABLE agent_slots_old;
     PRAGMA legacy_alter_table = OFF;
     PRAGMA foreign_keys = ON;
   `)
+}
+
+function runtimeSessionDir(runtime: string, projectId: string, slot: string) {
+  if (runtime === 'pi') return join(process.cwd(), '.pican', 'pi-sessions', projectId, slot)
+  return join(process.cwd(), '.pican', 'runtime-sessions', runtime, projectId, slot)
 }
 
 function repairAgentSlotReferences(database: DatabaseSync) {

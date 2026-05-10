@@ -16,7 +16,7 @@ function main() {
   const database = openDb()
 
   if (command === 'list') {
-    listProjects(database)
+    listProjects(database, options)
     return
   }
 
@@ -27,6 +27,16 @@ function main() {
 
   if (command === 'delete' || command === 'remove') {
     deleteProject(database, options)
+    return
+  }
+
+  if (command === 'hide') {
+    hideProject(database, options)
+    return
+  }
+
+  if (command === 'unhide' || command === 'show') {
+    unhideProject(database, options)
     return
   }
 
@@ -48,7 +58,8 @@ function migrate(database) {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       cwd TEXT NOT NULL,
-      position INTEGER NOT NULL
+      position INTEGER NOT NULL,
+      hidden_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS agent_slots (
@@ -115,20 +126,23 @@ function migrate(database) {
       updated_at TEXT NOT NULL
     );
   `)
+  addProjectHiddenAtColumn(database)
 }
 
-function listProjects(database) {
+function listProjects(database, options) {
+  const includeHidden = options.all
   const rows = database
     .prepare(
       `
-        SELECT p.id, p.name, p.cwd, COUNT(a.id) AS sessions
+        SELECT p.id, p.name, p.cwd, p.hidden_at AS hiddenAt, COUNT(a.id) AS sessions
         FROM projects p
         LEFT JOIN agent_slots a ON a.project_id = p.id
+        WHERE ? OR p.hidden_at IS NULL
         GROUP BY p.id
         ORDER BY p.position ASC
       `,
     )
-    .all()
+    .all(includeHidden ? 1 : 0)
 
   if (rows.length === 0) {
     console.log('No projects configured.')
@@ -136,7 +150,8 @@ function listProjects(database) {
   }
 
   for (const row of rows) {
-    console.log(`${row.id}\t${row.name}\t${row.sessions} sessions\t${row.cwd}`)
+    const state = row.hiddenAt ? 'hidden' : 'visible'
+    console.log(`${row.id}\t${row.name}\t${state}\t${row.sessions} sessions\t${row.cwd}`)
   }
 }
 
@@ -199,6 +214,47 @@ function deleteProject(database, options) {
   console.log(`Deleted project ${existing.id}: ${existing.name}`)
 }
 
+function hideProject(database, options) {
+  const id = required(options.id ?? options._[0], '--id')
+  const visibleCount = database
+    .prepare('SELECT COUNT(*) AS count FROM projects WHERE hidden_at IS NULL')
+    .get()
+  if (visibleCount.count <= 1) {
+    die('Cannot hide the last visible project')
+  }
+
+  const existing = database
+    .prepare('SELECT id, name FROM projects WHERE id = ?')
+    .get(id)
+  if (!existing) {
+    die(`Project not found: ${id}`)
+  }
+
+  database
+    .prepare('UPDATE projects SET hidden_at = ? WHERE id = ?')
+    .run(new Date().toISOString(), id)
+  console.log(`Hidden project ${existing.id}: ${existing.name}`)
+}
+
+function unhideProject(database, options) {
+  const id = required(options.id ?? options._[0], '--id')
+  const existing = database
+    .prepare('SELECT id, name FROM projects WHERE id = ?')
+    .get(id)
+  if (!existing) {
+    die(`Project not found: ${id}`)
+  }
+
+  database.prepare('UPDATE projects SET hidden_at = NULL WHERE id = ?').run(id)
+  console.log(`Unhid project ${existing.id}: ${existing.name}`)
+}
+
+function addProjectHiddenAtColumn(database) {
+  const columns = database.prepare('PRAGMA table_info(projects)').all()
+  if (columns.some((column) => column.name === 'hidden_at')) return
+  database.exec('ALTER TABLE projects ADD COLUMN hidden_at TEXT')
+}
+
 function nextProjectPosition(database) {
   const row = database
     .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM projects')
@@ -222,6 +278,10 @@ function parseArgs(args) {
     const arg = args[index]
     if (arg === '--yes' || arg === '-y') {
       options.yes = true
+      continue
+    }
+    if (arg === '--all') {
+      options.all = true
       continue
     }
     if (arg.startsWith('--')) {
@@ -258,8 +318,10 @@ function usage(error) {
   if (error) console.error(error)
   console.error(`
 Usage:
-  pnpm pican:projects list
+  pnpm pican:projects list [--all]
   pnpm pican:projects add --name "Project Name" --cwd /path/to/project [--id project-id]
+  pnpm pican:projects hide --id project-id
+  pnpm pican:projects unhide --id project-id
   pnpm pican:projects delete --id project-id --yes
 `)
   process.exit(error ? 1 : 0)

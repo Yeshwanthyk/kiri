@@ -128,6 +128,7 @@ export const projectRowSchema = z.object({
   name: z.string(),
   cwd: z.string(),
   position: z.number().int().nonnegative(),
+  hiddenAt: z.string().nullable(),
   agents: z.array(agentCellSchema),
 })
 export type ProjectRow = z.infer<typeof projectRowSchema>
@@ -135,6 +136,7 @@ export type ProjectRow = z.infer<typeof projectRowSchema>
 export const workspaceSnapshotSchema = z.object({
   settings: picanSettingsSchema,
   projects: z.array(projectRowSchema),
+  hiddenProjects: z.array(projectRowSchema),
   selected: z.object({
     projectId: z.string(),
     agentId: z.string(),
@@ -153,6 +155,16 @@ export const deleteProjectInputSchema = z.object({
   id: z.string().trim().min(1),
 })
 export type DeleteProjectInput = z.infer<typeof deleteProjectInputSchema>
+
+export const hideProjectInputSchema = z.object({
+  id: z.string().trim().min(1),
+})
+export type HideProjectInput = z.infer<typeof hideProjectInputSchema>
+
+export const unhideProjectInputSchema = z.object({
+  id: z.string().trim().min(1),
+})
+export type UnhideProjectInput = z.infer<typeof unhideProjectInputSchema>
 
 export const sendMessageImageSchema = z.object({
   name: z.string().trim().min(1).max(160),
@@ -201,6 +213,7 @@ export const startSessionInputSchema = z.object({
   title: z.string().trim().optional(),
   runtime: runtimeKindSchema.optional(),
   model: z.string().trim().optional(),
+  thinkingLevel: thinkingLevelSchema.default('medium'),
 })
 export type StartSessionInput = z.infer<typeof startSessionInputSchema>
 

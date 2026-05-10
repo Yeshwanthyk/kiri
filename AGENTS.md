@@ -5,14 +5,17 @@
 Use the CLI instead of editing `.pican/pican.sqlite` by hand.
 
 ```sh
-pnpm pican:projects list
+pnpm pican:projects list [--all]
 pnpm pican:projects add --name "Project Name" --cwd /absolute/path --id stable-id
+pnpm pican:projects hide --id stable-id
+pnpm pican:projects unhide --id stable-id
 pnpm pican:projects delete --id stable-id --yes
 ```
 
 Rules:
 
 - `add` creates only a project row. Sessions are created explicitly from the board.
+- `hide` removes a project from the board without deleting metadata or sessions.
 - `delete` removes only pican metadata; it does not delete the repo directory or session files.
 - Prefer stable lowercase ids; omit `--id` only when the slugified name is acceptable.
 - Run `pnpm build` after changes touching app code or contracts.
