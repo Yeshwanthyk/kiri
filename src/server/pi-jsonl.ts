@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
-import type { BoardMessage } from '~/lib/contracts'
+import type { BoardMessage, MessageRole } from '~/lib/contracts'
+import { boardMessageSchema, messageRoleSchema } from '~/lib/contracts'
 
 const piSessionHeaderSchema = z.object({
   type: z.literal('session'),
@@ -99,16 +100,19 @@ function toBoardMessage(entry: z.infer<typeof piMessageEntrySchema>): BoardMessa
   const role = normalizeRole(entry.message.role)
   if (!role) return null
 
-  return {
+  return boardMessageSchema.parse({
     id: entry.id,
     role,
     text: contentToText(entry.message.content),
     timestamp: entry.timestamp ?? new Date(0).toISOString(),
-  }
+  })
 }
 
-function normalizeRole(role: string): BoardMessage['role'] | null {
-  if (role === 'user' || role === 'assistant' || role === 'system') return role
+function normalizeRole(role: string): MessageRole | null {
+  const parsed = messageRoleSchema.safeParse(role)
+  if (parsed.success && parsed.data !== 'summary' && parsed.data !== 'tool') {
+    return parsed.data
+  }
   if (role === 'toolResult' || role === 'bashExecution') return 'tool'
   return null
 }

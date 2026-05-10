@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
+import { z } from 'zod'
 import type { AgentRuntimeState } from '~/lib/contracts'
 
 type PendingRequest = {
@@ -8,7 +9,34 @@ type PendingRequest = {
   timeout: ReturnType<typeof setTimeout>
 }
 
-export type PiRpcEvent = Record<string, unknown>
+const piRpcMessageSchema = z.object({
+  role: z.string(),
+  content: z.unknown(),
+  timestamp: z.number().optional(),
+})
+export type PiRpcMessage = z.infer<typeof piRpcMessageSchema>
+
+const piRpcEventSchema = z
+  .object({
+    type: z.string(),
+  })
+  .passthrough()
+export type PiRpcEvent = z.infer<typeof piRpcEventSchema>
+
+const piRpcResponseSchema = z
+  .object({
+    type: z.literal('response'),
+    id: z.string(),
+    success: z.boolean().optional(),
+    data: z.record(z.string(), z.unknown()).optional(),
+    error: z.string().optional(),
+  })
+  .passthrough()
+
+const piRpcAgentEndEventSchema = piRpcEventSchema.extend({
+  type: z.literal('agent_end'),
+  messages: z.array(piRpcMessageSchema).optional(),
+})
 
 export class PiRpcProcessAdapter {
   private child: ChildProcessWithoutNullStreams | null = null
@@ -23,6 +51,7 @@ export class PiRpcProcessAdapter {
       cwd: string
       sessionDir: string
       model?: string
+      models?: string[]
     },
   ) {}
 
@@ -30,6 +59,9 @@ export class PiRpcProcessAdapter {
     if (this.child) return
 
     const args = ['--mode', 'rpc', '--session-dir', this.options.sessionDir]
+    if (this.options.models?.length) {
+      args.push('--models', this.options.models.join(','))
+    }
     if (this.options.model) {
       args.push('--model', this.options.model)
     }
@@ -109,6 +141,25 @@ export class PiRpcProcessAdapter {
     return this.send('prompt', { message })
   }
 
+  async promptAndWait(message: string): Promise<PiRpcMessage[]> {
+    const completion = new Promise<PiRpcMessage[]>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup()
+        reject(new Error('Timed out waiting for Pi assistant response'))
+      }, 120_000)
+      const cleanup = this.onEvent((event) => {
+        const result = piRpcAgentEndEventSchema.safeParse(event)
+        if (!result.success) return
+        clearTimeout(timeout)
+        cleanup()
+        resolve(result.data.messages ?? [])
+      })
+    })
+
+    await this.prompt(message)
+    return completion
+  }
+
   abort() {
     return this.send('abort', {})
   }
@@ -164,7 +215,7 @@ export class PiRpcProcessAdapter {
 
     let payload: PiRpcEvent
     try {
-      payload = JSON.parse(line)
+      payload = piRpcEventSchema.parse(JSON.parse(line))
     } catch {
       return
     }
@@ -196,18 +247,16 @@ export class PiRpcProcessAdapter {
 }
 
 function getResponseData(response: unknown): Record<string, unknown> {
-  if (!response || typeof response !== 'object') return {}
-  if ('success' in response && response.success === false) {
+  const result = piRpcResponseSchema.safeParse(response)
+  if (!result.success) return {}
+  if (result.data.success === false) {
     throw new Error(
-      'error' in response && typeof response.error === 'string'
-        ? response.error
+      result.data.error
+        ? result.data.error
         : 'Pi RPC command failed',
     )
   }
-  if ('data' in response && response.data && typeof response.data === 'object') {
-    return response.data as Record<string, unknown>
-  }
-  return {}
+  return result.data.data ?? {}
 }
 
 function stringValue(value: unknown) {

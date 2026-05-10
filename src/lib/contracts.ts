@@ -1,24 +1,27 @@
 import { z } from 'zod'
 
-export const runtimeKindSchema = z.enum(['pi', 'codex', 'claude', 'opencode'])
+export const runtimeKinds = ['pi', 'codex', 'claude', 'opencode'] as const
+export const runtimeKindSchema = z.enum(runtimeKinds)
 export type RuntimeKind = z.infer<typeof runtimeKindSchema>
 
-export const agentStatusSchema = z.enum([
+export const agentStatuses = [
   'idle',
   'running',
   'queued',
   'blocked',
   'failed',
-])
+] as const
+export const agentStatusSchema = z.enum(agentStatuses)
 export type AgentStatus = z.infer<typeof agentStatusSchema>
 
-export const messageRoleSchema = z.enum([
+export const messageRoles = [
   'user',
   'assistant',
   'tool',
   'system',
   'summary',
-])
+] as const
+export const messageRoleSchema = z.enum(messageRoles)
 export type MessageRole = z.infer<typeof messageRoleSchema>
 
 export const boardMessageSchema = z.object({
@@ -57,6 +60,22 @@ export const agentCellSchema = z.object({
 })
 export type AgentCell = z.infer<typeof agentCellSchema>
 
+export const runtimeSettingsSchema = z.object({
+  models: z.array(z.string().trim().min(1)).min(1),
+  defaultModel: z.string().trim().min(1),
+})
+export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>
+
+export const picanSettingsSchema = z.object({
+  runtimes: z.object({
+    pi: runtimeSettingsSchema,
+    codex: runtimeSettingsSchema,
+    claude: runtimeSettingsSchema,
+    opencode: runtimeSettingsSchema,
+  }),
+})
+export type PicanSettings = z.infer<typeof picanSettingsSchema>
+
 export const projectRowSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -67,6 +86,7 @@ export const projectRowSchema = z.object({
 export type ProjectRow = z.infer<typeof projectRowSchema>
 
 export const workspaceSnapshotSchema = z.object({
+  settings: picanSettingsSchema,
   projects: z.array(projectRowSchema),
   selected: z.object({
     projectId: z.string(),
@@ -74,6 +94,31 @@ export const workspaceSnapshotSchema = z.object({
   }),
 })
 export type WorkspaceSnapshot = z.infer<typeof workspaceSnapshotSchema>
+
+export const addProjectInputSchema = z.object({
+  id: z.string().trim().optional(),
+  name: z.string().trim().min(1),
+  cwd: z.string().trim().min(1),
+})
+export type AddProjectInput = z.infer<typeof addProjectInputSchema>
+
+export const deleteProjectInputSchema = z.object({
+  id: z.string().trim().min(1),
+})
+export type DeleteProjectInput = z.infer<typeof deleteProjectInputSchema>
+
+export const sendMessageInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  text: z.string().trim().min(1),
+})
+export type SendMessageInput = z.infer<typeof sendMessageInputSchema>
+
+export const setAgentConfigInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  runtime: runtimeKindSchema,
+  model: z.string().trim().min(1),
+})
+export type SetAgentConfigInput = z.infer<typeof setAgentConfigInputSchema>
 
 export type AgentRuntimeState = {
   kind: RuntimeKind

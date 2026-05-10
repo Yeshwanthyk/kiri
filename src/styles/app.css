@@ -104,6 +104,319 @@ h1 {
   background: var(--panel);
 }
 
+.keymap kbd {
+  min-width: 15px;
+  color: var(--ink);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  text-align: center;
+}
+
+.settings-trigger,
+.reset-keymap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-trigger {
+  padding: 0 9px;
+}
+
+.settings-trigger[aria-expanded="true"] {
+  border-color: oklch(0.68 0.06 166);
+  background: oklch(0.96 0.015 158);
+  color: var(--ink);
+}
+
+.settings-shell {
+  min-height: 100vh;
+  padding: 26px;
+  background:
+    linear-gradient(180deg, oklch(0.982 0.006 84), var(--paper) 260px);
+}
+
+.settings-hero {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  max-width: 1180px;
+  margin: 0 auto 22px;
+}
+
+.settings-hero h1 {
+  font-size: 34px;
+}
+
+.settings-close {
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
+  gap: 14px;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.settings-section {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: oklch(0.982 0.008 92);
+}
+
+.runtime-section {
+  grid-row: span 2;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.section-heading > svg {
+  color: var(--accent);
+}
+
+.section-heading h2 {
+  margin-top: 2px;
+  font-size: 18px;
+  line-height: 1.15;
+}
+
+.settings-panel,
+.project-settings {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-panel {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+}
+
+.settings-panel > div,
+.reset-keymap {
+  grid-column: 1 / -1;
+}
+
+.settings-kicker {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.settings-panel strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 14px;
+}
+
+.key-select {
+  display: grid;
+  gap: 4px;
+}
+
+.key-select span,
+.project-add-form span,
+.agent-model-row label span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.key-select select,
+.project-add-form input,
+.agent-model-row select {
+  min-height: 34px;
+  padding: 0 30px 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.agent-model-list {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-model-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(120px, 0.45fr) minmax(220px, 1fr);
+  gap: 10px;
+  align-items: end;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+}
+
+.agent-model-row label,
+.agent-model-name {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.agent-model-name strong,
+.agent-model-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-model-name strong {
+  font-size: 13px;
+}
+
+.agent-model-name span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-settings-head,
+.project-add-form,
+.project-settings-row {
+  display: flex;
+  align-items: end;
+}
+
+.project-settings-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.project-settings-head strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 14px;
+}
+
+.project-settings-head span[role="status"] {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.project-add-form {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(220px, 1.4fr) minmax(130px, 0.7fr) auto;
+  gap: 8px;
+}
+
+.project-add-form label {
+  display: grid;
+  gap: 4px;
+}
+
+.project-add-form button,
+.composer button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: oklch(0.94 0.035 166);
+  color: oklch(0.32 0.08 166);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.project-add-form button:disabled,
+.composer button:disabled,
+.project-settings-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.project-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.project-settings-row {
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+}
+
+.project-settings-row div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.project-settings-row strong,
+.project-settings-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-settings-row strong {
+  font-size: 13px;
+}
+
+.project-settings-row span {
+  color: var(--muted);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.project-settings-row button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.project-settings-row button:not(:disabled):hover {
+  border-color: oklch(0.78 0.055 25);
+  background: oklch(0.955 0.025 25);
+  color: var(--danger);
+}
+
+.reset-keymap {
+  justify-content: center;
+  padding: 0 10px;
+}
+
 .board-grid {
   display: grid;
   gap: 12px;
@@ -368,13 +681,19 @@ h1 {
 
 .composer {
   gap: 8px;
+  min-width: 0;
   padding: 12px;
   border-top: 1px solid var(--line);
   color: var(--muted);
 }
 
+.composer > svg {
+  flex: 0 0 auto;
+}
+
 .composer input {
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   min-width: 0;
   height: 36px;
   padding: 0 10px;
@@ -382,6 +701,12 @@ h1 {
   border-radius: 7px;
   background: var(--paper);
   color: var(--ink);
+}
+
+.composer button {
+  width: 36px;
+  flex: 0 0 auto;
+  padding: 0;
 }
 
 .diff-header {
@@ -445,6 +770,28 @@ h1 {
 
   .keymap span {
     min-height: 28px;
+  }
+
+  .settings-shell {
+    padding: 20px 16px;
+  }
+
+  .settings-hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settings-layout,
+  .agent-model-row,
+  .project-add-form,
+  .project-list,
+  .settings-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-panel > div,
+  .reset-keymap {
+    grid-column: 1 / -1;
   }
 
   .sidebar-pane {

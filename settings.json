@@ -1,0 +1,23 @@
+{
+  "runtimes": {
+    "pi": {
+      "models": [
+        "openai-codex/gpt-5.5",
+        "vibeproxy-anthropic/claude-opus-4-7"
+      ],
+      "defaultModel": "openai-codex/gpt-5.5"
+    },
+    "codex": {
+      "models": ["gpt-5.5", "gpt-5.4"],
+      "defaultModel": "gpt-5.5"
+    },
+    "claude": {
+      "models": ["claude-opus-4-7", "claude-sonnet-4-5"],
+      "defaultModel": "claude-opus-4-7"
+    },
+    "opencode": {
+      "models": ["opencode/default"],
+      "defaultModel": "opencode/default"
+    }
+  }
+}

@@ -1,0 +1,285 @@
+#!/usr/bin/env node
+
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+
+const root = process.cwd()
+const dbPath = join(root, '.pican', 'pican.sqlite')
+const defaultAgents = [
+  ['planner', 'Planner'],
+  ['builder', 'Builder'],
+  ['reviewer', 'Reviewer'],
+]
+
+main()
+
+function main() {
+  const [command, ...args] = process.argv.slice(2)
+  const options = parseArgs(args)
+  const database = openDb()
+
+  if (command === 'list') {
+    listProjects(database)
+    return
+  }
+
+  if (command === 'add') {
+    addProject(database, options)
+    return
+  }
+
+  if (command === 'delete' || command === 'remove') {
+    deleteProject(database, options)
+    return
+  }
+
+  usage(command ? `Unknown command: ${command}` : undefined)
+}
+
+function openDb() {
+  mkdirSync(dirname(dbPath), { recursive: true })
+  const database = new DatabaseSync(dbPath)
+  database.exec('PRAGMA journal_mode = WAL')
+  database.exec('PRAGMA foreign_keys = ON')
+  migrate(database)
+  return database
+}
+
+function migrate(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      cwd TEXT NOT NULL,
+      position INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_slots (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      slot TEXT NOT NULL,
+      title TEXT NOT NULL,
+      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude', 'opencode')),
+      model TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
+      session_dir TEXT NOT NULL,
+      session_file TEXT,
+      position INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS threads (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+      active INTEGER NOT NULL DEFAULT 1,
+      preview TEXT NOT NULL,
+      message_count INTEGER NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS one_active_thread_per_agent
+      ON threads(agent_id)
+      WHERE active = 1;
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool', 'system', 'summary')),
+      text TEXT NOT NULL,
+      timestamp TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS diff_artifacts (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      path TEXT NOT NULL,
+      patch TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `)
+}
+
+function listProjects(database) {
+  const rows = database
+    .prepare(
+      `
+        SELECT p.id, p.name, p.cwd, COUNT(a.id) AS agents
+        FROM projects p
+        LEFT JOIN agent_slots a ON a.project_id = p.id
+        GROUP BY p.id
+        ORDER BY p.position ASC
+      `,
+    )
+    .all()
+
+  if (rows.length === 0) {
+    console.log('No projects configured.')
+    return
+  }
+
+  for (const row of rows) {
+    console.log(`${row.id}\t${row.name}\t${row.agents} agents\t${row.cwd}`)
+  }
+}
+
+function addProject(database, options) {
+  const cwd = options.cwd ? resolve(options.cwd) : root
+  const name = required(options.name, '--name')
+  const id = options.id ?? slugify(name)
+
+  if (!existsSync(cwd)) {
+    die(`Project cwd does not exist: ${cwd}`)
+  }
+
+  const exists = database
+    .prepare('SELECT id FROM projects WHERE id = ?')
+    .get(id)
+  if (exists) {
+    die(`Project already exists: ${id}`)
+  }
+
+  const nextPosition = nextProjectPosition(database)
+  const insertProject = database.prepare(`
+    INSERT INTO projects (id, name, cwd, position)
+    VALUES (?, ?, ?, ?)
+  `)
+  const insertAgent = database.prepare(`
+    INSERT INTO agent_slots (
+      id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
+    )
+    VALUES (?, ?, ?, ?, 'pi', ?, 'idle', ?, NULL, ?)
+  `)
+  const insertThread = database.prepare(`
+    INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
+    VALUES (?, ?, 1, 'Ready.', 0, ?)
+  `)
+
+  const now = new Date().toISOString()
+  const model = defaultPiModel()
+  database.exec('BEGIN')
+  try {
+    insertProject.run(id, name, cwd, nextPosition)
+    for (const [index, [slot, title]] of defaultAgents.entries()) {
+      const agentId = `${id}-${slot}`
+      insertAgent.run(
+        agentId,
+        id,
+        slot,
+        title,
+        model,
+        join(root, '.pican', 'pi-sessions', id, slot),
+        index,
+      )
+      insertThread.run(`thread-${agentId}`, agentId, now)
+    }
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+
+  console.log(`Added project ${id}: ${name}`)
+}
+
+function deleteProject(database, options) {
+  const id = required(options.id ?? options._[0], '--id')
+  if (!options.yes) {
+    die(`Refusing to delete ${id} without --yes`)
+  }
+
+  const existing = database
+    .prepare('SELECT id, name FROM projects WHERE id = ?')
+    .get(id)
+  if (!existing) {
+    die(`Project not found: ${id}`)
+  }
+
+  database.exec('BEGIN')
+  try {
+    database.prepare('DELETE FROM projects WHERE id = ?').run(id)
+    reindexProjects(database)
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+
+  console.log(`Deleted project ${existing.id}: ${existing.name}`)
+}
+
+function nextProjectPosition(database) {
+  const row = database
+    .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM projects')
+    .get()
+  return row.position
+}
+
+function reindexProjects(database) {
+  const rows = database
+    .prepare('SELECT id FROM projects ORDER BY position ASC, id ASC')
+    .all()
+  const update = database.prepare('UPDATE projects SET position = ? WHERE id = ?')
+  for (const [position, row] of rows.entries()) {
+    update.run(position, row.id)
+  }
+}
+
+function defaultPiModel() {
+  const settings = JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8'))
+  return settings.runtimes.pi.defaultModel
+}
+
+function parseArgs(args) {
+  const options = { _: [] }
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]
+    if (arg === '--yes' || arg === '-y') {
+      options.yes = true
+      continue
+    }
+    if (arg.startsWith('--')) {
+      const key = arg.slice(2)
+      const value = args[index + 1]
+      if (!value || value.startsWith('--')) {
+        die(`Missing value for ${arg}`)
+      }
+      options[key] = value
+      index += 1
+      continue
+    }
+    options._.push(arg)
+  }
+  return options
+}
+
+function required(value, label) {
+  if (!value) die(`Missing required ${label}`)
+  return value
+}
+
+function slugify(value) {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  if (!slug) die('Project name must contain at least one ASCII letter or digit')
+  return slug
+}
+
+function usage(error) {
+  if (error) console.error(error)
+  console.error(`
+Usage:
+  pnpm pican:projects list
+  pnpm pican:projects add --name "Project Name" --cwd /path/to/project [--id project-id]
+  pnpm pican:projects delete --id project-id --yes
+`)
+  process.exit(error ? 1 : 0)
+}
+
+function die(message) {
+  console.error(message)
+  process.exit(1)
+}
