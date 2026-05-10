@@ -20,6 +20,7 @@ export default defineConfig({
     env: {
       ...process.env,
       PICAN_DB_PATH: e2eDbPath,
+      PICAN_CODEX_APP_SERVER_URL: 'ws://127.0.0.1:39111',
     },
     url: 'http://localhost:3109',
     reuseExistingServer: false,

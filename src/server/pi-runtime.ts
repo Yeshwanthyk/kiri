@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import type { SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import { PiRpcProcessAdapter } from './pi-rpc'
@@ -7,6 +7,7 @@ import {
   appendUserMessage,
   createForkedSession,
   getAgentLaunchConfig,
+  getAgentThinkingLevel,
   recordAgentInfoEvent,
   recordPiTimelineEvent,
   recordPiMessages,
@@ -93,6 +94,7 @@ export async function resetPiSession(input: { agentId: string }) {
     throw new Error(`${config.runtime} agents do not support /new yet`)
   }
   stopAdapter(config.id)
+  archivePiSessionFiles(config.sessionDir)
   resetSession(config.id)
 }
 
@@ -133,6 +135,8 @@ async function promptPiAgentNow(
   let stopRecordingEvents: (() => void) | undefined
   try {
     adapter.start()
+    const thinkingLevel = getAgentThinkingLevel(config.id)
+    if (thinkingLevel) await adapter.setThinkingLevel(thinkingLevel)
     stopRecordingEvents = adapter.onEvent((event) => {
       try {
         recordPiTimelineEvent({ agentId: config.id, event })
@@ -197,6 +201,20 @@ function stopAdapter(agentId: string) {
   adapters.delete(agentId)
   adapterKeys.delete(agentId)
   queues.delete(agentId)
+}
+
+function archivePiSessionFiles(sessionDir: string) {
+  if (!existsSync(sessionDir)) return
+  const sessionFiles = readdirSync(sessionDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .map((entry) => entry.name)
+  if (!sessionFiles.length) return
+
+  const archiveDir = join(sessionDir, '.archive', new Date().toISOString().replace(/[:.]/g, '-'))
+  mkdirSync(archiveDir, { recursive: true })
+  for (const file of sessionFiles) {
+    renameSync(join(sessionDir, file), join(archiveDir, file))
+  }
 }
 
 function getOrCreatePiAdapter(config: ReturnType<typeof getAgentLaunchConfig>) {
