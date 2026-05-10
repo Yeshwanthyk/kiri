@@ -5,7 +5,9 @@ import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 const root = process.cwd()
-const dbPath = join(root, '.pican', 'pican.sqlite')
+const dbPath = process.env.PICAN_DB_PATH
+  ? resolve(process.env.PICAN_DB_PATH)
+  : join(root, '.pican', 'pican.sqlite')
 main()
 
 function main() {
@@ -81,6 +83,27 @@ function migrate(database) {
       role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool', 'system', 'summary')),
       text TEXT NOT NULL,
       timestamp TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS timeline_events (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      tone TEXT NOT NULL CHECK (tone IN ('thinking', 'tool', 'info', 'error')),
+      label TEXT NOT NULL,
+      detail TEXT,
+      timestamp TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS timeline_events_thread_timestamp
+      ON timeline_events(thread_id, timestamp, id);
+
+    CREATE TABLE IF NOT EXISTS deleted_sessions (
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      slot TEXT NOT NULL,
+      deleted_at TEXT NOT NULL,
+      PRIMARY KEY (project_id, slot)
     );
 
     CREATE TABLE IF NOT EXISTS diff_artifacts (

@@ -1,0 +1,47 @@
+{
+  "providerAliases": {
+    "vibeproxy-anthropic": "anthropic"
+  },
+  "openai-codex": {
+    "models": {
+      "gpt-5.5": {
+        "limit": {
+          "context": 258000
+        }
+      },
+      "gpt-5.4": {
+        "limit": {
+          "context": 272000
+        }
+      }
+    }
+  },
+  "openai": {
+    "models": {
+      "gpt-5.5": {
+        "limit": {
+          "context": 258000
+        }
+      },
+      "gpt-5.4": {
+        "limit": {
+          "context": 400000
+        }
+      }
+    }
+  },
+  "anthropic": {
+    "models": {
+      "claude-opus-4-7": {
+        "limit": {
+          "context": 1000000
+        }
+      },
+      "claude-sonnet-4-5": {
+        "limit": {
+          "context": 200000
+        }
+      }
+    }
+  }
+}

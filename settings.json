@@ -5,19 +5,40 @@
         "openai-codex/gpt-5.5",
         "vibeproxy-anthropic/claude-opus-4-7"
       ],
-      "defaultModel": "openai-codex/gpt-5.5"
+      "defaultModel": "openai-codex/gpt-5.5",
+      "contextWindows": {
+        "openai-codex/gpt-5.5": 258000,
+        "vibeproxy-anthropic/claude-opus-4-7": 1000000
+      }
     },
     "codex": {
-      "models": ["gpt-5.5", "gpt-5.4"],
-      "defaultModel": "gpt-5.5"
+      "models": [
+        "gpt-5.5",
+        "gpt-5.4"
+      ],
+      "defaultModel": "gpt-5.5",
+      "contextWindows": {
+        "gpt-5.5": 258000,
+        "gpt-5.4": 272000
+      }
     },
     "claude": {
-      "models": ["claude-opus-4-7", "claude-sonnet-4-5"],
-      "defaultModel": "claude-opus-4-7"
+      "models": [
+        "claude-opus-4-7",
+        "claude-sonnet-4-5"
+      ],
+      "defaultModel": "claude-opus-4-7",
+      "contextWindows": {
+        "claude-opus-4-7": 1000000,
+        "claude-sonnet-4-5": 200000
+      }
     },
     "opencode": {
-      "models": ["opencode/default"],
-      "defaultModel": "opencode/default"
+      "models": [
+        "opencode/default"
+      ],
+      "defaultModel": "opencode/default",
+      "contextWindows": {}
     }
   }
 }

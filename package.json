@@ -7,6 +7,7 @@
     "dev": "vite dev",
     "build": "vite build && tsc --noEmit",
     "test:e2e": "playwright test",
+    "pican:models": "node scripts/sync-models-dev.mjs",
     "pican:projects": "node scripts/pican-projects.mjs",
     "preview": "vite preview",
     "start": "pnpx srvx --prod -s ../client dist/server/server.js"

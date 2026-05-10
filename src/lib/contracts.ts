@@ -32,6 +32,36 @@ export const boardMessageSchema = z.object({
 })
 export type BoardMessage = z.infer<typeof boardMessageSchema>
 
+export const timelineEventTones = ['thinking', 'tool', 'info', 'error'] as const
+export const timelineEventToneSchema = z.enum(timelineEventTones)
+export type TimelineEventTone = z.infer<typeof timelineEventToneSchema>
+
+export const timelineEventSchema = z.object({
+  id: z.string(),
+  kind: z.string(),
+  tone: timelineEventToneSchema,
+  label: z.string(),
+  detail: z.string().nullable(),
+  timestamp: z.string(),
+})
+export type TimelineEvent = z.infer<typeof timelineEventSchema>
+
+export const boardTimelineItemSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('message'),
+    id: z.string(),
+    timestamp: z.string(),
+    message: boardMessageSchema,
+  }),
+  z.object({
+    type: z.literal('event'),
+    id: z.string(),
+    timestamp: z.string(),
+    event: timelineEventSchema,
+  }),
+])
+export type BoardTimelineItem = z.infer<typeof boardTimelineItemSchema>
+
 export const diffArtifactSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -40,6 +70,14 @@ export const diffArtifactSchema = z.object({
   updatedAt: z.string(),
 })
 export type DiffArtifact = z.infer<typeof diffArtifactSchema>
+
+export const contextUsageSchema = z.object({
+  usedTokens: z.number().int().nonnegative(),
+  remainingTokens: z.number().int().nonnegative(),
+  windowTokens: z.number().int().positive(),
+  usedPercent: z.number().min(0).max(100),
+})
+export type ContextUsage = z.infer<typeof contextUsageSchema>
 
 export const agentCellSchema = z.object({
   id: z.string(),
@@ -54,9 +92,12 @@ export const agentCellSchema = z.object({
   preview: z.string(),
   messageCount: z.number().int().nonnegative(),
   diffCount: z.number().int().nonnegative(),
+  contextUsage: contextUsageSchema.nullable().default(null),
   updatedAt: z.string(),
   isSession: z.boolean(),
   messages: z.array(boardMessageSchema),
+  timelineEvents: z.array(timelineEventSchema).default([]),
+  timeline: z.array(boardTimelineItemSchema).default([]),
   diffs: z.array(diffArtifactSchema),
 })
 export type AgentCell = z.infer<typeof agentCellSchema>
@@ -64,6 +105,7 @@ export type AgentCell = z.infer<typeof agentCellSchema>
 export const runtimeSettingsSchema = z.object({
   models: z.array(z.string().trim().min(1)).min(1),
   defaultModel: z.string().trim().min(1),
+  contextWindows: z.record(z.string(), z.number().int().positive()).optional(),
 })
 export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>
 

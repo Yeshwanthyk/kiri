@@ -17,6 +17,16 @@ const piMessageEntrySchema = z.object({
   message: z.object({
     role: z.string(),
     content: z.unknown(),
+    stopReason: z.string().optional(),
+    usage: z
+      .object({
+        input: z.number().int().nonnegative().optional(),
+        output: z.number().int().nonnegative().optional(),
+        cacheRead: z.number().int().nonnegative().optional(),
+        cacheWrite: z.number().int().nonnegative().optional(),
+        totalTokens: z.number().int().nonnegative().optional(),
+      })
+      .optional(),
   }),
 })
 
@@ -32,6 +42,7 @@ export type PiSessionProjection = {
   cwd?: string
   messages: BoardMessage[]
   preview: string
+  contextUsedTokens?: number
   updatedAt?: string
 }
 
@@ -70,6 +81,10 @@ export function projectPiSessionJsonl(content: string): PiSessionProjection {
       if (message) {
         projection.messages.push(message)
         projection.updatedAt = message.timestamp
+        if (message.role === 'assistant') {
+          projection.contextUsedTokens =
+            usageContextTokens(messageEntry.data.message) ?? projection.contextUsedTokens
+        }
         if (!projection.preview && message.role === 'user') {
           projection.preview = message.text
         }
@@ -115,6 +130,21 @@ function normalizeRole(role: string): MessageRole | null {
   }
   if (role === 'toolResult' || role === 'bashExecution') return 'tool'
   return null
+}
+
+function usageContextTokens(message: z.infer<typeof piMessageEntrySchema>['message']) {
+  if (message.stopReason === 'aborted' || message.stopReason === 'error') return undefined
+
+  const usage = message.usage
+  if (!usage) return undefined
+  if (usage.totalTokens !== undefined && usage.totalTokens > 0) return usage.totalTokens
+
+  const total =
+    (usage.input ?? 0) +
+    (usage.output ?? 0) +
+    (usage.cacheRead ?? 0) +
+    (usage.cacheWrite ?? 0)
+  return total > 0 ? total : undefined
 }
 
 function contentToText(content: unknown): string {

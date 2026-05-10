@@ -50,6 +50,7 @@ export class PiRpcProcessAdapter {
     private readonly options: {
       cwd: string
       sessionDir: string
+      sessionFile?: string
       model?: string
       models?: string[]
     },
@@ -59,6 +60,9 @@ export class PiRpcProcessAdapter {
     if (this.child) return
 
     const args = ['--mode', 'rpc', '--session-dir', this.options.sessionDir]
+    if (this.options.sessionFile) {
+      args.push('--session', this.options.sessionFile)
+    }
     if (this.options.models?.length) {
       args.push('--models', this.options.models.join(','))
     }

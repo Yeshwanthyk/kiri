@@ -1,25 +1,33 @@
-import { existsSync, mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import type {
   AddProjectInput,
   AgentStatus,
+  ContextUsage,
+  DiffArtifact,
   DeleteSessionInput,
   StartSessionInput,
   MessageRole,
+  TimelineEventTone,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import {
   agentStatusSchema,
   messageRoleSchema,
   runtimeKindSchema,
+  timelineEventToneSchema,
   workspaceSnapshotSchema,
 } from '~/lib/contracts'
-import type { PiRpcMessage } from './pi-rpc'
+import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
+import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
 
-const dbPath = join(process.cwd(), '.pican', 'pican.sqlite')
+const dbPath = process.env.PICAN_DB_PATH
+  ? resolve(process.env.PICAN_DB_PATH)
+  : join(process.cwd(), '.pican', 'pican.sqlite')
 
 let db: DatabaseSync | undefined
 
@@ -56,6 +64,17 @@ const messageDbRowSchema = z.object({
   timestamp: z.string(),
 })
 
+const timelineEventDbRowSchema = z.object({
+  id: z.string(),
+  agentId: z.string(),
+  kind: z.string(),
+  tone: timelineEventToneSchema,
+  label: z.string(),
+  detail: z.string().nullable(),
+  timestamp: z.string(),
+  payloadJson: z.string(),
+})
+
 const diffDbRowSchema = z.object({
   id: z.string(),
   agentId: z.string(),
@@ -65,16 +84,39 @@ const diffDbRowSchema = z.object({
   updatedAt: z.string(),
 })
 
+const contextUsageDbRowSchema = z.object({
+  agentId: z.string(),
+  usedTokens: z.number().int().nonnegative(),
+  updatedAt: z.string(),
+  sessionFile: z.string().nullable(),
+})
+
 const agentLaunchConfigSchema = z.object({
   id: z.string(),
   runtime: runtimeKindSchema,
   sessionDir: z.string(),
+  sessionFile: z.string().nullable(),
   model: z.string(),
   cwd: z.string(),
 })
 
 const idDbRowSchema = z.object({
   id: z.string(),
+})
+
+const projectIdDbRowSchema = z.object({
+  id: z.string(),
+})
+
+const persistedSessionDbRowSchema = z.object({
+  id: z.string(),
+  slot: z.string(),
+  sessionDir: z.string(),
+  sessionFile: z.string().nullable(),
+})
+
+const deletedSessionDbRowSchema = z.object({
+  slot: z.string(),
 })
 
 export function getDb() {
@@ -91,6 +133,7 @@ export function getDb() {
 
 export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   const database = getDb()
+  hydratePersistedPiSessions(database)
   const projects = database
     .prepare(
       `
@@ -146,6 +189,27 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
     .all()
     .map((row) => messageDbRowSchema.parse(row))
 
+  const timelineEvents = database
+    .prepare(
+      `
+        SELECT
+          e.id,
+          t.agent_id AS agentId,
+          e.kind,
+          e.tone,
+          e.label,
+          e.detail,
+          e.timestamp,
+          e.payload_json AS payloadJson
+        FROM timeline_events e
+        INNER JOIN threads t ON t.id = e.thread_id
+        WHERE t.active = 1
+        ORDER BY e.timestamp ASC, e.id ASC
+      `,
+    )
+    .all()
+    .map((row) => timelineEventFromDbRow(timelineEventDbRowSchema.parse(row)))
+
   const diffs = database
     .prepare(
       `
@@ -157,40 +221,76 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
     .all()
     .map((row) => diffDbRowSchema.parse(row))
 
+  const contextUsages = database
+    .prepare(
+      `
+        SELECT
+          agent_id AS agentId,
+          used_tokens AS usedTokens,
+          updated_at AS updatedAt,
+          session_file AS sessionFile
+        FROM agent_context_usage
+      `,
+    )
+    .all()
+    .map((row) => contextUsageDbRowSchema.parse(row))
+
+  const settings = getSettings()
   const messagesByAgent = groupBy(messages, (message) => message.agentId)
+  const timelineEventsByAgent = groupBy(
+    timelineEvents,
+    (event) => event.agentId,
+  )
   const diffsByAgent = groupBy(diffs, (diff) => diff.agentId)
+  const contextUsageByAgent = new Map(
+    contextUsages.map((usage) => [usage.agentId, usage]),
+  )
   const agentsByProject = groupBy(agents, (agent) => agent.projectId)
 
   const snapshotProjects = projects.map((project) => ({
     ...project,
-    agents: (agentsByProject.get(project.id) ?? []).map((agent) => ({
-      id: agent.id,
-      projectId: agent.projectId,
-      slot: agent.slot,
-      title: agent.title,
-      runtime: agent.runtime,
-      model: agent.model,
-      status: agent.status,
-      sessionDir: agent.sessionDir,
-      sessionFile: agent.sessionFile,
-      preview: agent.preview ?? 'No messages yet',
-      messageCount: agent.messageCount ?? 0,
-      diffCount: agent.diffCount,
-      updatedAt: agent.updatedAt ?? new Date(0).toISOString(),
-      isSession: agent.slot.startsWith('session-'),
-      messages: (messagesByAgent.get(agent.id) ?? []).map(
+    agents: (agentsByProject.get(project.id) ?? []).map((agent) => {
+      const messages = (messagesByAgent.get(agent.id) ?? []).map(
         ({ agentId: _agentId, ...message }) => message,
-      ),
-      diffs: (diffsByAgent.get(agent.id) ?? []).map(
-        ({ agentId: _agentId, ...diff }) => diff,
-      ),
-    })),
+      )
+      const timelineEvents = (timelineEventsByAgent.get(agent.id) ?? []).map(
+        ({ agentId: _agentId, ...event }) => event,
+      )
+
+      return {
+        id: agent.id,
+        projectId: agent.projectId,
+        slot: agent.slot,
+        title: agent.title,
+        runtime: agent.runtime,
+        model: agent.model,
+        status: agent.status,
+        sessionDir: agent.sessionDir,
+        sessionFile: agent.sessionFile,
+        preview: agent.preview ?? 'No messages yet',
+        messageCount: agent.messageCount ?? 0,
+        diffCount: agent.diffCount,
+        contextUsage: readContextUsage(
+          agent,
+          settings,
+          contextUsageByAgent.get(agent.id),
+        ),
+        updatedAt: agent.updatedAt ?? new Date(0).toISOString(),
+        isSession: agent.slot.startsWith('session-'),
+        messages,
+        timelineEvents,
+        timeline: mergeTimeline(messages, timelineEvents),
+        diffs: (diffsByAgent.get(agent.id) ?? []).map(
+          ({ agentId: _agentId, ...diff }) => diff,
+        ),
+      }
+    }),
   }))
   const selectedProject = snapshotProjects[0]
   const selectedAgent = selectedProject?.agents[0]
 
   const snapshot = {
-    settings: getSettings(),
+    settings,
     projects: snapshotProjects,
     selected: {
       projectId: selectedProject?.id ?? '',
@@ -308,6 +408,14 @@ export function deleteSession(input: DeleteSessionInput) {
 
   database.exec('BEGIN')
   try {
+    database
+      .prepare(
+        `
+          INSERT OR REPLACE INTO deleted_sessions (project_id, slot, deleted_at)
+          VALUES (?, ?, ?)
+        `,
+      )
+      .run(row.projectId, row.slot, new Date().toISOString())
     database.prepare('DELETE FROM agent_slots WHERE id = ?').run(agentId)
     const rows = database
       .prepare(
@@ -371,6 +479,7 @@ export function getAgentLaunchConfig(agentId: string) {
           a.id,
           a.runtime,
           a.session_dir AS sessionDir,
+          a.session_file AS sessionFile,
           a.model,
           p.cwd
         FROM agent_slots a
@@ -388,10 +497,45 @@ export function setAgentStatus(agentId: string, status: AgentStatus) {
   getDb().prepare('UPDATE agent_slots SET status = ? WHERE id = ?').run(parsed, agentId)
 }
 
+export function appendUserMessage(input: { agentId: string; text: string }) {
+  const text = input.text.trim()
+  if (!text) throw new Error('Message text is required')
+
+  const database = getDb()
+  const thread = database
+    .prepare('SELECT id FROM threads WHERE agent_id = ? AND active = 1')
+    .get(input.agentId) as { id: string } | undefined
+  if (!thread) throw new Error(`No active thread for agent: ${input.agentId}`)
+
+  const timestamp = new Date().toISOString()
+  const hash = createHash('sha256')
+    .update(`${input.agentId}\n${timestamp}\n${text}`)
+    .digest('hex')
+    .slice(0, 16)
+  database.exec('BEGIN')
+  try {
+    database
+      .prepare(
+        `
+          INSERT INTO messages (id, thread_id, role, text, timestamp)
+          VALUES (?, ?, 'user', ?, ?)
+        `,
+      )
+      .run(`user-${input.agentId}-${hash}`, thread.id, text, timestamp)
+    updateThreadSummary(database, thread.id, text, timestamp)
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+}
+
 export function recordPiMessages(input: {
   agentId: string
   promptText: string
   messages: PiRpcMessage[]
+  turnStartedAt: number
+  turnCompletedAt: number
   sessionFile?: string
 }) {
   const database = getDb()
@@ -400,22 +544,68 @@ export function recordPiMessages(input: {
     .get(input.agentId) as { id: string } | undefined
   if (!thread) throw new Error(`No active thread for agent: ${input.agentId}`)
 
+  if (input.sessionFile && existsSync(input.sessionFile)) {
+    const projection = safeProjectPiSessionFile(input.sessionFile)
+    if (projection) {
+      database.exec('BEGIN')
+      try {
+        database
+          .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
+          .run(input.sessionFile, input.agentId)
+        database
+          .prepare(
+            `
+              DELETE FROM messages
+              WHERE thread_id = ?
+                AND role = 'user'
+                AND text = ?
+                AND id LIKE ?
+            `,
+          )
+          .run(thread.id, input.promptText.trim(), `user-${input.agentId}-%`)
+        hydrateProjectionMessages(database, input.agentId, projection)
+        upsertAgentContextUsage(database, {
+          agentId: input.agentId,
+          usedTokens: projection.contextUsedTokens,
+          sessionFile: input.sessionFile,
+          updatedAt: projection.updatedAt,
+        })
+        database.exec('COMMIT')
+      } catch (error) {
+        database.exec('ROLLBACK')
+        throw error
+      }
+      return
+    }
+  }
+
   const insertMessage = database.prepare(`
-    INSERT INTO messages (id, thread_id, role, text, timestamp)
+    INSERT OR IGNORE INTO messages (id, thread_id, role, text, timestamp)
     VALUES (?, ?, ?, ?, ?)
   `)
-  const now = Date.now()
   const currentTurn = currentPiTurn(input.messages, input.promptText)
   const rows = currentTurn
     .map((message, index) => {
       const role = normalizePiRole(message.role)
       const text = piMessageToText(message)
       if (!role || !text) return null
+      if (role === 'user' && text === input.promptText.trim()) return null
+      const timestamp = new Date(
+        piMessageTimestamp({
+          message,
+          index,
+          role,
+          text,
+          promptText: input.promptText,
+          turnStartedAt: input.turnStartedAt,
+          turnCompletedAt: input.turnCompletedAt,
+        }),
+      ).toISOString()
       return {
-        id: `pi-${input.agentId}-${now}-${index}`,
+        id: liveMessageId(input.agentId, role, text, timestamp),
         role,
         text,
-        timestamp: new Date(message.timestamp ?? now + index).toISOString(),
+        timestamp,
       }
     })
     .filter((row): row is NonNullable<typeof row> => row !== null)
@@ -436,6 +626,74 @@ export function recordPiMessages(input: {
       database
         .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
         .run(input.sessionFile, input.agentId)
+    }
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+}
+
+export function recordPiTimelineEvent(input: {
+  agentId: string
+  event: PiRpcEvent
+}) {
+  const database = getDb()
+  const thread = database
+    .prepare('SELECT id FROM threads WHERE agent_id = ? AND active = 1')
+    .get(input.agentId) as { id: string } | undefined
+  if (!thread) throw new Error(`No active thread for agent: ${input.agentId}`)
+
+  const event = piEventToTimelineEvent(input.agentId, input.event)
+  if (!event) return
+
+  database
+    .prepare(
+      `
+        INSERT OR IGNORE INTO timeline_events (
+          id, thread_id, kind, tone, label, detail, timestamp, payload_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      event.id,
+      thread.id,
+      event.kind,
+      event.tone,
+      event.label,
+      event.detail,
+      event.timestamp,
+      JSON.stringify(input.event),
+    )
+}
+
+export function replaceAgentDiffArtifacts(input: {
+  agentId: string
+  diffs: Array<Pick<DiffArtifact, 'title' | 'path' | 'patch'>>
+}) {
+  const database = getDb()
+  const updatedAt = new Date().toISOString()
+  database.exec('BEGIN')
+  try {
+    database.prepare('DELETE FROM diff_artifacts WHERE agent_id = ?').run(input.agentId)
+    const insert = database.prepare(`
+      INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+    for (const diff of input.diffs) {
+      const hash = createHash('sha256')
+        .update(`${input.agentId}\n${diff.path}\n${diff.patch}`)
+        .digest('hex')
+        .slice(0, 16)
+      insert.run(
+        `diff-${input.agentId}-${hash}`,
+        input.agentId,
+        diff.title,
+        diff.path,
+        diff.patch,
+        updatedAt,
+      )
     }
     database.exec('COMMIT')
   } catch (error) {
@@ -487,6 +745,27 @@ function migrate(database: DatabaseSync) {
       timestamp TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS timeline_events (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      tone TEXT NOT NULL CHECK (tone IN ('thinking', 'tool', 'info', 'error')),
+      label TEXT NOT NULL,
+      detail TEXT,
+      timestamp TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS timeline_events_thread_timestamp
+      ON timeline_events(thread_id, timestamp, id);
+
+    CREATE TABLE IF NOT EXISTS deleted_sessions (
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      slot TEXT NOT NULL,
+      deleted_at TEXT NOT NULL,
+      PRIMARY KEY (project_id, slot)
+    );
+
     CREATE TABLE IF NOT EXISTS diff_artifacts (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
@@ -494,6 +773,13 @@ function migrate(database: DatabaseSync) {
       path TEXT NOT NULL,
       patch TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_context_usage (
+      agent_id TEXT PRIMARY KEY REFERENCES agent_slots(id) ON DELETE CASCADE,
+      used_tokens INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      session_file TEXT
     );
   `)
   widenRuntimeCheck(database)
@@ -595,6 +881,295 @@ function repairAgentSlotReferences(database: DatabaseSync) {
   `)
 }
 
+function hydratePersistedPiSessions(database: DatabaseSync) {
+  const projects = database
+    .prepare('SELECT id FROM projects ORDER BY position ASC')
+    .all()
+    .map((row) => projectIdDbRowSchema.parse(row))
+  const piSettings = getRuntimeSettings('pi')
+
+  for (const project of projects) {
+    const projectSessionRoot = join(process.cwd(), '.pican', 'pi-sessions', project.id)
+    if (!existsSync(projectSessionRoot)) continue
+    const deletedSlots = new Set(
+      database
+        .prepare('SELECT slot FROM deleted_sessions WHERE project_id = ?')
+        .all(project.id)
+        .map((row) => deletedSessionDbRowSchema.parse(row).slot),
+    )
+
+    const slots = readdirSync(projectSessionRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('session-'))
+      .map((entry) => entry.name)
+      .filter((slot) => !deletedSlots.has(slot))
+      .sort()
+
+    for (const slot of slots) {
+      const sessionDir = join(projectSessionRoot, slot)
+      const id = `${project.id}-${slot}`
+      const existing = database
+        .prepare(
+          `
+            SELECT
+              id,
+              slot,
+              session_dir AS sessionDir,
+              session_file AS sessionFile
+            FROM agent_slots
+            WHERE id = ?
+          `,
+        )
+        .get(id)
+      const existingAgent = existing
+        ? persistedSessionDbRowSchema.parse(existing)
+        : undefined
+      const sessionFile = activePiSessionFile(sessionDir, existingAgent?.sessionFile)
+      const projection = sessionFile ? safeProjectPiSessionFile(sessionFile) : undefined
+      const agent = existingAgent ??
+        createPersistedSessionAgent(database, {
+            id,
+            projectId: project.id,
+            slot,
+            title: sessionTitle(projection?.preview, slot),
+            model: piSettings.defaultModel,
+            sessionDir,
+            sessionFile,
+          })
+
+      if (sessionFile && !agent.sessionFile) {
+        database
+          .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
+          .run(sessionFile, id)
+      }
+      ensureThreadForAgent(database, id, projection)
+      if (projection?.messages.length) {
+        hydrateProjectionMessages(database, id, projection)
+        upsertAgentContextUsage(database, {
+          agentId: id,
+          usedTokens: projection.contextUsedTokens,
+          sessionFile,
+          updatedAt: projection.updatedAt,
+        })
+      }
+    }
+  }
+}
+
+function activePiSessionFile(sessionDir: string, storedSessionFile: string | null | undefined) {
+  if (storedSessionFile && existsSync(storedSessionFile)) return storedSessionFile
+  return latestPiSessionFile(sessionDir)
+}
+
+function createPersistedSessionAgent(
+  database: DatabaseSync,
+  input: {
+    id: string
+    projectId: string
+    slot: string
+    title: string
+    model: string
+    sessionDir: string
+    sessionFile?: string
+  },
+) {
+  const nextPosition = database
+    .prepare(
+      'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM agent_slots WHERE project_id = ?',
+    )
+    .get(input.projectId) as { position: number }
+  database
+    .prepare(
+      `
+        INSERT INTO agent_slots (
+          id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
+        )
+        VALUES (?, ?, ?, ?, 'pi', ?, 'idle', ?, ?, ?)
+      `,
+    )
+    .run(
+      input.id,
+      input.projectId,
+      input.slot,
+      input.title,
+      input.model,
+      input.sessionDir,
+      input.sessionFile ?? null,
+      nextPosition.position,
+    )
+  return {
+    id: input.id,
+    slot: input.slot,
+    sessionDir: input.sessionDir,
+    sessionFile: input.sessionFile ?? null,
+  }
+}
+
+function ensureThreadForAgent(
+  database: DatabaseSync,
+  agentId: string,
+  projection:
+    | {
+        preview: string
+        messages: Array<{ timestamp: string }>
+        updatedAt?: string
+      }
+    | undefined,
+) {
+  const existing = database
+    .prepare('SELECT id FROM threads WHERE agent_id = ? AND active = 1')
+    .get(agentId) as { id: string } | undefined
+  if (existing) return existing.id
+
+  const updatedAt = projection?.updatedAt ??
+    projection?.messages.at(-1)?.timestamp ??
+    new Date().toISOString()
+  database
+    .prepare(
+      `
+        INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
+        VALUES (?, ?, 1, ?, 0, ?)
+      `,
+    )
+    .run(`thread-${agentId}`, agentId, projection?.preview || 'Ready.', updatedAt)
+  return `thread-${agentId}`
+}
+
+function hydrateProjectionMessages(
+  database: DatabaseSync,
+  agentId: string,
+  projection: Pick<PiSessionProjection, 'preview' | 'updatedAt' | 'messages'>,
+) {
+  const threadId = ensureThreadForAgent(database, agentId, projection)
+  database
+    .prepare('DELETE FROM messages WHERE thread_id = ? AND id NOT LIKE ?')
+    .run(threadId, `user-${agentId}-%`)
+  const insertMessage = database.prepare(`
+    INSERT INTO messages (id, thread_id, role, text, timestamp)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO NOTHING
+  `)
+  for (const message of projection.messages) {
+    if (!message.text.trim()) continue
+    insertMessage.run(
+      jsonlMessageId(agentId, message.id),
+      threadId,
+      message.role,
+      message.text,
+      message.timestamp,
+    )
+  }
+  updateThreadSummary(
+    database,
+    threadId,
+    projection.preview || projection.messages.at(-1)?.text || null,
+    projection.updatedAt ?? projection.messages.at(-1)?.timestamp,
+  )
+}
+
+function upsertAgentContextUsage(
+  database: DatabaseSync,
+  input: {
+    agentId: string
+    usedTokens: number | undefined
+    sessionFile?: string
+    updatedAt?: string
+  },
+) {
+  if (input.usedTokens === undefined) return
+  database
+    .prepare(
+      `
+        INSERT INTO agent_context_usage (agent_id, used_tokens, updated_at, session_file)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(agent_id) DO UPDATE SET
+          used_tokens = excluded.used_tokens,
+          updated_at = excluded.updated_at,
+          session_file = excluded.session_file
+      `,
+    )
+    .run(
+      input.agentId,
+      input.usedTokens,
+      input.updatedAt ?? new Date().toISOString(),
+      input.sessionFile ?? null,
+    )
+}
+
+function readContextUsage(
+  agent: z.infer<typeof agentDbRowSchema>,
+  settings: ReturnType<typeof getSettings>,
+  persistedUsage: z.infer<typeof contextUsageDbRowSchema> | undefined,
+): ContextUsage | null {
+  const windowTokens = settings.runtimes[agent.runtime].contextWindows?.[agent.model]
+  if (!windowTokens) return null
+
+  const usedTokens = persistedUsage?.usedTokens
+  if (usedTokens === undefined) return null
+
+  return {
+    usedTokens,
+    remainingTokens: Math.max(windowTokens - usedTokens, 0),
+    windowTokens,
+    usedPercent: Math.min((usedTokens / windowTokens) * 100, 100),
+  }
+}
+
+function latestPiSessionFile(sessionDir: string) {
+  if (!existsSync(sessionDir)) return undefined
+  return readdirSync(sessionDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .map((entry) => join(sessionDir, entry.name))
+    .sort()
+    .at(-1)
+}
+
+function safeProjectPiSessionFile(path: string) {
+  try {
+    return projectPiSessionFile(path)
+  } catch {
+    return undefined
+  }
+}
+
+function sessionTitle(preview: string | undefined, fallback: string) {
+  const title = preview?.replace(/\s+/g, ' ').trim()
+  if (!title) return fallback
+  return title.length > 44 ? `${title.slice(0, 41)}...` : title
+}
+
+function updateThreadSummary(
+  database: DatabaseSync,
+  threadId: string,
+  preview: string | null | undefined,
+  updatedAt: string | undefined,
+) {
+  const count = database
+    .prepare('SELECT COUNT(*) AS count FROM messages WHERE thread_id = ?')
+    .get(threadId) as { count: number }
+  database
+    .prepare(
+      'UPDATE threads SET preview = COALESCE(?, preview), message_count = ?, updated_at = COALESCE(?, updated_at) WHERE id = ?',
+    )
+    .run(preview ?? null, count.count, updatedAt ?? null, threadId)
+}
+
+function jsonlMessageId(agentId: string, messageId: string) {
+  return `pi-jsonl-${agentId}-${messageId}`
+}
+
+function liveMessageId(
+  agentId: string,
+  role: MessageRole,
+  text: string,
+  timestamp: string,
+) {
+  const hash = createHash('sha256')
+    .update(`${agentId}\n${role}\n${timestamp}\n${text}`)
+    .digest('hex')
+    .slice(0, 16)
+  return `pi-live-${agentId}-${hash}`
+}
+
 function normalizeSeededModels(database: DatabaseSync) {
   const piSettings = getRuntimeSettings('pi')
   const staleRows = database
@@ -615,6 +1190,132 @@ function normalizeSeededModels(database: DatabaseSync) {
   }
 }
 
+function timelineEventFromDbRow(row: z.infer<typeof timelineEventDbRowSchema>) {
+  const payload = parseEventPayload(row.payloadJson)
+  const derived = payload ? piEventDisplayFields(payload, row.kind) : undefined
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    kind: row.kind,
+    tone: row.tone,
+    label: derived?.label ?? row.label,
+    detail: derived?.detail ?? row.detail,
+    timestamp: row.timestamp,
+  }
+}
+
+function piEventToTimelineEvent(agentId: string, event: PiRpcEvent) {
+  const kind = event.type.trim()
+  if (!kind || kind === 'agent_end') return null
+
+  const display = piEventDisplayFields(event, kind)
+  const timestamp = numberField(event, 'timestamp')
+  const createdAt = stringField(event, 'createdAt') ?? stringField(event, 'timestamp')
+
+  return {
+    id: eventId(agentId, event),
+    kind,
+    tone: eventTone(event),
+    label: display.label,
+    detail: display.detail,
+    timestamp: timestamp !== undefined
+      ? new Date(normalizeUnixTimestamp(timestamp)).toISOString()
+      : parseTimestamp(createdAt) ?? new Date().toISOString(),
+  }
+}
+
+function piEventDisplayFields(event: Record<string, unknown>, kind: string) {
+  const toolName = stringField(event, 'toolName')
+  const args = recordField(event, 'args')
+  const command = args ? stringField(args, 'command') : undefined
+  const label = toolName === 'bash'
+    ? 'Ran command'
+    : toolName ??
+      stringField(event, 'label') ??
+      stringField(event, 'title') ??
+      stringField(event, 'message') ??
+      formatEventKind(kind)
+  const detail = command ??
+    stringField(event, 'detail') ??
+    stringField(event, 'command') ??
+    stringField(event, 'rawCommand') ??
+    stringField(event, 'error')
+  return { label, detail: detail ?? null }
+}
+
+function parseEventPayload(value: string) {
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return parsed && typeof parsed === 'object'
+      ? parsed as Record<string, unknown>
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function eventId(agentId: string, event: PiRpcEvent) {
+  const stableId = stringField(event, 'id') ??
+    stringField(event, 'eventId') ??
+    stringField(event, 'toolCallId') ??
+    stringField(event, 'requestId')
+  if (stableId) return `pi-event-${agentId}-${event.type}-${stableId}`
+  const hash = createHash('sha256')
+    .update(JSON.stringify(event))
+    .digest('hex')
+    .slice(0, 16)
+  return `pi-event-${agentId}-${event.type}-${hash}`
+}
+
+function eventTone(event: PiRpcEvent): TimelineEventTone {
+  const explicitTone = stringField(event, 'tone')
+  if (explicitTone && timelineEventToneSchema.safeParse(explicitTone).success) {
+    return explicitTone as TimelineEventTone
+  }
+
+  const type = event.type.toLowerCase()
+  if (type.includes('error') || type.includes('failed')) return 'error'
+  if (type.includes('tool') || type.includes('bash') || type.includes('exec')) {
+    return 'tool'
+  }
+  if (type.includes('think') || type.includes('plan')) return 'thinking'
+  return 'info'
+}
+
+function stringField(record: Record<string, unknown>, key: string) {
+  const value = record[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function numberField(record: Record<string, unknown>, key: string) {
+  const value = record[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function recordField(record: Record<string, unknown>, key: string) {
+  const value = record[key]
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function normalizeUnixTimestamp(value: number) {
+  return value < 1_000_000_000_000 ? value * 1000 : value
+}
+
+function parseTimestamp(value: string | undefined) {
+  if (!value) return undefined
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? undefined : new Date(parsed).toISOString()
+}
+
+function formatEventKind(kind: string) {
+  return kind
+    .replace(/[_:.-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function groupBy<T, K extends string>(
   items: T[],
   getKey: (item: T) => K,
@@ -632,6 +1333,71 @@ function groupBy<T, K extends string>(
   return groups
 }
 
+function mergeTimeline(
+  messages: Array<{
+    id: string
+    role: MessageRole
+    text: string
+    timestamp: string
+  }>,
+  events: Array<{
+    id: string
+    kind: string
+    tone: TimelineEventTone
+    label: string
+    detail: string | null
+    timestamp: string
+  }>,
+) {
+  return [
+    ...messages.map((message) => ({
+      type: 'message' as const,
+      id: `message:${message.id}`,
+      timestamp: message.timestamp,
+      message,
+    })),
+    ...events.map((event) => ({
+      type: 'event' as const,
+      id: `event:${event.id}`,
+      timestamp: event.timestamp,
+      event,
+    })),
+  ].sort(compareTimelineItems)
+}
+
+function piMessageTimestamp(input: {
+  message: PiRpcMessage
+  index: number
+  role: MessageRole
+  text: string
+  promptText: string
+  turnStartedAt: number
+  turnCompletedAt: number
+}) {
+  if (input.message.timestamp !== undefined) {
+    return normalizeUnixTimestamp(input.message.timestamp)
+  }
+
+  if (input.role === 'user' && input.text === input.promptText.trim()) {
+    return input.turnStartedAt
+  }
+
+  if (input.role === 'assistant') {
+    return input.turnCompletedAt + input.index
+  }
+
+  return input.turnStartedAt + input.index
+}
+
+function compareTimelineItems(
+  left: { timestamp: string; id: string },
+  right: { timestamp: string; id: string },
+) {
+  const byTimestamp = left.timestamp.localeCompare(right.timestamp)
+  if (byTimestamp !== 0) return byTimestamp
+  return left.id.localeCompare(right.id)
+}
+
 function seed(database: DatabaseSync) {
   const count = database
     .prepare('SELECT COUNT(*) AS count FROM projects')
@@ -645,10 +1411,7 @@ function seed(database: DatabaseSync) {
     VALUES (?, ?, ?, ?)
   `)
 
-  const projects = [
-    ['pican', 'Pican Orchestrator', root, 0],
-    ['pi-mono', 'Pi Runtime Reference', '/Users/yesh/Documents/personal/reference/pi-mono', 1],
-  ] as const
+  const projects = [['pican', 'Pican Orchestrator', root, 0]] as const
 
   for (const project of projects) {
     insertProject.run(...project)
