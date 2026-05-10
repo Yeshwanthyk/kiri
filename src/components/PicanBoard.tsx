@@ -2,6 +2,8 @@
 
 import { PatchDiff } from '@pierre/diffs/react'
 import { useServerFn } from '@tanstack/react-start'
+import ReactMarkdown, { type Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   Activity,
   ArrowDown,
@@ -9,11 +11,18 @@ import {
   ArrowRight,
   ArrowUp,
   Bot,
+  Check,
+  ChevronDown,
+  Columns2,
   Circle,
+  Copy,
   GitPullRequest,
+  Maximize2,
   MessageSquareText,
+  Minimize2,
   PanelRight,
   Plus,
+  Rows3,
   Send,
   Settings2,
   TerminalSquare,
@@ -22,19 +31,51 @@ import {
 import * as React from 'react'
 import type {
   AgentCell,
+  BoardMessage,
+  DiffArtifact,
   ProjectRow,
   RuntimeKind,
+  TimelineEvent,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import {
   addProjectMutation,
   deleteProjectMutation,
   deleteSessionMutation,
+  fetchWorkspaceSnapshot,
   sendMessageMutation,
   startSessionMutation,
 } from '~/server/workspace'
 
 type SidebarTab = 'chat' | 'diffs' | 'artifacts'
+type DiffStyle = 'unified' | 'split'
+type AgentTimelineRow =
+  | {
+      kind: 'message'
+      id: string
+      message: BoardMessage
+    }
+  | {
+      kind: 'work'
+      id: string
+      startedAt: string
+      entries: TimelineWorkEntry[]
+    }
+  | {
+      kind: 'working'
+      id: string
+      startedAt: string | null
+    }
+
+type TimelineWorkEntry = {
+  id: string
+  kind: string
+  tone: TimelineEvent['tone']
+  label: string
+  detail: string | null
+  timestamp: string
+}
+
 type KeymapAction =
   | 'projectPrev'
   | 'projectNext'
@@ -81,9 +122,12 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [sessionLauncherOpen, setSessionLauncherOpen] = React.useState(false)
   const [keymap, setKeymap] = React.useState<KeymapSettings>(defaultKeymap)
+  const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
+  const [chatDrafts, setChatDrafts] = React.useState<Record<string, string>>({})
   const addProject = useServerFn(addProjectMutation)
   const deleteProject = useServerFn(deleteProjectMutation)
   const deleteSession = useServerFn(deleteSessionMutation)
+  const refreshWorkspace = useServerFn(fetchWorkspaceSnapshot)
   const sendMessage = useServerFn(sendMessageMutation)
   const startSession = useServerFn(startSessionMutation)
 
@@ -116,6 +160,21 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       if (!event.shiftKey || isEditableTarget(event.target)) return
 
       const key = event.key.toLowerCase()
+      if (key === 'c') {
+        event.preventDefault()
+        setSettingsOpen(false)
+        setSessionLauncherOpen(false)
+        setTab('chat')
+        setChatFocusRequest((request) => request + 1)
+        return
+      }
+
+      if (key === 'd') {
+        event.preventDefault()
+        setTab('diffs')
+        return
+      }
+
       const action = actionForKey(keymap, key)
       if (!action) return
       event.preventDefault()
@@ -138,12 +197,14 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       }
 
       if (action === 'projectPrev' || action === 'projectNext') {
+        setChatFocusRequest(0)
         setSelection((current) =>
           moveProject(workspace.projects, current, action === 'projectNext' ? 1 : -1),
         )
         return
       }
 
+      setChatFocusRequest(0)
       setSelection((current) => {
         const project =
           workspace.projects.find((row) => row.id === current.projectId) ??
@@ -182,6 +243,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     if (!project) return
     const fallbackAgent =
       project.agents[Math.max(0, Math.min(currentIndex - 1, project.agents.length - 1))]
+    setChatFocusRequest(0)
     if (fallbackAgent) {
       setSelection({ projectId: project.id, agentId: fallbackAgent.id })
     } else {
@@ -190,8 +252,26 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   async function handleSendMessage(agentId: string, text: string) {
-    const next = await sendMessage({ data: { agentId, text } })
-    setWorkspace(next)
+    let stopped = false
+    let timer: number | undefined
+    const poll = async () => {
+      if (stopped) return
+      try {
+        setWorkspace(await refreshWorkspace())
+      } finally {
+        if (!stopped) {
+          timer = window.setTimeout(poll, 750)
+        }
+      }
+    }
+    timer = window.setTimeout(poll, 250)
+    try {
+      const next = await sendMessage({ data: { agentId, text } })
+      setWorkspace(next)
+    } finally {
+      stopped = true
+      if (timer) window.clearTimeout(timer)
+    }
   }
 
   async function handleStartSession(input: {
@@ -208,6 +288,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         ? project?.agents.find((item) => item.title === input.title)
         : undefined) ?? project?.agents[project.agents.length - 1]
     if (project && agent) {
+      setChatFocusRequest(0)
       setSelection({ projectId: project.id, agentId: agent.id })
     }
     setSessionLauncherOpen(false)
@@ -265,6 +346,14 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               <Keycap value={keymap.deleteSession} />
               remove session
             </span>
+            <span>
+              <Keycap value="c" />
+              chat
+            </span>
+            <span>
+              <Keycap value="d" />
+              diffs
+            </span>
             <button
               type="button"
               className="settings-trigger"
@@ -303,9 +392,10 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               project={project}
               selectedAgentId={selection.agentId}
               selectedProjectId={selection.projectId}
-              onSelect={(agentId) =>
+              onSelect={(agentId) => {
+                setChatFocusRequest(0)
                 setSelection({ projectId: project.id, agentId })
-              }
+              }}
             />
           ))}
         </div>
@@ -354,10 +444,21 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
             </div>
 
             {tab === 'chat' ? (
-              <ChatPanel agent={selectedAgent} onSend={handleSendMessage} />
+              <ChatPanel
+                key={selectedAgent.id}
+                agent={selectedAgent}
+                draft={chatDrafts[selectedAgent.id] ?? ''}
+                focusRequest={chatFocusRequest}
+                onDraftChange={(draft) =>
+                  setChatDrafts((current) => ({ ...current, [selectedAgent.id]: draft }))
+                }
+                onSend={handleSendMessage}
+              />
             ) : null}
-            {tab === 'diffs' ? <DiffPanel agent={selectedAgent} /> : null}
-            {tab === 'artifacts' ? <ArtifactsPanel agent={selectedAgent} /> : null}
+            {tab === 'diffs' ? <DiffPanel key={selectedAgent.id} agent={selectedAgent} /> : null}
+            {tab === 'artifacts' ? (
+              <ArtifactsPanel key={selectedAgent.id} agent={selectedAgent} />
+            ) : null}
           </>
         ) : (
           <EmptySessionPanel
@@ -882,30 +983,104 @@ function SidebarHeader({
   )
 }
 
+function ContextUsageChip({
+  usage,
+}: {
+  usage: AgentCell['contextUsage']
+}) {
+  if (!usage) return null
+
+  const usedPercent = Math.round(usage.usedPercent)
+  const remainingPercent = Math.max(100 - usedPercent, 0)
+  const normalizedPercent = Math.max(0, Math.min(100, usage.usedPercent))
+
+  return (
+    <button
+      type="button"
+      className="context-chip"
+      aria-label={`${formatTokenCount(usage.usedTokens)} of ${formatTokenCount(usage.windowTokens)} context tokens used`}
+      title={`${usedPercent}% used (${remainingPercent}% left), ${usage.usedTokens.toLocaleString('en')} / ${usage.windowTokens.toLocaleString('en')} tokens used`}
+      style={{ '--context-used': `${normalizedPercent}%` } as React.CSSProperties}
+    >
+      <span className="context-chip-ring" aria-hidden="true" />
+      <strong>{usedPercent}</strong>
+    </button>
+  )
+}
+
 function ChatPanel({
   agent,
+  draft,
+  focusRequest,
+  onDraftChange,
   onSend,
 }: {
   agent: AgentCell
+  draft: string
+  focusRequest: number
+  onDraftChange: (draft: string) => void
   onSend: (agentId: string, text: string) => Promise<void>
 }) {
-  const [draft, setDraft] = React.useState('')
   const [pending, setPending] = React.useState(false)
   const [pendingPrompt, setPendingPrompt] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const canSend = draft.trim().length > 0 && !pending
-  const visibleMessages =
-    pendingPrompt === null
-      ? agent.messages
-      : [
-          ...agent.messages,
-          {
-            id: `pending-${agent.id}`,
-            role: 'user' as const,
-            text: pendingPrompt,
-            timestamp: new Date().toISOString(),
-          },
-        ]
+  const pendingMessage = React.useMemo<BoardMessage | null>(
+    () => {
+      if (pendingPrompt === null) return null
+      const persisted = agent.messages.some(
+        (message) => message.role === 'user' && message.text === pendingPrompt,
+      )
+      if (persisted) return null
+      return {
+        id: `pending-${agent.id}`,
+        role: 'user',
+        text: pendingPrompt,
+        timestamp: new Date().toISOString(),
+      }
+    },
+    [agent.id, agent.messages, pendingPrompt],
+  )
+  const visibleMessages = React.useMemo(
+    () => (pendingMessage ? [...agent.messages, pendingMessage] : agent.messages),
+    [agent.messages, pendingMessage],
+  )
+  const timelineAgent = React.useMemo(
+    () => ({
+      ...agent,
+      messages: visibleMessages,
+      timeline: pendingMessage === null
+        ? agent.timeline
+        : [
+            ...agent.timeline,
+            {
+              type: 'message' as const,
+              id: `message:${pendingMessage.id}`,
+              timestamp: pendingMessage.timestamp,
+              message: pendingMessage,
+            },
+          ],
+    }),
+    [agent, pendingMessage, visibleMessages],
+  )
+  const rows = React.useMemo(
+    () => deriveAgentTimelineRows(timelineAgent),
+    [timelineAgent],
+  )
+  const messageListRef = React.useRef<HTMLDivElement | null>(null)
+  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null)
+  const latestRowId = rows.at(-1)?.id ?? ''
+
+  React.useEffect(() => {
+    if (focusRequest === 0) return
+    textareaRef.current?.focus()
+  }, [focusRequest])
+
+  React.useLayoutEffect(() => {
+    const list = messageListRef.current
+    if (!list) return
+    list.scrollTop = list.scrollHeight
+  }, [agent.id, agent.status, latestRowId, rows.length])
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -914,7 +1089,7 @@ function ChatPanel({
     setPending(true)
     setPendingPrompt(prompt)
     setError(null)
-    setDraft('')
+    onDraftChange('')
     try {
       await onSend(agent.id, prompt)
     } catch (cause) {
@@ -927,28 +1102,35 @@ function ChatPanel({
 
   return (
     <div className="chat-panel" data-testid="chat-panel">
-      <div className="message-list">
-        {visibleMessages.map((message) => (
-          <article key={message.id} className={`message ${message.role}`}>
-            <div>
-              <span>{message.role}</span>
-              <time>{formatTime(message.timestamp)}</time>
-            </div>
-            <p>{message.text}</p>
-          </article>
-        ))}
-      </div>
+      <MessageTimeline rows={rows} listRef={messageListRef} />
       {error ? <span className="chat-error" role="status">{error}</span> : null}
       <form className="composer" onSubmit={submit}>
         <TerminalSquare size={16} />
-        <input
+        <textarea
+          ref={textareaRef}
           value={draft}
-          onChange={(event) => setDraft(event.currentTarget.value)}
+          onChange={(event) => onDraftChange(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.currentTarget.blur()
+              return
+            }
+            if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey) return
+            event.preventDefault()
+            event.currentTarget.form?.requestSubmit()
+          }}
           aria-label="Prompt"
           placeholder="Type to this agent"
+          rows={3}
           data-testid="chat-input"
         />
-        <button type="submit" disabled={!canSend} aria-label="Send prompt">
+        <ContextUsageChip usage={agent.contextUsage} />
+        <button
+          type="submit"
+          className="composer-submit"
+          disabled={!canSend}
+          aria-label="Send prompt"
+        >
           <Send size={15} />
         </button>
       </form>
@@ -956,8 +1138,410 @@ function ChatPanel({
   )
 }
 
+function MessageTimeline({
+  rows,
+  listRef,
+}: {
+  rows: AgentTimelineRow[]
+  listRef: React.RefObject<HTMLDivElement | null>
+}) {
+  if (rows.length === 0) {
+    return (
+      <div className="message-list" ref={listRef}>
+        <div className="empty-panel">No messages yet.</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="message-list" ref={listRef}>
+      {rows.map((row) => {
+        if (row.kind === 'work') return <WorkTimelineRow key={row.id} row={row} />
+        if (row.kind === 'working') {
+          return <WorkingTimelineRow key={row.id} row={row} />
+        }
+        return <MessageTimelineRow key={row.id} message={row.message} />
+      })}
+    </div>
+  )
+}
+
+function MessageTimelineRow({ message }: { message: BoardMessage }) {
+  if (message.role === 'user') {
+    return (
+      <article className="timeline-row user-row" data-message-role={message.role}>
+        <div className="user-bubble">
+          <RichMessageBody text={message.text} />
+          <MessageMeta message={message} align="right" />
+        </div>
+      </article>
+    )
+  }
+
+  if (message.role === 'assistant') {
+    return (
+      <article className="timeline-row assistant-row" data-message-role={message.role}>
+        <RichMessageBody text={message.text} />
+        <div className="assistant-meta-row">
+          <MessageMeta message={message} />
+          <CopyTextButton text={message.text} label="Copy response" />
+        </div>
+      </article>
+    )
+  }
+
+  return (
+    <article
+      className={`timeline-row note-row ${message.role}`}
+      data-message-role={message.role}
+    >
+      <div className="note-meta">
+        <span>{message.role}</span>
+        <time>{formatTime(message.timestamp)}</time>
+      </div>
+      <RichMessageBody text={message.text} />
+    </article>
+  )
+}
+
+function WorkTimelineRow({
+  row,
+}: {
+  row: Extract<AgentTimelineRow, { kind: 'work' }>
+}) {
+  const [expanded, setExpanded] = React.useState(false)
+  const visibleEntries = expanded ? row.entries : row.entries.slice(0, 6)
+  const hiddenCount = row.entries.length - visibleEntries.length
+
+  return (
+    <section className="timeline-row work-row" aria-label="Runtime activity">
+      <div className="work-row-header">
+        <span>Tool calls ({row.entries.length})</span>
+        {hiddenCount > 0 ? (
+          <button type="button" onClick={() => setExpanded((value) => !value)}>
+            <ChevronDown size={13} className={expanded ? 'expanded' : ''} />
+            {expanded ? 'Show less' : `Show ${hiddenCount} more`}
+          </button>
+        ) : null}
+      </div>
+      <div className="work-entry-list">
+        {visibleEntries.map((entry) => (
+          <WorkEntryRow key={entry.id} entry={entry} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function WorkEntryRow({ entry }: { entry: TimelineWorkEntry }) {
+  const [expanded, setExpanded] = React.useState(false)
+  const preview = workEntryPreview(entry)
+  const displayText = preview ? `${entry.label} - ${preview}` : entry.label
+  const fullText = preview ?? displayText
+  const canExpand = displayText.length > 72 || fullText.includes('\n')
+
+  return (
+    <div className={`work-entry ${entry.tone} ${expanded ? 'expanded' : ''}`}>
+      <TerminalSquare size={13} className={`work-entry-icon ${entry.tone}`} />
+      <div className="work-entry-content">
+        <div className="work-entry-title">
+          <button
+            type="button"
+            onClick={() => {
+              if (canExpand) setExpanded((value) => !value)
+            }}
+            className={`work-entry-toggle ${canExpand ? 'expandable' : ''}`}
+            aria-expanded={expanded}
+            disabled={!canExpand}
+            title={displayText}
+          >
+            <span>
+              <strong>{entry.label}</strong>
+              {preview ? <> - {preview}</> : null}
+            </span>
+          </button>
+          <time>{formatTime(entry.timestamp)}</time>
+        </div>
+        {expanded && canExpand ? (
+          <pre className="work-entry-detail"><code>{fullText}</code></pre>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function workEntryPreview(entry: TimelineWorkEntry) {
+  return entry.detail?.trim() || null
+}
+
+function WorkingTimelineRow({
+  row,
+}: {
+  row: Extract<AgentTimelineRow, { kind: 'working' }>
+}) {
+  return (
+    <div className="timeline-row working-row">
+      <span className="working-dots" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+      <span>{row.startedAt ? `Working since ${formatTime(row.startedAt)}` : 'Working'}</span>
+    </div>
+  )
+}
+
+function MessageMeta({
+  message,
+  align = 'left',
+}: {
+  message: BoardMessage
+  align?: 'left' | 'right'
+}) {
+  return (
+    <div className={`message-meta ${align}`}>
+      <span>{message.role}</span>
+      <time>{formatTime(message.timestamp)}</time>
+    </div>
+  )
+}
+
+const markdownComponents = {
+  a({ children, ...props }) {
+    return (
+      <a {...props} target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    )
+  },
+} satisfies Components
+
+function RichMessageBody({
+  text,
+  compact = false,
+}: {
+  text: string
+  compact?: boolean
+}) {
+  return (
+    <div className={compact ? 'rich-message-body compact' : 'rich-message-body'}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {text}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+function CopyTextButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = React.useState(false)
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1000)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return (
+    <button type="button" className="copy-message" onClick={copy} aria-label={label}>
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+    </button>
+  )
+}
+
+function deriveAgentTimelineRows(agent: AgentCell): AgentTimelineRow[] {
+  const rows: AgentTimelineRow[] = []
+  let workEntries: TimelineWorkEntry[] = []
+  const timeline = agent.timeline.length
+    ? agent.timeline
+    : agent.messages.map((message) => ({
+        type: 'message' as const,
+        id: `message:${message.id}`,
+        timestamp: message.timestamp,
+        message,
+      }))
+
+  function flushWork() {
+    if (workEntries.length === 0) return
+    rows.push({
+      kind: 'work',
+      id: `work:${workEntries[0]?.id}:${workEntries[workEntries.length - 1]?.id}`,
+      startedAt: workEntries[0]?.timestamp ?? new Date(0).toISOString(),
+      entries: workEntries,
+    })
+    workEntries = []
+  }
+
+  for (const item of timeline) {
+    if (item.type === 'event') {
+      const entry = eventToWorkEntry(item.event)
+      if (entry) workEntries.push(entry)
+      continue
+    }
+
+    if (item.message.role === 'tool') {
+      workEntries.push(toolMessageToWorkEntry(item.message))
+      continue
+    }
+
+    flushWork()
+    rows.push({
+      kind: 'message',
+      id: `message:${item.message.id}`,
+      message: item.message,
+    })
+  }
+
+  flushWork()
+
+  if (agent.status === 'running') {
+    const lastRow = rows[rows.length - 1]
+    rows.push({
+      kind: 'working',
+      id: 'working-indicator',
+      startedAt: lastRow?.kind === 'message' ? lastRow.message.timestamp : null,
+    })
+  }
+
+  return rows
+}
+
+function eventToWorkEntry(event: TimelineEvent): TimelineWorkEntry | null {
+  if (!shouldShowRuntimeEvent(event)) return null
+
+  return {
+    id: event.id,
+    kind: event.kind,
+    tone: event.tone,
+    label: runtimeEventLabel(event),
+    detail: event.detail,
+    timestamp: event.timestamp,
+  }
+}
+
+function shouldShowRuntimeEvent(event: TimelineEvent) {
+  if (event.kind !== 'tool_execution_start') return false
+  return event.label.toLowerCase() !== 'taskupdate'
+}
+
+function runtimeEventLabel(event: TimelineEvent) {
+  const label = event.label.trim()
+  if (label.toLowerCase() === 'bash') return 'Ran command'
+  if (!label || label === 'tool execution start') return 'Tool'
+  return label
+}
+
+function toolMessageToWorkEntry(message: BoardMessage): TimelineWorkEntry {
+  const [firstLine, ...rest] = message.text.split('\n')
+  return {
+    id: message.id,
+    kind: 'tool.message',
+    tone: 'tool',
+    label: firstLine?.trim() || 'Tool output',
+    detail: rest.join('\n').trim() || message.text,
+    timestamp: message.timestamp,
+  }
+}
+
 function DiffPanel({ agent }: { agent: AgentCell }) {
-  const diff = agent.diffs[0]
+  const [selectedDiffId, setSelectedDiffId] = React.useState<string | null>(null)
+  const [diffStyle, setDiffStyle] = React.useState<DiffStyle>('unified')
+  const [fullscreen, setFullscreen] = React.useState(false)
+  const fileButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([])
+  const diff =
+    agent.diffs.find((item) => item.id === selectedDiffId) ?? agent.diffs[0]
+  const selectedIndex = diff
+    ? Math.max(0, agent.diffs.findIndex((item) => item.id === diff.id))
+    : -1
+  const duplicateFileNames = React.useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const item of agent.diffs) {
+      const name = diffFileName(item)
+      counts.set(name, (counts.get(name) ?? 0) + 1)
+    }
+    return new Set(
+      [...counts.entries()]
+        .filter(([, count]) => count > 1)
+        .map(([name]) => name),
+    )
+  }, [agent.diffs])
+
+  React.useEffect(() => {
+    setSelectedDiffId(null)
+    setFullscreen(false)
+  }, [agent.id, agent.diffs.length])
+
+  React.useEffect(() => {
+    if (!fullscreen) return
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (isEditableTarget(event.target)) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setFullscreen(false)
+        return
+      }
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        selectRelative(-1, false)
+        return
+      }
+      if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        selectRelative(1, false)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [fullscreen, selectedIndex, agent.diffs])
+
+  React.useEffect(() => {
+    fileButtonRefs.current[selectedIndex]?.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+    })
+  }, [selectedIndex])
+
+  function selectIndex(index: number, focus = false) {
+    if (!agent.diffs.length) return
+    const nextIndex = Math.max(0, Math.min(index, agent.diffs.length - 1))
+    setSelectedDiffId(agent.diffs[nextIndex]?.id ?? null)
+    if (focus) {
+      window.requestAnimationFrame(() => fileButtonRefs.current[nextIndex]?.focus())
+    }
+  }
+
+  function selectRelative(delta: -1 | 1, focus = false) {
+    if (!agent.diffs.length || selectedIndex === -1) return
+    const nextIndex = (selectedIndex + delta + agent.diffs.length) % agent.diffs.length
+    selectIndex(nextIndex, focus)
+  }
+
+  function onFileListKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      selectRelative(-1, true)
+      return
+    }
+    if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      selectRelative(1, true)
+      return
+    }
+    if (event.key === 'Home') {
+      event.preventDefault()
+      selectIndex(0, true)
+      return
+    }
+    if (event.key === 'End') {
+      event.preventDefault()
+      selectIndex(agent.diffs.length - 1, true)
+    }
+  }
 
   if (!diff) {
     return (
@@ -969,17 +1553,101 @@ function DiffPanel({ agent }: { agent: AgentCell }) {
   }
 
   return (
-    <div className="diff-panel" data-testid="diff-panel">
+    <div
+      className={`diff-panel${fullscreen ? ' fullscreen' : ''}`}
+      data-testid="diff-panel"
+    >
       <div className="diff-header">
-        <strong>{diff.title}</strong>
-        <span>{diff.path}</span>
+        <div>
+          <strong>{agent.diffs.length} file{agent.diffs.length === 1 ? '' : 's'}</strong>
+          <span>{diff.path}</span>
+        </div>
+        <div className="diff-toolbar" aria-label="Diff controls">
+          <button
+            type="button"
+            onClick={() => selectRelative(-1)}
+            aria-label="Previous changed file"
+            title="Previous file"
+          >
+            <ArrowLeft size={14} />
+          </button>
+          <span className="diff-index">{selectedIndex + 1}/{agent.diffs.length}</span>
+          <button
+            type="button"
+            onClick={() => selectRelative(1)}
+            aria-label="Next changed file"
+            title="Next file"
+          >
+            <ArrowRight size={14} />
+          </button>
+          <div className="diff-view-toggle" role="group" aria-label="Diff layout">
+            <button
+              type="button"
+              className={diffStyle === 'unified' ? 'active' : ''}
+              onClick={() => setDiffStyle('unified')}
+              aria-label="Unified diff"
+              title="Unified"
+            >
+              <Rows3 size={14} />
+            </button>
+            <button
+              type="button"
+              className={diffStyle === 'split' ? 'active' : ''}
+              onClick={() => setDiffStyle('split')}
+              aria-label="Split diff"
+              title="Split"
+            >
+              <Columns2 size={14} />
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setFullscreen((value) => !value)}
+            aria-label={fullscreen ? 'Exit fullscreen diffs' : 'Fullscreen diffs'}
+            title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+        </div>
+      </div>
+      <div
+        className="diff-file-list"
+        role="tablist"
+        aria-label="Changed files"
+        onKeyDown={onFileListKeyDown}
+      >
+        {agent.diffs.map((item, index) => {
+          const fileName = diffFileName(item)
+          const folder = duplicateFileNames.has(fileName)
+            ? diffFileFolder(item.path)
+            : null
+          return (
+            <button
+              key={item.id}
+              ref={(element) => {
+                fileButtonRefs.current[index] = element
+              }}
+              type="button"
+              role="tab"
+              className={item.id === diff.id ? 'active' : ''}
+              onClick={() => setSelectedDiffId(item.id)}
+              aria-selected={item.id === diff.id}
+              tabIndex={item.id === diff.id ? 0 : -1}
+              title={item.path}
+            >
+              <span className="diff-file-name">{fileName}</span>
+              {folder ? <span className="diff-file-folder">{folder}</span> : null}
+            </button>
+          )
+        })}
       </div>
       <div className="pierre-host">
         <PatchDiff
+          key={`${diff.id}:${diffStyle}`}
           patch={diff.patch}
           disableWorkerPool
           options={{
-            diffStyle: 'unified',
+            diffStyle,
             overflow: 'wrap',
             themeType: 'light',
           }}
@@ -987,6 +1655,17 @@ function DiffPanel({ agent }: { agent: AgentCell }) {
       </div>
     </div>
   )
+}
+
+function diffFileName(file: Pick<DiffArtifact, 'path' | 'title'>) {
+  const normalized = file.path.replace(/\\/g, '/')
+  return normalized.split('/').filter(Boolean).at(-1) ?? file.title
+}
+
+function diffFileFolder(path: string) {
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (parts.length <= 1) return null
+  return parts.slice(0, -1).join('/')
 }
 
 function ArtifactsPanel({ agent }: { agent: AgentCell }) {
@@ -1056,6 +1735,16 @@ function formatTime(value: string) {
     hour: 'numeric',
     minute: '2-digit',
   }).format(date)
+}
+
+function formatTokenCount(value: number) {
+  if (value >= 1_000_000) return `${trimFixed(value / 1_000_000)}M`
+  if (value >= 1_000) return `${trimFixed(value / 1_000)}K`
+  return value.toLocaleString('en')
+}
+
+function trimFixed(value: number) {
+  return value.toFixed(value >= 10 ? 0 : 1).replace(/\.0$/, '')
 }
 
 function actionForKey(keymap: KeymapSettings, key: string): KeymapAction | undefined {
