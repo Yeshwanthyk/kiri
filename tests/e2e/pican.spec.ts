@@ -47,6 +47,8 @@ test('keymap settings remap navigation', async ({ page }) => {
   const firstProject = await page.getByTestId('selected-project').textContent()
 
   await page.getByRole('button', { name: 'Settings' }).click()
+  await expect(page.getByTestId('keymap-focusChat')).toBeVisible()
+  await expect(page.getByTestId('keymap-openDiffs')).toBeVisible()
   await page.getByTestId('keymap-projectNext').selectOption('arrowdown')
   await page.getByRole('button', { name: 'Back to board' }).click()
 
@@ -92,6 +94,49 @@ test('start and remove session with keymaps', async ({ page }, testInfo) => {
   await expect(page.getByTestId('board-pane')).not.toContainText(title)
 })
 
+test('command menu starts, switches, and ends sessions', async ({ page }, testInfo) => {
+  const firstTitle = `Command First ${testInfo.project.name}`
+  const secondTitle = `Command Second ${testInfo.project.name}`
+
+  await page.goto('/')
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+
+  await page.keyboard.press('Control+K')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('settings-page')).toBeVisible()
+  await page.getByRole('button', { name: 'Back to board' }).click()
+
+  await page.keyboard.press('Control+K')
+  await page.getByTestId('command-search').fill('start')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('session-launcher')).toBeVisible()
+  await page.getByTestId('session-title').fill(firstTitle)
+  await page
+    .getByTestId('session-launcher')
+    .getByRole('button', { name: 'Start session' })
+    .click()
+
+  await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
+  await createSession(page, secondTitle)
+
+  await page.keyboard.press('Control+K')
+  await page.getByTestId('command-search').fill(firstTitle)
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toContain(firstTitle)
+    await dialog.accept()
+  })
+  await page.keyboard.press('Control+K')
+  await page.getByTestId('command-search').fill('end selected')
+  await page.keyboard.press('Enter')
+
+  await expect(page.getByTestId('board-pane')).not.toContainText(firstTitle)
+  await expect(page.getByTestId('selected-agent')).toHaveText(secondTitle)
+})
+
 test('settings add and remove projects', async ({ page }, testInfo) => {
   const id = `e2e-${testInfo.project.name}`
   const name = `E2E ${testInfo.project.name}`
@@ -134,7 +179,7 @@ test('chat composer accepts and records input', async ({ page }, testInfo) => {
   await expect(page.getByTestId('chat-input')).toHaveValue('')
 })
 
-test('sidebar switches between chat, diffs, and artifacts', async ({ page }, testInfo) => {
+test('sidebar switches between chat and diffs', async ({ page }, testInfo) => {
   const title = `Sidebar Session ${testInfo.project.name}`
 
   await page.goto('/')
@@ -142,11 +187,6 @@ test('sidebar switches between chat, diffs, and artifacts', async ({ page }, tes
 
   await page.getByTestId('tab-diffs').click()
   await expect(page.getByTestId('diff-panel')).toContainText('No diffs')
-
-  await page.getByTestId('tab-artifacts').click()
-  await expect(page.getByTestId('artifacts-panel')).toContainText(
-    'Reserved session dir:',
-  )
 
   await pressShiftKey(page, 'KeyC')
   await expect(page.getByTestId('chat-panel')).toBeVisible()

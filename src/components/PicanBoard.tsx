@@ -15,18 +15,22 @@ import {
   ChevronDown,
   Columns2,
   Circle,
+  Command,
   Copy,
   GitPullRequest,
+  ImagePlus,
   Maximize2,
   MessageSquareText,
   Minimize2,
-  PanelRight,
   Plus,
   Rows3,
   Send,
   Settings2,
+  Square,
+  Shuffle,
   TerminalSquare,
   Trash2,
+  type LucideIcon,
 } from 'lucide-react'
 import * as React from 'react'
 import type {
@@ -35,6 +39,7 @@ import type {
   DiffArtifact,
   ProjectRow,
   RuntimeKind,
+  SendMessageImage,
   TimelineEvent,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
@@ -43,11 +48,13 @@ import {
   deleteProjectMutation,
   deleteSessionMutation,
   fetchWorkspaceSnapshot,
+  interruptMessageMutation,
   sendMessageMutation,
   startSessionMutation,
+  steerMessageMutation,
 } from '~/server/workspace'
 
-type SidebarTab = 'chat' | 'diffs' | 'artifacts'
+type SidebarTab = 'chat' | 'diffs'
 type DiffStyle = 'unified' | 'split'
 type AgentTimelineRow =
   | {
@@ -83,12 +90,23 @@ type KeymapAction =
   | 'agentNext'
   | 'startSession'
   | 'deleteSession'
+  | 'focusChat'
+  | 'openDiffs'
 
 type KeymapSettings = Record<KeymapAction, string>
 
 type Selection = {
   projectId: string
   agentId: string
+}
+
+type CommandPaletteAction = {
+  id: string
+  title: string
+  detail: string
+  icon: LucideIcon
+  disabled: boolean
+  run: () => void
 }
 
 const defaultKeymap: KeymapSettings = {
@@ -98,6 +116,8 @@ const defaultKeymap: KeymapSettings = {
   agentNext: 'l',
   startSession: 'n',
   deleteSession: 'x',
+  focusChat: 'c',
+  openDiffs: 'd',
 }
 
 const keyOptions = [
@@ -107,6 +127,8 @@ const keyOptions = [
   'l',
   'n',
   'x',
+  'c',
+  'd',
   'arrowup',
   'arrowdown',
   'arrowleft',
@@ -121,6 +143,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [hydrated, setHydrated] = React.useState(false)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [sessionLauncherOpen, setSessionLauncherOpen] = React.useState(false)
+  const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
   const [keymap, setKeymap] = React.useState<KeymapSettings>(defaultKeymap)
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
   const [chatDrafts, setChatDrafts] = React.useState<Record<string, string>>({})
@@ -129,6 +152,8 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const deleteSession = useServerFn(deleteSessionMutation)
   const refreshWorkspace = useServerFn(fetchWorkspaceSnapshot)
   const sendMessage = useServerFn(sendMessageMutation)
+  const steerMessage = useServerFn(steerMessageMutation)
+  const interruptMessage = useServerFn(interruptMessageMutation)
   const startSession = useServerFn(startSessionMutation)
 
   const selectedProject =
@@ -157,30 +182,44 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
   React.useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (!event.shiftKey || isEditableTarget(event.target)) return
-
       const key = event.key.toLowerCase()
-      if (key === 'c') {
+      if ((event.metaKey || event.ctrlKey) && key === 'k') {
         event.preventDefault()
         setSettingsOpen(false)
         setSessionLauncherOpen(false)
-        setTab('chat')
-        setChatFocusRequest((request) => request + 1)
+        setCommandPaletteOpen((open) => !open)
         return
       }
 
-      if (key === 'd') {
+      if (event.key === 'Escape' && commandPaletteOpen) {
         event.preventDefault()
-        setTab('diffs')
+        setCommandPaletteOpen(false)
         return
       }
+
+      if (commandPaletteOpen || !event.shiftKey || isEditableTarget(event.target)) return
 
       const action = actionForKey(keymap, key)
       if (!action) return
       event.preventDefault()
 
+      if (action === 'focusChat') {
+        setSettingsOpen(false)
+        setSessionLauncherOpen(false)
+        setCommandPaletteOpen(false)
+        setTab('chat')
+        setChatFocusRequest((request) => request + 1)
+        return
+      }
+
+      if (action === 'openDiffs') {
+        setTab('diffs')
+        return
+      }
+
       if (action === 'startSession') {
         setSettingsOpen(false)
+        setCommandPaletteOpen(false)
         setSessionLauncherOpen(true)
         return
       }
@@ -216,7 +255,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [keymap, workspace.projects])
+  }, [commandPaletteOpen, keymap, workspace.projects])
 
   async function handleAddProject(input: { id?: string; name: string; cwd: string }) {
     const next = await addProject({ data: input })
@@ -229,8 +268,8 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   async function handleDeleteSession(agentId: string) {
-    const agent = selectedProject.agents.find((item) => item.id === agentId)
-    if (!agent) return
+    const agent = selectedProject?.agents.find((item) => item.id === agentId)
+    if (!agent || !selectedProject) return
     if (!window.confirm(`Remove session "${agent.title}"?`)) return
 
     const currentProjectId = selectedProject.id
@@ -251,7 +290,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
   }
 
-  async function handleSendMessage(agentId: string, text: string) {
+  async function withWorkspacePolling<T>(action: () => Promise<T>, onResult: (result: T) => void) {
     let stopped = false
     let timer: number | undefined
     const poll = async () => {
@@ -266,12 +305,37 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
     timer = window.setTimeout(poll, 250)
     try {
-      const next = await sendMessage({ data: { agentId, text } })
-      setWorkspace(next)
+      const result = await action()
+      onResult(result)
     } finally {
       stopped = true
       if (timer) window.clearTimeout(timer)
     }
+  }
+
+  async function handleSendMessage(
+    agentId: string,
+    text: string,
+    images: SendMessageImage[] = [],
+  ) {
+    await withWorkspacePolling(
+      () => sendMessage({ data: { agentId, text, images } }),
+      (next) => setWorkspace(next),
+    )
+  }
+
+  async function handleSteerMessage(
+    agentId: string,
+    text: string,
+    images: SendMessageImage[] = [],
+  ) {
+    const next = await steerMessage({ data: { agentId, text, images } })
+    setWorkspace(next)
+  }
+
+  async function handleInterruptMessage(agentId: string) {
+    const next = await interruptMessage({ data: { agentId } })
+    setWorkspace(next)
   }
 
   async function handleStartSession(input: {
@@ -293,6 +357,99 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
     setSessionLauncherOpen(false)
   }
+
+  const commandActions = React.useMemo(
+    () => [
+      {
+        id: 'start-session',
+        title: 'Start session',
+        detail: selectedProject?.name ?? 'Current project',
+        icon: Plus,
+        disabled: false,
+        run: () => {
+          setSettingsOpen(false)
+          setCommandPaletteOpen(false)
+          setSessionLauncherOpen(true)
+        },
+      },
+      {
+        id: 'end-session',
+        title: 'End selected session',
+        detail: selectedAgent?.isSession ? selectedAgent.title : 'No selected session',
+        icon: Trash2,
+        disabled: !selectedAgent?.isSession,
+        run: () => {
+          if (!selectedAgent?.isSession) return
+          setCommandPaletteOpen(false)
+          void handleDeleteSession(selectedAgent.id)
+        },
+      },
+      {
+        id: 'settings',
+        title: 'Open settings',
+        detail: 'Keymaps and projects',
+        icon: Settings2,
+        disabled: false,
+        run: () => {
+          setSessionLauncherOpen(false)
+          setCommandPaletteOpen(false)
+          setSettingsOpen(true)
+        },
+      },
+      {
+        id: 'add-project',
+        title: 'Add project',
+        detail: 'Project settings',
+        icon: Plus,
+        disabled: false,
+        run: () => {
+          setSessionLauncherOpen(false)
+          setCommandPaletteOpen(false)
+          setSettingsOpen(true)
+        },
+      },
+      ...workspace.projects.map((project) => ({
+
+        id: `delete-project-${project.id}`,
+        title: `Remove ${project.name}`,
+        detail: 'Project',
+        icon: Trash2,
+        disabled: workspace.projects.length <= 1,
+        run: () => {
+          setCommandPaletteOpen(false)
+          void handleDeleteProject(project.id)
+        },
+      })),
+      ...workspace.projects.flatMap((project) => [
+        {
+          id: `switch-project-${project.id}`,
+          title: `Switch to ${project.name}`,
+          detail: 'Project',
+          icon: Shuffle,
+          disabled: false,
+          run: () => {
+            const agentId = project.agents[0]?.id ?? ''
+            setChatFocusRequest(0)
+            setSelection({ projectId: project.id, agentId })
+            setCommandPaletteOpen(false)
+          },
+        },
+        ...project.agents.map((agent) => ({
+          id: `switch-agent-${agent.id}`,
+          title: `Switch to ${agent.title}`,
+          detail: project.name,
+          icon: Bot,
+          disabled: false,
+          run: () => {
+            setChatFocusRequest(0)
+            setSelection({ projectId: project.id, agentId: agent.id })
+            setCommandPaletteOpen(false)
+          },
+        })),
+      ]),
+    ],
+    [selectedAgent, selectedProject, workspace.projects],
+  )
 
   if (!selectedProject) {
     return <div className="empty-shell">No projects configured.</div>
@@ -323,58 +480,24 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         data-testid="board-pane"
       >
         <header className="topbar">
-          <div>
-            <p className="eyebrow">pican</p>
-            <h1>Kanban Orchestrator</h1>
-          </div>
-          <div className="keymap" aria-label="Keyboard shortcuts">
-            <span>
-              <Keycap value={keymap.projectPrev} />
-              <Keycap value={keymap.projectNext} />
-              projects
-            </span>
-            <span>
-              <Keycap value={keymap.agentPrev} />
-              <Keycap value={keymap.agentNext} />
-              agents
-            </span>
-            <span>
-              <Keycap value={keymap.startSession} />
-              new session
-            </span>
-            <span>
-              <Keycap value={keymap.deleteSession} />
-              remove session
-            </span>
-            <span>
-              <Keycap value="c" />
-              chat
-            </span>
-            <span>
-              <Keycap value="d" />
-              diffs
-            </span>
-            <button
-              type="button"
-              className="settings-trigger"
-              aria-expanded={sessionLauncherOpen}
-              onClick={() => setSessionLauncherOpen((open) => !open)}
-              data-testid="start-session-trigger"
-            >
-              <Plus size={14} />
-              Start
-            </button>
-            <button
-              type="button"
-              className="settings-trigger"
-              aria-expanded={settingsOpen}
-              onClick={() => setSettingsOpen((open) => !open)}
-            >
-              <Settings2 size={14} />
-              Settings
-            </button>
-          </div>
+          <h1 className="pican-mark">PICAN</h1>
+          <button
+            type="button"
+            className="settings-trigger"
+            aria-expanded={settingsOpen}
+            onClick={() => setSettingsOpen((open) => !open)}
+          >
+            <Settings2 size={14} />
+            Settings
+          </button>
         </header>
+
+        {commandPaletteOpen ? (
+          <CommandPalette
+            actions={commandActions}
+            onClose={() => setCommandPaletteOpen(false)}
+          />
+        ) : null}
 
         {sessionLauncherOpen ? (
           <InlineSessionLauncher
@@ -432,15 +555,6 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
                 <GitPullRequest size={15} />
                 Diffs
               </button>
-              <button
-                type="button"
-                className={tab === 'artifacts' ? 'active' : ''}
-                onClick={() => setTab('artifacts')}
-                data-testid="tab-artifacts"
-              >
-                <PanelRight size={15} />
-                Artifacts
-              </button>
             </div>
 
             {tab === 'chat' ? (
@@ -453,12 +567,11 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
                   setChatDrafts((current) => ({ ...current, [selectedAgent.id]: draft }))
                 }
                 onSend={handleSendMessage}
+                onSteer={handleSteerMessage}
+                onInterrupt={handleInterruptMessage}
               />
             ) : null}
             {tab === 'diffs' ? <DiffPanel key={selectedAgent.id} agent={selectedAgent} /> : null}
-            {tab === 'artifacts' ? (
-              <ArtifactsPanel key={selectedAgent.id} agent={selectedAgent} />
-            ) : null}
           </>
         ) : (
           <EmptySessionPanel
@@ -491,14 +604,19 @@ function SettingsScreen({
   return (
     <main className="settings-shell" data-testid="settings-page">
       <header className="settings-hero">
-        <div>
-          <p className="eyebrow">settings</p>
-          <h1>Workspace Settings</h1>
-        </div>
+        <h1 className="pican-mark">PICAN</h1>
         <button type="button" className="settings-close" onClick={onClose}>
           Back to board
         </button>
       </header>
+
+      <section className="settings-intro" aria-label="Settings overview">
+        <div>
+          <p className="settings-kicker">Settings</p>
+          <h2>Workspace controls</h2>
+        </div>
+        <p>Keymaps and project rows stay here. Session work stays on the board.</p>
+      </section>
 
       <div className="settings-layout">
         <section className="settings-section">
@@ -681,10 +799,11 @@ function ProjectSettingsPanel({
       <div className="project-settings-head">
         <div>
           <p className="settings-kicker">Projects</p>
-          <strong>Add or remove rows</strong>
+          <strong>Manage board rows</strong>
         </div>
-        {error ? <span role="status">{error}</span> : null}
+        <span>{projects.length} total</span>
       </div>
+      {error ? <span className="settings-error" role="status">{error}</span> : null}
       <form className="project-add-form" onSubmit={submit}>
         <label>
           <span>Name</span>
@@ -726,6 +845,7 @@ function ProjectSettingsPanel({
             <div>
               <strong>{project.name}</strong>
               <span>{project.id}</span>
+              <small>{project.cwd}</small>
             </div>
             <button
               type="button"
@@ -755,7 +875,7 @@ function KeymapSettingsPanel({
     <section className="settings-panel" aria-label="Keymap settings">
       <div>
         <p className="settings-kicker">Keymap</p>
-        <strong>Shift plus key</strong>
+        <strong>Board shortcuts use Shift plus key</strong>
       </div>
       <KeySelect
         label="Project up"
@@ -793,6 +913,22 @@ function KeymapSettingsPanel({
         value={keymap.deleteSession}
         onChange={onChange}
       />
+      <KeySelect
+        label="Focus chat"
+        action="focusChat"
+        value={keymap.focusChat}
+        onChange={onChange}
+      />
+      <KeySelect
+        label="Open diffs"
+        action="openDiffs"
+        value={keymap.openDiffs}
+        onChange={onChange}
+      />
+      <div className="key-static" aria-label="Command menu shortcut">
+        <span>Command menu</span>
+        <strong>⌘K / Ctrl+K</strong>
+      </div>
       <button type="button" className="reset-keymap" onClick={onReset}>
         Reset
       </button>
@@ -826,6 +962,115 @@ function KeySelect({
         ))}
       </select>
     </label>
+  )
+}
+
+function CommandPalette({
+  actions,
+  onClose,
+}: {
+  actions: CommandPaletteAction[]
+  onClose: () => void
+}) {
+  const [query, setQuery] = React.useState('')
+  const [selectedIndex, setSelectedIndex] = React.useState(0)
+  const inputRef = React.useRef<HTMLInputElement>(null)
+
+  React.useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredActions = actions.filter((action) => {
+    const haystack = `${action.title} ${action.detail}`.toLowerCase()
+    return haystack.includes(normalizedQuery)
+  })
+  const visibleActions = normalizedQuery ? filteredActions : filteredActions.slice(0, 7)
+  const selectedAction = visibleActions[selectedIndex]
+
+  React.useEffect(() => {
+    setSelectedIndex(0)
+  }, [query])
+
+  function moveSelection(delta: number) {
+    const enabledIndexes = visibleActions
+      .map((action, index) => (action.disabled ? -1 : index))
+      .filter((index) => index >= 0)
+    if (enabledIndexes.length === 0) return
+
+    const currentEnabledIndex = enabledIndexes.indexOf(selectedIndex)
+    const nextEnabledIndex =
+      currentEnabledIndex < 0
+        ? 0
+        : (currentEnabledIndex + delta + enabledIndexes.length) % enabledIndexes.length
+    setSelectedIndex(enabledIndexes[nextEnabledIndex])
+  }
+
+  function submit(action: CommandPaletteAction | undefined) {
+    if (!action || action.disabled) return
+    action.run()
+  }
+
+  return (
+    <div className="command-panel" role="dialog" aria-label="Command menu">
+      <div className="command-search">
+        <Command size={16} aria-hidden="true" />
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              onClose()
+            }
+            if (event.key === 'ArrowDown') {
+              event.preventDefault()
+              moveSelection(1)
+            }
+            if (event.key === 'ArrowUp') {
+              event.preventDefault()
+              moveSelection(-1)
+            }
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              submit(selectedAction)
+            }
+          }}
+          aria-activedescendant={selectedAction ? `command-${selectedAction.id}` : undefined}
+          placeholder="Start, end, or switch"
+          aria-label="Command search"
+          data-testid="command-search"
+        />
+        <span>⌘K</span>
+      </div>
+      <div className="command-list" role="listbox">
+        {visibleActions.length > 0 ? (
+          visibleActions.map((action, index) => {
+            const Icon = action.icon
+            return (
+              <button
+                key={action.id}
+                type="button"
+                id={`command-${action.id}`}
+                className={`command-item ${index === selectedIndex ? 'active' : ''}`}
+                disabled={action.disabled}
+                onMouseEnter={() => setSelectedIndex(index)}
+                onClick={() => submit(action)}
+              >
+                <Icon size={15} aria-hidden="true" />
+                <span>
+                  <strong>{action.title}</strong>
+                  <small>{action.detail}</small>
+                </span>
+              </button>
+            )
+          })
+        ) : (
+          <p className="command-empty">No command matches.</p>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -1014,17 +1259,26 @@ function ChatPanel({
   focusRequest,
   onDraftChange,
   onSend,
+  onSteer,
+  onInterrupt,
 }: {
   agent: AgentCell
   draft: string
   focusRequest: number
   onDraftChange: (draft: string) => void
-  onSend: (agentId: string, text: string) => Promise<void>
+  onSend: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
+  onSteer: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
+  onInterrupt: (agentId: string) => Promise<void>
 }) {
   const [pending, setPending] = React.useState(false)
   const [pendingPrompt, setPendingPrompt] = React.useState<string | null>(null)
+  const [localRunning, setLocalRunning] = React.useState(false)
+  const [images, setImages] = React.useState<SendMessageImage[]>([])
   const [error, setError] = React.useState<string | null>(null)
-  const canSend = draft.trim().length > 0 && !pending
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const isRunning = agent.status === 'running' || localRunning
+  const hasDraftContent = draft.trim().length > 0 || images.length > 0
+  const canSubmit = !pending && (hasDraftContent || isRunning)
   const pendingMessage = React.useMemo<BoardMessage | null>(
     () => {
       if (pendingPrompt === null) return null
@@ -1076,22 +1330,68 @@ function ChatPanel({
     textareaRef.current?.focus()
   }, [focusRequest])
 
+  React.useEffect(() => {
+    if (agent.status !== 'running') setLocalRunning(false)
+  }, [agent.id, agent.status])
+
   React.useLayoutEffect(() => {
     const list = messageListRef.current
     if (!list) return
     list.scrollTop = list.scrollHeight
   }, [agent.id, agent.status, latestRowId, rows.length])
 
+  async function addImageFiles(files: File[]) {
+    const imageFiles = files.filter((file) => file.type.startsWith('image/'))
+    if (!imageFiles.length) return
+    try {
+      const remaining = Math.max(4 - images.length, 0)
+      const nextImages = await Promise.all(imageFiles.slice(0, remaining).map(readImageFile))
+      if (imageFiles.length > remaining) {
+        setError('Attach up to 4 images per message')
+      }
+      setImages((current) => [...current, ...nextImages].slice(0, 4))
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
+
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!canSend) return
-    const prompt = draft.trim()
-    setPending(true)
-    setPendingPrompt(prompt)
+    if (!canSubmit) return
+    if (isRunning && !hasDraftContent) {
+      setPending(true)
+      setError(null)
+      try {
+        await onInterrupt(agent.id)
+      } catch (cause) {
+        setError(errorMessage(cause))
+      } finally {
+        setPending(false)
+      }
+      return
+    }
+
+    const prompt = draft.trim() || 'Please inspect the attached image files.'
+    const promptImages = images
+    setPendingPrompt(pendingPromptText(prompt, promptImages))
     setError(null)
     onDraftChange('')
+    setImages([])
+
+    if (!isRunning) {
+      setLocalRunning(true)
+      void onSend(agent.id, prompt, promptImages)
+        .catch((cause) => setError(errorMessage(cause)))
+        .finally(() => {
+          setPendingPrompt(null)
+          setLocalRunning(false)
+        })
+      return
+    }
+
+    setPending(true)
     try {
-      await onSend(agent.id, prompt)
+      await onSteer(agent.id, prompt, promptImages)
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {
@@ -1105,33 +1405,76 @@ function ChatPanel({
       <MessageTimeline rows={rows} listRef={messageListRef} />
       {error ? <span className="chat-error" role="status">{error}</span> : null}
       <form className="composer" onSubmit={submit}>
-        <TerminalSquare size={16} />
-        <textarea
-          ref={textareaRef}
-          value={draft}
-          onChange={(event) => onDraftChange(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.currentTarget.blur()
-              return
-            }
-            if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey) return
-            event.preventDefault()
-            event.currentTarget.form?.requestSubmit()
+        <div className="composer-fields">
+          <textarea
+            ref={textareaRef}
+            value={draft}
+            onChange={(event) => onDraftChange(event.currentTarget.value)}
+            onPaste={(event) => {
+              void addImageFiles(Array.from(event.clipboardData.files))
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.currentTarget.blur()
+                return
+              }
+              if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey) return
+              event.preventDefault()
+              event.currentTarget.form?.requestSubmit()
+            }}
+            aria-label="Prompt"
+            placeholder="Type to this agent"
+            rows={3}
+            data-testid="chat-input"
+          />
+          {images.length ? (
+            <div className="composer-attachments" aria-label="Attached images">
+              {images.map((image, index) => (
+                <span key={`${image.name}-${index}`} className="composer-attachment">
+                  {image.name}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                    }
+                    aria-label={`Remove ${image.name}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          multiple
+          hidden
+          onChange={(event) => {
+            void addImageFiles(Array.from(event.currentTarget.files ?? []))
+            event.currentTarget.value = ''
           }}
-          aria-label="Prompt"
-          placeholder="Type to this agent"
-          rows={3}
-          data-testid="chat-input"
         />
+        <button
+          type="button"
+          className="composer-attach"
+          onClick={() => fileInputRef.current?.click()}
+          aria-label="Attach images"
+          title="Attach images"
+        >
+          <ImagePlus size={15} />
+        </button>
         <ContextUsageChip usage={agent.contextUsage} />
         <button
           type="submit"
-          className="composer-submit"
-          disabled={!canSend}
-          aria-label="Send prompt"
+          className={`composer-submit${isRunning && !hasDraftContent ? ' interrupt' : ''}${isRunning && hasDraftContent ? ' steer' : ''}`}
+          disabled={!canSubmit}
+          aria-label={isRunning && !hasDraftContent ? 'Stop generation' : isRunning ? 'Steer agent' : 'Send prompt'}
+          title={isRunning && !hasDraftContent ? 'Stop generation' : isRunning ? 'Steer this turn' : 'Send prompt'}
         >
-          <Send size={15} />
+          {isRunning && !hasDraftContent ? <Square size={13} fill="currentColor" /> : <Send size={15} />}
         </button>
       </form>
     </div>
@@ -1451,6 +1794,7 @@ function DiffPanel({ agent }: { agent: AgentCell }) {
   const [diffStyle, setDiffStyle] = React.useState<DiffStyle>('unified')
   const [fullscreen, setFullscreen] = React.useState(false)
   const fileButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([])
+  const diffBodyRef = React.useRef<HTMLDivElement | null>(null)
   const diff =
     agent.diffs.find((item) => item.id === selectedDiffId) ?? agent.diffs[0]
   const selectedIndex = diff
@@ -1475,23 +1819,39 @@ function DiffPanel({ agent }: { agent: AgentCell }) {
   }, [agent.id, agent.diffs.length])
 
   React.useEffect(() => {
-    if (!fullscreen) return
-
     function onKeyDown(event: KeyboardEvent) {
-      if (isEditableTarget(event.target)) return
-      if (event.key === 'Escape') {
+      if (isEditableTarget(event.target) || event.metaKey || event.ctrlKey || event.altKey) {
+        return
+      }
+      const key = event.key.toLowerCase()
+      if (key === 'escape' && fullscreen) {
         event.preventDefault()
         setFullscreen(false)
         return
       }
-      if (event.key === 'ArrowLeft') {
+      if (key === 'f') {
+        event.preventDefault()
+        setFullscreen((value) => !value)
+        return
+      }
+      if (key === 'h') {
         event.preventDefault()
         selectRelative(-1, false)
         return
       }
-      if (event.key === 'ArrowRight') {
+      if (key === 'l') {
         event.preventDefault()
         selectRelative(1, false)
+        return
+      }
+      if (key === 'j') {
+        event.preventDefault()
+        scrollDiff(320)
+        return
+      }
+      if (key === 'k') {
+        event.preventDefault()
+        scrollDiff(-320)
       }
     }
 
@@ -1522,25 +1882,30 @@ function DiffPanel({ agent }: { agent: AgentCell }) {
   }
 
   function onFileListKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === 'ArrowLeft') {
+    const key = event.key.toLowerCase()
+    if (key === 'h') {
       event.preventDefault()
       selectRelative(-1, true)
       return
     }
-    if (event.key === 'ArrowRight') {
+    if (key === 'l') {
       event.preventDefault()
       selectRelative(1, true)
       return
     }
-    if (event.key === 'Home') {
+    if (key === 'j') {
       event.preventDefault()
-      selectIndex(0, true)
+      scrollDiff(320)
       return
     }
-    if (event.key === 'End') {
+    if (key === 'k') {
       event.preventDefault()
-      selectIndex(agent.diffs.length - 1, true)
+      scrollDiff(-320)
     }
+  }
+
+  function scrollDiff(delta: number) {
+    diffBodyRef.current?.scrollBy({ top: delta, behavior: 'smooth' })
   }
 
   if (!diff) {
@@ -1641,7 +2006,7 @@ function DiffPanel({ agent }: { agent: AgentCell }) {
           )
         })}
       </div>
-      <div className="pierre-host">
+      <div className="pierre-host" ref={diffBodyRef}>
         <PatchDiff
           key={`${diff.id}:${diffStyle}`}
           patch={diff.patch}
@@ -1666,17 +2031,6 @@ function diffFileFolder(path: string) {
   const parts = path.replace(/\\/g, '/').split('/').filter(Boolean)
   if (parts.length <= 1) return null
   return parts.slice(0, -1).join('/')
-}
-
-function ArtifactsPanel({ agent }: { agent: AgentCell }) {
-  return (
-    <div className="empty-panel" data-testid="artifacts-panel">
-      <Activity size={18} />
-      {agent.sessionFile
-        ? `Session file: ${agent.sessionFile}`
-        : `Reserved session dir: ${agent.sessionDir}`}
-    </div>
-  )
 }
 
 function RuntimeBadge({ runtime }: { runtime: string }) {
@@ -1799,6 +2153,40 @@ function saveKeymap(keymap: KeymapSettings): KeymapSettings {
 function formatKey(key: string) {
   if (key.startsWith('arrow')) return key.replace('arrow', 'Arrow ')
   return key.toUpperCase()
+}
+
+function pendingPromptText(text: string, images: SendMessageImage[]) {
+  if (!images.length) return text
+  return `${text}\n\nAttached images:\n${images.map((image) => `- ${image.name}`).join('\n')}`
+}
+
+async function readImageFile(file: File): Promise<SendMessageImage> {
+  if (!/^image\/(png|jpe?g|webp|gif)$/.test(file.type)) {
+    throw new Error(`Unsupported image type: ${file.type || file.name}`)
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    throw new Error(`Image "${file.name}" is larger than 5MB`)
+  }
+  const dataUrl = await readFileAsDataUrl(file)
+  const [, data] = dataUrl.split(',', 2)
+  if (!data) throw new Error(`Could not read image "${file.name}"`)
+  return {
+    name: file.name || 'image',
+    mimeType: file.type,
+    data,
+  }
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => {
+      if (typeof reader.result === 'string') resolve(reader.result)
+      else reject(new Error(`Could not read image "${file.name}"`))
+    })
+    reader.addEventListener('error', () => reject(reader.error ?? new Error('File read failed')))
+    reader.readAsDataURL(file)
+  })
 }
 
 function errorMessage(error: unknown) {

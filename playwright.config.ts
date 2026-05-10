@@ -16,7 +16,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'pnpm dev -- --port 3109 --strictPort',
+    command: 'pnpm dev --port 3109 --strictPort',
     env: {
       ...process.env,
       PICAN_DB_PATH: e2eDbPath,
