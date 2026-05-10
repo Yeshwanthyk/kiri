@@ -21,7 +21,7 @@ export const Route = createRootRouteWithContext<{
       },
       ...seo({
         title: 'pican',
-        description: 'Keyboard-first kanban orchestrator for Pi agents.',
+        description: 'Keyboard-first kanban orchestrator for project sessions.',
       }),
     ],
     links: [

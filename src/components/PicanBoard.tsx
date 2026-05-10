@@ -29,6 +29,7 @@ import type {
 import {
   addProjectMutation,
   deleteProjectMutation,
+  deleteSessionMutation,
   sendMessageMutation,
   startSessionMutation,
 } from '~/server/workspace'
@@ -40,6 +41,7 @@ type KeymapAction =
   | 'agentPrev'
   | 'agentNext'
   | 'startSession'
+  | 'deleteSession'
 
 type KeymapSettings = Record<KeymapAction, string>
 
@@ -54,6 +56,7 @@ const defaultKeymap: KeymapSettings = {
   agentPrev: 'h',
   agentNext: 'l',
   startSession: 'n',
+  deleteSession: 'x',
 }
 
 const keyOptions = [
@@ -62,6 +65,7 @@ const keyOptions = [
   'k',
   'l',
   'n',
+  'x',
   'arrowup',
   'arrowdown',
   'arrowleft',
@@ -79,6 +83,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [keymap, setKeymap] = React.useState<KeymapSettings>(defaultKeymap)
   const addProject = useServerFn(addProjectMutation)
   const deleteProject = useServerFn(deleteProjectMutation)
+  const deleteSession = useServerFn(deleteSessionMutation)
   const sendMessage = useServerFn(sendMessageMutation)
   const startSession = useServerFn(startSessionMutation)
 
@@ -94,12 +99,10 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }, [snapshot])
 
   React.useEffect(() => {
-    if (!selectedProject || !selectedAgent) return
-    if (
-      selectedProject.id !== selection.projectId ||
-      selectedAgent.id !== selection.agentId
-    ) {
-      setSelection({ projectId: selectedProject.id, agentId: selectedAgent.id })
+    if (!selectedProject) return
+    const agentId = selectedAgent?.id ?? ''
+    if (selectedProject.id !== selection.projectId || agentId !== selection.agentId) {
+      setSelection({ projectId: selectedProject.id, agentId })
     }
   }, [selectedAgent, selectedProject, selection.agentId, selection.projectId])
 
@@ -120,6 +123,17 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       if (action === 'startSession') {
         setSettingsOpen(false)
         setSessionLauncherOpen(true)
+        return
+      }
+
+      if (action === 'deleteSession') {
+        const project =
+          workspace.projects.find((row) => row.id === selection.projectId) ??
+          workspace.projects[0]
+        const agent = project?.agents.find((row) => row.id === selection.agentId)
+        if (agent?.isSession) {
+          void handleDeleteSession(agent.id)
+        }
         return
       }
 
@@ -153,6 +167,28 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setWorkspace(next)
   }
 
+  async function handleDeleteSession(agentId: string) {
+    const agent = selectedProject.agents.find((item) => item.id === agentId)
+    if (!agent) return
+    if (!window.confirm(`Remove session "${agent.title}"?`)) return
+
+    const currentProjectId = selectedProject.id
+    const currentProject = selectedProject
+    const currentIndex = currentProject.agents.findIndex((agent) => agent.id === agentId)
+    const next = await deleteSession({ data: { agentId } })
+    setWorkspace(next)
+    const project =
+      next.projects.find((item) => item.id === currentProjectId) ?? next.projects[0]
+    if (!project) return
+    const fallbackAgent =
+      project.agents[Math.max(0, Math.min(currentIndex - 1, project.agents.length - 1))]
+    if (fallbackAgent) {
+      setSelection({ projectId: project.id, agentId: fallbackAgent.id })
+    } else {
+      setSelection({ projectId: project.id, agentId: '' })
+    }
+  }
+
   async function handleSendMessage(agentId: string, text: string) {
     const next = await sendMessage({ data: { agentId, text } })
     setWorkspace(next)
@@ -177,7 +213,7 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setSessionLauncherOpen(false)
   }
 
-  if (!selectedProject || !selectedAgent) {
+  if (!selectedProject) {
     return <div className="empty-shell">No projects configured.</div>
   }
 
@@ -224,6 +260,10 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
             <span>
               <Keycap value={keymap.startSession} />
               new session
+            </span>
+            <span>
+              <Keycap value={keymap.deleteSession} />
+              remove session
             </span>
             <button
               type="button"
@@ -276,42 +316,55 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         aria-label="Selected chat"
         data-testid="sidebar-pane"
       >
-        <SidebarHeader project={selectedProject} agent={selectedAgent} />
-        <div className="sidebar-tabs" role="tablist">
-          <button
-            type="button"
-            className={tab === 'chat' ? 'active' : ''}
-            onClick={() => setTab('chat')}
-            data-testid="tab-chat"
-          >
-            <MessageSquareText size={15} />
-            Chat
-          </button>
-          <button
-            type="button"
-            className={tab === 'diffs' ? 'active' : ''}
-            onClick={() => setTab('diffs')}
-            data-testid="tab-diffs"
-          >
-            <GitPullRequest size={15} />
-            Diffs
-          </button>
-          <button
-            type="button"
-            className={tab === 'artifacts' ? 'active' : ''}
-            onClick={() => setTab('artifacts')}
-            data-testid="tab-artifacts"
-          >
-            <PanelRight size={15} />
-            Artifacts
-          </button>
-        </div>
+        {selectedAgent ? (
+          <>
+            <SidebarHeader
+              project={selectedProject}
+              agent={selectedAgent}
+              onDeleteSession={handleDeleteSession}
+            />
+            <div className="sidebar-tabs" role="tablist">
+              <button
+                type="button"
+                className={tab === 'chat' ? 'active' : ''}
+                onClick={() => setTab('chat')}
+                data-testid="tab-chat"
+              >
+                <MessageSquareText size={15} />
+                Chat
+              </button>
+              <button
+                type="button"
+                className={tab === 'diffs' ? 'active' : ''}
+                onClick={() => setTab('diffs')}
+                data-testid="tab-diffs"
+              >
+                <GitPullRequest size={15} />
+                Diffs
+              </button>
+              <button
+                type="button"
+                className={tab === 'artifacts' ? 'active' : ''}
+                onClick={() => setTab('artifacts')}
+                data-testid="tab-artifacts"
+              >
+                <PanelRight size={15} />
+                Artifacts
+              </button>
+            </div>
 
-        {tab === 'chat' ? (
-          <ChatPanel agent={selectedAgent} onSend={handleSendMessage} />
-        ) : null}
-        {tab === 'diffs' ? <DiffPanel agent={selectedAgent} /> : null}
-        {tab === 'artifacts' ? <ArtifactsPanel agent={selectedAgent} /> : null}
+            {tab === 'chat' ? (
+              <ChatPanel agent={selectedAgent} onSend={handleSendMessage} />
+            ) : null}
+            {tab === 'diffs' ? <DiffPanel agent={selectedAgent} /> : null}
+            {tab === 'artifacts' ? <ArtifactsPanel agent={selectedAgent} /> : null}
+          </>
+        ) : (
+          <EmptySessionPanel
+            project={selectedProject}
+            onStart={() => setSessionLauncherOpen(true)}
+          />
+        )}
       </aside>
     </main>
   )
@@ -633,6 +686,12 @@ function KeymapSettingsPanel({
         value={keymap.startSession}
         onChange={onChange}
       />
+      <KeySelect
+        label="Remove session"
+        action="deleteSession"
+        value={keymap.deleteSession}
+        onChange={onChange}
+      />
       <button type="button" className="reset-keymap" onClick={onReset}>
         Reset
       </button>
@@ -701,6 +760,11 @@ function ProjectLane({
         <span>{project.cwd}</span>
       </div>
       <div className="agent-row">
+        {project.agents.length === 0 ? (
+          <div className="empty-session-card" data-testid="empty-project-sessions">
+            No sessions
+          </div>
+        ) : null}
         {project.agents.map((agent) => (
           <button
             key={agent.id}
@@ -736,13 +800,53 @@ function ProjectLane({
   )
 }
 
+function EmptySessionPanel({
+  project,
+  onStart,
+}: {
+  project: ProjectRow
+  onStart: () => void
+}) {
+  return (
+    <div className="empty-sidebar-session" data-testid="empty-session-panel">
+      <div className="runtime-icon">
+        <Bot size={18} />
+      </div>
+      <p data-testid="selected-project">{project.name}</p>
+      <h2 data-testid="selected-agent">No session</h2>
+      <button type="button" onClick={onStart}>
+        <Plus size={14} />
+        Start session
+      </button>
+    </div>
+  )
+}
+
 function SidebarHeader({
   project,
   agent,
+  onDeleteSession,
 }: {
   project: ProjectRow
   agent: AgentCell
+  onDeleteSession: (agentId: string) => Promise<void>
 }) {
+  const [pending, setPending] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  async function removeSession() {
+    if (!agent.isSession) return
+    setPending(true)
+    setError(null)
+    try {
+      await onDeleteSession(agent.id)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
   return (
     <header className="sidebar-header">
       <div className="sidebar-title-row">
@@ -753,7 +857,19 @@ function SidebarHeader({
           <p data-testid="selected-project">{project.name}</p>
           <h2 data-testid="selected-agent">{agent.title}</h2>
         </div>
+        <button
+          type="button"
+          className="session-remove"
+          disabled={!agent.isSession || pending}
+          onClick={removeSession}
+          aria-label={`Remove ${agent.title}`}
+          title={agent.isSession ? 'Remove session' : 'Only sessions can be removed'}
+          data-testid="remove-session"
+        >
+          <Trash2 size={15} />
+        </button>
       </div>
+      {error ? <span className="sidebar-error" role="status">{error}</span> : null}
       <div className="sidebar-stats">
         <span className={`status-pill ${agent.status}`}>
           <Circle size={10} fill="currentColor" />
@@ -840,7 +956,7 @@ function DiffPanel({ agent }: { agent: AgentCell }) {
 
   if (!diff) {
     return (
-      <div className="empty-panel">
+      <div className="empty-panel" data-testid="diff-panel">
         <GitPullRequest size={18} />
         <span>No diffs for this agent yet.</span>
       </div>

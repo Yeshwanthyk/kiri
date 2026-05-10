@@ -55,6 +55,7 @@ export const agentCellSchema = z.object({
   messageCount: z.number().int().nonnegative(),
   diffCount: z.number().int().nonnegative(),
   updatedAt: z.string(),
+  isSession: z.boolean(),
   messages: z.array(boardMessageSchema),
   diffs: z.array(diffArtifactSchema),
 })
@@ -120,6 +121,11 @@ export const startSessionInputSchema = z.object({
   model: z.string().trim().optional(),
 })
 export type StartSessionInput = z.infer<typeof startSessionInputSchema>
+
+export const deleteSessionInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+})
+export type DeleteSessionInput = z.infer<typeof deleteSessionInputSchema>
 
 export type AgentRuntimeState = {
   kind: RuntimeKind

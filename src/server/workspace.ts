@@ -2,12 +2,14 @@ import { queryOptions } from '@tanstack/react-query'
 import { createServerFn } from '@tanstack/react-start'
 import {
   addProjectInputSchema,
+  deleteSessionInputSchema,
   deleteProjectInputSchema,
   sendMessageInputSchema,
   startSessionInputSchema,
 } from '~/lib/contracts'
 import {
   addProject,
+  deleteSession,
   deleteProject,
   getWorkspaceSnapshot,
   startSession,
@@ -25,6 +27,10 @@ export const addProjectMutation = createServerFn({ method: 'POST' })
 export const deleteProjectMutation = createServerFn({ method: 'POST' })
   .inputValidator(deleteProjectInputSchema)
   .handler(async ({ data }) => deleteProject(data.id))
+
+export const deleteSessionMutation = createServerFn({ method: 'POST' })
+  .inputValidator(deleteSessionInputSchema)
+  .handler(async ({ data }) => deleteSession(data))
 
 export const sendMessageMutation = createServerFn({ method: 'POST' })
   .inputValidator(sendMessageInputSchema)

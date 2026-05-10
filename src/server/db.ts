@@ -5,6 +5,7 @@ import { z } from 'zod'
 import type {
   AddProjectInput,
   AgentStatus,
+  DeleteSessionInput,
   StartSessionInput,
   MessageRole,
   WorkspaceSnapshot,
@@ -19,11 +20,6 @@ import type { PiRpcMessage } from './pi-rpc'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
 
 const dbPath = join(process.cwd(), '.pican', 'pican.sqlite')
-const defaultAgentSlots = [
-  ['planner', 'Planner'],
-  ['builder', 'Builder'],
-  ['reviewer', 'Reviewer'],
-] as const
 
 let db: DatabaseSync | undefined
 
@@ -181,6 +177,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
       messageCount: agent.messageCount ?? 0,
       diffCount: agent.diffCount,
       updatedAt: agent.updatedAt ?? new Date(0).toISOString(),
+      isSession: agent.slot.startsWith('session-'),
       messages: (messagesByAgent.get(agent.id) ?? []).map(
         ({ agentId: _agentId, ...message }) => message,
       ),
@@ -226,35 +223,9 @@ export function addProject(input: AddProjectInput) {
     INSERT INTO projects (id, name, cwd, position)
     VALUES (?, ?, ?, ?)
   `)
-  const insertAgent = database.prepare(`
-    INSERT INTO agent_slots (
-      id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
-    )
-    VALUES (?, ?, ?, ?, 'pi', ?, 'idle', ?, NULL, ?)
-  `)
-  const insertThread = database.prepare(`
-    INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
-    VALUES (?, ?, 1, 'Ready.', 0, ?)
-  `)
-  const now = new Date().toISOString()
-  const piModel = getRuntimeSettings('pi').defaultModel
-
   database.exec('BEGIN')
   try {
     insertProject.run(id, name, cwd, nextPosition.position)
-    for (const [position, [slot, title]] of defaultAgentSlots.entries()) {
-      const agentId = `${id}-${slot}`
-      insertAgent.run(
-        agentId,
-        id,
-        slot,
-        title,
-        piModel,
-        join(process.cwd(), '.pican', 'pi-sessions', id, slot),
-        position,
-      )
-      insertThread.run(`thread-${agentId}`, agentId, now)
-    }
     database.exec('COMMIT')
   } catch (error) {
     database.exec('ROLLBACK')
@@ -315,6 +286,39 @@ export function startSession(input: StartSessionInput) {
         `,
       )
       .run(`thread-${id}`, id, now)
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+
+  return getWorkspaceSnapshot()
+}
+
+export function deleteSession(input: DeleteSessionInput) {
+  const database = getDb()
+  const agentId = input.agentId.trim()
+  const row = database
+    .prepare('SELECT id, project_id AS projectId, slot FROM agent_slots WHERE id = ?')
+    .get(agentId) as { id: string; projectId: string; slot: string } | undefined
+  if (!row) throw new Error(`Session not found: ${agentId}`)
+  if (!row.slot.startsWith('session-')) {
+    throw new Error('Only started sessions can be removed')
+  }
+
+  database.exec('BEGIN')
+  try {
+    database.prepare('DELETE FROM agent_slots WHERE id = ?').run(agentId)
+    const rows = database
+      .prepare(
+        'SELECT id FROM agent_slots WHERE project_id = ? ORDER BY position ASC, id ASC',
+      )
+      .all(row.projectId)
+      .map((item) => idDbRowSchema.parse(item))
+    const update = database.prepare('UPDATE agent_slots SET position = ? WHERE id = ?')
+    for (const [position, item] of rows.entries()) {
+      update.run(position, item.id)
+    }
     database.exec('COMMIT')
   } catch (error) {
     database.exec('ROLLBACK')
@@ -494,6 +498,11 @@ function migrate(database: DatabaseSync) {
   `)
   widenRuntimeCheck(database)
   repairAgentSlotReferences(database)
+  removeLegacyDefaultAgentSlots(database)
+}
+
+function removeLegacyDefaultAgentSlots(database: DatabaseSync) {
+  database.prepare("DELETE FROM agent_slots WHERE slot NOT LIKE 'session-%'").run()
 }
 
 function widenRuntimeCheck(database: DatabaseSync) {
@@ -629,30 +638,11 @@ function seed(database: DatabaseSync) {
     .get() as { count: number }
   if (count.count > 0) return
 
-  const now = new Date().toISOString()
   const root = process.cwd()
 
   const insertProject = database.prepare(`
     INSERT INTO projects (id, name, cwd, position)
     VALUES (?, ?, ?, ?)
-  `)
-  const insertAgent = database.prepare(`
-    INSERT INTO agent_slots (
-      id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
-    )
-    VALUES (?, ?, ?, ?, 'pi', ?, ?, ?, NULL, ?)
-  `)
-  const insertThread = database.prepare(`
-    INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
-    VALUES (?, ?, 1, ?, ?, ?)
-  `)
-  const insertMessage = database.prepare(`
-    INSERT INTO messages (id, thread_id, role, text, timestamp)
-    VALUES (?, ?, ?, ?, ?)
-  `)
-  const insertDiff = database.prepare(`
-    INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
   `)
 
   const projects = [
@@ -663,103 +653,6 @@ function seed(database: DatabaseSync) {
   for (const project of projects) {
     insertProject.run(...project)
   }
-
-  const piModel = getRuntimeSettings('pi').defaultModel
-  const agents = [
-    ['pican-planner', 'pican', 'planner', 'Planner', piModel, 'idle', 0],
-    ['pican-builder', 'pican', 'builder', 'Builder', piModel, 'running', 1],
-    ['pican-reviewer', 'pican', 'reviewer', 'Reviewer', piModel, 'queued', 2],
-    ['pi-inspector', 'pi-mono', 'inspector', 'Inspector', piModel, 'idle', 0],
-    ['pi-rpc', 'pi-mono', 'runtime', 'RPC Runtime', piModel, 'blocked', 1],
-  ] as const
-
-  for (const [id, projectId, slot, title, model, status, position] of agents) {
-    insertAgent.run(
-      id,
-      projectId,
-      slot,
-      title,
-      model,
-      status,
-      join(root, '.pican', 'pi-sessions', projectId, slot),
-      position,
-    )
-    insertThread.run(
-      `thread-${id}`,
-      id,
-      seedPreview(slot),
-      slot === 'reviewer' ? 2 : 3,
-      now,
-    )
-  }
-
-  insertMessage.run(
-    'm1',
-    'thread-pican-builder',
-    'user',
-    'Build the TanStack Start kanban shell and keep Pi as the first runtime.',
-    now,
-  )
-  insertMessage.run(
-    'm2',
-    'thread-pican-builder',
-    'assistant',
-    'Scaffold is ready. I am wiring the board projection, Pi RPC contract, and Pierre diff panel next.',
-    now,
-  )
-  insertMessage.run(
-    'm3',
-    'thread-pican-builder',
-    'tool',
-    'SQLite initialized at .pican/pican.sqlite. Pi sessions are reserved under .pican/pi-sessions.',
-    now,
-  )
-  insertMessage.run(
-    'm4',
-    'thread-pican-planner',
-    'summary',
-    'MVP contract: one active Pi session per project x agent slot. pican stores orchestration metadata; Pi owns execution and JSONL transcript.',
-    now,
-  )
-  insertMessage.run(
-    'm5',
-    'thread-pi-rpc',
-    'system',
-    'Blocked until a real Pi RPC process is attached from the server adapter.',
-    now,
-  )
-
-  insertDiff.run(
-    'diff-1',
-    'pican-builder',
-    'Initial pican contracts',
-    'src/lib/contracts.ts',
-    `diff --git a/src/lib/contracts.ts b/src/lib/contracts.ts
-new file mode 100644
-index 0000000..1111111
---- /dev/null
-+++ b/src/lib/contracts.ts
-@@ -0,0 +1,10 @@
-+import { z } from 'zod'
-+
-+export const runtimeKindSchema = z.enum(['pi', 'codex', 'claude', 'opencode'])
-+export const agentStatusSchema = z.enum(['idle', 'running', 'queued', 'blocked', 'failed'])
-+
-+export const agentCellSchema = z.object({
-+  id: z.string(),
-+  runtime: runtimeKindSchema,
-+  status: agentStatusSchema,
-+})`,
-    now,
-  )
-}
-
-function seedPreview(slot: string) {
-  if (slot === 'planner') return 'Contract-first plan is ready.'
-  if (slot === 'builder') return 'Building the initial orchestrator UI.'
-  if (slot === 'reviewer') return 'Waiting for first implementation chunk.'
-  if (slot === 'runtime') return 'RPC adapter boundary identified.'
-  return 'Ready.'
 }
 
 function slugify(value: string) {

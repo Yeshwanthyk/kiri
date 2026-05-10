@@ -23,9 +23,9 @@ pnpm pican:projects add --name "Pican Orchestrator" --cwd /path/to/repo --id pic
 pnpm pican:projects delete --id pican --yes
 ```
 
-Adding a project creates the default Pi agent slots: `planner`, `builder`, and
-`reviewer`. Deleting a project removes pican metadata for that project; it does
-not delete the project working directory.
+Adding a project creates a project row with no sessions. Deleting a project
+removes pican metadata for that project; it does not delete the project working
+directory.
 
 ## Settings
 
@@ -47,3 +47,4 @@ session model through `--model ...`.
 - `Shift+ArrowUp` / `Shift+ArrowDown`: move between projects.
 - `Shift+H/J/K/L`: move between agents in the selected project.
 - `Shift+N`: start a session in the selected project.
+- `Shift+X`: confirm and remove the selected session.

@@ -12,7 +12,7 @@ pnpm pican:projects delete --id stable-id --yes
 
 Rules:
 
-- `add` creates `planner`, `builder`, and `reviewer` Pi agent slots.
+- `add` creates only a project row. Sessions are created explicitly from the board.
 - `delete` removes only pican metadata; it does not delete the repo directory or session files.
 - Prefer stable lowercase ids; omit `--id` only when the slugified name is acceptable.
 - Run `pnpm build` after changes touching app code or contracts.
@@ -24,6 +24,9 @@ or server handlers. Sessions are represented as agent slots and store the
 `runtime` and `model` chosen when the session starts, but valid choices come
 from `settings.json`. Do not add global per-slot model settings; model choice
 belongs to session start.
+
+Started sessions are agent slots whose `slot` starts with `session-`. Projects
+do not have default planner/builder/reviewer slots.
 
 ## Skill Routing
 

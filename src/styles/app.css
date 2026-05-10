@@ -462,6 +462,18 @@ h1 {
     transform 160ms ease;
 }
 
+.empty-session-card {
+  display: grid;
+  min-height: 132px;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: oklch(0.982 0.008 92);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .agent-cell:hover {
   border-color: oklch(0.72 0.035 166);
   transform: translateY(-1px);
@@ -558,6 +570,10 @@ h1 {
   gap: 12px;
 }
 
+.sidebar-title-row > div:nth-child(2) {
+  min-width: 0;
+}
+
 .runtime-icon {
   display: grid;
   width: 38px;
@@ -576,6 +592,65 @@ h1 {
 .sidebar-title-row h2 {
   font-size: 22px;
   line-height: 1.15;
+}
+
+.session-remove {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.session-remove:not(:disabled):hover {
+  border-color: oklch(0.78 0.055 25);
+  background: oklch(0.955 0.025 25);
+  color: var(--danger);
+}
+
+.sidebar-error {
+  display: block;
+  margin-top: 10px;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.empty-sidebar-session {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  min-height: 100%;
+  padding: 28px;
+  gap: 10px;
+}
+
+.empty-sidebar-session p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.empty-sidebar-session h2 {
+  font-size: 24px;
+}
+
+.empty-sidebar-session button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: oklch(0.94 0.035 166);
+  color: oklch(0.32 0.08 166);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .sidebar-stats {

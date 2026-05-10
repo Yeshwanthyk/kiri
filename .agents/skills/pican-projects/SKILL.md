@@ -17,7 +17,7 @@ pnpm pican:projects delete --id stable-id --yes
 
 ## Behavior
 
-- `add` validates that `cwd` exists, inserts a project row, and creates default Pi slots: `planner`, `builder`, `reviewer`.
+- `add` validates that `cwd` exists and inserts a project row. It does not create default sessions.
 - `delete` requires `--yes` and deletes the project row. SQLite cascades agent slots, active threads, messages, and diff artifacts.
 - Deleting a project does not remove the project working directory or existing session files.
 

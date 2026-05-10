@@ -1,17 +1,11 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 const root = process.cwd()
 const dbPath = join(root, '.pican', 'pican.sqlite')
-const defaultAgents = [
-  ['planner', 'Planner'],
-  ['builder', 'Builder'],
-  ['reviewer', 'Reviewer'],
-]
-
 main()
 
 function main() {
@@ -104,7 +98,7 @@ function listProjects(database) {
   const rows = database
     .prepare(
       `
-        SELECT p.id, p.name, p.cwd, COUNT(a.id) AS agents
+        SELECT p.id, p.name, p.cwd, COUNT(a.id) AS sessions
         FROM projects p
         LEFT JOIN agent_slots a ON a.project_id = p.id
         GROUP BY p.id
@@ -119,7 +113,7 @@ function listProjects(database) {
   }
 
   for (const row of rows) {
-    console.log(`${row.id}\t${row.name}\t${row.agents} agents\t${row.cwd}`)
+    console.log(`${row.id}\t${row.name}\t${row.sessions} sessions\t${row.cwd}`)
   }
 }
 
@@ -144,35 +138,9 @@ function addProject(database, options) {
     INSERT INTO projects (id, name, cwd, position)
     VALUES (?, ?, ?, ?)
   `)
-  const insertAgent = database.prepare(`
-    INSERT INTO agent_slots (
-      id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
-    )
-    VALUES (?, ?, ?, ?, 'pi', ?, 'idle', ?, NULL, ?)
-  `)
-  const insertThread = database.prepare(`
-    INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
-    VALUES (?, ?, 1, 'Ready.', 0, ?)
-  `)
-
-  const now = new Date().toISOString()
-  const model = defaultPiModel()
   database.exec('BEGIN')
   try {
     insertProject.run(id, name, cwd, nextPosition)
-    for (const [index, [slot, title]] of defaultAgents.entries()) {
-      const agentId = `${id}-${slot}`
-      insertAgent.run(
-        agentId,
-        id,
-        slot,
-        title,
-        model,
-        join(root, '.pican', 'pi-sessions', id, slot),
-        index,
-      )
-      insertThread.run(`thread-${agentId}`, agentId, now)
-    }
     database.exec('COMMIT')
   } catch (error) {
     database.exec('ROLLBACK')
@@ -223,11 +191,6 @@ function reindexProjects(database) {
   for (const [position, row] of rows.entries()) {
     update.run(position, row.id)
   }
-}
-
-function defaultPiModel() {
-  const settings = JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8'))
-  return settings.runtimes.pi.defaultModel
 }
 
 function parseArgs(args) {
