@@ -10,6 +10,7 @@ yarn.lock
 /build/
 /dist/
 /.pican/
+/artifacts/
 /api/
 /server/build
 /public/build

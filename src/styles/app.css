@@ -47,6 +47,7 @@ button {
   display: grid;
   grid-template-columns: minmax(560px, 1fr) minmax(360px, 440px);
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 .board-pane {
@@ -86,10 +87,10 @@ h1 {
 .keymap {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   color: var(--muted);
   font-size: 12px;
-  white-space: nowrap;
 }
 
 .keymap span {
@@ -429,6 +430,23 @@ h1 {
     grid-template-columns: 1fr;
   }
 
+  .board-pane {
+    padding: 22px 22px 0;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .keymap {
+    max-width: 100%;
+  }
+
+  .keymap span {
+    min-height: 28px;
+  }
+
   .sidebar-pane {
     border-top: 1px solid var(--line);
     border-left: 0;
@@ -440,5 +458,35 @@ h1 {
 
   .agent-row {
     grid-template-columns: 1fr;
+  }
+
+  .chat-panel,
+  .diff-panel {
+    height: auto;
+    min-height: 0;
+  }
+
+  .message-list {
+    flex: none;
+    max-height: 420px;
+  }
+}
+
+@media (max-width: 480px) {
+  h1 {
+    font-size: 31px;
+  }
+
+  .board-pane {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .project-lane {
+    padding: 11px;
+  }
+
+  .agent-cell {
+    min-height: 132px;
   }
 }
