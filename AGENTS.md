@@ -20,8 +20,10 @@ Rules:
 ## Runtime Models
 
 Use `settings.json` for runtime model lists. Do not hard-code model menus in UI
-or server handlers. Agent slots store their selected `runtime` and `model` in
-SQLite, but valid choices come from `settings.json`.
+or server handlers. Sessions are represented as agent slots and store the
+`runtime` and `model` chosen when the session starts, but valid choices come
+from `settings.json`. Do not add global per-slot model settings; model choice
+belongs to session start.
 
 ## Skill Routing
 

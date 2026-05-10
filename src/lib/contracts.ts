@@ -113,12 +113,13 @@ export const sendMessageInputSchema = z.object({
 })
 export type SendMessageInput = z.infer<typeof sendMessageInputSchema>
 
-export const setAgentConfigInputSchema = z.object({
-  agentId: z.string().trim().min(1),
-  runtime: runtimeKindSchema,
-  model: z.string().trim().min(1),
+export const startSessionInputSchema = z.object({
+  projectId: z.string().trim().min(1),
+  title: z.string().trim().optional(),
+  runtime: runtimeKindSchema.optional(),
+  model: z.string().trim().optional(),
 })
-export type SetAgentConfigInput = z.infer<typeof setAgentConfigInputSchema>
+export type StartSessionInput = z.infer<typeof startSessionInputSchema>
 
 export type AgentRuntimeState = {
   kind: RuntimeKind

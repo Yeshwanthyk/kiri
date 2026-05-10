@@ -16,7 +16,6 @@ import {
   Plus,
   Send,
   Settings2,
-  SlidersHorizontal,
   TerminalSquare,
   Trash2,
 } from 'lucide-react'
@@ -30,12 +29,17 @@ import type {
 import {
   addProjectMutation,
   deleteProjectMutation,
-  setAgentConfigMutation,
   sendMessageMutation,
+  startSessionMutation,
 } from '~/server/workspace'
 
 type SidebarTab = 'chat' | 'diffs' | 'artifacts'
-type KeymapAction = 'projectPrev' | 'projectNext' | 'agentPrev' | 'agentNext'
+type KeymapAction =
+  | 'projectPrev'
+  | 'projectNext'
+  | 'agentPrev'
+  | 'agentNext'
+  | 'startSession'
 
 type KeymapSettings = Record<KeymapAction, string>
 
@@ -49,6 +53,7 @@ const defaultKeymap: KeymapSettings = {
   projectNext: 'j',
   agentPrev: 'h',
   agentNext: 'l',
+  startSession: 'n',
 }
 
 const keyOptions = [
@@ -56,6 +61,7 @@ const keyOptions = [
   'j',
   'k',
   'l',
+  'n',
   'arrowup',
   'arrowdown',
   'arrowleft',
@@ -69,11 +75,12 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [tab, setTab] = React.useState<SidebarTab>('chat')
   const [hydrated, setHydrated] = React.useState(false)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [sessionLauncherOpen, setSessionLauncherOpen] = React.useState(false)
   const [keymap, setKeymap] = React.useState<KeymapSettings>(defaultKeymap)
   const addProject = useServerFn(addProjectMutation)
   const deleteProject = useServerFn(deleteProjectMutation)
-  const setAgentConfig = useServerFn(setAgentConfigMutation)
   const sendMessage = useServerFn(sendMessageMutation)
+  const startSession = useServerFn(startSessionMutation)
 
   const selectedProject =
     workspace.projects.find((project) => project.id === selection.projectId) ??
@@ -110,6 +117,12 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       if (!action) return
       event.preventDefault()
 
+      if (action === 'startSession') {
+        setSettingsOpen(false)
+        setSessionLauncherOpen(true)
+        return
+      }
+
       if (action === 'projectPrev' || action === 'projectNext') {
         setSelection((current) =>
           moveProject(workspace.projects, current, action === 'projectNext' ? 1 : -1),
@@ -145,13 +158,23 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setWorkspace(next)
   }
 
-  async function handleSetAgentConfig(input: {
-    agentId: string
+  async function handleStartSession(input: {
+    projectId: string
     runtime: RuntimeKind
-    model: string
+    model?: string
+    title?: string
   }) {
-    const next = await setAgentConfig({ data: input })
+    const next = await startSession({ data: input })
     setWorkspace(next)
+    const project = next.projects.find((item) => item.id === input.projectId)
+    const agent =
+      (input.title
+        ? project?.agents.find((item) => item.title === input.title)
+        : undefined) ?? project?.agents[project.agents.length - 1]
+    if (project && agent) {
+      setSelection({ projectId: project.id, agentId: agent.id })
+    }
+    setSessionLauncherOpen(false)
   }
 
   if (!selectedProject || !selectedAgent) {
@@ -169,7 +192,6 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onKeymapReset={() => setKeymap(saveKeymap(defaultKeymap))}
         onAddProject={handleAddProject}
         onDeleteProject={handleDeleteProject}
-        onSetAgentConfig={handleSetAgentConfig}
         onClose={() => setSettingsOpen(false)}
       />
     )
@@ -199,6 +221,20 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               <Keycap value={keymap.agentNext} />
               agents
             </span>
+            <span>
+              <Keycap value={keymap.startSession} />
+              new session
+            </span>
+            <button
+              type="button"
+              className="settings-trigger"
+              aria-expanded={sessionLauncherOpen}
+              onClick={() => setSessionLauncherOpen((open) => !open)}
+              data-testid="start-session-trigger"
+            >
+              <Plus size={14} />
+              Start
+            </button>
             <button
               type="button"
               className="settings-trigger"
@@ -210,6 +246,15 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
             </button>
           </div>
         </header>
+
+        {sessionLauncherOpen ? (
+          <InlineSessionLauncher
+            project={selectedProject}
+            settings={workspace.settings}
+            onStartSession={handleStartSession}
+            onCancel={() => setSessionLauncherOpen(false)}
+          />
+        ) : null}
 
         <div className="board-grid">
           {workspace.projects.map((project) => (
@@ -279,7 +324,6 @@ function SettingsScreen({
   onKeymapReset,
   onAddProject,
   onDeleteProject,
-  onSetAgentConfig,
   onClose,
 }: {
   workspace: WorkspaceSnapshot
@@ -288,11 +332,6 @@ function SettingsScreen({
   onKeymapReset: () => void
   onAddProject: (input: { id?: string; name: string; cwd: string }) => Promise<void>
   onDeleteProject: (projectId: string) => Promise<void>
-  onSetAgentConfig: (input: {
-    agentId: string
-    runtime: RuntimeKind
-    model: string
-  }) => Promise<void>
   onClose: () => void
 }) {
   return (
@@ -300,7 +339,7 @@ function SettingsScreen({
       <header className="settings-hero">
         <div>
           <p className="eyebrow">settings</p>
-          <h1>Runtime Control</h1>
+          <h1>Workspace Settings</h1>
         </div>
         <button type="button" className="settings-close" onClick={onClose}>
           Back to board
@@ -308,21 +347,6 @@ function SettingsScreen({
       </header>
 
       <div className="settings-layout">
-        <section className="settings-section runtime-section">
-          <div className="section-heading">
-            <SlidersHorizontal size={17} />
-            <div>
-              <p className="settings-kicker">Agents</p>
-              <h2>Runtime and model per slot</h2>
-            </div>
-          </div>
-          <AgentModelSettings
-            projects={workspace.projects}
-            settings={workspace.settings}
-            onSetAgentConfig={onSetAgentConfig}
-          />
-        </section>
-
         <section className="settings-section">
           <KeymapSettingsPanel
             keymap={keymap}
@@ -343,90 +367,115 @@ function SettingsScreen({
   )
 }
 
-function AgentModelSettings({
-  projects,
+function InlineSessionLauncher({
+  project,
   settings,
-  onSetAgentConfig,
+  onStartSession,
+  onCancel,
 }: {
-  projects: ProjectRow[]
+  project: ProjectRow
   settings: WorkspaceSnapshot['settings']
-  onSetAgentConfig: (input: {
-    agentId: string
+  onStartSession: (input: {
+    projectId: string
     runtime: RuntimeKind
-    model: string
+    model?: string
+    title?: string
   }) => Promise<void>
+  onCancel: () => void
 }) {
-  const [pendingAgentId, setPendingAgentId] = React.useState<string | null>(null)
+  const [runtime, setRuntime] = React.useState<RuntimeKind>('pi')
+  const [model, setModel] = React.useState(settings.runtimes.pi.defaultModel)
+  const [title, setTitle] = React.useState('')
+  const [pending, setPending] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
   const runtimes = Object.keys(settings.runtimes) as RuntimeKind[]
+  const models = settings.runtimes[runtime].models
 
-  async function updateAgent(agent: AgentCell, runtime: RuntimeKind, model: string) {
-    setPendingAgentId(agent.id)
+  function updateRuntime(nextRuntime: RuntimeKind) {
+    setRuntime(nextRuntime)
+    setModel(settings.runtimes[nextRuntime].defaultModel)
+  }
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setPending(true)
+    setError(null)
     try {
-      await onSetAgentConfig({ agentId: agent.id, runtime, model })
+      await onStartSession({
+        projectId: project.id,
+        runtime,
+        model,
+        title: title || undefined,
+      })
+      setTitle('')
+    } catch (cause) {
+      setError(errorMessage(cause))
     } finally {
-      setPendingAgentId(null)
+      setPending(false)
     }
   }
 
   return (
-    <div className="agent-model-list" data-testid="agent-model-settings">
-      {projects.flatMap((project) =>
-        project.agents.map((agent) => {
-          const configuredModels = settings.runtimes[agent.runtime].models
-          const models = configuredModels.includes(agent.model)
-            ? configuredModels
-            : [agent.model, ...configuredModels]
-          const pending = pendingAgentId === agent.id
-          return (
-            <div key={agent.id} className="agent-model-row">
-              <div className="agent-model-name">
-                <strong>{agent.title}</strong>
-                <span>{project.name}</span>
-              </div>
-              <label>
-                <span>Runtime</span>
-                <select
-                  value={agent.runtime}
-                  disabled={pending}
-                  data-testid={`runtime-${agent.id}`}
-                  onChange={(event) => {
-                    const runtime = event.currentTarget.value as RuntimeKind
-                    updateAgent(
-                      agent,
-                      runtime,
-                      settings.runtimes[runtime].defaultModel,
-                    )
-                  }}
-                >
-                  {runtimes.map((runtime) => (
-                    <option key={runtime} value={runtime}>
-                      {runtime}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>Model</span>
-                <select
-                  value={agent.model}
-                  disabled={pending}
-                  data-testid={`model-${agent.id}`}
-                  onChange={(event) =>
-                    updateAgent(agent, agent.runtime, event.currentTarget.value)
-                  }
-                >
-                  {models.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          )
-        }),
-      )}
-    </div>
+    <form
+      className="session-start-form inline-session-launcher"
+      onSubmit={submit}
+      data-testid="session-launcher"
+    >
+      <div className="session-launcher-head">
+        <div>
+          <p className="settings-kicker">New session</p>
+          <strong>{project.name}</strong>
+        </div>
+        <button type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+      <label>
+        <span>Runtime</span>
+        <select
+          value={runtime}
+          disabled={pending}
+          data-testid="session-runtime"
+          onChange={(event) => updateRuntime(event.currentTarget.value as RuntimeKind)}
+        >
+          {runtimes.map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Model</span>
+        <select
+          value={model}
+          disabled={pending}
+          data-testid="session-model"
+          onChange={(event) => setModel(event.currentTarget.value)}
+        >
+          {models.map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Name</span>
+        <input
+          value={title}
+          disabled={pending}
+          placeholder="Base session"
+          data-testid="session-title"
+          onChange={(event) => setTitle(event.currentTarget.value)}
+        />
+      </label>
+      <button type="submit" disabled={pending}>
+        <Plus size={14} />
+        Start session
+      </button>
+      {error ? <span role="status">{error}</span> : null}
+    </form>
   )
 }
 
@@ -576,6 +625,12 @@ function KeymapSettingsPanel({
         label="Agent right"
         action="agentNext"
         value={keymap.agentNext}
+        onChange={onChange}
+      />
+      <KeySelect
+        label="Start session"
+        action="startSession"
+        value={keymap.startSession}
         onChange={onChange}
       />
       <button type="button" className="reset-keymap" onClick={onReset}>

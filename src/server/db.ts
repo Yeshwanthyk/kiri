@@ -5,7 +5,7 @@ import { z } from 'zod'
 import type {
   AddProjectInput,
   AgentStatus,
-  SetAgentConfigInput,
+  StartSessionInput,
   MessageRole,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
@@ -264,18 +264,62 @@ export function addProject(input: AddProjectInput) {
   return getWorkspaceSnapshot()
 }
 
-export function setAgentConfig(input: SetAgentConfigInput) {
-  const runtime = runtimeKindSchema.parse(input.runtime)
-  assertConfiguredModel(runtime, input.model)
+export function startSession(input: StartSessionInput) {
   const database = getDb()
-  const existing = database
-    .prepare('SELECT id FROM agent_slots WHERE id = ?')
-    .get(input.agentId)
-  if (!existing) throw new Error(`Agent not found: ${input.agentId}`)
+  const projectId = input.projectId.trim()
+  const project = database
+    .prepare('SELECT id FROM projects WHERE id = ?')
+    .get(projectId)
+  if (!project) throw new Error(`Project not found: ${projectId}`)
 
-  database
-    .prepare('UPDATE agent_slots SET runtime = ?, model = ? WHERE id = ?')
-    .run(runtime, input.model, input.agentId)
+  const runtime = runtimeKindSchema.parse(input.runtime ?? 'pi')
+  const runtimeSettings = getRuntimeSettings(runtime)
+  const model = input.model?.trim() || runtimeSettings.defaultModel
+  assertConfiguredModel(runtime, model)
+
+  const nextPosition = database
+    .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM agent_slots WHERE project_id = ?')
+    .get(projectId) as { position: number }
+  const suffix = Math.random().toString(36).slice(2, 8)
+  const slot = `session-${Date.now().toString(36)}-${suffix}`
+  const id = `${projectId}-${slot}`
+  const title = input.title?.trim() || `Session ${nextPosition.position + 1}`
+  const now = new Date().toISOString()
+
+  database.exec('BEGIN')
+  try {
+    database
+      .prepare(
+        `
+          INSERT INTO agent_slots (
+            id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
+          )
+          VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, NULL, ?)
+        `,
+      )
+      .run(
+        id,
+        projectId,
+        slot,
+        title,
+        runtime,
+        model,
+        join(process.cwd(), '.pican', 'pi-sessions', projectId, slot),
+        nextPosition.position,
+      )
+    database
+      .prepare(
+        `
+          INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
+          VALUES (?, ?, 1, 'Ready.', 0, ?)
+        `,
+      )
+      .run(`thread-${id}`, id, now)
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
 
   return getWorkspaceSnapshot()
 }

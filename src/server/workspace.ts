@@ -3,14 +3,14 @@ import { createServerFn } from '@tanstack/react-start'
 import {
   addProjectInputSchema,
   deleteProjectInputSchema,
-  setAgentConfigInputSchema,
   sendMessageInputSchema,
+  startSessionInputSchema,
 } from '~/lib/contracts'
 import {
   addProject,
   deleteProject,
   getWorkspaceSnapshot,
-  setAgentConfig,
+  startSession,
 } from './db'
 import { promptPiAgent } from './pi-runtime'
 
@@ -33,9 +33,9 @@ export const sendMessageMutation = createServerFn({ method: 'POST' })
     return getWorkspaceSnapshot()
   })
 
-export const setAgentConfigMutation = createServerFn({ method: 'POST' })
-  .inputValidator(setAgentConfigInputSchema)
-  .handler(async ({ data }) => setAgentConfig(data))
+export const startSessionMutation = createServerFn({ method: 'POST' })
+  .inputValidator(startSessionInputSchema)
+  .handler(async ({ data }) => startSession(data))
 
 export const workspaceQueryOptions = () =>
   queryOptions({

@@ -39,22 +39,27 @@ test('keymap settings remap navigation', async ({ page }) => {
   await expect(page.getByTestId('selected-project')).toHaveText('Pi Runtime Reference')
 })
 
-test('settings choose agent runtime models', async ({ page }) => {
+test('start session from selected project with keymap', async ({ page }, testInfo) => {
+  const title = `E2E Session ${testInfo.project.name}`
+
   await page.goto('/')
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
 
-  await page.getByRole('button', { name: 'Settings' }).click()
-  await expect(page.getByTestId('settings-page')).toBeVisible()
+  await pressShiftKey(page, 'KeyN')
+  await expect(page.getByTestId('session-launcher')).toBeVisible()
 
-  const plannerModel = page.getByTestId('model-pican-planner')
-  await expect(plannerModel).toContainText('openai-codex/gpt-5.5')
-  await expect(plannerModel).toContainText('vibeproxy-anthropic/claude-opus-4-7')
+  const sessionModel = page.getByTestId('session-model')
+  await expect(sessionModel).toContainText('openai-codex/gpt-5.5')
+  await expect(sessionModel).toContainText('vibeproxy-anthropic/claude-opus-4-7')
 
-  await plannerModel.selectOption('vibeproxy-anthropic/claude-opus-4-7')
-  await expect(plannerModel).toHaveValue('vibeproxy-anthropic/claude-opus-4-7')
+  await sessionModel.selectOption('vibeproxy-anthropic/claude-opus-4-7')
+  await page.getByTestId('session-title').fill(title)
+  await page.getByRole('button', { name: 'Start session' }).click()
 
-  await plannerModel.selectOption('openai-codex/gpt-5.5')
-  await expect(plannerModel).toHaveValue('openai-codex/gpt-5.5')
+  await expect(page.getByTestId('selected-agent')).toHaveText(title)
+  await expect(page.getByTestId('board-pane')).toContainText(
+    'vibeproxy-anthropic/claude-opus-4-7',
+  )
 })
 
 test('settings add and remove projects', async ({ page }, testInfo) => {

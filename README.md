@@ -29,10 +29,10 @@ not delete the project working directory.
 
 ## Settings
 
-Runtime model lists live in `settings.json`. The Settings screen lets each
-agent slot choose a runtime and one configured model. Pi launches with the
-configured list through `pi --models ...` and the selected slot model through
-`--model ...`.
+Runtime model lists live in `settings.json`. Start a session from the selected
+project, choose a runtime/model, or keep the runtime default for a base session.
+Pi launches with the configured list through `pi --models ...` and the selected
+session model through `--model ...`.
 
 ## Shape
 
@@ -46,3 +46,4 @@ configured list through `pi --models ...` and the selected slot model through
 
 - `Shift+ArrowUp` / `Shift+ArrowDown`: move between projects.
 - `Shift+H/J/K/L`: move between agents in the selected project.
+- `Shift+N`: start a session in the selected project.

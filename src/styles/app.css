@@ -182,27 +182,6 @@ h1 {
   background: oklch(0.982 0.008 92);
 }
 
-.runtime-section {
-  grid-row: span 2;
-}
-
-.section-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.section-heading > svg {
-  color: var(--accent);
-}
-
-.section-heading h2 {
-  margin-top: 2px;
-  font-size: 18px;
-  line-height: 1.15;
-}
-
 .settings-panel,
 .project-settings {
   display: grid;
@@ -239,7 +218,7 @@ h1 {
 
 .key-select span,
 .project-add-form span,
-.agent-model-row label span {
+.session-start-form label span {
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
@@ -247,7 +226,8 @@ h1 {
 
 .key-select select,
 .project-add-form input,
-.agent-model-row select {
+.session-start-form input,
+.session-start-form select {
   min-height: 34px;
   padding: 0 30px 0 9px;
   border: 1px solid var(--line);
@@ -258,44 +238,44 @@ h1 {
   font-size: 12px;
 }
 
-.agent-model-list {
+.inline-session-launcher {
   display: grid;
-  gap: 8px;
-}
-
-.agent-model-row {
-  display: grid;
-  grid-template-columns: minmax(150px, 0.8fr) minmax(120px, 0.45fr) minmax(220px, 1fr);
+  grid-template-columns: minmax(160px, 0.55fr) minmax(260px, 1fr) minmax(160px, 0.7fr) auto;
   gap: 10px;
   align-items: end;
-  min-width: 0;
-  padding: 10px;
+  margin: -6px 0 18px;
+  padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--panel);
+  border-radius: 8px;
+  background: oklch(0.982 0.008 92);
 }
 
-.agent-model-row label,
-.agent-model-name {
+.session-start-form label,
+.session-launcher-head {
   display: grid;
   min-width: 0;
   gap: 4px;
 }
 
-.agent-model-name strong,
-.agent-model-name span {
+.session-launcher-head strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.agent-model-name strong {
-  font-size: 13px;
-}
-
-.agent-model-name span {
+.session-launcher-head button {
+  width: fit-content;
+  border: 0;
+  background: transparent;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 800;
+}
+
+.session-start-form span[role="status"] {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .project-settings-head,
@@ -334,6 +314,7 @@ h1 {
 }
 
 .project-add-form button,
+.session-start-form button[type="submit"],
 .composer button {
   display: inline-flex;
   align-items: center;
@@ -349,6 +330,7 @@ h1 {
 }
 
 .project-add-form button:disabled,
+.session-start-form button:disabled,
 .composer button:disabled,
 .project-settings-row button:disabled {
   cursor: not-allowed;
@@ -782,7 +764,7 @@ h1 {
   }
 
   .settings-layout,
-  .agent-model-row,
+  .inline-session-launcher,
   .project-add-form,
   .project-list,
   .settings-panel {
