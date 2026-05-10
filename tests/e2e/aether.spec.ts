@@ -6,7 +6,7 @@ import { startFakeCodexAppServer } from '../harness/fake-codex-app-server.mjs'
 
 test.describe.configure({ mode: 'serial' })
 
-const testDbPath = resolve(process.env.PICAN_DB_PATH ?? '.pican/pican.e2e.sqlite')
+const testDbPath = resolve(process.env.AETHER_DB_PATH ?? '.aether/aether.e2e.sqlite')
 const projectRoot = process.cwd()
 let fakeCodexServer: Awaited<ReturnType<typeof startFakeCodexAppServer>>
 
@@ -21,7 +21,7 @@ test.afterAll(async () => {
 test.beforeEach(async ({ page }) => {
   if (fakeCodexServer) fakeCodexServer.requests.length = 0
   mkdirSync(dirname(testDbPath), { recursive: true })
-  rmSync(resolve(projectRoot, '.pican', 'pi-sessions', 'e2e-pican'), {
+  rmSync(resolve(projectRoot, '.aether', 'pi-sessions', 'e2e-aether'), {
     force: true,
     recursive: true,
   })
@@ -31,7 +31,7 @@ test.beforeEach(async ({ page }) => {
     DELETE FROM agent_slots;
     DELETE FROM projects;
     INSERT INTO projects (id, name, cwd, position)
-    VALUES ('e2e-pican', 'Pican Orchestrator', '${projectRoot.replaceAll("'", "''")}', 0);
+    VALUES ('e2e-aether', 'Aether Orchestrator', '${projectRoot.replaceAll("'", "''")}', 0);
     INSERT INTO projects (id, name, cwd, position)
     VALUES ('test-reference', 'Test Reference', '/Users/yesh/Documents/personal/reference/test', 1);
   `)
@@ -41,21 +41,23 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
 })
 
-test('keyboard navigation moves projects without default sessions', async ({ page }) => {
+test('keyboard navigation moves projects without default sessions', async ({ page, isMobile }) => {
   await page.goto('/')
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
 
   const firstProject = await page.getByTestId('selected-project').textContent()
-  await expect(page.getByTestId('selected-project')).toContainText(/pican/i)
+  await expect(page.getByTestId('selected-project')).toContainText(/aether/i)
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
-  await expect(page.getByTestId('empty-project-sessions').first()).toBeVisible()
+  if (!isMobile) {
+    await expect(page.getByTestId('empty-project-sessions').first()).toBeVisible()
+  }
 
   await pressShiftKey(page, 'KeyJ')
   await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
 
   await pressShiftKey(page, 'KeyK')
-  await expect(page.getByTestId('selected-project')).toContainText(/pican/i)
+  await expect(page.getByTestId('selected-project')).toContainText(/aether/i)
 })
 
 test('keymap settings remap navigation', async ({ page }) => {
@@ -70,7 +72,7 @@ test('keymap settings remap navigation', async ({ page }) => {
   await page.getByRole('button', { name: 'Back to board' }).click()
 
   await pressShiftKey(page, 'KeyJ')
-  await expect(page.getByTestId('selected-project')).toContainText(/pican/i)
+  await expect(page.getByTestId('selected-project')).toContainText(/aether/i)
 
   await pressShiftKey(page, 'ArrowDown')
   await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
@@ -165,7 +167,7 @@ test('projects panel adds, hides, and unhides projects', async ({ page }, testIn
   await page.getByTestId('project-name-input').fill(name)
   await page
     .getByTestId('project-cwd-input')
-    .fill('/Users/yesh/Documents/personal/pican')
+    .fill(projectRoot)
   await page.getByTestId('project-id-input').fill(id)
   await page.getByRole('button', { name: 'Add' }).click()
 
@@ -268,13 +270,14 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
   )
 })
 
-test('sidebar switches between chat and diffs', async ({ page }, testInfo) => {
+test('sidebar switches between chat and diffs', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop sidebar tabs only')
   const title = `Sidebar Session ${testInfo.project.name}`
 
   await page.goto('/')
   await createSession(page, title)
 
-  await page.getByTestId('tab-diffs').click()
+  await page.getByRole('button', { name: 'Diffs' }).click()
   await expect(page.getByTestId('diff-panel')).toContainText('No diffs')
 
   await pressShiftKey(page, 'KeyC')
@@ -282,7 +285,8 @@ test('sidebar switches between chat and diffs', async ({ page }, testInfo) => {
   await expect(page.getByTestId('chat-input')).toBeFocused()
 })
 
-test('escape leaves chat composer so board keymaps work', async ({ page }, testInfo) => {
+test('escape leaves chat composer so board keymaps work', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop board keymaps only')
   const title = `Escape Session ${testInfo.project.name}`
 
   await page.goto('/')
@@ -301,7 +305,8 @@ test('escape leaves chat composer so board keymaps work', async ({ page }, testI
   await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
 })
 
-test('agent switching does not refocus chat after explicit chat focus', async ({ page }, testInfo) => {
+test('agent switching does not refocus chat after explicit chat focus', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop agent switching only')
   const firstTitle = `First Session ${testInfo.project.name}`
   const secondTitle = `Second Session ${testInfo.project.name}`
 
@@ -322,13 +327,14 @@ test('agent switching does not refocus chat after explicit chat focus', async ({
   await expect(page.getByTestId('chat-input')).not.toBeFocused()
 })
 
-test('mobile layout keeps board and sidebar usable', async ({ page, isMobile }) => {
+test('mobile layout keeps navigation and sidebar usable', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'mobile project only')
 
   await page.goto('/')
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
-  await expect(page.getByTestId('board-pane')).toBeVisible()
+  await expect(page.getByTestId('board-pane')).not.toBeVisible()
   await expect(page.getByTestId('sidebar-pane')).toBeVisible()
+  await expect(page.getByLabel('Mobile navigation')).toBeVisible()
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
 })
 

@@ -1,8 +1,8 @@
 import { defineConfig, devices } from '@playwright/test'
 import { join } from 'node:path'
 
-const e2eDbPath = join(process.cwd(), '.pican', 'pican.e2e.sqlite')
-process.env.PICAN_DB_PATH = e2eDbPath
+const e2eDbPath = join(process.cwd(), '.aether', 'aether.e2e.sqlite')
+process.env.AETHER_DB_PATH = e2eDbPath
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -19,8 +19,8 @@ export default defineConfig({
     command: 'pnpm dev --port 3109 --strictPort',
     env: {
       ...process.env,
-      PICAN_DB_PATH: e2eDbPath,
-      PICAN_CODEX_APP_SERVER_URL: 'ws://127.0.0.1:39111',
+      AETHER_DB_PATH: e2eDbPath,
+      AETHER_CODEX_APP_SERVER_URL: 'ws://127.0.0.1:39111',
     },
     url: 'http://localhost:3109',
     reuseExistingServer: false,
