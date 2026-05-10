@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 import { z } from 'zod'
-import type { AgentRuntimeState } from '~/lib/contracts'
+import type { AgentRuntimeState, ThinkingLevel } from '~/lib/contracts'
 
 type PendingRequest = {
   resolve: (value: unknown) => void
@@ -170,6 +170,32 @@ export class PiRpcProcessAdapter {
 
   abort() {
     return this.send('abort', {})
+  }
+
+  async newSession() {
+    getResponseData(await this.send('new_session', {}))
+  }
+
+  async clone() {
+    getResponseData(await this.send('clone', {}))
+  }
+
+  async setThinkingLevel(level: ThinkingLevel) {
+    getResponseData(await this.send('set_thinking_level', { level }))
+  }
+
+  async cycleThinkingLevel(): Promise<ThinkingLevel | null> {
+    const response = await this.send('cycle_thinking_level', {})
+    const data = getResponseData(response)
+    const level = stringValue(data.level)
+    return level === 'off' ||
+      level === 'minimal' ||
+      level === 'low' ||
+      level === 'medium' ||
+      level === 'high' ||
+      level === 'xhigh'
+      ? level
+      : null
   }
 
   private send(type: string, body: Record<string, unknown>) {

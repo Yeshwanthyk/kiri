@@ -4,8 +4,11 @@ import {
   addProjectInputSchema,
   deleteSessionInputSchema,
   deleteProjectInputSchema,
+  forkSessionInputSchema,
   interruptMessageInputSchema,
+  resetSessionInputSchema,
   sendMessageInputSchema,
+  setThinkingLevelInputSchema,
   startSessionInputSchema,
   steerMessageInputSchema,
 } from '~/lib/contracts'
@@ -16,7 +19,14 @@ import {
   getWorkspaceSnapshot,
   startSession,
 } from './db'
-import { interruptPiAgent, promptPiAgent, steerPiAgent } from './pi-runtime'
+import {
+  forkPiSession,
+  interruptPiAgent,
+  promptPiAgent,
+  resetPiSession,
+  setPiThinkingLevel,
+  steerPiAgent,
+} from './pi-runtime'
 
 export const fetchWorkspaceSnapshot = createServerFn({ method: 'GET' }).handler(
   async () => getWorkspaceSnapshot(),
@@ -53,6 +63,27 @@ export const interruptMessageMutation = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     await interruptPiAgent(data)
     return getWorkspaceSnapshot()
+  })
+
+export const setThinkingLevelMutation = createServerFn({ method: 'POST' })
+  .inputValidator(setThinkingLevelInputSchema)
+  .handler(async ({ data }) => {
+    await setPiThinkingLevel(data)
+    return getWorkspaceSnapshot()
+  })
+
+export const resetSessionMutation = createServerFn({ method: 'POST' })
+  .inputValidator(resetSessionInputSchema)
+  .handler(async ({ data }) => {
+    await resetPiSession(data)
+    return getWorkspaceSnapshot()
+  })
+
+export const forkSessionMutation = createServerFn({ method: 'POST' })
+  .inputValidator(forkSessionInputSchema)
+  .handler(async ({ data }) => {
+    const agentId = await forkPiSession(data)
+    return { agentId, snapshot: getWorkspaceSnapshot() }
   })
 
 export const startSessionMutation = createServerFn({ method: 'POST' })

@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import type {
@@ -436,6 +436,129 @@ export function deleteSession(input: DeleteSessionInput) {
   return getWorkspaceSnapshot()
 }
 
+export function resetSession(agentId: string) {
+  const database = getDb()
+  const id = agentId.trim()
+  const thread = database
+    .prepare('SELECT id FROM threads WHERE agent_id = ? AND active = 1')
+    .get(id) as { id: string } | undefined
+  if (!thread) throw new Error(`No active thread for agent: ${id}`)
+
+  const now = new Date().toISOString()
+  database.exec('BEGIN')
+  try {
+    database.prepare('DELETE FROM messages WHERE thread_id = ?').run(thread.id)
+    database.prepare('DELETE FROM timeline_events WHERE thread_id = ?').run(thread.id)
+    database.prepare('DELETE FROM diff_artifacts WHERE agent_id = ?').run(id)
+    database.prepare('DELETE FROM agent_context_usage WHERE agent_id = ?').run(id)
+    database
+      .prepare("UPDATE threads SET preview = 'Ready.', message_count = 0, updated_at = ? WHERE id = ?")
+      .run(now, thread.id)
+    database
+      .prepare("UPDATE agent_slots SET status = 'idle', session_file = NULL WHERE id = ?")
+      .run(id)
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+}
+
+export function createForkedSession(input: {
+  sourceAgentId: string
+  sessionFile: string
+}) {
+  const database = getDb()
+  const source = database
+    .prepare(
+      `
+        SELECT
+          a.id,
+          a.project_id AS projectId,
+          a.title,
+          a.runtime,
+          a.model
+        FROM agent_slots a
+        WHERE a.id = ?
+      `,
+    )
+    .get(input.sourceAgentId) as
+    | {
+        id: string
+        projectId: string
+        title: string
+        runtime: string
+        model: string
+      }
+    | undefined
+  if (!source) throw new Error(`Agent not found: ${input.sourceAgentId}`)
+  if (source.runtime !== 'pi') throw new Error(`${source.runtime} agents do not support /fork yet`)
+  if (!existsSync(input.sessionFile)) {
+    throw new Error(`Forked Pi session file does not exist: ${input.sessionFile}`)
+  }
+
+  const nextPosition = database
+    .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM agent_slots WHERE project_id = ?')
+    .get(source.projectId) as { position: number }
+  const suffix = Math.random().toString(36).slice(2, 8)
+  const slot = `session-${Date.now().toString(36)}-${suffix}`
+  const id = `${source.projectId}-${slot}`
+  const sessionDir = join(process.cwd(), '.pican', 'pi-sessions', source.projectId, slot)
+  mkdirSync(sessionDir, { recursive: true })
+  const sessionFile = join(sessionDir, basename(input.sessionFile))
+  if (resolve(sessionFile) !== resolve(input.sessionFile)) {
+    copyFileSync(input.sessionFile, sessionFile)
+  }
+  const projection = safeProjectPiSessionFile(sessionFile)
+  const now = new Date().toISOString()
+
+  database.exec('BEGIN')
+  try {
+    database
+      .prepare(
+        `
+          INSERT INTO agent_slots (
+            id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
+          )
+          VALUES (?, ?, ?, ?, 'pi', ?, 'idle', ?, ?, ?)
+        `,
+      )
+      .run(
+        id,
+        source.projectId,
+        slot,
+        `${source.title} fork`,
+        source.model,
+        sessionDir,
+        sessionFile,
+        nextPosition.position,
+      )
+    database
+      .prepare(
+        `
+          INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
+          VALUES (?, ?, 1, ?, 0, ?)
+        `,
+      )
+      .run(`thread-${id}`, id, projection?.preview || 'Ready.', projection?.updatedAt ?? now)
+    if (projection) {
+      hydrateProjectionMessages(database, id, projection)
+      upsertAgentContextUsage(database, {
+        agentId: id,
+        usedTokens: projection.contextUsedTokens,
+        sessionFile,
+        updatedAt: projection.updatedAt,
+      })
+    }
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+
+  return id
+}
+
 export function deleteProject(id: string) {
   const database = getDb()
   const projectId = id.trim()
@@ -665,6 +788,45 @@ export function recordPiTimelineEvent(input: {
       event.detail,
       event.timestamp,
       JSON.stringify(input.event),
+    )
+}
+
+export function recordAgentInfoEvent(input: {
+  agentId: string
+  kind: string
+  label: string
+  detail?: string | null
+}) {
+  const database = getDb()
+  const thread = database
+    .prepare('SELECT id FROM threads WHERE agent_id = ? AND active = 1')
+    .get(input.agentId) as { id: string } | undefined
+  if (!thread) throw new Error(`No active thread for agent: ${input.agentId}`)
+
+  const timestamp = new Date().toISOString()
+  const payload = {
+    type: input.kind,
+    label: input.label,
+    detail: input.detail ?? null,
+    timestamp,
+  }
+  database
+    .prepare(
+      `
+        INSERT OR IGNORE INTO timeline_events (
+          id, thread_id, kind, tone, label, detail, timestamp, payload_json
+        )
+        VALUES (?, ?, ?, 'info', ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      eventId(input.agentId, payload),
+      thread.id,
+      input.kind,
+      input.label,
+      input.detail ?? null,
+      timestamp,
+      JSON.stringify(payload),
     )
 }
 

@@ -40,16 +40,21 @@ import type {
   ProjectRow,
   RuntimeKind,
   SendMessageImage,
+  ThinkingLevel,
   TimelineEvent,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
+import { thinkingLevelSchema } from '~/lib/contracts'
 import {
   addProjectMutation,
   deleteProjectMutation,
   deleteSessionMutation,
   fetchWorkspaceSnapshot,
+  forkSessionMutation,
   interruptMessageMutation,
+  resetSessionMutation,
   sendMessageMutation,
+  setThinkingLevelMutation,
   startSessionMutation,
   steerMessageMutation,
 } from '~/server/workspace'
@@ -150,8 +155,11 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const addProject = useServerFn(addProjectMutation)
   const deleteProject = useServerFn(deleteProjectMutation)
   const deleteSession = useServerFn(deleteSessionMutation)
+  const forkSession = useServerFn(forkSessionMutation)
   const refreshWorkspace = useServerFn(fetchWorkspaceSnapshot)
+  const resetSession = useServerFn(resetSessionMutation)
   const sendMessage = useServerFn(sendMessageMutation)
+  const setThinkingLevel = useServerFn(setThinkingLevelMutation)
   const steerMessage = useServerFn(steerMessageMutation)
   const interruptMessage = useServerFn(interruptMessageMutation)
   const startSession = useServerFn(startSessionMutation)
@@ -336,6 +344,28 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   async function handleInterruptMessage(agentId: string) {
     const next = await interruptMessage({ data: { agentId } })
     setWorkspace(next)
+  }
+
+  async function handleThinkingCommand(agentId: string, level?: ThinkingLevel) {
+    const next = await setThinkingLevel({ data: { agentId, level } })
+    setWorkspace(next)
+  }
+
+  async function handleResetSession(agentId: string) {
+    const next = await resetSession({ data: { agentId } })
+    setWorkspace(next)
+  }
+
+  async function handleForkSession(agentId: string) {
+    const result = await forkSession({ data: { agentId } })
+    setWorkspace(result.snapshot)
+    const project = result.snapshot.projects.find((item) =>
+      item.agents.some((agent) => agent.id === result.agentId),
+    )
+    if (project) {
+      setSelection({ projectId: project.id, agentId: result.agentId })
+      setChatFocusRequest(0)
+    }
   }
 
   async function handleStartSession(input: {
@@ -569,6 +599,9 @@ export function PicanBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
                 onSend={handleSendMessage}
                 onSteer={handleSteerMessage}
                 onInterrupt={handleInterruptMessage}
+                onThinkingCommand={handleThinkingCommand}
+                onResetSession={handleResetSession}
+                onForkSession={handleForkSession}
               />
             ) : null}
             {tab === 'diffs' ? <DiffPanel key={selectedAgent.id} agent={selectedAgent} /> : null}
@@ -660,8 +693,13 @@ function InlineSessionLauncher({
   const [title, setTitle] = React.useState('')
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const titleRef = React.useRef<HTMLInputElement>(null)
   const runtimes = Object.keys(settings.runtimes) as RuntimeKind[]
   const models = settings.runtimes[runtime].models
+
+  React.useEffect(() => {
+    titleRef.current?.focus()
+  }, [])
 
   function updateRuntime(nextRuntime: RuntimeKind) {
     setRuntime(nextRuntime)
@@ -688,66 +726,92 @@ function InlineSessionLauncher({
   }
 
   return (
-    <form
-      className="session-start-form inline-session-launcher"
-      onSubmit={submit}
-      data-testid="session-launcher"
-    >
-      <div className="session-launcher-head">
-        <div>
-          <p className="settings-kicker">New session</p>
-          <strong>{project.name}</strong>
+    <>
+      <div className="session-dialog-scrim" onClick={onCancel} />
+      <form
+        className="session-start-form session-dialog"
+        onSubmit={submit}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            onCancel()
+          }
+        }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="session-dialog-title"
+        data-testid="session-launcher"
+      >
+        <div className="session-launcher-head">
+          <span className="session-dialog-icon" aria-hidden="true">
+            <Bot size={16} />
+          </span>
+          <div>
+            <p className="settings-kicker">New session</p>
+            <strong id="session-dialog-title">{project.name}</strong>
+            <small>Pick a runtime, then launch into chat.</small>
+          </div>
+          <button type="button" onClick={onCancel} aria-label="Cancel new session">
+            ×
+          </button>
         </div>
-        <button type="button" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-      <label>
-        <span>Runtime</span>
-        <select
-          value={runtime}
-          disabled={pending}
-          data-testid="session-runtime"
-          onChange={(event) => updateRuntime(event.currentTarget.value as RuntimeKind)}
-        >
-          {runtimes.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <span>Model</span>
-        <select
-          value={model}
-          disabled={pending}
-          data-testid="session-model"
-          onChange={(event) => setModel(event.currentTarget.value)}
-        >
-          {models.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <span>Name</span>
-        <input
-          value={title}
-          disabled={pending}
-          placeholder="Base session"
-          data-testid="session-title"
-          onChange={(event) => setTitle(event.currentTarget.value)}
-        />
-      </label>
-      <button type="submit" disabled={pending}>
-        <Plus size={14} />
-        Start session
-      </button>
-      {error ? <span role="status">{error}</span> : null}
-    </form>
+
+        <label className="session-command-field">
+          <Command size={16} aria-hidden="true" />
+          <input
+            ref={titleRef}
+            value={title}
+            disabled={pending}
+            placeholder="Name this session (optional)"
+            aria-label="Session name"
+            data-testid="session-title"
+            onChange={(event) => setTitle(event.currentTarget.value)}
+          />
+          <span>optional</span>
+        </label>
+
+        <div className="session-dialog-grid">
+          <label>
+            <span>Runtime</span>
+            <select
+              value={runtime}
+              disabled={pending}
+              data-testid="session-runtime"
+              onChange={(event) => updateRuntime(event.currentTarget.value as RuntimeKind)}
+            >
+              {runtimes.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Model</span>
+            <select
+              value={model}
+              disabled={pending}
+              data-testid="session-model"
+              onChange={(event) => setModel(event.currentTarget.value)}
+            >
+              {models.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="session-dialog-actions">
+          {error ? <span role="status">{error}</span> : null}
+          <button type="submit" disabled={pending}>
+            <Plus size={14} />
+            Start session
+          </button>
+        </div>
+      </form>
+    </>
   )
 }
 
@@ -1193,6 +1257,8 @@ function SidebarHeader({
     }
   }
 
+  const thinkingLevel = currentThinkingLevel(agent)
+
   return (
     <header className="sidebar-header">
       <div className="sidebar-title-row">
@@ -1223,9 +1289,26 @@ function SidebarHeader({
         </span>
         <span>{agent.runtime}</span>
         <span>{agent.slot}</span>
+        <span className="thinking-level-pill" data-testid="thinking-level">
+          Thinking {formatThinkingLevel(thinkingLevel ?? 'off')}
+        </span>
       </div>
     </header>
   )
+}
+
+function currentThinkingLevel(agent: AgentCell) {
+  for (let index = agent.timelineEvents.length - 1; index >= 0; index -= 1) {
+    const event = agent.timelineEvents[index]
+    if (event?.kind !== 'thinking_level') continue
+    const parsed = thinkingLevelSchema.safeParse(event.detail)
+    if (parsed.success) return parsed.data
+  }
+  return null
+}
+
+function formatThinkingLevel(level: ThinkingLevel) {
+  return level === 'minimal' ? 'low' : level
 }
 
 function ContextUsageChip({
@@ -1261,6 +1344,9 @@ function ChatPanel({
   onSend,
   onSteer,
   onInterrupt,
+  onThinkingCommand,
+  onResetSession,
+  onForkSession,
 }: {
   agent: AgentCell
   draft: string
@@ -1269,6 +1355,9 @@ function ChatPanel({
   onSend: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
   onSteer: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
   onInterrupt: (agentId: string) => Promise<void>
+  onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
+  onResetSession: (agentId: string) => Promise<void>
+  onForkSession: (agentId: string) => Promise<void>
 }) {
   const [pending, setPending] = React.useState(false)
   const [pendingPrompt, setPendingPrompt] = React.useState<string | null>(null)
@@ -1372,6 +1461,35 @@ function ChatPanel({
     }
 
     const prompt = draft.trim() || 'Please inspect the attached image files.'
+    let slashCommand: SlashCommand | null
+    try {
+      slashCommand = parseSlashCommand(prompt)
+    } catch (cause) {
+      setError(errorMessage(cause))
+      return
+    }
+    if (slashCommand) {
+      if (images.length > 0) {
+        setError('Slash commands cannot include image attachments')
+        return
+      }
+      setPending(true)
+      setError(null)
+      try {
+        await runSlashCommand(slashCommand, agent, {
+          onThinkingCommand,
+          onResetSession,
+          onForkSession,
+        })
+        onDraftChange('')
+      } catch (cause) {
+        setError(errorMessage(cause))
+      } finally {
+        setPending(false)
+      }
+      return
+    }
+
     const promptImages = images
     setPendingPrompt(pendingPromptText(prompt, promptImages))
     setError(null)
@@ -1615,6 +1733,59 @@ function WorkEntryRow({ entry }: { entry: TimelineWorkEntry }) {
 
 function workEntryPreview(entry: TimelineWorkEntry) {
   return entry.detail?.trim() || null
+}
+
+type SlashCommand = {
+  name: 'thinking' | 'new' | 'fork'
+  level?: ThinkingLevel
+}
+
+function parseSlashCommand(prompt: string): SlashCommand | null {
+  const [command = '', ...args] = prompt.trim().split(/\s+/)
+  if (command === '/new') {
+    if (args.length > 0) throw new Error('Usage: /new')
+    return { name: 'new' }
+  }
+  if (command === '/fork') {
+    if (args.length > 0) throw new Error('Usage: /fork')
+    return { name: 'fork' }
+  }
+  if (command !== '/thinking') return null
+  if (args.length === 0) return { name: 'thinking' }
+  if (args.length > 1) {
+    throw new Error('Usage: /thinking [off|minimal|low|medium|high|xhigh]')
+  }
+  if (args[0] === 'cycle') return { name: 'thinking' }
+  const parsed = thinkingLevelSchema.safeParse(args[0])
+  if (!parsed.success) {
+    throw new Error('Usage: /thinking [off|minimal|low|medium|high|xhigh]')
+  }
+  return { name: 'thinking', level: parsed.data }
+}
+
+async function runSlashCommand(
+  command: SlashCommand,
+  agent: AgentCell,
+  actions: {
+    onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
+    onResetSession: (agentId: string) => Promise<void>
+    onForkSession: (agentId: string) => Promise<void>
+  },
+) {
+  if (command.name === 'new') {
+    await actions.onResetSession(agent.id)
+    return
+  }
+  if (command.name === 'fork') {
+    await actions.onForkSession(agent.id)
+    return
+  }
+  if (command.name === 'thinking') {
+    if (agent.runtime !== 'pi') {
+      throw new Error(`${agent.runtime} sessions do not support /thinking yet`)
+    }
+    await actions.onThinkingCommand(agent.id, command.level)
+  }
 }
 
 function WorkingTimelineRow({

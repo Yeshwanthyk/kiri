@@ -4,6 +4,10 @@ export const runtimeKinds = ['pi', 'codex', 'claude', 'opencode'] as const
 export const runtimeKindSchema = z.enum(runtimeKinds)
 export type RuntimeKind = z.infer<typeof runtimeKindSchema>
 
+export const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
+export const thinkingLevelSchema = z.enum(thinkingLevels)
+export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>
+
 export const agentStatuses = [
   'idle',
   'running',
@@ -175,6 +179,22 @@ export const interruptMessageInputSchema = z.object({
   agentId: z.string().trim().min(1),
 })
 export type InterruptMessageInput = z.infer<typeof interruptMessageInputSchema>
+
+export const setThinkingLevelInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  level: thinkingLevelSchema.optional(),
+})
+export type SetThinkingLevelInput = z.infer<typeof setThinkingLevelInputSchema>
+
+export const resetSessionInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+})
+export type ResetSessionInput = z.infer<typeof resetSessionInputSchema>
+
+export const forkSessionInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+})
+export type ForkSessionInput = z.infer<typeof forkSessionInputSchema>
 
 export const startSessionInputSchema = z.object({
   projectId: z.string().trim().min(1),

@@ -1,14 +1,17 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import type { SendMessageImage } from '~/lib/contracts'
+import type { SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import { PiRpcProcessAdapter } from './pi-rpc'
 import {
   appendUserMessage,
+  createForkedSession,
   getAgentLaunchConfig,
+  recordAgentInfoEvent,
   recordPiTimelineEvent,
   recordPiMessages,
   replaceAgentDiffArtifacts,
+  resetSession,
   setAgentStatus,
 } from './db'
 import { getRuntimeSettings } from './settings'
@@ -23,6 +26,12 @@ export async function promptPiAgent(input: {
   images?: SendMessageImage[]
 }) {
   const config = getAgentLaunchConfig(input.agentId)
+  if (config.runtime !== 'pi') {
+    throw new Error(`${config.runtime} agents can be configured, but only Pi can run chat today`)
+  }
+  // Register the live adapter before the queued turn starts so immediate steer/interrupt
+  // requests from the composer can find the process target.
+  getOrCreatePiAdapter(config)
   const previous = queues.get(config.id) ?? Promise.resolve()
   const next = previous.then(() =>
     promptPiAgentNow(config, promptWithSavedImages(config.id, input.text, input.images ?? [])),
@@ -42,53 +51,82 @@ export async function steerPiAgent(input: {
   images?: SendMessageImage[]
 }) {
   const config = getAgentLaunchConfig(input.agentId)
-  const adapter = getLivePiAdapter(config)
+  const adapter = await waitForLivePiAdapter(config)
   const text = promptWithSavedImages(config.id, input.text, input.images ?? [])
-  appendUserMessage({ agentId: config.id, text })
   await adapter.steer(text)
+  appendUserMessage({ agentId: config.id, text })
 }
 
 export async function interruptPiAgent(input: { agentId: string }) {
   const config = getAgentLaunchConfig(input.agentId)
-  const adapter = getLivePiAdapter(config)
+  const adapter = await waitForLivePiAdapter(config)
   await adapter.abort()
+}
+
+export async function setPiThinkingLevel(input: {
+  agentId: string
+  level?: ThinkingLevel
+}) {
+  const config = getAgentLaunchConfig(input.agentId)
+  if (config.runtime !== 'pi') {
+    throw new Error(`${config.runtime} agents do not support /thinking yet`)
+  }
+
+  const adapter = getOrCreatePiAdapter(config)
+  adapter.start()
+  const level = input.level ?? await adapter.cycleThinkingLevel()
+  if (!level) throw new Error('No thinking levels available for this Pi model')
+  if (input.level) await adapter.setThinkingLevel(input.level)
+
+  recordAgentInfoEvent({
+    agentId: config.id,
+    kind: 'thinking_level',
+    label: 'Thinking level changed',
+    detail: level,
+  })
+  return level
+}
+
+export async function resetPiSession(input: { agentId: string }) {
+  const config = getAgentLaunchConfig(input.agentId)
+  if (config.runtime !== 'pi') {
+    throw new Error(`${config.runtime} agents do not support /new yet`)
+  }
+  stopAdapter(config.id)
+  resetSession(config.id)
+}
+
+export async function forkPiSession(input: { agentId: string }) {
+  const config = getAgentLaunchConfig(input.agentId)
+  if (config.runtime !== 'pi') {
+    throw new Error(`${config.runtime} agents do not support /fork yet`)
+  }
+  const adapter = getOrCreatePiAdapter(config)
+  adapter.start()
+  try {
+    await adapter.clone()
+    const state = await adapter.getState()
+    if (!state.sessionFile) {
+      throw new Error('Pi did not return a cloned session file')
+    }
+    return createForkedSession({
+      sourceAgentId: config.id,
+      sessionFile: state.sessionFile,
+    })
+  } finally {
+    stopAdapter(config.id)
+  }
 }
 
 async function promptPiAgentNow(
   config: ReturnType<typeof getAgentLaunchConfig>,
   text: string,
 ) {
-  let adapter = adapters.get(config.id)
   if (config.runtime !== 'pi') {
     throw new Error(`${config.runtime} agents can be configured, but only Pi can run chat today`)
   }
 
-  const settings = getRuntimeSettings(config.runtime)
-  const adapterKey = JSON.stringify({
-    cwd: config.cwd,
-    sessionDir: config.sessionDir,
-    sessionFile: config.sessionFile,
-    model: config.model,
-    models: settings.models,
-  })
-  if (adapter && adapterKeys.get(config.id) !== adapterKey) {
-    adapter.stop()
-    adapters.delete(config.id)
-    adapterKeys.delete(config.id)
-    adapter = undefined
-  }
-
-  if (!adapter) {
-    adapter = new PiRpcProcessAdapter({
-      cwd: config.cwd,
-      sessionDir: config.sessionDir,
-      sessionFile: config.sessionFile ?? undefined,
-      model: config.model,
-      models: settings.models,
-    })
-    adapters.set(config.id, adapter)
-    adapterKeys.set(config.id, adapterKey)
-  }
+  const adapter = getOrCreatePiAdapter(config)
 
   setAgentStatus(config.id, 'running')
   appendUserMessage({ agentId: config.id, text })
@@ -135,12 +173,60 @@ type RuntimeDiffArtifact = {
   patch: string
 }
 
-function getLivePiAdapter(config: ReturnType<typeof getAgentLaunchConfig>) {
+async function waitForLivePiAdapter(config: ReturnType<typeof getAgentLaunchConfig>) {
   if (config.runtime !== 'pi') {
     throw new Error(`${config.runtime} agents can be configured, but only Pi can run chat today`)
   }
-  const adapter = adapters.get(config.id)
-  if (!adapter) throw new Error('No running Pi agent process for this session')
+
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const adapter = adapters.get(config.id)
+    if (adapter) return adapter
+    await sleep(100)
+  }
+
+  throw new Error('This session is not currently running in this Pican server process')
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function stopAdapter(agentId: string) {
+  const adapter = adapters.get(agentId)
+  adapter?.stop()
+  adapters.delete(agentId)
+  adapterKeys.delete(agentId)
+  queues.delete(agentId)
+}
+
+function getOrCreatePiAdapter(config: ReturnType<typeof getAgentLaunchConfig>) {
+  let adapter = adapters.get(config.id)
+  const settings = getRuntimeSettings(config.runtime)
+  const adapterKey = JSON.stringify({
+    cwd: config.cwd,
+    sessionDir: config.sessionDir,
+    sessionFile: config.sessionFile,
+    model: config.model,
+    models: settings.models,
+  })
+  if (adapter && adapterKeys.get(config.id) !== adapterKey) {
+    adapter.stop()
+    adapters.delete(config.id)
+    adapterKeys.delete(config.id)
+    adapter = undefined
+  }
+
+  if (!adapter) {
+    adapter = new PiRpcProcessAdapter({
+      cwd: config.cwd,
+      sessionDir: config.sessionDir,
+      sessionFile: config.sessionFile ?? undefined,
+      model: config.model,
+      models: settings.models,
+    })
+    adapters.set(config.id, adapter)
+    adapterKeys.set(config.id, adapterKey)
+  }
   return adapter
 }
 
