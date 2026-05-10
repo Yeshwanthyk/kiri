@@ -150,11 +150,31 @@ export const deleteProjectInputSchema = z.object({
 })
 export type DeleteProjectInput = z.infer<typeof deleteProjectInputSchema>
 
+export const sendMessageImageSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  mimeType: z.string().trim().regex(/^image\/(png|jpeg|jpg|webp|gif)$/),
+  data: z.string().trim().min(1).max(7_000_000),
+})
+export type SendMessageImage = z.infer<typeof sendMessageImageSchema>
+
 export const sendMessageInputSchema = z.object({
   agentId: z.string().trim().min(1),
   text: z.string().trim().min(1),
+  images: z.array(sendMessageImageSchema).max(4).default([]),
 })
 export type SendMessageInput = z.infer<typeof sendMessageInputSchema>
+
+export const steerMessageInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  text: z.string().trim().min(1),
+  images: z.array(sendMessageImageSchema).max(4).default([]),
+})
+export type SteerMessageInput = z.infer<typeof steerMessageInputSchema>
+
+export const interruptMessageInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+})
+export type InterruptMessageInput = z.infer<typeof interruptMessageInputSchema>
 
 export const startSessionInputSchema = z.object({
   projectId: z.string().trim().min(1),

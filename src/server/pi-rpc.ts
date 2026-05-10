@@ -145,6 +145,10 @@ export class PiRpcProcessAdapter {
     return this.send('prompt', { message })
   }
 
+  steer(message: string) {
+    return this.send('steer', { message })
+  }
+
   async promptAndWait(message: string): Promise<PiRpcMessage[]> {
     const completion = new Promise<PiRpcMessage[]>((resolve, reject) => {
       const timeout = setTimeout(() => {

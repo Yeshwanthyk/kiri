@@ -4,8 +4,10 @@ import {
   addProjectInputSchema,
   deleteSessionInputSchema,
   deleteProjectInputSchema,
+  interruptMessageInputSchema,
   sendMessageInputSchema,
   startSessionInputSchema,
+  steerMessageInputSchema,
 } from '~/lib/contracts'
 import {
   addProject,
@@ -14,7 +16,7 @@ import {
   getWorkspaceSnapshot,
   startSession,
 } from './db'
-import { promptPiAgent } from './pi-runtime'
+import { interruptPiAgent, promptPiAgent, steerPiAgent } from './pi-runtime'
 
 export const fetchWorkspaceSnapshot = createServerFn({ method: 'GET' }).handler(
   async () => getWorkspaceSnapshot(),
@@ -36,6 +38,20 @@ export const sendMessageMutation = createServerFn({ method: 'POST' })
   .inputValidator(sendMessageInputSchema)
   .handler(async ({ data }) => {
     await promptPiAgent(data)
+    return getWorkspaceSnapshot()
+  })
+
+export const steerMessageMutation = createServerFn({ method: 'POST' })
+  .inputValidator(steerMessageInputSchema)
+  .handler(async ({ data }) => {
+    await steerPiAgent(data)
+    return getWorkspaceSnapshot()
+  })
+
+export const interruptMessageMutation = createServerFn({ method: 'POST' })
+  .inputValidator(interruptMessageInputSchema)
+  .handler(async ({ data }) => {
+    await interruptPiAgent(data)
     return getWorkspaceSnapshot()
   })
 
