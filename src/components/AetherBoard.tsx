@@ -106,6 +106,19 @@ import {
   workCallLabel,
 } from './aether-board/timeline'
 import {
+  actionForKey,
+  defaultKeymap,
+  formatKey,
+  keymapGroups,
+  keyOptions,
+  moveAgent,
+  moveProject,
+  updateKeymap,
+  type KeymapAction,
+  type KeymapSettings,
+  type Selection,
+} from './aether-board/navigation'
+import {
   parseSlashCommand,
   runSlashCommand,
   supportsThinking,
@@ -114,19 +127,6 @@ import {
 
 type SidebarTab = 'chat' | 'diffs' | 'terminal'
 type DiffStyle = 'unified' | 'split'
-
-type KeymapAction =
-  | 'projectPrev'
-  | 'projectNext'
-  | 'agentPrev'
-  | 'agentNext'
-  | 'startSession'
-  | 'deleteSession'
-  | 'focusChat'
-  | 'openDiffs'
-  | 'openTerminal'
-
-type KeymapSettings = Record<KeymapAction, string>
 
 type ChatFontSize = 'compact' | 'comfortable' | 'large' | 'xlarge'
 
@@ -159,11 +159,6 @@ function mergeAgentDetail(
 type GhosttyTerminalInstance = InstanceType<(typeof import('ghostty-web'))['Terminal']>
 type GhosttyFitAddonInstance = InstanceType<(typeof import('ghostty-web'))['FitAddon']>
 
-type Selection = {
-  projectId: string
-  agentId: string
-}
-
 type CommandPaletteAction = {
   id: string
   title: string
@@ -175,33 +170,6 @@ type CommandPaletteAction = {
 
 const sessionThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
 
-const defaultKeymap: KeymapSettings = {
-  projectPrev: 'k',
-  projectNext: 'j',
-  agentPrev: 'h',
-  agentNext: 'l',
-  startSession: 'n',
-  deleteSession: 'x',
-  focusChat: 'c',
-  openDiffs: 'd',
-  openTerminal: 't',
-}
-
-const keyOptions = [
-  'h',
-  'j',
-  'k',
-  'l',
-  'n',
-  'x',
-  'c',
-  'd',
-  't',
-  'arrowup',
-  'arrowdown',
-  'arrowleft',
-  'arrowright',
-]
 const chatFontSizes: Record<ChatFontSize, { label: string; size: string; lineHeight: string }> = {
   compact: { label: 'Compact · 13px', size: '13px', lineHeight: '1.5' },
   comfortable: { label: 'Comfortable · 14px', size: '14px', lineHeight: '1.58' },
@@ -749,7 +717,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         themeSelection={themeSelection}
         chatTypography={chatTypography}
         onKeymapChange={(action, value) =>
-          setKeymap((current) => updateKeymap(current, action, value))
+          setKeymap((current) => saveKeymap(updateKeymap(current, action, value)))
         }
         onKeymapReset={() => setKeymap(saveKeymap(defaultKeymap))}
         onThemeChange={(next) => setThemeSelection(saveThemeSelection(next))}
@@ -1531,36 +1499,6 @@ function ProjectManagerDialog({
     </div>
   )
 }
-
-const keymapGroups: { id: string; label: string; rows: { action: KeymapAction; label: string; hint: string }[] }[] = [
-  {
-    id: 'board',
-    label: 'Board navigation',
-    rows: [
-      { action: 'projectPrev', label: 'Project up', hint: 'Previous project row' },
-      { action: 'projectNext', label: 'Project down', hint: 'Next project row' },
-      { action: 'agentPrev', label: 'Agent left', hint: 'Previous session in row' },
-      { action: 'agentNext', label: 'Agent right', hint: 'Next session in row' },
-    ],
-  },
-  {
-    id: 'session',
-    label: 'Session',
-    rows: [
-      { action: 'startSession', label: 'Start session', hint: 'Open new-session dialog' },
-      { action: 'deleteSession', label: 'Remove session', hint: 'Delete the selected session' },
-    ],
-  },
-  {
-    id: 'focus',
-    label: 'Focus',
-    rows: [
-      { action: 'focusChat', label: 'Focus chat', hint: 'Jump cursor to composer' },
-      { action: 'openDiffs', label: 'Open diffs', hint: 'Switch sidebar to diffs' },
-      { action: 'openTerminal', label: 'Open terminal', hint: 'Switch sidebar to terminal' },
-    ],
-  },
-]
 
 function ThemeSettingsPanel({
   selection,
@@ -4372,45 +4310,6 @@ function formatAgo(iso: string): string {
   return `${d}d`
 }
 
-function moveProject(
-  projects: ProjectRow[],
-  current: Selection,
-  delta: 1 | -1,
-): Selection {
-  const index = projects.findIndex((project) => project.id === current.projectId)
-  const nextIndex = clamp(index + delta, 0, projects.length - 1)
-  const project = projects[nextIndex]
-  const currentProject = projects[index]
-  if (!project) return current
-  const agent =
-    project.agents.find((item) => item.id === current.agentId) ??
-    project.agents[
-      clamp(
-        currentProject?.agents.findIndex((item) => item.id === current.agentId) ??
-          0,
-        0,
-        project.agents.length - 1,
-      )
-    ]
-  return {
-    projectId: project.id,
-    agentId: agent?.id ?? current.agentId,
-  }
-}
-
-function moveAgent(project: ProjectRow, current: Selection, delta: 1 | -1): Selection {
-  const index = project.agents.findIndex((agent) => agent.id === current.agentId)
-  const nextIndex = clamp(index + delta, 0, project.agents.length - 1)
-  return {
-    projectId: project.id,
-    agentId: project.agents[nextIndex]?.id ?? current.agentId,
-  }
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value))
-}
-
 function isEditableTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
   const tag = target.tagName.toLowerCase()
@@ -4434,31 +4333,6 @@ function formatTokenCount(value: number) {
 
 function trimFixed(value: number) {
   return value.toFixed(value >= 10 ? 0 : 1).replace(/\.0$/, '')
-}
-
-function actionForKey(keymap: KeymapSettings, key: string): KeymapAction | undefined {
-  return (Object.entries(keymap) as Array<[KeymapAction, string]>).find(
-    ([, binding]) => binding === key,
-  )?.[0]
-}
-
-function updateKeymap(
-  current: KeymapSettings,
-  action: KeymapAction,
-  value: string,
-): KeymapSettings {
-  const keymap = { ...current }
-  const displacedAction = (
-    Object.entries(keymap) as Array<[KeymapAction, string]>
-  ).find(
-    ([otherAction, binding]) => otherAction !== action && binding === value,
-  )?.[0]
-
-  if (displacedAction) {
-    keymap[displacedAction] = current[action]
-  }
-  keymap[action] = value
-  return saveKeymap(keymap)
 }
 
 function readStoredKeymap(): KeymapSettings {
@@ -4565,11 +4439,6 @@ function applyChatTypography(element: HTMLElement, settings: ChatTypographySetti
   element.style.setProperty('--chat-font-size', tokens.size)
   element.style.setProperty('--chat-line-height', tokens.lineHeight)
   element.style.setProperty('--font-mono', monoFonts[settings.monoFont].stack)
-}
-
-function formatKey(key: string) {
-  if (key.startsWith('arrow')) return key.replace('arrow', 'Arrow ')
-  return key.toUpperCase()
 }
 
 function pendingPromptText(text: string, images: SendMessageImage[]) {
