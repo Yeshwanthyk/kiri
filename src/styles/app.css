@@ -2130,6 +2130,14 @@ h1 {
   overflow: hidden;
 }
 
+.message-list-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .message-list {
   flex: 1;
   min-width: 0;
@@ -2137,6 +2145,47 @@ h1 {
   overflow-x: hidden;
   overflow-y: auto;
   padding: 12px 14px;
+}
+
+.jump-to-bottom {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in oklab, var(--accent) 50%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 18%, var(--panel));
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transform: translate(-50%, 0);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  animation: jump-to-bottom-in 140ms ease-out;
+}
+
+.jump-to-bottom:hover {
+  background: color-mix(in oklab, var(--accent) 28%, var(--panel));
+}
+
+.jump-to-bottom:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--accent) 60%, transparent);
+  outline-offset: 2px;
+}
+
+@keyframes jump-to-bottom-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 .chat-error {

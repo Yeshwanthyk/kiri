@@ -292,10 +292,14 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         return
       }
 
-      if (event.key === 'Escape' && (commandPaletteOpen || agentSwitcherOpen)) {
+      if (
+        event.key === 'Escape' &&
+        (commandPaletteOpen || agentSwitcherOpen || projectManagerOpen)
+      ) {
         event.preventDefault()
         setCommandPaletteOpen(false)
         setAgentSwitcherOpen(false)
+        setProjectManagerOpen(false)
         return
       }
 
@@ -364,7 +368,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [agentSwitcherOpen, commandPaletteOpen, keymap, workspace.projects])
+  }, [agentSwitcherOpen, commandPaletteOpen, projectManagerOpen, keymap, workspace.projects])
 
   async function handleAddProject(input: { id?: string; name: string; cwd: string }) {
     const next = await addProject({ data: input })
@@ -2525,6 +2529,7 @@ function ChatPanel({
   )
   const messageListRef = React.useRef<HTMLDivElement | null>(null)
   const latestRowId = rows.at(-1)?.id ?? ''
+  const [hasNewContent, setHasNewContent] = React.useState(false)
 
   React.useEffect(() => {
     if (agent.status !== 'running') setLocalRunning(false)
@@ -2534,7 +2539,38 @@ function ChatPanel({
     const list = messageListRef.current
     if (!list) return
     list.scrollTop = list.scrollHeight
-  }, [agent.id, agent.status, latestRowId, rows.length])
+    setHasNewContent(false)
+  }, [agent.id])
+
+  React.useLayoutEffect(() => {
+    const list = messageListRef.current
+    if (!list) return
+    const distance = list.scrollHeight - list.clientHeight - list.scrollTop
+    if (distance <= 24) {
+      list.scrollTop = list.scrollHeight
+      setHasNewContent(false)
+    } else {
+      setHasNewContent(true)
+    }
+  }, [agent.status, latestRowId, rows.length])
+
+  React.useEffect(() => {
+    const list = messageListRef.current
+    if (!list) return
+    const onScroll = () => {
+      const distance = list.scrollHeight - list.clientHeight - list.scrollTop
+      if (distance <= 24) setHasNewContent(false)
+    }
+    list.addEventListener('scroll', onScroll, { passive: true })
+    return () => list.removeEventListener('scroll', onScroll)
+  }, [agent.id])
+
+  function scrollToBottom() {
+    const list = messageListRef.current
+    if (!list) return
+    list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' })
+    setHasNewContent(false)
+  }
 
   async function interrupt() {
     setPending(true)
@@ -2615,7 +2651,20 @@ function ChatPanel({
 
   return (
     <div className="chat-panel" data-testid="chat-panel">
-      <MessageTimeline rows={rows} listRef={messageListRef} />
+      <div className="message-list-wrap">
+        <MessageTimeline rows={rows} listRef={messageListRef} />
+        {hasNewContent ? (
+          <button
+            type="button"
+            className="jump-to-bottom"
+            onClick={scrollToBottom}
+            aria-label="Jump to latest messages"
+          >
+            <ChevronDown size={14} />
+            New messages
+          </button>
+        ) : null}
+      </div>
       {error ? <span className="chat-error" role="status">{error}</span> : null}
       {agent.pendingQuestion ? (
         <PendingQuestionPanel
