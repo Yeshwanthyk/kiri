@@ -9,6 +9,14 @@ pnpm install
 pnpm dev
 ```
 
+For Tailscale access, bind Vite to all interfaces:
+
+```sh
+pnpm exec vite dev --host 0.0.0.0 --port 3090
+```
+
+`--host 127.0.0.1` is localhost-only and will not be reachable over Tailscale.
+
 ## Verify
 
 ```sh
