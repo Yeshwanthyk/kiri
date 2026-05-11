@@ -183,7 +183,7 @@ function runtimeLifecycleError(message: string, cause: unknown) {
 }
 
 export async function runRuntimeLifecyclePromise<A>(
-  effect: Effect.Effect<A, unknown>,
+  effect: Effect.Effect<A, unknown, never>,
 ) {
   const exit = await Effect.runPromiseExit(effect)
   if (Exit.isSuccess(exit)) return exit.value

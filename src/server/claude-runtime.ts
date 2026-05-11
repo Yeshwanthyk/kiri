@@ -34,6 +34,7 @@ import {
   enqueueAgentTurn,
   nextThinkingLevel,
   runAgentTurnLifecycle,
+  RuntimeLifecycleError,
   runRuntimeLifecyclePromise,
   setRuntimeState,
 } from './runtime-lifecycle'
@@ -180,13 +181,13 @@ async function promptClaudeAgentNow(
     displayText: messageDisplayText(message),
     errorEvent: { kind: 'claude_error', label: 'Claude error' },
     isCurrent: () => (sessionGenerations.get(config.id) ?? 0) === generation,
-    run: async () => {
+    run: () => runRuntimeLifecyclePromise(Effect.gen(function* () {
       const live = getOrCreateClaudeSession(config)
-      await prepareClaudeTurn(live, config)
-      await runClaudeTurn(live, message)
+      yield* prepareClaudeTurnEffect(live, config)
+      yield* runClaudeTurnEffect(live, message)
       if ((sessionGenerations.get(config.id) ?? 0) !== generation) return
-      captureClaudeGitDiffArtifacts(config)
-    },
+      yield* captureClaudeGitDiffArtifactsEffect(config)
+    })),
   }))
 }
 
@@ -194,29 +195,65 @@ async function prepareClaudeTurn(
   live: ClaudeLiveSession,
   config: ReturnType<typeof getAgentLaunchConfig>,
 ) {
-  await live.query.setModel(config.model)
-  await live.query.setPermissionMode('bypassPermissions')
-  const thinkingLevel = getAgentThinkingLevel(config.id)
-  if (thinkingLevel) {
-    await live.query.setMaxThinkingTokens(
-      thinkingLevel === 'off' ? 0 : thinkingTokenBudget(thinkingLevel),
-    )
-  }
-  await refreshClaudeContextUsage(config.id, live)
+  return runRuntimeLifecyclePromise(prepareClaudeTurnEffect(live, config))
+}
+
+function prepareClaudeTurnEffect(
+  live: ClaudeLiveSession,
+  config: ReturnType<typeof getAgentLaunchConfig>,
+) {
+  return Effect.gen(function* () {
+    yield* claudeProtocolPromise(() => live.query.setModel(config.model))
+    yield* claudeProtocolPromise(() => live.query.setPermissionMode('bypassPermissions'))
+    const thinkingLevel = getAgentThinkingLevel(config.id)
+    if (thinkingLevel) {
+      yield* claudeProtocolPromise(() => live.query.setMaxThinkingTokens(
+        thinkingLevel === 'off' ? 0 : thinkingTokenBudget(thinkingLevel),
+      ))
+    }
+    yield* refreshClaudeContextUsageEffect(config.id, live)
+  })
 }
 
 async function runClaudeTurn(live: ClaudeLiveSession, message: SDKUserMessage) {
-  if (live.activeTurn) throw new Error('Claude session already has an active turn')
+  return runRuntimeLifecyclePromise(runClaudeTurnEffect(live, message))
+}
 
-  let resolveTurn!: () => void
-  let rejectTurn!: (error: unknown) => void
-  const promise = new Promise<void>((resolve, reject) => {
-    resolveTurn = resolve
-    rejectTurn = reject
+function runClaudeTurnEffect(live: ClaudeLiveSession, message: SDKUserMessage) {
+  return Effect.gen(function* () {
+    if (live.activeTurn) {
+      return yield* new RuntimeLifecycleError({
+        message: 'Runtime turn failed',
+        cause: new Error('Claude session already has an active turn'),
+      })
+    }
+
+    let resolveTurn!: () => void
+    let rejectTurn!: (error: unknown) => void
+    const promise = new Promise<void>((resolve, reject) => {
+      resolveTurn = resolve
+      rejectTurn = reject
+    })
+    live.activeTurn = { promise, resolve: resolveTurn, reject: rejectTurn }
+    yield* Effect.try({
+      try: () => {
+        live.promptQueue.push(message)
+      },
+      catch: (cause) => new RuntimeLifecycleError({
+        message: 'Runtime turn failed',
+        cause,
+      }),
+    }).pipe(
+      Effect.tapError(() => Effect.sync(() => {
+        if (live.activeTurn?.promise === promise) live.activeTurn = null
+      })),
+    )
+    yield* claudeProtocolPromise(() => promise).pipe(
+      Effect.ensuring(Effect.sync(() => {
+        if (live.activeTurn?.promise === promise) live.activeTurn = null
+      })),
+    )
   })
-  live.activeTurn = { promise, resolve: resolveTurn, reject: rejectTurn }
-  live.promptQueue.push(message)
-  await promise
 }
 
 function getOrCreateClaudeSession(config: ReturnType<typeof getAgentLaunchConfig>) {
@@ -252,7 +289,7 @@ async function readClaudeStream(agentId: string, live: ClaudeLiveSession) {
   try {
     for await (const message of live.query) {
       if ((sessionGenerations.get(agentId) ?? 0) !== live.generation) return
-      handleClaudeMessage(agentId, live, message)
+      Effect.runSync(projectClaudeMessage(agentId, live, message))
     }
   } catch (error) {
     live.activeTurn?.reject(error)
@@ -263,49 +300,55 @@ async function readClaudeStream(agentId: string, live: ClaudeLiveSession) {
 }
 
 function handleClaudeMessage(agentId: string, live: ClaudeLiveSession, message: SDKMessage) {
-	const sessionId = stringValue(objectValue(message).session_id)
-	if (sessionId) {
-		const currentState = claudeState(getAgentRuntimeState(agentId))
-		live.state = { ...live.state, pendingQuestion: currentState.pendingQuestion, resume: sessionId }
-		setClaudeState(agentId, live.state)
-	}
+  Effect.runSync(projectClaudeMessage(agentId, live, message))
+}
 
-	if (message.type === 'assistant') {
-		recordClaudeAssistantMessage(agentId, message)
-		const currentState = claudeState(getAgentRuntimeState(agentId))
-		live.state = {
-			...live.state,
-			pendingQuestion: currentState.pendingQuestion,
-			resumeSessionAt: message.uuid,
-		}
-		setClaudeState(agentId, live.state)
-		return
-	}
-
-  if (message.type === 'stream_event') {
-    recordClaudeStreamEvent(agentId, live, message)
-    return
-  }
-
-  if (message.type === 'user') {
-    recordClaudeUserMessage(agentId, live, message)
-    return
-  }
-
-  if (message.type === 'result') {
-    recordClaudeResult(agentId, live, message)
-    if (message.subtype !== 'success' || message.is_error) {
-      live.activeTurn?.reject(new Error(resultErrorText(message)))
-    } else {
-      live.activeTurn?.resolve()
+function projectClaudeMessage(agentId: string, live: ClaudeLiveSession, message: SDKMessage) {
+  return Effect.sync(() => {
+    const sessionId = stringValue(objectValue(message).session_id)
+    if (sessionId) {
+      const currentState = claudeState(getAgentRuntimeState(agentId))
+      live.state = { ...live.state, pendingQuestion: currentState.pendingQuestion, resume: sessionId }
+      setClaudeState(agentId, live.state)
     }
-    live.activeTurn = null
-    return
-  }
 
-  if (message.type === 'system' && 'subtype' in message) {
-    recordClaudeSystemEvent(agentId, message)
-  }
+    if (message.type === 'assistant') {
+      recordClaudeAssistantMessage(agentId, message)
+      const currentState = claudeState(getAgentRuntimeState(agentId))
+      live.state = {
+        ...live.state,
+        pendingQuestion: currentState.pendingQuestion,
+        resumeSessionAt: message.uuid,
+      }
+      setClaudeState(agentId, live.state)
+      return
+    }
+
+    if (message.type === 'stream_event') {
+      recordClaudeStreamEvent(agentId, live, message)
+      return
+    }
+
+    if (message.type === 'user') {
+      recordClaudeUserMessage(agentId, live, message)
+      return
+    }
+
+    if (message.type === 'result') {
+      recordClaudeResult(agentId, live, message)
+      if (message.subtype !== 'success' || message.is_error) {
+        live.activeTurn?.reject(new Error(resultErrorText(message)))
+      } else {
+        live.activeTurn?.resolve()
+      }
+      live.activeTurn = null
+      return
+    }
+
+    if (message.type === 'system' && 'subtype' in message) {
+      recordClaudeSystemEvent(agentId, message)
+    }
+  })
 }
 
 function recordClaudeAssistantMessage(agentId: string, message: SDKAssistantMessage) {
@@ -491,11 +534,15 @@ function closeClaudeSession(agentId: string) {
 }
 
 function captureClaudeGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchConfig>) {
-  Effect.runSync(captureRuntimeDiffs(config.id, () =>
+  Effect.runSync(captureClaudeGitDiffArtifactsEffect(config))
+}
+
+function captureClaudeGitDiffArtifactsEffect(config: ReturnType<typeof getAgentLaunchConfig>) {
+  return captureRuntimeDiffs(config.id, () =>
     collectGitDiffArtifactsWithFallback(
       config.cwd,
       getSessionDiffFallbackCwds(config.id),
-    )))
+    ))
 }
 
 function claudeOptions(
@@ -517,7 +564,7 @@ function claudeOptions(
     settingSources: [...CLAUDE_SETTING_SOURCES],
     settings: { autoCompactEnabled: true },
     canUseTool: (toolName, input, options) =>
-      handleClaudePermission(config.id, pendingQuestions, toolName, input, options),
+      runRuntimeLifecyclePromise(handleClaudePermissionEffect(config.id, pendingQuestions, toolName, input, options)),
     env: claudeEnvironment(state),
     ...extraArgsOption(),
     ...claudeThinkingOptions(getAgentThinkingLevel(config.id)),
@@ -539,71 +586,91 @@ async function handleClaudePermission(
   input: Record<string, unknown>,
   options: { signal: AbortSignal; toolUseID: string },
 ) {
-  if (toolName !== 'AskUserQuestion') {
-    return {
-      behavior: 'allow' as const,
-      updatedInput: input,
-      toolUseID: options.toolUseID,
-    }
-  }
-
-  const requestId = randomUUID()
-  const pendingQuestion: PendingQuestion = {
-    requestId,
-    questions: parseClaudeQuestions(input),
-  }
-  const previousState = claudeState(getAgentRuntimeState(agentId))
-  setClaudeState(agentId, { ...previousState, pendingQuestion })
-  setAgentStatus(agentId, 'blocked')
-  recordRuntimeTimelineEvent({
+  return runRuntimeLifecyclePromise(handleClaudePermissionEffect(
     agentId,
-    kind: 'claude_question_requested',
-    tone: 'info',
-    label: 'Question requested',
-    detail: pendingQuestion.questions.map((question) => question.question).join('\n'),
-    payload: { requestId, questions: pendingQuestion.questions, toolUseID: options.toolUseID },
-  })
+    pendingQuestions,
+    toolName,
+    input,
+    options,
+  ))
+}
 
-  try {
-	    const answers = await new Promise<AnswerQuestionInput['answers']>((resolve, reject) => {
-	      pendingQuestions.set(requestId, { resolve, reject })
-	      options.signal.addEventListener('abort', () => {
-	        pendingQuestions.delete(requestId)
-	        reject(new Error('Claude question was aborted'))
-	      }, { once: true })
-	    })
-    const claudeAnswers = answersForClaude(answers)
-	    const latestState = claudeState(getAgentRuntimeState(agentId))
-	    setClaudeState(agentId, { ...latestState, pendingQuestion: undefined })
-	    setAgentStatus(agentId, 'running')
-	    recordRuntimeTimelineEvent({
-	      agentId,
-      kind: 'claude_question_answered',
+function handleClaudePermissionEffect(
+  agentId: string,
+  pendingQuestions: Map<string, PendingQuestionResolver>,
+  toolName: string,
+  input: Record<string, unknown>,
+  options: { signal: AbortSignal; toolUseID: string },
+) {
+  return Effect.gen(function* () {
+    if (toolName !== 'AskUserQuestion') {
+      return {
+        behavior: 'allow' as const,
+        updatedInput: input,
+        toolUseID: options.toolUseID,
+      }
+    }
+
+    const requestId = randomUUID()
+    const pendingQuestion: PendingQuestion = {
+      requestId,
+      questions: parseClaudeQuestions(input),
+    }
+    const previousState = claudeState(getAgentRuntimeState(agentId))
+    setClaudeState(agentId, { ...previousState, pendingQuestion })
+    setAgentStatus(agentId, 'blocked')
+    recordRuntimeTimelineEvent({
+      agentId,
+      kind: 'claude_question_requested',
       tone: 'info',
-	      label: 'Question answered',
-	      detail: Object.entries(claudeAnswers).map(([question, answer]) => (
-	        `${question}: ${answer}`
-	      )).join('\n'),
-	      payload: { requestId, answers: claudeAnswers },
-	    })
-	    return {
-	      behavior: 'allow' as const,
-	      updatedInput: {
-	        questions: input.questions,
-	        answers: claudeAnswers,
-	      },
-	      toolUseID: options.toolUseID,
-	    }
-  } catch (error) {
+      label: 'Question requested',
+      detail: pendingQuestion.questions.map((question) => question.question).join('\n'),
+      payload: { requestId, questions: pendingQuestion.questions, toolUseID: options.toolUseID },
+    })
+
+    const answers = yield* Effect.either(claudeProtocolPromise(() =>
+      new Promise<AnswerQuestionInput['answers']>((resolve, reject) => {
+        pendingQuestions.set(requestId, { resolve, reject })
+        options.signal.addEventListener('abort', () => {
+          pendingQuestions.delete(requestId)
+          reject(new Error('Claude question was aborted'))
+        }, { once: true })
+      })))
+
+    if (answers._tag === 'Right') {
+      const claudeAnswers = answersForClaude(answers.right)
+      const latestState = claudeState(getAgentRuntimeState(agentId))
+      setClaudeState(agentId, { ...latestState, pendingQuestion: undefined })
+      setAgentStatus(agentId, 'running')
+      recordRuntimeTimelineEvent({
+        agentId,
+        kind: 'claude_question_answered',
+        tone: 'info',
+        label: 'Question answered',
+        detail: Object.entries(claudeAnswers).map(([question, answer]) => (
+          `${question}: ${answer}`
+        )).join('\n'),
+        payload: { requestId, answers: claudeAnswers },
+      })
+      return {
+        behavior: 'allow' as const,
+        updatedInput: {
+          questions: input.questions,
+          answers: claudeAnswers,
+        },
+        toolUseID: options.toolUseID,
+      }
+    }
+
     const latestState = claudeState(getAgentRuntimeState(agentId))
     setClaudeState(agentId, { ...latestState, pendingQuestion: undefined })
     setAgentStatus(agentId, 'running')
     return {
       behavior: 'deny' as const,
-      message: error instanceof Error ? error.message : 'Question cancelled',
+      message: runtimeCauseMessage(answers.left, 'Question cancelled'),
       toolUseID: options.toolUseID,
-	  }
-	}
+    }
+  })
 }
 
 function expireClaudeQuestion(agentId: string, requestId: string) {
@@ -634,6 +701,21 @@ function answersForClaude(answers: AnswerQuestionInput['answers']) {
 function createClaudeQuery(params: { prompt: AsyncIterable<SDKUserMessage>; options: ClaudeOptions }) {
   if (process.env.AETHER_FAKE_CLAUDE === '1') return fakeClaudeQuery(params)
   return claudeQuery(params)
+}
+
+function claudeProtocolPromise<T>(run: () => Promise<T>) {
+  return Effect.tryPromise({
+    try: run,
+    catch: (cause) => new RuntimeLifecycleError({
+      message: 'Runtime turn failed',
+      cause,
+    }),
+  })
+}
+
+function runtimeCauseMessage(error: unknown, fallback: string) {
+  const cause = error instanceof RuntimeLifecycleError ? error.cause : error
+  return cause instanceof Error ? cause.message : fallback
 }
 
 function claudeThinkingOptions(level: ThinkingLevel | null): Pick<ClaudeOptions, 'thinking' | 'effort'> {
@@ -835,12 +917,17 @@ function usedTokensFromResult(message: SDKResultMessage) {
 }
 
 async function refreshClaudeContextUsage(agentId: string, live: ClaudeLiveSession) {
-  try {
-    const usage = await live.query.getContextUsage()
-    recordClaudeContextUsage(agentId, usage)
-  } catch {
-    // Context usage is an observability projection; chat execution should not fail on it.
-  }
+  return runRuntimeLifecyclePromise(refreshClaudeContextUsageEffect(agentId, live))
+}
+
+function refreshClaudeContextUsageEffect(agentId: string, live: ClaudeLiveSession) {
+  return Effect.gen(function* () {
+    const usage = yield* Effect.either(claudeProtocolPromise(() => live.query.getContextUsage()))
+    if (usage._tag === 'Left') return
+    yield* Effect.sync(() => {
+      recordClaudeContextUsage(agentId, usage.right)
+    })
+  })
 }
 
 function recordClaudeContextUsage(

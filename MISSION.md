@@ -9,7 +9,7 @@ Move Pican runtime lifecycle behavior toward Effect in safe phases, preserving r
 - [x] Phase 1 review feedback is fixed and ready to commit.
 - [x] Phase 2 makes lifecycle helpers Effect-native while runtime exports stay Promise-compatible.
 - [x] Phase 2 uses Effect tests and is reviewed/fixed/ready to commit.
-- [ ] Phase 3 moves Codex, Claude, then Pi protocol cores to Effect where appropriate.
+- [ ] Phase 3 moves Codex, Claude, then Pi protocol cores to Effect where appropriate. Codex and Claude are done; Pi remains.
 - [ ] Phase 3 is tested, reviewed, fixed, and committed per runtime chunk.
 - [ ] Phase 4 introduces Layers only where they replace real boundaries in tests.
 - [ ] Final build/test/lint pass is green.
@@ -27,3 +27,4 @@ Move Pican runtime lifecycle behavior toward Effect in safe phases, preserving r
 - Review caught that Pi reset/stop semantics must remain idle/silent in Phase 1; only queue and diff helpers are shared for Pi for now.
 - Phase 2 keeps typed `RuntimeLifecycleError` inside Effect but unwraps `Runtime turn failed` at Promise runtime boundaries to preserve provider error messages.
 - Codex protocol-core Effect migration reviewed clean; optional future hardening is direct coverage for non-missing adapter failures preserving provider error identity.
+- Claude protocol-core Effect migration reviewed with one fixed edge: `activeTurn` is now cleared if prompt queue push or turn completion fails.
