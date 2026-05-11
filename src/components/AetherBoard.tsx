@@ -3113,6 +3113,7 @@ function WorkingTimelineRow({
 }: {
   row: Extract<AgentTimelineRow, { kind: 'working' }>
 }) {
+  const elapsed = useElapsedSeconds(row.startedAt)
   return (
     <div className="timeline-row working-row">
       <span className="working-dots" aria-hidden="true">
@@ -3120,9 +3121,70 @@ function WorkingTimelineRow({
         <span />
         <span />
       </span>
-      <span>{row.startedAt ? `Working since ${formatTime(row.startedAt)}` : 'Working'}</span>
+      <span>
+        {elapsed === null ? 'Working' : `Working · ${formatElapsed(elapsed)}`}
+      </span>
     </div>
   )
+}
+
+function useElapsedSeconds(startedAt: string | null | undefined) {
+  const startMs = React.useMemo(() => {
+    if (!startedAt) return null
+    const ms = new Date(startedAt).getTime()
+    return Number.isNaN(ms) ? null : ms
+  }, [startedAt])
+
+  const [seconds, setSeconds] = React.useState<number | null>(() =>
+    startMs === null ? null : Math.max(0, Math.floor((Date.now() - startMs) / 1000)),
+  )
+
+  React.useEffect(() => {
+    if (startMs === null) {
+      setSeconds(null)
+      return
+    }
+    const tick = () => setSeconds(Math.max(0, Math.floor((Date.now() - startMs) / 1000)))
+    tick()
+    let timer: number | undefined
+    const start = () => {
+      if (timer !== undefined) return
+      timer = window.setInterval(tick, 1000)
+    }
+    const stop = () => {
+      if (timer === undefined) return
+      window.clearInterval(timer)
+      timer = undefined
+    }
+    if (document.visibilityState === 'visible') start()
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        tick()
+        start()
+      } else {
+        stop()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [startMs])
+
+  return seconds
+}
+
+function formatElapsed(totalSeconds: number) {
+  const seconds = totalSeconds % 60
+  const minutes = Math.floor(totalSeconds / 60) % 60
+  const hours = Math.floor(totalSeconds / 3600)
+  const ss = seconds.toString().padStart(2, '0')
+  if (hours > 0) {
+    const mm = minutes.toString().padStart(2, '0')
+    return `${hours}:${mm}:${ss}`
+  }
+  return `${minutes}:${ss}`
 }
 
 function MessageMeta({
