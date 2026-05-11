@@ -737,11 +737,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         data-testid="board-pane"
       >
         <header className="topbar">
-          <h1 className="aether-mark">AETHER</h1>
           <div className="topbar-actions">
             <button
               type="button"
-              className="settings-trigger"
+              className="topbar-trigger"
+              aria-label="Projects"
               aria-expanded={projectManagerOpen}
               onClick={() => {
                 setSettingsOpen(false)
@@ -749,11 +749,12 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               }}
             >
               <FolderOpen size={14} />
-              Projects
+              <span>Projects</span>
             </button>
             <button
               type="button"
-              className="settings-trigger"
+              className="topbar-trigger"
+              aria-label="Settings"
               aria-expanded={settingsOpen}
               onClick={() => {
                 setProjectManagerOpen(false)
@@ -761,7 +762,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               }}
             >
               <Settings2 size={14} />
-              Settings
+              <span>Settings</span>
             </button>
           </div>
         </header>
