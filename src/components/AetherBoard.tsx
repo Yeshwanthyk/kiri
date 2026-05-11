@@ -2897,70 +2897,90 @@ function PendingQuestionPanel({
       <div className="pending-question-head">
         <strong>Claude needs input</strong>
       </div>
-      {pendingQuestion.questions.map((question) => (
-        <label key={question.id} className="pending-question-field">
-          <span>{question.question}</span>
-          {question.options.length > 0 && !question.multiSelect ? (
-	            <select
-	              value={String(answers[question.id] ?? '')}
-	              onChange={(event) => {
-	                const value = event.currentTarget.value
-	                setAnswers((current) => ({
-	                  ...current,
-	                  [question.id]: value,
-	                }))
-	              }}
-	            >
-              {question.options.map((option) => (
-                <option key={option.label} value={option.label}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          ) : question.options.length > 0 ? (
-            <div className="pending-question-options">
-              {question.options.map((option) => {
-                const selected = Array.isArray(answers[question.id])
-                  ? answers[question.id].includes(option.label)
-                  : false
-                return (
-	                  <label key={option.label}>
-	                    <input
-	                      type="checkbox"
-	                      checked={selected}
-	                      onChange={(event) => {
-	                        const checked = event.currentTarget.checked
-	                        setAnswers((current) => {
-	                          const currentAnswer = current[question.id]
-	                          const existing = Array.isArray(currentAnswer) ? currentAnswer : []
-	                          return {
-	                            ...current,
-	                            [question.id]: checked
-	                              ? [...existing, option.label]
-	                              : existing.filter((item: string) => item !== option.label),
-	                          }
-	                        })
-	                      }}
-	                    />
-                    <span>{option.label}</span>
-                  </label>
-                )
-              })}
-            </div>
-          ) : (
-	            <input
-	              value={String(answers[question.id] ?? '')}
-	              onChange={(event) => {
-	                const value = event.currentTarget.value
-	                setAnswers((current) => ({
-	                  ...current,
-	                  [question.id]: value,
-	                }))
-	              }}
-	            />
-          )}
-        </label>
-      ))}
+      {pendingQuestion.questions.map((question) => {
+        const labelId = `pending-question-${question.id}-label`
+        const hasOptions = question.options.length > 0
+        return (
+          <div key={question.id} className="pending-question-field">
+            <span id={labelId}>{question.question}</span>
+            {hasOptions && !question.multiSelect ? (
+              <div
+                className="pending-question-options"
+                role="radiogroup"
+                aria-labelledby={labelId}
+              >
+                {question.options.map((option) => {
+                  const selected = answers[question.id] === option.label
+                  return (
+                    <button
+                      key={option.label}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      className={`pending-question-chip${selected ? ' selected' : ''}`}
+                      onClick={() =>
+                        setAnswers((current) => ({
+                          ...current,
+                          [question.id]: option.label,
+                        }))
+                      }
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : hasOptions ? (
+              <div
+                className="pending-question-options"
+                role="group"
+                aria-labelledby={labelId}
+              >
+                {question.options.map((option) => {
+                  const currentAnswer = answers[question.id]
+                  const selected = Array.isArray(currentAnswer)
+                    ? currentAnswer.includes(option.label)
+                    : false
+                  return (
+                    <button
+                      key={option.label}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={selected}
+                      className={`pending-question-chip${selected ? ' selected' : ''}`}
+                      onClick={() =>
+                        setAnswers((current) => {
+                          const existing = Array.isArray(current[question.id])
+                            ? (current[question.id] as string[])
+                            : []
+                          const next = existing.includes(option.label)
+                            ? existing.filter((item) => item !== option.label)
+                            : [...existing, option.label]
+                          return { ...current, [question.id]: next }
+                        })
+                      }
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <input
+                aria-labelledby={labelId}
+                value={String(answers[question.id] ?? '')}
+                onChange={(event) => {
+                  const value = event.currentTarget.value
+                  setAnswers((current) => ({
+                    ...current,
+                    [question.id]: value,
+                  }))
+                }}
+              />
+            )}
+          </div>
+        )
+      })}
       <button type="submit" disabled={pending}>
         <Check size={14} />
         Answer
