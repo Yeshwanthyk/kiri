@@ -63,7 +63,6 @@ import {
   applyAetherTheme,
   defaultThemeSelection,
   getAetherThemeTokens,
-  normalizeThemeSelection,
   aetherThemeNames,
   type AetherThemeName,
   type ThemeMode,
@@ -119,6 +118,23 @@ import {
   type Selection,
 } from './aether-board/navigation'
 import {
+  applyChatTypography,
+  chatFontSizes,
+  defaultChatTypography,
+  monoFonts,
+  readStoredChatDraft,
+  readStoredChatTypography,
+  readStoredKeymap,
+  readStoredThemeSelection,
+  saveChatTypography,
+  saveKeymap,
+  saveThemeSelection,
+  updateChatDraft,
+  type ChatFontSize,
+  type ChatTypographySettings,
+  type MonoFont,
+} from './aether-board/storage'
+import {
   parseSlashCommand,
   runSlashCommand,
   supportsThinking,
@@ -127,15 +143,6 @@ import {
 
 type SidebarTab = 'chat' | 'diffs' | 'terminal'
 type DiffStyle = 'unified' | 'split'
-
-type ChatFontSize = 'compact' | 'comfortable' | 'large' | 'xlarge'
-
-type MonoFont = 'jetbrains' | 'fira' | 'plex' | 'system'
-
-type ChatTypographySettings = {
-  fontSize: ChatFontSize
-  monoFont: MonoFont
-}
 
 type RefreshAgentDetail = () => Promise<void>
 
@@ -169,41 +176,6 @@ type CommandPaletteAction = {
 }
 
 const sessionThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
-
-const chatFontSizes: Record<ChatFontSize, { label: string; size: string; lineHeight: string }> = {
-  compact: { label: 'Compact · 13px', size: '13px', lineHeight: '1.5' },
-  comfortable: { label: 'Comfortable · 14px', size: '14px', lineHeight: '1.58' },
-  large: { label: 'Large · 16px', size: '16px', lineHeight: '1.62' },
-  xlarge: { label: 'Extra large · 18px', size: '18px', lineHeight: '1.66' },
-}
-
-const monoFonts: Record<MonoFont, { label: string; stack: string }> = {
-  jetbrains: {
-    label: 'JetBrains Mono',
-    stack: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  fira: {
-    label: 'Fira Code',
-    stack: '"Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  plex: {
-    label: 'IBM Plex Mono',
-    stack: '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  system: {
-    label: 'System Mono',
-    stack: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-  },
-}
-
-const defaultChatTypography: ChatTypographySettings = {
-  fontSize: 'comfortable',
-  monoFont: 'jetbrains',
-}
-const keymapStorageKey = 'aether:keymap:v1'
-const themeStorageKey = 'aether:theme:v1'
-const chatTypographyStorageKey = 'aether:chat-typography:v1'
-const chatDraftStorageKey = 'aether:chat-drafts:v1'
 
 export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [workspace, setWorkspace] = React.useState(snapshot)
@@ -4333,112 +4305,6 @@ function formatTokenCount(value: number) {
 
 function trimFixed(value: number) {
   return value.toFixed(value >= 10 ? 0 : 1).replace(/\.0$/, '')
-}
-
-function readStoredKeymap(): KeymapSettings {
-  try {
-    const stored = window.localStorage.getItem(keymapStorageKey)
-    if (!stored) return defaultKeymap
-    const parsed = JSON.parse(stored) as Partial<KeymapSettings>
-    const next = { ...defaultKeymap, ...parsed }
-    const values = Object.values(next)
-    if (
-      values.length !== new Set(values).size ||
-      values.some((value) => !keyOptions.includes(value))
-    ) {
-      return defaultKeymap
-    }
-    return next
-  } catch {
-    return defaultKeymap
-  }
-}
-
-function saveKeymap(keymap: KeymapSettings): KeymapSettings {
-  window.localStorage.setItem(keymapStorageKey, JSON.stringify(keymap))
-  return keymap
-}
-
-function readStoredThemeSelection(): ThemeSelection {
-  try {
-    const stored = window.localStorage.getItem(themeStorageKey)
-    if (!stored) return defaultThemeSelection
-    return normalizeThemeSelection(JSON.parse(stored))
-  } catch {
-    return defaultThemeSelection
-  }
-}
-
-function saveThemeSelection(selection: ThemeSelection): ThemeSelection {
-  window.localStorage.setItem(themeStorageKey, JSON.stringify(selection))
-  return selection
-}
-
-function readStoredChatTypography(): ChatTypographySettings {
-  try {
-    const stored = window.localStorage.getItem(chatTypographyStorageKey)
-    if (!stored) return defaultChatTypography
-    const record = JSON.parse(stored) as Record<string, unknown>
-    return normalizeChatTypography(record)
-  } catch {
-    return defaultChatTypography
-  }
-}
-
-function saveChatTypography(settings: ChatTypographySettings): ChatTypographySettings {
-  window.localStorage.setItem(chatTypographyStorageKey, JSON.stringify(settings))
-  return settings
-}
-
-function readStoredChatDraft(agentId: string) {
-  return readStoredChatDrafts()[agentId] ?? ''
-}
-
-function updateChatDraft(
-  agentId: string,
-  value: string,
-  setDraft: React.Dispatch<React.SetStateAction<string>>,
-) {
-  setDraft(value)
-  const drafts = readStoredChatDrafts()
-  if (value) {
-    drafts[agentId] = value
-  } else {
-    delete drafts[agentId]
-  }
-  window.sessionStorage.setItem(chatDraftStorageKey, JSON.stringify(drafts))
-}
-
-function readStoredChatDrafts(): Record<string, string> {
-  try {
-    const stored = window.sessionStorage.getItem(chatDraftStorageKey)
-    if (!stored) return {}
-    const parsed = JSON.parse(stored) as Record<string, unknown>
-    return Object.fromEntries(
-      Object.entries(parsed).filter((entry): entry is [string, string] => (
-        typeof entry[0] === 'string' && typeof entry[1] === 'string'
-      )),
-    )
-  } catch {
-    return {}
-  }
-}
-
-function normalizeChatTypography(value: Record<string, unknown>): ChatTypographySettings {
-  const fontSize = typeof value.fontSize === 'string' && value.fontSize in chatFontSizes
-    ? value.fontSize as ChatFontSize
-    : defaultChatTypography.fontSize
-  const monoFont = typeof value.monoFont === 'string' && value.monoFont in monoFonts
-    ? value.monoFont as MonoFont
-    : defaultChatTypography.monoFont
-  return { fontSize, monoFont }
-}
-
-function applyChatTypography(element: HTMLElement, settings: ChatTypographySettings): void {
-  const tokens = chatFontSizes[settings.fontSize]
-  element.style.setProperty('--chat-font-size', tokens.size)
-  element.style.setProperty('--chat-line-height', tokens.lineHeight)
-  element.style.setProperty('--font-mono', monoFonts[settings.monoFont].stack)
 }
 
 function pendingPromptText(text: string, images: SendMessageImage[]) {
