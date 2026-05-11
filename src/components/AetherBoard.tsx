@@ -2070,6 +2070,7 @@ function SelectedAgentPane({
               onResetSession={onResetSession}
               onForkSession={onForkSession}
               onAnswerQuestion={onAnswerQuestion}
+              onDetailRefresh={refreshDetail}
             />
           ) : null}
           {tab === 'diffs' ? (
@@ -2345,6 +2346,7 @@ function ChatPanel({
   onResetSession,
   onForkSession,
   onAnswerQuestion,
+  onDetailRefresh,
 }: {
   agent: AgentCell
   focusRequest: number
@@ -2359,6 +2361,7 @@ function ChatPanel({
     requestId: string,
     answers: Record<string, string | string[]>,
   ) => Promise<void>
+  onDetailRefresh: RefreshAgentDetail
 }) {
   const [pending, setPending] = React.useState(false)
   const [pendingPrompt, setPendingPrompt] = React.useState<string | null>(null)
@@ -2458,6 +2461,7 @@ function ChatPanel({
           onResetSession,
           onForkSession,
         })
+        await onDetailRefresh()
         clearComposer()
       } catch (cause) {
         setError(errorMessage(cause))
@@ -2485,6 +2489,7 @@ function ChatPanel({
     setPending(true)
     try {
       await onSteer(agent.id, prompt, promptImages)
+      await onDetailRefresh()
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {

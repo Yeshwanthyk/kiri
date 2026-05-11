@@ -4,6 +4,7 @@ import {
   type Options as ClaudeOptions,
   type Query as ClaudeQuery,
   type SDKAssistantMessage,
+  type SDKControlGetContextUsageResponse,
   type SDKMessage,
   type SDKResultMessage,
   type SDKUserMessage,
@@ -201,10 +202,12 @@ async function prepareClaudeTurn(
   await live.query.setModel(config.model)
   await live.query.setPermissionMode('bypassPermissions')
   const thinkingLevel = getAgentThinkingLevel(config.id)
-  if (!thinkingLevel) return
-  await live.query.setMaxThinkingTokens(
-    thinkingLevel === 'off' ? 0 : thinkingTokenBudget(thinkingLevel),
-  )
+  if (thinkingLevel) {
+    await live.query.setMaxThinkingTokens(
+      thinkingLevel === 'off' ? 0 : thinkingTokenBudget(thinkingLevel),
+    )
+  }
+  await refreshClaudeContextUsage(config.id, live)
 }
 
 async function runClaudeTurn(live: ClaudeLiveSession, message: SDKUserMessage) {
@@ -295,7 +298,7 @@ function handleClaudeMessage(agentId: string, live: ClaudeLiveSession, message: 
   }
 
   if (message.type === 'result') {
-    recordClaudeResult(agentId, message)
+    recordClaudeResult(agentId, live, message)
     if (message.subtype !== 'success' || message.is_error) {
       live.activeTurn?.reject(new Error(resultErrorText(message)))
     } else {
@@ -423,9 +426,10 @@ function recordClaudeUserMessage(
   }
 }
 
-function recordClaudeResult(agentId: string, message: SDKResultMessage) {
+function recordClaudeResult(agentId: string, live: ClaudeLiveSession, message: SDKResultMessage) {
   const usedTokens: number = usedTokensFromResult(message)
   if (usedTokens > 0) recordRuntimeContextUsage({ agentId, usedTokens })
+  void refreshClaudeContextUsage(agentId, live)
   if (message.subtype !== 'success' || message.is_error) {
     recordRuntimeTimelineEvent({
       agentId,
@@ -458,12 +462,22 @@ function recordClaudeSystemEvent(agentId: string, message: Extract<SDKMessage, {
     return
   }
   if (subtype === 'compact_boundary') {
-    clearRuntimeContextUsage(agentId)
+    const metadata = objectValue(objectValue(message).compact_metadata)
+    const postTokens = numberValue(metadata.post_tokens)
+    const preTokens = numberValue(metadata.pre_tokens)
+    if (postTokens !== undefined) {
+      recordRuntimeContextUsage({ agentId, usedTokens: postTokens })
+    } else {
+      clearRuntimeContextUsage(agentId)
+    }
     recordRuntimeTimelineEvent({
       agentId,
       kind: 'claude_context_compacted',
       tone: 'info',
       label: 'Context compacted',
+      detail: preTokens === undefined
+        ? undefined
+        : `Claude compacted context from ${preTokens.toLocaleString('en')} tokens.`,
       payload: message,
     })
   }
@@ -512,6 +526,7 @@ function claudeOptions(
     allowDangerouslySkipPermissions: true,
     includePartialMessages: true,
     settingSources: [...CLAUDE_SETTING_SOURCES],
+    settings: { autoCompactEnabled: true },
     canUseTool: (toolName, input, options) =>
       handleClaudePermission(config.id, pendingQuestions, toolName, input, options),
     env: claudeEnvironment(state),
@@ -834,6 +849,25 @@ function usedTokensFromResult(message: SDKResultMessage) {
     (numberValue(usage.output_tokens) ?? 0) +
     (numberValue(usage.cache_read_input_tokens) ?? 0) +
     (numberValue(usage.cache_creation_input_tokens) ?? 0)
+}
+
+async function refreshClaudeContextUsage(agentId: string, live: ClaudeLiveSession) {
+  try {
+    const usage = await live.query.getContextUsage()
+    recordClaudeContextUsage(agentId, usage)
+  } catch {
+    // Context usage is an observability projection; chat execution should not fail on it.
+  }
+}
+
+function recordClaudeContextUsage(
+  agentId: string,
+  usage: SDKControlGetContextUsageResponse,
+) {
+  const usedTokens = Math.max(0, Math.round(usage.totalTokens))
+  const windowTokens = Math.max(0, Math.round(usage.maxTokens || usage.rawMaxTokens))
+  if (!windowTokens) return
+  recordRuntimeContextUsage({ agentId, usedTokens, windowTokens })
 }
 
 function setClaudeState(agentId: string, state: ClaudeRuntimeState) {

@@ -1619,7 +1619,14 @@ function readContextUsage(
   if (!windowTokens) return null
 
   const usedTokens = persistedUsage?.usedTokens
-  if (usedTokens === undefined) return null
+  if (usedTokens === undefined) {
+    return {
+      usedTokens: 0,
+      remainingTokens: windowTokens,
+      windowTokens,
+      usedPercent: 0,
+    }
+  }
 
   return {
     usedTokens,
