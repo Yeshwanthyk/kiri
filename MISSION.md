@@ -26,3 +26,4 @@ Move Pican runtime lifecycle behavior toward Effect in safe phases, preserving r
 - Quint is available locally; use simple pure state models first, then executable action specs only where needed.
 - Review caught that Pi reset/stop semantics must remain idle/silent in Phase 1; only queue and diff helpers are shared for Pi for now.
 - Phase 2 keeps typed `RuntimeLifecycleError` inside Effect but unwraps `Runtime turn failed` at Promise runtime boundaries to preserve provider error messages.
+- Codex protocol-core Effect migration reviewed clean; optional future hardening is direct coverage for non-missing adapter failures preserving provider error identity.

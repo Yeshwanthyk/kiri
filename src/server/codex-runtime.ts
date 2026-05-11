@@ -37,6 +37,7 @@ import {
   enqueueAgentTurn,
   nextThinkingLevel,
   runAgentTurnLifecycle,
+  RuntimeLifecycleError,
   runRuntimeLifecyclePromise,
   setRuntimeState,
 } from './runtime-lifecycle'
@@ -208,47 +209,16 @@ async function promptCodexAgentNow(
         websocketUrl: adapterUrl(state.websocketUrl),
       })
     },
-    run: async () => {
-      const threadId = await ensureCodexThread({ adapter, config, state })
-      if ((sessionGenerations.get(config.id) ?? 0) !== generation) return false
-      activeThreadId = threadId
-      threadAgents.set(threadId, config.id)
-      agentThreads.set(config.id, threadId)
-      const thread = await readCodexThread(adapter, threadId)
-      syncCodexThreadStatus(config.id, thread)
-      const activeTurnId = activeTurnIdFromThread(thread)
-      if (activeTurnId) {
-        await steerCodexTurn(config.id, {
-          ...state,
-          threadId,
-          websocketUrl: adapterUrl(state.websocketUrl),
-        }, activeTurnId, text)
-        return false
-      }
-      const turnResponse = await adapter.startTurn({
-        threadId,
-        input: textInput(text),
-        model: config.model,
-        sandboxPolicy: CODEX_SANDBOX_POLICY,
-        ...codexReasoningOptions(getAgentThinkingLevel(config.id)),
-      })
-      const turnId = turnResponse.turn.id
-      setCodexState(config.id, {
-        ...state,
-        threadId,
-        websocketUrl: adapterUrl(state.websocketUrl),
-      })
-      const completedTurn = await adapter.waitForTurnCompleted({ threadId, turnId })
-      if ((sessionGenerations.get(config.id) ?? 0) !== generation) return false
-      recordCodexTurn(config.id, completedTurn)
-      captureCodexGitDiffArtifacts(config)
-      setCodexState(config.id, {
-        ...state,
-        threadId,
-        websocketUrl: adapterUrl(state.websocketUrl),
-      })
-      return true
-    },
+    run: () => runRuntimeLifecyclePromise(startOrSteerCodexTurn({
+      adapter,
+      config,
+      state,
+      text,
+      generation,
+      setActiveThreadId: (threadId) => {
+        activeThreadId = threadId
+      },
+    })),
   }))
 }
 
@@ -260,42 +230,118 @@ function captureCodexGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchCo
     )))
 }
 
-async function ensureCodexThread(input: {
+function startOrSteerCodexTurn(input: {
+  adapter: CodexAppServerAdapter
+  config: ReturnType<typeof getAgentLaunchConfig>
+  state: CodexRuntimeState
+  text: string
+  generation: number
+  setActiveThreadId: (threadId: string) => void
+}) {
+  return Effect.gen(function* () {
+    const threadId = yield* ensureCodexThreadEffect(input)
+    if (!isCurrentCodexGeneration(input.config.id, input.generation)) return false
+    yield* Effect.sync(() => {
+      input.setActiveThreadId(threadId)
+      threadAgents.set(threadId, input.config.id)
+      agentThreads.set(input.config.id, threadId)
+    })
+    const thread = yield* readCodexThreadEffect(input.adapter, threadId)
+    yield* Effect.sync(() => {
+      syncCodexThreadStatus(input.config.id, thread)
+    })
+    const activeTurnId = activeTurnIdFromThread(thread)
+    if (activeTurnId) {
+      yield* steerCodexTurnEffect(input.config.id, {
+        ...input.state,
+        threadId,
+        websocketUrl: adapterUrl(input.state.websocketUrl),
+      }, activeTurnId, input.text)
+      return false
+    }
+
+    const turnResponse = yield* codexProtocolPromise(() => input.adapter.startTurn({
+      threadId,
+      input: textInput(input.text),
+      model: input.config.model,
+      sandboxPolicy: CODEX_SANDBOX_POLICY,
+      ...codexReasoningOptions(getAgentThinkingLevel(input.config.id)),
+    }))
+    const turnId = turnResponse.turn.id
+    yield* Effect.sync(() => {
+      setCodexState(input.config.id, {
+        ...input.state,
+        threadId,
+        websocketUrl: adapterUrl(input.state.websocketUrl),
+      })
+    })
+    const completedTurn = yield* codexProtocolPromise(() =>
+      input.adapter.waitForTurnCompleted({ threadId, turnId }))
+    if (!isCurrentCodexGeneration(input.config.id, input.generation)) return false
+    yield* Effect.sync(() => {
+      recordCodexTurn(input.config.id, completedTurn)
+      captureCodexGitDiffArtifacts(input.config)
+      setCodexState(input.config.id, {
+        ...input.state,
+        threadId,
+        websocketUrl: adapterUrl(input.state.websocketUrl),
+      })
+    })
+    return true
+  })
+}
+
+function ensureCodexThreadEffect(input: {
   adapter: CodexAppServerAdapter
   config: ReturnType<typeof getAgentLaunchConfig>
   state: CodexRuntimeState
 }) {
-  if (input.state.threadId) {
-    try {
-      const response = await input.adapter.resumeThread({
-        threadId: input.state.threadId,
+  return Effect.gen(function* () {
+    const existingThreadId = input.state.threadId
+    if (existingThreadId) {
+      const resumed = yield* Effect.either(codexProtocolPromise(() => input.adapter.resumeThread({
+        threadId: existingThreadId,
         cwd: input.config.cwd,
         model: input.config.model,
         approvalPolicy: 'never',
         sandbox: CODEX_SANDBOX_MODE,
+      })))
+      if (resumed._tag === 'Right') {
+        yield* Effect.sync(() => {
+          syncCodexThreadStatus(input.config.id, resumed.right.thread)
+        })
+        return existingThreadId
+      }
+      if (!isMissingRolloutError(runtimeCause(resumed.left))) {
+        return yield* resumed.left
+      }
+      yield* Effect.sync(() => {
+        forgetCodexThread(input.config.id, input.state)
       })
-      syncCodexThreadStatus(input.config.id, response.thread)
-      return input.state.threadId
-    } catch (error) {
-      if (!isMissingRolloutError(error)) throw error
-      forgetCodexThread(input.config.id, input.state)
     }
-  }
 
-  const response = await input.adapter.startThread({
-    cwd: input.config.cwd,
-    model: input.config.model,
-    approvalPolicy: 'never',
-    sandbox: CODEX_SANDBOX_MODE,
+    const response = yield* codexProtocolPromise(() => input.adapter.startThread({
+      cwd: input.config.cwd,
+      model: input.config.model,
+      approvalPolicy: 'never',
+      sandbox: CODEX_SANDBOX_MODE,
+    }))
+    const threadId = response.thread.id
+    if (!threadId) {
+      return yield* new RuntimeLifecycleError({
+        message: 'Runtime turn failed',
+        cause: new Error('Codex app-server did not return a thread id'),
+      })
+    }
+    yield* Effect.sync(() => {
+      setCodexState(input.config.id, {
+        ...input.state,
+        threadId,
+        websocketUrl: adapterUrl(input.state.websocketUrl),
+      })
+    })
+    return threadId
   })
-  const threadId = response.thread.id
-  if (!threadId) throw new Error('Codex app-server did not return a thread id')
-  setCodexState(input.config.id, {
-    ...input.state,
-    threadId,
-    websocketUrl: adapterUrl(input.state.websocketUrl),
-  })
-  return threadId
 }
 
 function getOrCreateCodexAdapter(websocketUrl: string | undefined) {
@@ -317,6 +363,11 @@ function getOrCreateCodexAdapter(websocketUrl: string | undefined) {
 }
 
 function handleCodexServerMessage(adapter: CodexAppServerAdapter, message: CodexServerMessage) {
+  Effect.runSync(projectCodexNotification(adapter, message))
+}
+
+function projectCodexNotification(adapter: CodexAppServerAdapter, message: CodexServerMessage) {
+  return Effect.sync(() => {
   const params = objectValue(message.params)
   const threadId = stringValue(params.threadId)
   const agentId = threadId ? threadAgents.get(threadId) : undefined
@@ -411,6 +462,7 @@ function handleCodexServerMessage(adapter: CodexAppServerAdapter, message: Codex
     if (!decoded) return
     recordCodexItem(agentId, decoded.item, timestampFromMs(decoded.completedAtMs))
   }
+  })
 }
 
 async function steerCodexTurn(
@@ -429,26 +481,79 @@ async function steerCodexTurn(
 }
 
 async function readCodexThread(adapter: CodexAppServerAdapter, threadId: string) {
-  let response: { thread: CodexThread }
-  try {
-    response = await adapter.readThread({ threadId, includeTurns: true })
-  } catch (error) {
-    if (!isUnmaterializedThreadReadError(error)) throw error
-    response = await adapter.readThread({ threadId, includeTurns: false })
-  }
-  return response.thread
+  return runRuntimeLifecyclePromise(readCodexThreadEffect(adapter, threadId))
 }
 
 async function readCodexThreadIfAvailable(
   adapter: CodexAppServerAdapter,
   threadId: string,
 ) {
-  try {
-    return await readCodexThread(adapter, threadId)
-  } catch (error) {
-    if (!isMissingRolloutError(error)) throw error
+  return runRuntimeLifecyclePromise(readCodexThreadIfAvailableEffect(adapter, threadId))
+}
+
+function readCodexThreadEffect(adapter: CodexAppServerAdapter, threadId: string) {
+  return Effect.gen(function* () {
+    const withTurns = yield* Effect.either(codexProtocolPromise(() =>
+      adapter.readThread({ threadId, includeTurns: true })))
+    if (withTurns._tag === 'Right') return withTurns.right.thread
+    if (!isUnmaterializedThreadReadError(runtimeCause(withTurns.left))) {
+      return yield* withTurns.left
+    }
+    const withoutTurns = yield* codexProtocolPromise(() =>
+      adapter.readThread({ threadId, includeTurns: false }))
+    return withoutTurns.thread
+  })
+}
+
+function readCodexThreadIfAvailableEffect(
+  adapter: CodexAppServerAdapter,
+  threadId: string,
+) {
+  return Effect.gen(function* () {
+    const thread = yield* Effect.either(readCodexThreadEffect(adapter, threadId))
+    if (thread._tag === 'Right') return thread.right
+    if (!isMissingRolloutError(runtimeCause(thread.left))) {
+      return yield* thread.left
+    }
     return null
-  }
+  })
+}
+
+function steerCodexTurnEffect(
+  agentId: string,
+  state: CodexRuntimeState & { threadId: string },
+  activeTurnId: string,
+  text: string,
+) {
+  return Effect.gen(function* () {
+    const adapter = getOrCreateCodexAdapter(state.websocketUrl)
+    yield* codexProtocolPromise(() => adapter.steerTurn({
+      threadId: state.threadId,
+      expectedTurnId: activeTurnId,
+      input: textInput(text),
+    }))
+    yield* Effect.sync(() => {
+      appendUserMessage({ agentId, text })
+    })
+  })
+}
+
+function codexProtocolPromise<T>(run: () => Promise<T>) {
+  return Effect.tryPromise({
+    try: run,
+    catch: (cause) => new RuntimeLifecycleError({
+      message: 'Runtime turn failed',
+      cause,
+    }),
+  })
+}
+
+function runtimeCause(error: unknown) {
+  return error instanceof RuntimeLifecycleError ? error.cause : error
+}
+
+function isCurrentCodexGeneration(agentId: string, generation: number) {
+  return (sessionGenerations.get(agentId) ?? 0) === generation
 }
 
 function isUnmaterializedThreadReadError(error: unknown) {
