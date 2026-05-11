@@ -3058,9 +3058,10 @@ const WorkTimelineRow = React.memo(function WorkTimelineRow({
 
 const WorkEntryRow = React.memo(function WorkEntryRow({ entry }: { entry: TimelineWorkEntry }) {
   const [expanded, setExpanded] = React.useState(false)
-  const preview = workEntryPreview(entry)
-  const displayText = preview ? `${entry.label} - ${preview}` : entry.label
-  const fullText = preview ?? displayText
+  const preview = formatWorkPreview(entry)
+  const previewText = preview?.text ?? null
+  const displayText = previewText ? `${entry.label} - ${previewText}` : entry.label
+  const fullText = entry.detail?.trim() || displayText
   const canExpand = displayText.length > 72 || fullText.includes('\n')
 
   return (
@@ -3080,7 +3081,7 @@ const WorkEntryRow = React.memo(function WorkEntryRow({ entry }: { entry: Timeli
           >
             <span suppressHydrationWarning>
               <strong>{entry.label}</strong>
-              {preview ? <> - {preview}</> : null}
+              {preview ? <> - {preview.node}</> : null}
             </span>
           </button>
           <time>{formatTime(entry.timestamp)}</time>
@@ -3093,8 +3094,56 @@ const WorkEntryRow = React.memo(function WorkEntryRow({ entry }: { entry: Timeli
   )
 })
 
-function workEntryPreview(entry: TimelineWorkEntry) {
-  return entry.detail?.trim() || null
+type WorkPreview = { node: React.ReactNode; text: string }
+
+function formatWorkPreview(entry: TimelineWorkEntry): WorkPreview | null {
+  const detail = entry.detail?.trim()
+  if (!detail) return null
+
+  const colonIndex = detail.indexOf(': ')
+  if (colonIndex > 0 && colonIndex <= 32) {
+    const toolName = detail.slice(0, colonIndex)
+    const args = detail.slice(colonIndex + 2).trim()
+    if (args) {
+      const kind = classifyToolName(toolName)
+      if (kind === 'path') return renderPathPreview(args)
+      if (kind === 'command') return { node: <span className="work-arg-mono">{args}</span>, text: args }
+      if (kind === 'pattern') {
+        return { node: <span className="work-arg-mono">"{args}"</span>, text: `"${args}"` }
+      }
+    }
+  }
+
+  return { node: detail, text: detail }
+}
+
+function classifyToolName(name: string): 'path' | 'command' | 'pattern' | 'unknown' {
+  const normalized = name.toLowerCase()
+  if (['read', 'edit', 'write', 'multiedit', 'notebookedit'].includes(normalized)) return 'path'
+  if (normalized === 'bash' || normalized.includes('shell') || normalized.includes('command')) {
+    return 'command'
+  }
+  if (normalized === 'grep' || normalized === 'glob') return 'pattern'
+  return 'unknown'
+}
+
+function renderPathPreview(rawPath: string): WorkPreview {
+  const path = rawPath.replace(/^["']|["']$/g, '').trim()
+  const slash = path.lastIndexOf('/')
+  if (slash <= 0 || slash >= path.length - 1) {
+    return { node: <span className="work-arg-path">{path}</span>, text: path }
+  }
+  const dir = path.slice(0, slash + 1)
+  const base = path.slice(slash + 1)
+  return {
+    node: (
+      <span className="work-arg-path">
+        <span className="work-arg-dir">{dir}</span>
+        <span className="work-arg-base">{base}</span>
+      </span>
+    ),
+    text: path,
+  }
 }
 
 type SlashCommand = {
