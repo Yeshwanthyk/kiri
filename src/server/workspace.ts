@@ -14,12 +14,14 @@ import {
   setThinkingLevelInputSchema,
   startSessionInputSchema,
   steerMessageInputSchema,
+  terminalConfigInputSchema,
   unhideProjectInputSchema,
 } from '~/lib/contracts'
 import {
   addProject,
   deleteSession,
   deleteProject,
+  getAgentLaunchConfig,
   getWorkspaceSnapshot,
   hideProject,
   startSession,
@@ -34,6 +36,7 @@ import {
   setAgentThinkingLevel,
   steerAgent,
 } from './runtime'
+import { ensureTerminalServer } from './terminal-server'
 
 export const fetchWorkspaceSnapshot = createServerFn({ method: 'GET' }).handler(
   async () => getWorkspaceSnapshot(),
@@ -115,6 +118,13 @@ export const answerQuestionMutation = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     await answerAgentQuestion(data)
     return getWorkspaceSnapshot()
+  })
+
+export const terminalConfigQuery = createServerFn({ method: 'GET' })
+  .inputValidator(terminalConfigInputSchema)
+  .handler(async ({ data }) => {
+    getAgentLaunchConfig(data.agentId)
+    return ensureTerminalServer()
   })
 
 export const startSessionMutation = createServerFn({ method: 'POST' })

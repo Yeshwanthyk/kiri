@@ -224,6 +224,11 @@ export const forkSessionInputSchema = z.object({
 })
 export type ForkSessionInput = z.infer<typeof forkSessionInputSchema>
 
+export const terminalConfigInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+})
+export type TerminalConfigInput = z.infer<typeof terminalConfigInputSchema>
+
 export const answerQuestionInputSchema = z.object({
   agentId: z.string().trim().min(1),
   requestId: z.string().trim().min(1),
