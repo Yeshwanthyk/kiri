@@ -1,6 +1,5 @@
-import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
-import { basename, extname, join } from 'node:path'
+import { extname, join } from 'node:path'
 import type { SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import { PiRpcProcessAdapter } from './pi-rpc'
 import {
@@ -15,6 +14,7 @@ import {
   resetSession,
   setAgentStatus,
 } from './db'
+import { collectGitDiffArtifacts } from './git-diff'
 import { getRuntimeSettings } from './settings'
 
 const adapters = new Map<string, PiRpcProcessAdapter>()
@@ -171,12 +171,6 @@ async function promptPiAgentNow(
   }
 }
 
-type RuntimeDiffArtifact = {
-  title: string
-  path: string
-  patch: string
-}
-
 async function waitForLivePiAdapter(config: ReturnType<typeof getAgentLaunchConfig>) {
   if (config.runtime !== 'pi') {
     throw new Error(`${config.runtime} agents can be configured, but only Pi can run chat today`)
@@ -288,101 +282,4 @@ function safePathSegment(value: string, fallback = 'attachment') {
     .replace(/[^a-zA-Z0-9._-]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 120) || fallback
-}
-
-function collectGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] {
-  if (!isGitWorkTree(cwd)) return []
-  const patches = [
-    ...splitGitPatch(runGit(cwd, [
-      'diff',
-      '--no-ext-diff',
-      '--src-prefix=a/',
-      '--dst-prefix=b/',
-      '--binary',
-      '--',
-    ])),
-    ...untrackedFiles(cwd).flatMap((path) =>
-      splitGitPatch(runGitAllowExit(cwd, [
-        'diff',
-        '--no-ext-diff',
-        '--no-index',
-        '--',
-        '/dev/null',
-        path,
-      ])),
-    ),
-  ]
-  return patches
-    .map((patch) => {
-      const path = diffPath(patch)
-      if (!path || shouldSkipDiffPath(path)) return null
-      return {
-        title: basename(path),
-        path,
-        patch,
-      }
-    })
-    .filter((diff): diff is RuntimeDiffArtifact => diff !== null)
-}
-
-function isGitWorkTree(cwd: string) {
-  try {
-    return runGit(cwd, ['rev-parse', '--is-inside-work-tree']).trim() === 'true'
-  } catch {
-    return false
-  }
-}
-
-function untrackedFiles(cwd: string) {
-  return runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])
-    .split('\0')
-    .filter((path) => path.length > 0 && !shouldSkipDiffPath(path))
-}
-
-function shouldSkipDiffPath(path: string) {
-  return ['.pi/', '.aether/', 'node_modules/', 'dist/'].some((prefix) =>
-    path.startsWith(prefix),
-  )
-}
-
-function splitGitPatch(patch: string) {
-  const trimmed = patch.trim()
-  if (!trimmed) return []
-  return trimmed
-    .split(/\n(?=diff --git )/)
-    .map((section) => section.trim())
-    .filter((section) => section.startsWith('diff --git '))
-}
-
-function diffPath(patch: string) {
-  const match = /^diff --git (?:a\/)?(.+?) (?:b\/)?(.+)$/m.exec(patch)
-  if (!match) return null
-  return cleanDiffPath(match[2] ?? match[1] ?? '')
-}
-
-function cleanDiffPath(path: string) {
-  return path
-    .replace(/^"|"$/g, '')
-    .replace(/^b\//, '')
-    .trim()
-}
-
-function runGit(cwd: string, args: string[]) {
-  return execFileSync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    maxBuffer: 20 * 1024 * 1024,
-    stdio: ['ignore', 'pipe', 'ignore'],
-  })
-}
-
-function runGitAllowExit(cwd: string, args: string[]) {
-  try {
-    return runGit(cwd, args)
-  } catch (error) {
-    const output = (error as { stdout?: Buffer | string }).stdout
-    if (Buffer.isBuffer(output)) return output.toString('utf8')
-    if (typeof output === 'string') return output
-    return ''
-  }
 }

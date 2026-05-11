@@ -7,6 +7,7 @@ import {
   clearAgentRuntimeState,
   clearRuntimeContextUsage,
   getAgentLaunchConfig,
+  getSessionDiffFallbackCwds,
   getAgentThinkingLevel,
   getAgentRuntimeState,
   recordAgentInfoEvent,
@@ -18,10 +19,10 @@ import {
   setAgentRuntimeState,
   setAgentStatus,
 } from './db'
+import { collectGitDiffArtifactsWithFallback, diffArtifactsFromPatch } from './git-diff'
 
 type CodexRuntimeState = {
   threadId?: string
-  activeTurnId?: string
   websocketUrl?: string
   userAgent?: string
 }
@@ -30,6 +31,12 @@ type CodexTurn = {
   id?: string
   status?: string
   items?: unknown[]
+}
+
+type CodexThreadSnapshot = {
+  id?: string
+  status?: Record<string, unknown>
+  turns: CodexTurn[]
 }
 
 const adapters = new Map<string, CodexAppServerAdapter>()
@@ -53,9 +60,22 @@ export async function promptCodexAgent(input: {
 
   const state = codexState(readState(config.runtimeStateJson) ?? getAgentRuntimeState(config.id))
   const text = promptWithSavedImages(config.id, input.text, input.images ?? [])
-  if (state.threadId && state.activeTurnId) {
-    await steerCodexTurn(config.id, state, text)
-    return
+  if (state.threadId) {
+    const adapter = getOrCreateCodexAdapter(state.websocketUrl)
+    const thread = await readCodexThreadIfAvailable(adapter, state.threadId)
+    if (thread) {
+      syncCodexThreadStatus(config.id, thread)
+      const activeTurnId = activeTurnIdFromThread(thread)
+      if (activeTurnId) {
+        await steerCodexTurn(config.id, {
+          ...state,
+          threadId: state.threadId,
+        }, activeTurnId, text)
+        return
+      }
+    } else {
+      forgetCodexThread(config.id, state)
+    }
   }
 
   const previous = queues.get(config.id) ?? Promise.resolve()
@@ -74,26 +94,46 @@ export async function steerCodexAgent(input: {
 }) {
   const config = getAgentLaunchConfig(input.agentId)
   const state = codexState(getAgentRuntimeState(config.id))
-  if (!state.threadId || !state.activeTurnId) {
+  if (!state.threadId) {
     return promptCodexAgent(input)
   }
+  const adapter = getOrCreateCodexAdapter(state.websocketUrl)
+  const thread = await readCodexThreadIfAvailable(adapter, state.threadId)
+  if (!thread) {
+    forgetCodexThread(config.id, state)
+    return promptCodexAgent(input)
+  }
+  syncCodexThreadStatus(config.id, thread)
+  const activeTurnId = activeTurnIdFromThread(thread)
+  if (!activeTurnId) return promptCodexAgent(input)
 
   await steerCodexTurn(
     config.id,
-    state,
+    { ...state, threadId: state.threadId },
+    activeTurnId,
     promptWithSavedImages(config.id, input.text, input.images ?? []),
   )
 }
 
 export async function interruptCodexAgent(input: { agentId: string }) {
   const state = codexState(getAgentRuntimeState(input.agentId))
-  if (!state.threadId || !state.activeTurnId) {
+  if (!state.threadId) {
     throw new Error('Codex session has no active turn to interrupt')
   }
   const adapter = getOrCreateCodexAdapter(state.websocketUrl)
-  await adapter.request('turn/interrupt', {
+  const thread = await readCodexThreadIfAvailable(adapter, state.threadId)
+  if (!thread) {
+    forgetCodexThread(input.agentId, state)
+    throw new Error('Codex session has no active turn to interrupt')
+  }
+  syncCodexThreadStatus(input.agentId, thread)
+  const activeTurnId = activeTurnIdFromThread(thread)
+  if (!activeTurnId) {
+    throw new Error('Codex session has no active turn to interrupt')
+  }
+  await adapter.interruptTurn({
     threadId: state.threadId,
-    turnId: state.activeTurnId,
+    turnId: activeTurnId,
   })
 }
 
@@ -119,13 +159,17 @@ export async function setCodexThinkingLevel(input: {
 export async function resetCodexSession(input: { agentId: string }) {
   sessionGenerations.set(input.agentId, (sessionGenerations.get(input.agentId) ?? 0) + 1)
   const state = codexState(getAgentRuntimeState(input.agentId))
-  if (state.threadId && state.activeTurnId) {
+  if (state.threadId) {
     try {
       const adapter = getOrCreateCodexAdapter(state.websocketUrl)
-      await adapter.request('turn/interrupt', {
-        threadId: state.threadId,
-        turnId: state.activeTurnId,
-      })
+      const thread = await readCodexThread(adapter, state.threadId)
+      const activeTurnId = activeTurnIdFromThread(thread)
+      if (activeTurnId) {
+        await adapter.interruptTurn({
+          threadId: state.threadId,
+          turnId: activeTurnId,
+        })
+      }
     } catch {
       // Reset should clear local state even if the remote turn is already gone.
     }
@@ -155,12 +199,18 @@ async function promptCodexAgentNow(
     activeThreadId = threadId
     threadAgents.set(threadId, config.id)
     agentThreads.set(config.id, threadId)
-    const latestState = codexState(getAgentRuntimeState(config.id))
-    if (latestState.threadId && latestState.activeTurnId) {
-      await steerCodexTurn(config.id, latestState, text)
+    const thread = await readCodexThread(adapter, threadId)
+    syncCodexThreadStatus(config.id, thread)
+    const activeTurnId = activeTurnIdFromThread(thread)
+    if (activeTurnId) {
+      await steerCodexTurn(config.id, {
+        ...state,
+        threadId,
+        websocketUrl: adapterUrl(state.websocketUrl),
+      }, activeTurnId, text)
       return
     }
-    const turnResponse = objectValue(await adapter.request('turn/start', {
+    const turnResponse = objectValue(await adapter.startTurn({
       threadId,
       input: textInput(text),
       model: config.model,
@@ -172,7 +222,6 @@ async function promptCodexAgentNow(
     setCodexState(config.id, {
       ...state,
       threadId,
-      activeTurnId: turnId,
       websocketUrl: adapterUrl(state.websocketUrl),
     })
     const completedTurn = objectValue(
@@ -180,6 +229,7 @@ async function promptCodexAgentNow(
     ) as CodexTurn
     if ((sessionGenerations.get(config.id) ?? 0) !== generation) return
     recordCodexTurn(config.id, completedTurn)
+    captureCodexGitDiffArtifacts(config)
     setCodexState(config.id, {
       ...state,
       threadId,
@@ -205,23 +255,44 @@ async function promptCodexAgentNow(
   }
 }
 
+function captureCodexGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchConfig>) {
+  try {
+    replaceAgentDiffArtifacts({
+      agentId: config.id,
+      diffs: collectGitDiffArtifactsWithFallback(
+        config.cwd,
+        getSessionDiffFallbackCwds(config.id),
+      ),
+    })
+  } catch {
+    // Diff capture is a projection for the UI; chat persistence is authoritative.
+  }
+}
+
 async function ensureCodexThread(input: {
   adapter: CodexAppServerAdapter
   config: ReturnType<typeof getAgentLaunchConfig>
   state: CodexRuntimeState
 }) {
   if (input.state.threadId) {
-    await input.adapter.request('thread/resume', {
-      threadId: input.state.threadId,
-      cwd: input.config.cwd,
-      model: input.config.model,
-      approvalPolicy: 'never',
-      sandbox: CODEX_SANDBOX_MODE,
-    })
-    return input.state.threadId
+    try {
+      const response = objectValue(await input.adapter.resumeThread({
+        threadId: input.state.threadId,
+        cwd: input.config.cwd,
+        model: input.config.model,
+        approvalPolicy: 'never',
+        sandbox: CODEX_SANDBOX_MODE,
+      }))
+      const thread = codexThreadSnapshot(objectValue(response.thread))
+      syncCodexThreadStatus(input.config.id, thread)
+      return input.state.threadId
+    } catch (error) {
+      if (!isMissingRolloutError(error)) throw error
+      forgetCodexThread(input.config.id, input.state)
+    }
   }
 
-  const response = objectValue(await input.adapter.request('thread/start', {
+  const response = objectValue(await input.adapter.startThread({
     cwd: input.config.cwd,
     model: input.config.model,
     approvalPolicy: 'never',
@@ -294,8 +365,10 @@ function handleCodexServerMessage(adapter: CodexAppServerAdapter, message: Codex
   if (message.method === 'thread/tokenUsage/updated') {
     const usage = objectValue(params.tokenUsage)
     const total = objectValue(usage.total)
-    const usedTokens = numberValue(total.totalTokens)
-    recordRuntimeContextUsage({ agentId, usedTokens })
+    const last = objectValue(usage.last)
+    const usedTokens = numberValue(last.inputTokens) ?? numberValue(total.inputTokens)
+    const windowTokens = numberValue(usage.modelContextWindow)
+    recordRuntimeContextUsage({ agentId, usedTokens, windowTokens })
     return
   }
   if (message.method === 'thread/compacted') {
@@ -314,7 +387,7 @@ function handleCodexServerMessage(adapter: CodexAppServerAdapter, message: Codex
     const diff = stringValue(params.diff) ?? ''
     replaceAgentDiffArtifacts({
       agentId,
-      diffs: diff ? [{ title: 'Codex diff', path: '.', patch: diff }] : [],
+      diffs: diffArtifactsFromPatch(diff),
     })
     return
   }
@@ -325,7 +398,6 @@ function handleCodexServerMessage(adapter: CodexAppServerAdapter, message: Codex
       setCodexState(agentId, {
         ...currentState,
         threadId,
-        activeTurnId: turnId,
         websocketUrl: adapterUrl(currentState.websocketUrl),
       })
     }
@@ -343,14 +415,89 @@ function handleCodexServerMessage(adapter: CodexAppServerAdapter, message: Codex
   }
 }
 
-async function steerCodexTurn(agentId: string, state: CodexRuntimeState, text: string) {
+async function steerCodexTurn(
+  agentId: string,
+  state: CodexRuntimeState & { threadId: string },
+  activeTurnId: string,
+  text: string,
+) {
   const adapter = getOrCreateCodexAdapter(state.websocketUrl)
-  await adapter.request('turn/steer', {
+  await adapter.steerTurn({
     threadId: state.threadId,
-    expectedTurnId: state.activeTurnId,
+    expectedTurnId: activeTurnId,
     input: textInput(text),
   })
   appendUserMessage({ agentId, text })
+}
+
+async function readCodexThread(adapter: CodexAppServerAdapter, threadId: string) {
+  let response: Record<string, unknown>
+  try {
+    response = objectValue(await adapter.readThread({ threadId, includeTurns: true }))
+  } catch (error) {
+    if (!isUnmaterializedThreadReadError(error)) throw error
+    response = objectValue(await adapter.readThread({ threadId, includeTurns: false }))
+  }
+  return codexThreadSnapshot(objectValue(response.thread))
+}
+
+async function readCodexThreadIfAvailable(
+  adapter: CodexAppServerAdapter,
+  threadId: string,
+) {
+  try {
+    return await readCodexThread(adapter, threadId)
+  } catch (error) {
+    if (!isMissingRolloutError(error)) throw error
+    return null
+  }
+}
+
+function isUnmaterializedThreadReadError(error: unknown) {
+  return error instanceof Error &&
+    error.message.includes('not materialized yet') &&
+    error.message.includes('includeTurns')
+}
+
+function isMissingRolloutError(error: unknown) {
+  return error instanceof Error &&
+    error.message.includes('no rollout found for thread id')
+}
+
+function forgetCodexThread(agentId: string, state: CodexRuntimeState) {
+  if (state.threadId) {
+    threadAgents.delete(state.threadId)
+    agentThreads.delete(agentId)
+  }
+  setCodexState(agentId, {
+    ...state,
+    threadId: undefined,
+  })
+}
+
+function codexThreadSnapshot(value: Record<string, unknown>): CodexThreadSnapshot {
+  return {
+    id: stringValue(value.id),
+    status: objectValue(value.status),
+    turns: Array.isArray(value.turns)
+      ? value.turns.map((turn) => objectValue(turn) as CodexTurn)
+      : [],
+  }
+}
+
+function activeTurnIdFromThread(thread: CodexThreadSnapshot) {
+  const activeTurn = [...thread.turns].reverse().find((turn) => turn.status === 'inProgress')
+  return activeTurn?.id
+}
+
+function syncCodexThreadStatus(agentId: string, thread: CodexThreadSnapshot) {
+  if (thread.status?.type === 'active') {
+    setAgentStatus(agentId, 'running')
+  } else if (thread.status?.type === 'systemError') {
+    setAgentStatus(agentId, 'failed')
+  } else if (thread.status?.type === 'idle' || thread.status?.type === 'notLoaded') {
+    setAgentStatus(agentId, 'idle')
+  }
 }
 
 function recordCodexTurn(agentId: string, turn: CodexTurn) {
@@ -408,7 +555,6 @@ function setCodexState(agentId: string, state: CodexRuntimeState) {
 function codexState(value: Record<string, unknown>): CodexRuntimeState {
   return {
     threadId: stringValue(value.threadId),
-    activeTurnId: stringValue(value.activeTurnId),
     websocketUrl: stringValue(value.websocketUrl),
     userAgent: stringValue(value.userAgent),
   }

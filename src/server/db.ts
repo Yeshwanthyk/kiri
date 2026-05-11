@@ -19,6 +19,7 @@ import type {
 import {
   agentStatusSchema,
   messageRoleSchema,
+  pendingQuestionSchema,
   runtimeKindSchema,
   thinkingLevelSchema,
   timelineEventToneSchema,
@@ -91,6 +92,7 @@ const diffDbRowSchema = z.object({
 const contextUsageDbRowSchema = z.object({
   agentId: z.string(),
   usedTokens: z.number().int().nonnegative(),
+  windowTokens: z.number().int().positive().nullable(),
   updatedAt: z.string(),
   sessionFile: z.string().nullable(),
 })
@@ -232,6 +234,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
         SELECT
           agent_id AS agentId,
           used_tokens AS usedTokens,
+          window_tokens AS windowTokens,
           updated_at AS updatedAt,
           session_file AS sessionFile
         FROM agent_context_usage
@@ -280,6 +283,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
           settings,
           contextUsageByAgent.get(agent.id),
         ),
+        pendingQuestion: readPendingQuestion(agent.id),
         updatedAt: agent.updatedAt ?? new Date(0).toISOString(),
         isSession: agent.slot.startsWith('session-'),
         messages,
@@ -668,6 +672,21 @@ export function getAgentLaunchConfig(agentId: string) {
   return agentLaunchConfigSchema.parse(row)
 }
 
+export function getSessionDiffFallbackCwds(agentId: string) {
+  const database = getDb()
+  const rows = database
+    .prepare(
+      `
+        SELECT DISTINCT p.cwd
+        FROM agent_slots a
+        INNER JOIN projects p ON p.id = a.project_id
+        ORDER BY CASE WHEN a.id = ? THEN 0 ELSE 1 END, p.position ASC, p.cwd ASC
+      `,
+    )
+    .all(agentId) as Array<{ cwd: string }>
+  return rows.map((row) => row.cwd)
+}
+
 export function getAgentRuntimeState(agentId: string) {
   const row = getDb()
     .prepare('SELECT runtime_state_json AS runtimeStateJson FROM agent_slots WHERE id = ?')
@@ -813,6 +832,7 @@ export function recordRuntimeTimelineEvent(input: {
 export function recordRuntimeContextUsage(input: {
   agentId: string
   usedTokens: number | undefined
+  windowTokens?: number | undefined
   updatedAt?: string
 }) {
   upsertAgentContextUsage(getDb(), input)
@@ -1139,11 +1159,13 @@ function migrate(database: DatabaseSync) {
     CREATE TABLE IF NOT EXISTS agent_context_usage (
       agent_id TEXT PRIMARY KEY REFERENCES agent_slots(id) ON DELETE CASCADE,
       used_tokens INTEGER NOT NULL,
+      window_tokens INTEGER,
       updated_at TEXT NOT NULL,
       session_file TEXT
     );
   `)
   widenRuntimeCheck(database)
+  addContextUsageWindowTokensColumn(database)
   addProjectHiddenAtColumn(database)
   addRuntimeStateColumn(database)
   repairAgentSlotReferences(database)
@@ -1156,6 +1178,14 @@ function addProjectHiddenAtColumn(database: DatabaseSync) {
     .all() as Array<{ name: string }>
   if (columns.some((column) => column.name === 'hidden_at')) return
   database.exec('ALTER TABLE projects ADD COLUMN hidden_at TEXT')
+}
+
+function addContextUsageWindowTokensColumn(database: DatabaseSync) {
+  const columns = database
+    .prepare('PRAGMA table_info(agent_context_usage)')
+    .all() as Array<{ name: string }>
+  if (columns.some((column) => column.name === 'window_tokens')) return
+  database.exec('ALTER TABLE agent_context_usage ADD COLUMN window_tokens INTEGER')
 }
 
 function addRuntimeStateColumn(database: DatabaseSync) {
@@ -1456,6 +1486,7 @@ function upsertAgentContextUsage(
   input: {
     agentId: string
     usedTokens: number | undefined
+    windowTokens?: number | undefined
     sessionFile?: string
     updatedAt?: string
   },
@@ -1464,10 +1495,13 @@ function upsertAgentContextUsage(
   database
     .prepare(
       `
-        INSERT INTO agent_context_usage (agent_id, used_tokens, updated_at, session_file)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO agent_context_usage (
+          agent_id, used_tokens, window_tokens, updated_at, session_file
+        )
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(agent_id) DO UPDATE SET
           used_tokens = excluded.used_tokens,
+          window_tokens = COALESCE(excluded.window_tokens, agent_context_usage.window_tokens),
           updated_at = excluded.updated_at,
           session_file = excluded.session_file
       `,
@@ -1475,6 +1509,7 @@ function upsertAgentContextUsage(
     .run(
       input.agentId,
       input.usedTokens,
+      input.windowTokens ?? null,
       input.updatedAt ?? new Date().toISOString(),
       input.sessionFile ?? null,
     )
@@ -1485,7 +1520,8 @@ function readContextUsage(
   settings: ReturnType<typeof getSettings>,
   persistedUsage: z.infer<typeof contextUsageDbRowSchema> | undefined,
 ): ContextUsage | null {
-  const windowTokens = settings.runtimes[agent.runtime].contextWindows?.[agent.model]
+  const windowTokens =
+    persistedUsage?.windowTokens ?? settings.runtimes[agent.runtime].contextWindows?.[agent.model]
   if (!windowTokens) return null
 
   const usedTokens = persistedUsage?.usedTokens
@@ -1497,6 +1533,11 @@ function readContextUsage(
     windowTokens,
     usedPercent: Math.min((usedTokens / windowTokens) * 100, 100),
   }
+}
+
+function readPendingQuestion(agentId: string) {
+  const parsed = pendingQuestionSchema.safeParse(getAgentRuntimeState(agentId).pendingQuestion)
+  return parsed.success ? parsed.data : null
 }
 
 function latestPiSessionFile(sessionDir: string) {

@@ -140,6 +140,94 @@ export class CodexAppServerAdapter {
     return result
   }
 
+  readThread(input: { threadId: string; includeTurns?: boolean }) {
+    return this.request('thread/read', {
+      threadId: input.threadId,
+      includeTurns: input.includeTurns ?? true,
+    })
+  }
+
+  listThreads(input: {
+    cursor?: string | null
+    limit?: number | null
+    cwd?: string | string[] | null
+    archived?: boolean | null
+  } = {}) {
+    return this.request('thread/list', input)
+  }
+
+  resumeThread(input: {
+    threadId: string
+    cwd: string
+    model: string
+    approvalPolicy: string
+    sandbox: string
+  }) {
+    return this.request('thread/resume', input)
+  }
+
+  startThread(input: {
+    cwd: string
+    model: string
+    approvalPolicy: string
+    sandbox: string
+  }) {
+    return this.request('thread/start', input)
+  }
+
+  forkThread(input: {
+    threadId: string
+    cwd?: string | null
+    model?: string | null
+    approvalPolicy?: string | null
+    sandbox?: string | null
+  }) {
+    return this.request('thread/fork', input)
+  }
+
+  rollbackThread(input: { threadId: string; numTurns: number }) {
+    return this.request('thread/rollback', input)
+  }
+
+  compactThread(input: { threadId: string }) {
+    return this.request('thread/compact/start', input)
+  }
+
+  setThreadName(input: { threadId: string; name: string }) {
+    return this.request('thread/name/set', input)
+  }
+
+  archiveThread(input: { threadId: string }) {
+    return this.request('thread/archive', input)
+  }
+
+  unarchiveThread(input: { threadId: string }) {
+    return this.request('thread/unarchive', input)
+  }
+
+  updateThreadMetadata(input: {
+    threadId: string
+    gitInfo?: Record<string, string | null | undefined> | null
+  }) {
+    return this.request('thread/metadata/update', input)
+  }
+
+  startTurn(input: Record<string, unknown>) {
+    return this.request('turn/start', input)
+  }
+
+  steerTurn(input: {
+    threadId: string
+    expectedTurnId: string
+    input: unknown
+  }) {
+    return this.request('turn/steer', input)
+  }
+
+  interruptTurn(input: { threadId: string; turnId: string }) {
+    return this.request('turn/interrupt', input)
+  }
+
   waitForTurnCompleted(input: { threadId: string; turnId?: string }) {
     const cached = this.completedTurn(input)
     if (cached) return cachedTurnResult(cached)

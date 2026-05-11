@@ -83,6 +83,21 @@ export const contextUsageSchema = z.object({
 })
 export type ContextUsage = z.infer<typeof contextUsageSchema>
 
+export const pendingQuestionSchema = z.object({
+  requestId: z.string().trim().min(1),
+  questions: z.array(z.object({
+    id: z.string().trim().min(1),
+    header: z.string().trim().min(1),
+    question: z.string().trim().min(1),
+    options: z.array(z.object({
+      label: z.string(),
+      description: z.string(),
+    })).default([]),
+    multiSelect: z.boolean().default(false),
+  })).min(1),
+})
+export type PendingQuestion = z.infer<typeof pendingQuestionSchema>
+
 export const agentCellSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -97,6 +112,7 @@ export const agentCellSchema = z.object({
   messageCount: z.number().int().nonnegative(),
   diffCount: z.number().int().nonnegative(),
   contextUsage: contextUsageSchema.nullable().default(null),
+  pendingQuestion: pendingQuestionSchema.nullable().default(null),
   updatedAt: z.string(),
   isSession: z.boolean(),
   messages: z.array(boardMessageSchema),
@@ -207,6 +223,16 @@ export const forkSessionInputSchema = z.object({
   agentId: z.string().trim().min(1),
 })
 export type ForkSessionInput = z.infer<typeof forkSessionInputSchema>
+
+export const answerQuestionInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  requestId: z.string().trim().min(1),
+  answers: z.record(z.string(), z.union([
+    z.string(),
+    z.array(z.string()),
+  ])),
+})
+export type AnswerQuestionInput = z.infer<typeof answerQuestionInputSchema>
 
 export const startSessionInputSchema = z.object({
   projectId: z.string().trim().min(1),

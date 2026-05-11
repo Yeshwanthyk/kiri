@@ -86,6 +86,16 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
       return
     }
     if (message.method === 'thread/resume') {
+      if (missingRolloutThreadId(message.params?.threadId)) {
+        send(socket, {
+          id: message.id,
+          error: {
+            code: -32000,
+            message: `no rollout found for thread id ${message.params?.threadId}`,
+          },
+        })
+        return
+      }
       const thread = threads.get(message.params?.threadId) ??
         makeThread(message.params?.threadId ?? `fake-thread-${++nextThread}`, message.params?.cwd)
       threads.set(thread.id, thread)
@@ -106,8 +116,112 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
       })
       return
     }
+    if (message.method === 'thread/read') {
+      if (missingRolloutThreadId(message.params?.threadId)) {
+        send(socket, {
+          id: message.id,
+          error: {
+            code: -32000,
+            message: `no rollout found for thread id ${message.params?.threadId}`,
+          },
+        })
+        return
+      }
+      const thread = threads.get(message.params?.threadId)
+      if (!thread) {
+        send(socket, {
+          id: message.id,
+          error: { code: -32000, message: `unknown thread ${message.params?.threadId}` },
+        })
+        return
+      }
+      if (message.params?.includeTurns !== false && thread.turns.length === 0) {
+        send(socket, {
+          id: message.id,
+          error: {
+            code: -32000,
+            message: `thread ${thread.id} is not materialized yet; includeTurns is unavailable before first user message`,
+          },
+        })
+        return
+      }
+      send(socket, {
+        id: message.id,
+        result: {
+          thread: {
+            ...thread,
+            turns: message.params?.includeTurns === false ? [] : thread.turns,
+          },
+        },
+      })
+      return
+    }
+    if (message.method === 'thread/list') {
+      const data = [...threads.values()].filter((thread) => {
+        if (message.params?.archived === true) return thread.archived === true
+        if (message.params?.archived === false || message.params?.archived == null) {
+          return thread.archived !== true
+        }
+        return true
+      })
+      send(socket, { id: message.id, result: { data, nextCursor: null, backwardsCursor: null } })
+      return
+    }
+    if (message.method === 'thread/fork') {
+      const source = threads.get(message.params?.threadId)
+      if (!source) {
+        send(socket, {
+          id: message.id,
+          error: { code: -32000, message: `unknown thread ${message.params?.threadId}` },
+        })
+        return
+      }
+      const thread = {
+        ...makeThread(`fake-thread-${++nextThread}`, message.params?.cwd ?? source.cwd),
+        sessionId: source.sessionId,
+        forkedFromId: source.id,
+        turns: source.turns.map((turn) => ({ ...turn })),
+      }
+      threads.set(thread.id, thread)
+      send(socket, { id: message.id, result: { thread } })
+      return
+    }
+    if (message.method === 'thread/rollback') {
+      const thread = threads.get(message.params?.threadId)
+      if (thread) {
+        thread.turns.splice(Math.max(0, thread.turns.length - message.params.numTurns))
+        thread.updatedAt = Math.floor(Date.now() / 1000)
+      }
+      send(socket, { id: message.id, result: { thread } })
+      return
+    }
+    if (message.method === 'thread/compact/start') {
+      send(socket, { id: message.id, result: {} })
+      send(socket, {
+        method: 'thread/compacted',
+        params: { threadId: message.params?.threadId, turnId: null },
+      })
+      return
+    }
+    if (message.method === 'thread/name/set') {
+      const thread = threads.get(message.params?.threadId)
+      if (thread) thread.name = message.params?.name
+      send(socket, { id: message.id, result: {} })
+      return
+    }
+    if (message.method === 'thread/archive' || message.method === 'thread/unarchive') {
+      const thread = threads.get(message.params?.threadId)
+      if (thread) thread.archived = message.method === 'thread/archive'
+      send(socket, { id: message.id, result: {} })
+      return
+    }
+    if (message.method === 'thread/metadata/update') {
+      send(socket, { id: message.id, result: {} })
+      return
+    }
     if (message.method === 'turn/start') {
       const threadId = message.params?.threadId
+      const thread = threads.get(threadId)
       const turnId = `fake-turn-${++nextTurn}`
       const prompt = message.params?.input?.[0]?.text ?? ''
       const shouldCompact = prompt.toLowerCase().includes('compact')
@@ -133,10 +247,16 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
         completedAt: Math.floor(Date.now() / 1000),
         durationMs: 1,
       }
+      const inProgressTurn = { ...turn, status: 'inProgress', completedAt: null }
+      if (thread) {
+        thread.status = { type: 'active', activeFlags: [] }
+        thread.turns.push(inProgressTurn)
+        thread.updatedAt = Math.floor(Date.now() / 1000)
+      }
       send(socket, { id: message.id, result: { turn: { ...turn, items: [] } } })
       send(socket, {
         method: 'turn/started',
-        params: { threadId, turn: { ...turn, status: 'inProgress', completedAt: null } },
+        params: { threadId, turn: inProgressTurn },
       })
       send(socket, {
         method: 'item/started',
@@ -191,6 +311,12 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
         method: 'turn/diff/updated',
         params: { threadId, turnId, diff: '' },
       })
+      if (thread) {
+        const index = thread.turns.findIndex((entry) => entry.id === turnId)
+        if (index >= 0) thread.turns[index] = { ...turn, items: [item] }
+        thread.status = { type: 'idle' }
+        thread.updatedAt = Math.floor(Date.now() / 1000)
+      }
       send(socket, { method: 'turn/completed', params: { threadId, turn } })
       send(socket, {
         method: 'thread/status/changed',
@@ -238,6 +364,10 @@ function sandboxPolicy(mode, cwd) {
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   }
+}
+
+function missingRolloutThreadId(threadId) {
+  return typeof threadId === 'string' && threadId.includes('missing-rollout')
 }
 
 function makeThread(id, cwd = '/') {

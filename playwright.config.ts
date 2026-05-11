@@ -21,6 +21,7 @@ export default defineConfig({
       ...process.env,
       AETHER_DB_PATH: e2eDbPath,
       AETHER_CODEX_APP_SERVER_URL: 'ws://127.0.0.1:39111',
+      AETHER_FAKE_CLAUDE: '1',
     },
     url: 'http://localhost:3109',
     reuseExistingServer: false,

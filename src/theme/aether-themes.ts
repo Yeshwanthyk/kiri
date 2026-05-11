@@ -88,6 +88,12 @@ export function resolveAetherTheme(selection: ThemeSelection): Record<`--${strin
   return vars
 }
 
+export type AetherThemeTokens = ThemeTokens
+
+export function getAetherThemeTokens(selection: ThemeSelection): AetherThemeTokens {
+  return aetherThemes[selection.name][selection.mode]
+}
+
 export function applyAetherTheme(element: HTMLElement, selection: ThemeSelection): void {
   const vars = resolveAetherTheme(selection)
   element.dataset.theme = selection.name

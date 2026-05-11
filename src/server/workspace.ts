@@ -3,6 +3,7 @@ import { createServerFn } from '@tanstack/react-start'
 import { execFileSync } from 'node:child_process'
 import {
   addProjectInputSchema,
+  answerQuestionInputSchema,
   deleteSessionInputSchema,
   deleteProjectInputSchema,
   forkSessionInputSchema,
@@ -26,6 +27,7 @@ import {
 } from './db'
 import {
   forkAgentSession,
+  answerAgentQuestion,
   interruptAgent,
   promptAgent,
   resetAgentSession,
@@ -106,6 +108,13 @@ export const forkSessionMutation = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const agentId = await forkAgentSession(data)
     return { agentId, snapshot: getWorkspaceSnapshot() }
+  })
+
+export const answerQuestionMutation = createServerFn({ method: 'POST' })
+  .inputValidator(answerQuestionInputSchema)
+  .handler(async ({ data }) => {
+    await answerAgentQuestion(data)
+    return getWorkspaceSnapshot()
   })
 
 export const startSessionMutation = createServerFn({ method: 'POST' })

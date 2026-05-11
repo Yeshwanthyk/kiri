@@ -222,13 +222,23 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
   })
   await expect(page.locator('.context-chip')).toHaveAttribute(
     'title',
-    /123 \/ 258,000 tokens used/,
+    /45 \/ 258,000 tokens used/,
   )
 
   const requests = fakeCodexServer.requests as CodexHarnessRequest[]
   expect(requests.some((request) => request.method === 'initialize')).toBe(true)
   expect(requests.some((request) => request.method === 'thread/start')).toBe(true)
   expect(requests.some((request) => request.method === 'turn/start')).toBe(true)
+  const firstReadWithTurnsIndex = requests.findIndex((request) => (
+    request.method === 'thread/read' && request.params?.includeTurns !== false
+  ))
+  const fallbackReadWithoutTurnsIndex = requests.findIndex((request) => (
+    request.method === 'thread/read' && request.params?.includeTurns === false
+  ))
+  const firstTurnStartIndex = requests.findIndex((request) => request.method === 'turn/start')
+  expect(firstReadWithTurnsIndex).toBeGreaterThanOrEqual(0)
+  expect(fallbackReadWithoutTurnsIndex).toBeGreaterThan(firstReadWithTurnsIndex)
+  expect(firstTurnStartIndex).toBeGreaterThan(fallbackReadWithoutTurnsIndex)
   expect(requests.find((request) => request.method === 'thread/start')?.params?.sandbox)
     .toBe('danger-full-access')
   expect(turnStartRequests(requests).at(-1)?.params.sandboxPolicy)
@@ -266,8 +276,97 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
   await expect(page.getByTestId('chat-panel')).toContainText('Context compacted')
   await expect(page.locator('.context-chip')).toHaveAttribute(
     'title',
-    /42 \/ 258,000 tokens used/,
+    /18 \/ 258,000 tokens used/,
   )
+})
+
+test('claude runtime runs through claude-agent-sdk harness', async ({ page }, testInfo) => {
+  const title = `Claude Session ${testInfo.project.name}`
+  const text = `hello claude ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title, 'claude', 'high')
+
+  await page.getByTestId('chat-input').fill(text)
+  await page.getByRole('button', { name: 'Send prompt' }).click()
+
+  await expect(page.getByTestId('chat-panel')).toContainText(text, {
+    timeout: 30_000,
+  })
+  await expect(page.getByTestId('chat-panel')).toContainText(`fake claude received: ${text}`, {
+    timeout: 30_000,
+  })
+  await expect(page.getByTestId('chat-panel')).toContainText('Read: package.json', {
+    timeout: 30_000,
+  })
+  await expect(page.getByTestId('chat-panel')).toContainText('fake file contents', {
+    timeout: 30_000,
+  })
+  await expect(page.locator('.context-chip')).toHaveAttribute(
+    'title',
+    /20 \/ 1,000,000 tokens used/,
+  )
+
+  await page.getByTestId('chat-input').fill('/thinking off')
+  await page.getByRole('button', { name: 'Send prompt' }).click()
+  await expect(page.getByTestId('thinking-level')).toContainText('Thinking off')
+})
+
+test('claude runtime answers AskUserQuestion requests', async ({ page }, testInfo) => {
+  const title = `Claude Question ${testInfo.project.name}`
+  const text = `please ask question ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title, 'claude', 'medium')
+
+  await page.getByTestId('chat-input').fill(text)
+  await page.getByRole('button', { name: 'Send prompt' }).click()
+
+  await expect(page.getByTestId('pending-question')).toContainText(
+    'Which option should Claude use?',
+    { timeout: 30_000 },
+  )
+  await page.getByTestId('pending-question').getByRole('combobox').selectOption('Option B')
+  await page.getByTestId('pending-question').getByRole('button', { name: 'Answer' }).click()
+  await expect(page.getByTestId('pending-question')).toHaveCount(0, { timeout: 30_000 })
+  await expect(page.getByTestId('chat-panel')).toContainText(`fake claude received: ${text}`, {
+    timeout: 30_000,
+  })
+})
+
+test('codex runtime replaces a missing rollout thread on first prompt', async ({ page }, testInfo) => {
+  const title = `Missing Rollout ${testInfo.project.name}`
+  const text = `first prompt after missing rollout ${testInfo.project.name}`
+  const missingThreadId = `missing-rollout-${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title, 'codex', 'low')
+
+  const database = new DatabaseSync(testDbPath)
+  database
+    .prepare('UPDATE agent_slots SET runtime_state_json = ? WHERE title = ?')
+    .run(JSON.stringify({
+      threadId: missingThreadId,
+      websocketUrl: 'ws://127.0.0.1:39111',
+    }), title)
+  database.close()
+
+  await page.getByTestId('chat-input').fill(text)
+  await page.getByRole('button', { name: 'Send prompt' }).click()
+
+  await expect(page.getByTestId('chat-panel')).toContainText(`fake codex received: ${text}`, {
+    timeout: 30_000,
+  })
+
+  const requests = fakeCodexServer.requests as CodexHarnessRequest[]
+  const missingReadIndex = requests.findIndex((request) => (
+    request.method === 'thread/read' && request.params?.threadId === missingThreadId
+  ))
+  const newThreadStartIndex = requests.findIndex((request) => request.method === 'thread/start')
+  const turnStartIndex = requests.findIndex((request) => request.method === 'turn/start')
+  expect(missingReadIndex).toBeGreaterThanOrEqual(0)
+  expect(newThreadStartIndex).toBeGreaterThan(missingReadIndex)
+  expect(turnStartIndex).toBeGreaterThan(newThreadStartIndex)
 })
 
 test('sidebar switches between chat and diffs', async ({ page, isMobile }, testInfo) => {
@@ -341,7 +440,7 @@ test('mobile layout keeps navigation and sidebar usable', async ({ page, isMobil
 async function createSession(
   page: import('@playwright/test').Page,
   title: string,
-  runtime: 'pi' | 'codex' = 'pi',
+  runtime: 'pi' | 'codex' | 'claude' = 'pi',
   thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh',
 ) {
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
@@ -364,8 +463,10 @@ type CodexHarnessRequest = {
   method: string
   params?: {
     effort?: string
+    includeTurns?: boolean
     sandbox?: string
     sandboxPolicy?: { type: string }
+    threadId?: string
   }
 }
 
