@@ -369,7 +369,7 @@ test('codex runtime replaces a missing rollout thread on first prompt', async ({
   expect(turnStartIndex).toBeGreaterThan(newThreadStartIndex)
 })
 
-test('sidebar switches between chat and diffs', async ({ page, isMobile }, testInfo) => {
+test('sidebar switches between chat, diffs, and terminal', async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, 'desktop sidebar tabs only')
   const title = `Sidebar Session ${testInfo.project.name}`
 
@@ -378,6 +378,17 @@ test('sidebar switches between chat and diffs', async ({ page, isMobile }, testI
 
   await page.getByRole('button', { name: 'Diffs' }).click()
   await expect(page.getByTestId('diff-panel')).toContainText('No diffs')
+
+  await page.getByRole('button', { name: 'Terminal' }).click()
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  await page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+    .click()
+  await page.keyboard.type('pwd')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
 
   await pressShiftKey(page, 'KeyC')
   await expect(page.getByTestId('chat-panel')).toBeVisible()
