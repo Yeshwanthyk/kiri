@@ -11,6 +11,7 @@ import type {
   ContextUsage,
   DiffArtifact,
   DeleteSessionInput,
+  RestoreSessionInput,
   StartSessionInput,
   MessageRole,
   ThinkingLevel,
@@ -62,10 +63,16 @@ const agentDbRowSchema = z.object({
   updatedAt: z.string().nullable(),
   diffCount: z.number().int().nonnegative(),
   threadId: z.string().nullable(),
+  archivedAt: z.string().nullable(),
 })
 
 const agentDetailDbRowSchema = agentDbRowSchema.extend({
   cwd: z.string(),
+})
+
+const archivedSessionDbRowSchema = agentDbRowSchema.extend({
+  projectName: z.string(),
+  archivedAt: z.string(),
 })
 
 const messageDbRowSchema = z.object({
@@ -174,6 +181,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
           a.session_dir AS sessionDir,
           a.session_file AS sessionFile,
           a.position,
+          a.archived_at AS archivedAt,
           t.id AS threadId,
           t.preview,
           t.message_count AS messageCount,
@@ -211,11 +219,14 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   const contextUsageByAgent = new Map(
     contextUsages.map((usage) => [usage.agentId, usage]),
   )
-  const agentsByProject = groupBy(agents, (agent) => agent.projectId)
+  const activeAgentsByProject = groupBy(
+    agents.filter((agent) => !agent.archivedAt),
+    (agent) => agent.projectId,
+  )
 
   const snapshotProjectRows = projects.map((project) => ({
     ...project,
-    agents: (agentsByProject.get(project.id) ?? []).map((agent) => {
+    agents: (activeAgentsByProject.get(project.id) ?? []).map((agent) => {
       return {
         id: agent.id,
         projectId: agent.projectId,
@@ -244,6 +255,33 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
       }
     }),
   }))
+  const projectNameById = new Map(projects.map((project) => [project.id, project.name]))
+  const visibleProjectIds = new Set(
+    projects.filter((project) => !project.hiddenAt).map((project) => project.id),
+  )
+  const archivedSessions = agents
+    .flatMap((agent) => {
+      if (!agent.archivedAt || !visibleProjectIds.has(agent.projectId)) return []
+      return [archivedSessionDbRowSchema.parse({
+        ...agent,
+        projectName: projectNameById.get(agent.projectId) ?? agent.projectId,
+        archivedAt: agent.archivedAt,
+      })]
+    })
+    .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))
+    .map((agent) => ({
+      id: agent.id,
+      projectId: agent.projectId,
+      projectName: agent.projectName,
+      title: agent.title,
+      runtime: agent.runtime,
+      model: agent.model,
+      status: agent.status,
+      preview: agent.preview ?? 'No messages yet',
+      messageCount: agent.messageCount ?? 0,
+      updatedAt: agent.updatedAt ?? new Date(0).toISOString(),
+      archivedAt: agent.archivedAt,
+    }))
   const snapshotProjects = snapshotProjectRows.filter((project) => !project.hiddenAt)
   const hiddenProjects = snapshotProjectRows.filter((project) => project.hiddenAt)
   const selectedProject = snapshotProjects[0]
@@ -253,6 +291,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
     settings,
     projects: snapshotProjects,
     hiddenProjects,
+    archivedSessions,
     selected: {
       projectId: selectedProject?.id ?? '',
       agentId: selectedAgent?.id ?? '',
@@ -283,6 +322,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
           a.session_dir AS sessionDir,
           a.session_file AS sessionFile,
           a.position,
+          a.archived_at AS archivedAt,
           t.id AS threadId,
           t.preview,
           t.message_count AS messageCount,
@@ -505,15 +545,10 @@ export function deleteSession(input: DeleteSessionInput) {
 
   database.exec('BEGIN')
   try {
+    const archivedAt = new Date().toISOString()
     database
-      .prepare(
-        `
-          INSERT OR REPLACE INTO deleted_sessions (project_id, slot, deleted_at)
-          VALUES (?, ?, ?)
-        `,
-      )
-      .run(row.projectId, row.slot, new Date().toISOString())
-    database.prepare('DELETE FROM agent_slots WHERE id = ?').run(agentId)
+      .prepare('UPDATE agent_slots SET archived_at = ? WHERE id = ?')
+      .run(archivedAt, agentId)
     const rows = database
       .prepare(
         'SELECT id FROM agent_slots WHERE project_id = ? ORDER BY position ASC, id ASC',
@@ -530,6 +565,23 @@ export function deleteSession(input: DeleteSessionInput) {
     throw error
   }
 
+  return getWorkspaceSnapshot()
+}
+
+export function restoreSession(input: RestoreSessionInput) {
+  const database = getDb()
+  const agentId = input.agentId.trim()
+  const row = database
+    .prepare('SELECT id, project_id AS projectId, slot, archived_at AS archivedAt FROM agent_slots WHERE id = ?')
+    .get(agentId) as { id: string; projectId: string; slot: string; archivedAt: string | null } | undefined
+  if (!row) throw new Error(`Session not found: ${agentId}`)
+  if (!row.slot.startsWith('session-')) {
+    throw new Error('Only started sessions can be restored')
+  }
+
+  database
+    .prepare('UPDATE agent_slots SET archived_at = NULL WHERE id = ?')
+    .run(agentId)
   return getWorkspaceSnapshot()
 }
 
@@ -1208,6 +1260,7 @@ function migrate(database: DatabaseSync) {
       session_dir TEXT NOT NULL,
       session_file TEXT,
       runtime_state_json TEXT,
+      archived_at TEXT,
       position INTEGER NOT NULL
     );
 
@@ -1274,6 +1327,7 @@ function migrate(database: DatabaseSync) {
   addContextUsageWindowTokensColumn(database)
   addProjectHiddenAtColumn(database)
   addRuntimeStateColumn(database)
+  addAgentArchivedAtColumn(database)
   repairAgentSlotReferences(database)
   removeLegacyDefaultAgentSlots(database)
 }
@@ -1302,6 +1356,14 @@ function addRuntimeStateColumn(database: DatabaseSync) {
   database.exec('ALTER TABLE agent_slots ADD COLUMN runtime_state_json TEXT')
 }
 
+function addAgentArchivedAtColumn(database: DatabaseSync) {
+  const columns = database
+    .prepare('PRAGMA table_info(agent_slots)')
+    .all() as Array<{ name: string }>
+  if (columns.some((column) => column.name === 'archived_at')) return
+  database.exec('ALTER TABLE agent_slots ADD COLUMN archived_at TEXT')
+}
+
 function removeLegacyDefaultAgentSlots(database: DatabaseSync) {
   database.prepare("DELETE FROM agent_slots WHERE slot NOT LIKE 'session-%'").run()
 }
@@ -1328,13 +1390,14 @@ function widenRuntimeCheck(database: DatabaseSync) {
       session_dir TEXT NOT NULL,
       session_file TEXT,
       runtime_state_json TEXT,
+      archived_at TEXT,
       position INTEGER NOT NULL
     );
 
     INSERT INTO agent_slots (
-      id, project_id, slot, title, runtime, model, status, session_dir, session_file, runtime_state_json, position
+      id, project_id, slot, title, runtime, model, status, session_dir, session_file, runtime_state_json, archived_at, position
     )
-    SELECT id, project_id, slot, title, runtime, model, status, session_dir, session_file, NULL, position
+    SELECT id, project_id, slot, title, runtime, model, status, session_dir, session_file, NULL, NULL, position
     FROM agent_slots_old;
 
     DROP TABLE agent_slots_old;
@@ -1739,6 +1802,7 @@ function timelineEventFromDbRow(row: z.infer<typeof timelineEventDbRowSchema>) {
   const derived = payload && !row.kind.startsWith('fileOperation')
     ? piEventDisplayFields(payload, row.kind)
     : undefined
+  const path = eventPath(payload)
   return {
     id: row.id,
     agentId: row.agentId,
@@ -1746,8 +1810,15 @@ function timelineEventFromDbRow(row: z.infer<typeof timelineEventDbRowSchema>) {
     tone: row.tone,
     label: derived?.label ?? row.label,
     detail: derived?.detail ?? row.detail,
+    ...(path ? { path } : {}),
     timestamp: row.timestamp,
   }
+}
+
+function eventPath(payload: Record<string, unknown> | null | undefined) {
+  if (!payload) return undefined
+  const path = stringField(payload, 'path')
+  return path?.trim() || undefined
 }
 
 function piEventToTimelineEvent(agentId: string, event: PiRpcEvent) {

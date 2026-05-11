@@ -46,6 +46,7 @@ export const timelineEventSchema = z.object({
   tone: timelineEventToneSchema,
   label: z.string(),
   detail: z.string().nullable(),
+  path: z.string().optional(),
   timestamp: z.string(),
 })
 export type TimelineEvent = z.infer<typeof timelineEventSchema>
@@ -122,6 +123,21 @@ export const agentCellSchema = z.object({
 })
 export type AgentCell = z.infer<typeof agentCellSchema>
 
+export const archivedSessionSummarySchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  projectName: z.string(),
+  title: z.string(),
+  runtime: runtimeKindSchema,
+  model: z.string(),
+  status: agentStatusSchema,
+  preview: z.string(),
+  messageCount: z.number().int().nonnegative(),
+  updatedAt: z.string(),
+  archivedAt: z.string(),
+})
+export type ArchivedSessionSummary = z.infer<typeof archivedSessionSummarySchema>
+
 export const agentDetailInputSchema = z.object({
   agentId: z.string().trim().min(1),
   limit: z.number().int().positive().max(500).default(100),
@@ -162,6 +178,7 @@ export const workspaceSnapshotSchema = z.object({
   settings: aetherSettingsSchema,
   projects: z.array(projectRowSchema),
   hiddenProjects: z.array(projectRowSchema),
+  archivedSessions: z.array(archivedSessionSummarySchema).default([]),
   selected: z.object({
     projectId: z.string(),
     agentId: z.string(),
@@ -278,6 +295,11 @@ export const deleteSessionInputSchema = z.object({
   agentId: z.string().trim().min(1),
 })
 export type DeleteSessionInput = z.infer<typeof deleteSessionInputSchema>
+
+export const restoreSessionInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+})
+export type RestoreSessionInput = z.infer<typeof restoreSessionInputSchema>
 
 export const renameSessionInputSchema = z.object({
   agentId: z.string().trim().min(1),
