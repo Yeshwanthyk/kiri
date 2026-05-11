@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { Cause, Data, Effect, Exit, Option, Schema } from 'effect'
 import type { RuntimeKind } from '~/lib/contracts'
 
-type JsonRpcId = string | number
+const JsonRpcIdSchema = Schema.Union(Schema.String, Schema.Number)
+type JsonRpcId = typeof JsonRpcIdSchema.Type
 
 type JsonRpcRequest = {
   id: JsonRpcId
@@ -24,16 +26,104 @@ type JsonRpcResponse = {
   }
 }
 
+const UnknownRecord = Schema.Record({ key: Schema.String, value: Schema.Unknown })
+
+const CodexTurnSchema = Schema.Struct({
+  id: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.String),
+  items: Schema.optional(Schema.Array(Schema.Unknown)),
+})
+
+export type CodexTurn = typeof CodexTurnSchema.Type
+
+const CodexThreadSchema = Schema.Struct({
+  id: Schema.optional(Schema.String),
+  status: Schema.optional(UnknownRecord),
+  turns: Schema.optional(Schema.Array(CodexTurnSchema)),
+})
+
+export type CodexThread = typeof CodexThreadSchema.Type
+
+const ThreadResponseSchema = Schema.Struct({
+  thread: CodexThreadSchema,
+})
+
+const TurnStartResponseSchema = Schema.Struct({
+  turn: CodexTurnSchema,
+})
+
+const TokenUsageSchema = Schema.Struct({
+  total: UnknownRecord,
+  last: UnknownRecord,
+  modelContextWindow: Schema.optional(Schema.Number),
+})
+
+export const ThreadTokenUsageUpdatedParamsSchema = Schema.Struct({
+  threadId: Schema.String,
+  tokenUsage: TokenUsageSchema,
+})
+
+export const ThreadCompactedParamsSchema = Schema.Struct({
+  threadId: Schema.String,
+  turnId: Schema.optional(Schema.NullOr(Schema.String)),
+})
+
+export const TurnDiffUpdatedParamsSchema = Schema.Struct({
+  threadId: Schema.String,
+  diff: Schema.optional(Schema.String),
+})
+
+export const TurnCompletedParamsSchema = Schema.Struct({
+  threadId: Schema.String,
+  turn: CodexTurnSchema,
+})
+
+export const TurnStartedParamsSchema = Schema.Struct({
+  threadId: Schema.String,
+  turnId: Schema.optional(Schema.String),
+  turn: Schema.optional(CodexTurnSchema),
+})
+
+export const ItemCompletedParamsSchema = Schema.Struct({
+  threadId: Schema.String,
+  item: Schema.Unknown,
+  completedAtMs: Schema.optional(Schema.Number),
+})
+
+export type ThreadTokenUsageUpdatedParams =
+  typeof ThreadTokenUsageUpdatedParamsSchema.Type
+export type ThreadCompactedParams = typeof ThreadCompactedParamsSchema.Type
+export type TurnDiffUpdatedParams = typeof TurnDiffUpdatedParamsSchema.Type
+export type TurnCompletedParams = typeof TurnCompletedParamsSchema.Type
+export type TurnStartedParams = typeof TurnStartedParamsSchema.Type
+export type ItemCompletedParams = typeof ItemCompletedParamsSchema.Type
+type DecodableSchema<A> = Schema.Schema<A, A, never>
+
 export type CodexServerMessage = JsonRpcRequest | JsonRpcNotification
 
 type PendingRequest = {
-  resolve: (value: unknown) => void
-  reject: (error: Error) => void
+  resume: (effect: Effect.Effect<unknown, CodexAppServerError>) => void
   timeout: ReturnType<typeof setTimeout>
 }
 
 type PendingTurnCompletion = {
-  reject: (error: Error) => void
+  resume: (effect: Effect.Effect<CodexTurn, CodexAppServerError>) => void
+  cleanup: () => void
+}
+
+class CodexAppServerError extends Data.TaggedError('CodexAppServerError')<{
+  readonly message: string
+  readonly cause?: unknown
+}> {}
+
+async function runCodexEffect<A>(
+  effect: Effect.Effect<A, CodexAppServerError>,
+) {
+  const exit = await Effect.runPromiseExit(effect)
+  if (Exit.isSuccess(exit)) return exit.value
+  const failure = Option.getOrUndefined(Cause.failureOption(exit.cause))
+  if (failure) throw failure
+  throw Cause.squash(exit.cause)
 }
 
 const defaultCodexPort = 8390
@@ -71,8 +161,8 @@ export class CodexAppServerAdapter {
 
   close() {
     this.closed = true
-    this.rejectPending(new Error('Codex app-server adapter closed'))
-    this.rejectTurnCompletions(new Error('Codex app-server adapter closed'))
+    this.rejectPending(codexAppServerError('Codex app-server adapter closed'))
+    this.rejectTurnCompletions(codexAppServerError('Codex app-server adapter closed'))
     this.completedTurns.clear()
     this.socket?.close()
     this.socket = null
@@ -85,7 +175,11 @@ export class CodexAppServerAdapter {
     return () => this.notifications.delete(listener)
   }
 
-  async request(method: string, params?: unknown, timeoutMs = requestTimeoutMs) {
+  async request<T = unknown>(
+    method: string,
+    params?: unknown,
+    timeoutMs = requestTimeoutMs,
+  ): Promise<T> {
     await this.connect()
     const socket = this.socket
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -94,20 +188,39 @@ export class CodexAppServerAdapter {
 
     const id = `aether-codex-${++this.requestId}`
     const payload = JSON.stringify({ id, method, params })
-    return new Promise<unknown>((resolve, reject) => {
+    const result = await runCodexEffect(Effect.async<unknown, CodexAppServerError>((resume) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`Timed out waiting for Codex app-server ${method}`))
+        resume(Effect.fail(codexAppServerError(
+          `Timed out waiting for Codex app-server ${method}`,
+        )))
       }, timeoutMs)
-      this.pending.set(id, { resolve, reject, timeout })
+      this.pending.set(id, { resume, timeout })
       try {
         socket.send(payload)
       } catch (error) {
         this.pending.delete(id)
         clearTimeout(timeout)
-        reject(error instanceof Error ? error : new Error(String(error)))
+        resume(Effect.fail(codexAppServerError('Failed to send Codex app-server request', error)))
       }
-    })
+      return Effect.sync(() => {
+        const pending = this.pending.get(id)
+        if (!pending) return
+        clearTimeout(pending.timeout)
+        this.pending.delete(id)
+      })
+    }))
+    return result as T
+  }
+
+  private async requestDecoded<A>(
+    method: string,
+    params: unknown,
+    schema: DecodableSchema<A>,
+    timeoutMs = requestTimeoutMs,
+  ): Promise<A> {
+    const result = await this.request<unknown>(method, params, timeoutMs)
+    return runCodexEffect(decodeUnknown(schema, result, `Invalid Codex app-server ${method} response`))
   }
 
   notify(method: string, params?: unknown) {
@@ -141,10 +254,10 @@ export class CodexAppServerAdapter {
   }
 
   readThread(input: { threadId: string; includeTurns?: boolean }) {
-    return this.request('thread/read', {
+    return this.requestDecoded('thread/read', {
       threadId: input.threadId,
       includeTurns: input.includeTurns ?? true,
-    })
+    }, ThreadResponseSchema)
   }
 
   listThreads(input: {
@@ -153,7 +266,7 @@ export class CodexAppServerAdapter {
     cwd?: string | string[] | null
     archived?: boolean | null
   } = {}) {
-    return this.request('thread/list', input)
+    return this.request<Record<string, unknown>>('thread/list', input)
   }
 
   resumeThread(input: {
@@ -163,7 +276,7 @@ export class CodexAppServerAdapter {
     approvalPolicy: string
     sandbox: string
   }) {
-    return this.request('thread/resume', input)
+    return this.requestDecoded('thread/resume', input, ThreadResponseSchema)
   }
 
   startThread(input: {
@@ -172,7 +285,7 @@ export class CodexAppServerAdapter {
     approvalPolicy: string
     sandbox: string
   }) {
-    return this.request('thread/start', input)
+    return this.requestDecoded('thread/start', input, ThreadResponseSchema)
   }
 
   forkThread(input: {
@@ -182,38 +295,38 @@ export class CodexAppServerAdapter {
     approvalPolicy?: string | null
     sandbox?: string | null
   }) {
-    return this.request('thread/fork', input)
+    return this.request<Record<string, unknown>>('thread/fork', input)
   }
 
   rollbackThread(input: { threadId: string; numTurns: number }) {
-    return this.request('thread/rollback', input)
+    return this.request<Record<string, unknown>>('thread/rollback', input)
   }
 
   compactThread(input: { threadId: string }) {
-    return this.request('thread/compact/start', input)
+    return this.request<Record<string, unknown>>('thread/compact/start', input)
   }
 
   setThreadName(input: { threadId: string; name: string }) {
-    return this.request('thread/name/set', input)
+    return this.request<Record<string, unknown>>('thread/name/set', input)
   }
 
   archiveThread(input: { threadId: string }) {
-    return this.request('thread/archive', input)
+    return this.request<Record<string, unknown>>('thread/archive', input)
   }
 
   unarchiveThread(input: { threadId: string }) {
-    return this.request('thread/unarchive', input)
+    return this.request<Record<string, unknown>>('thread/unarchive', input)
   }
 
   updateThreadMetadata(input: {
     threadId: string
     gitInfo?: Record<string, string | null | undefined> | null
   }) {
-    return this.request('thread/metadata/update', input)
+    return this.request<Record<string, unknown>>('thread/metadata/update', input)
   }
 
   startTurn(input: Record<string, unknown>) {
-    return this.request('turn/start', input)
+    return this.requestDecoded('turn/start', input, TurnStartResponseSchema)
   }
 
   steerTurn(input: {
@@ -221,22 +334,24 @@ export class CodexAppServerAdapter {
     expectedTurnId: string
     input: unknown
   }) {
-    return this.request('turn/steer', input)
+    return this.request<Record<string, unknown>>('turn/steer', input)
   }
 
   interruptTurn(input: { threadId: string; turnId: string }) {
-    return this.request('turn/interrupt', input)
+    return this.request<Record<string, unknown>>('turn/interrupt', input)
   }
 
   waitForTurnCompleted(input: { threadId: string; turnId?: string }) {
     const cached = this.completedTurn(input)
     if (cached) return cachedTurnResult(cached)
 
-    return new Promise<unknown>((resolve, reject) => {
-      let timeout: ReturnType<typeof setTimeout>
+    return runCodexEffect(Effect.async<CodexTurn, CodexAppServerError>((resume) => {
       let unsubscribe = () => {}
       let cleanedUp = false
-      let pending: PendingTurnCompletion
+      const timeout = setTimeout(() => {
+        cleanup()
+        resume(Effect.fail(codexAppServerError('Timed out waiting for Codex turn completion')))
+      }, turnTimeoutMs)
       const cleanup = () => {
         if (cleanedUp) return
         cleanedUp = true
@@ -244,35 +359,30 @@ export class CodexAppServerAdapter {
         unsubscribe()
         this.turnCompletions.delete(pending)
       }
-      pending = {
-        reject: (error) => {
-          cleanup()
-          reject(error)
-        },
+      const pending: PendingTurnCompletion = {
+        resume,
+        cleanup,
       }
-      timeout = setTimeout(() => {
-        cleanup()
-        reject(new Error('Timed out waiting for Codex turn completion'))
-      }, turnTimeoutMs)
       unsubscribe = this.onMessage((message) => {
         if (!('method' in message) || message.method !== 'turn/completed') return
-        const params = objectValue(message.params)
-        if (stringValue(params.threadId) !== input.threadId) return
-        const turn = objectValue(params.turn)
-        if (input.turnId && stringValue(turn.id) !== input.turnId) return
-        const turnId = stringValue(turn.id)
+        const params = decodeServerParams(message, TurnCompletedParamsSchema)
+        if (!params || params.threadId !== input.threadId) return
+        const turn = params.turn
+        if (input.turnId && turn.id !== input.turnId) return
+        const turnId = turn.id
         if (turnId) {
           this.completedTurns.delete(completedTurnKey(input.threadId, turnId))
         }
         cleanup()
         if (turn.status === 'failed' || turn.status === 'interrupted') {
-          reject(new Error(`Codex turn ${turn.status}`))
+          resume(Effect.fail(codexAppServerError(`Codex turn ${turn.status}`)))
           return
         }
-        resolve(turn)
+        resume(Effect.succeed(turn))
       })
       this.turnCompletions.add(pending)
-    })
+      return Effect.sync(cleanup)
+    }))
   }
 
   private sendMessage(message: unknown) {
@@ -296,33 +406,54 @@ export class CodexAppServerAdapter {
   }
 
   private openWebSocket() {
-    return new Promise<void>((resolve, reject) => {
+    return runCodexEffect(Effect.async<void, CodexAppServerError>((resume) => {
       const socket = new WebSocket(this.options.websocketUrl)
+      let settled = false
+      const cleanup = () => {
+        clearTimeout(failTimer)
+        socket.removeEventListener('open', onOpen)
+        socket.removeEventListener('error', onError)
+      }
+      const settle = (effect: Effect.Effect<void, CodexAppServerError>) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resume(effect)
+      }
       const failTimer = setTimeout(() => {
         socket.close()
-        reject(new Error(`Timed out connecting to ${this.options.websocketUrl}`))
+        settle(Effect.fail(codexAppServerError(
+          `Timed out connecting to ${this.options.websocketUrl}`,
+        )))
       }, 5_000)
 
-      socket.addEventListener('open', () => {
-        clearTimeout(failTimer)
+      const onOpen = () => {
         this.socket = socket
-        resolve()
-      }, { once: true })
+        settle(Effect.void)
+      }
 
-      socket.addEventListener('error', () => {
-        clearTimeout(failTimer)
-        reject(new Error(`Failed to connect to ${this.options.websocketUrl}`))
-      }, { once: true })
+      const onError = () => {
+        settle(Effect.fail(codexAppServerError(
+          `Failed to connect to ${this.options.websocketUrl}`,
+        )))
+      }
+
+      socket.addEventListener('open', onOpen, { once: true })
+      socket.addEventListener('error', onError, { once: true })
 
       socket.addEventListener('message', (event) => this.handleMessage(event.data))
       socket.addEventListener('close', () => {
         if (this.socket === socket) this.socket = null
         if (!this.closed) {
-          this.rejectPending(new Error('Codex app-server websocket closed'))
-          this.rejectTurnCompletions(new Error('Codex app-server websocket closed'))
+          this.rejectPending(codexAppServerError('Codex app-server websocket closed'))
+          this.rejectTurnCompletions(codexAppServerError('Codex app-server websocket closed'))
         }
       })
-    })
+      return Effect.sync(() => {
+        cleanup()
+        if (!settled) socket.close()
+      })
+    }))
   }
 
   private async spawnLocalAppServer() {
@@ -342,14 +473,14 @@ export class CodexAppServerAdapter {
     this.child = child
 
     let stderr = ''
-    child.stderr.on('data', (chunk) => {
-      stderr = `${stderr}${chunk.toString()}`.slice(-8000)
+    child.stderr.on('data', (chunk: Buffer | string) => {
+      stderr = `${stderr}${Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk}`.slice(-8000)
     })
     child.on('exit', (code, signal) => {
       if (this.child !== child) return
       this.child = null
       this.rejectPending(
-        new Error(
+        codexAppServerError(
           `Codex app-server exited${code === null ? '' : ` with code ${code}`}${
             signal ? ` from ${signal}` : ''
           }. ${stderr}`,
@@ -389,9 +520,12 @@ export class CodexAppServerAdapter {
       this.pending.delete(response.id)
       if (pending) clearTimeout(pending.timeout)
       if (response.error) {
-        pending?.reject(new Error(response.error.message ?? 'Codex app-server request failed'))
+        pending?.resume(Effect.fail(codexAppServerError(
+          response.error.message ?? 'Codex app-server request failed',
+          response.error,
+        )))
       } else {
-        pending?.resolve(response.result)
+        pending?.resume(Effect.succeed(response.result))
       }
       return
     }
@@ -404,29 +538,27 @@ export class CodexAppServerAdapter {
     }
   }
 
-  private rejectPending(error: Error) {
+  private rejectPending(error: CodexAppServerError) {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout)
-      pending.reject(error)
+      pending.resume(Effect.fail(error))
     }
     this.pending.clear()
   }
 
-  private rejectTurnCompletions(error: Error) {
+  private rejectTurnCompletions(error: CodexAppServerError) {
     for (const pending of [...this.turnCompletions]) {
-      pending.reject(error)
+      pending.cleanup()
+      pending.resume(Effect.fail(error))
     }
     this.turnCompletions.clear()
   }
 
   private cacheCompletedTurn(message: CodexServerMessage) {
     if (!('method' in message) || message.method !== 'turn/completed') return
-    const params = objectValue(message.params)
-    const threadId = stringValue(params.threadId)
-    const turn = objectValue(params.turn)
-    const turnId = stringValue(turn.id)
-    if (!threadId || !turnId) return
-    this.completedTurns.set(completedTurnKey(threadId, turnId), turn)
+    const params = decodeServerParams(message, TurnCompletedParamsSchema)
+    if (!params?.turn.id) return
+    this.completedTurns.set(completedTurnKey(params.threadId, params.turn.id), params.turn)
   }
 
   private completedTurn(input: { threadId: string; turnId?: string }) {
@@ -456,8 +588,8 @@ export function runtimeSupportsManagedAppServer(runtime: RuntimeKind) {
 
 function parseResponse(value: unknown): JsonRpcResponse | null {
   const object = objectValue(value)
-  const id = idValue(object.id)
-  if (id === null) return null
+  const id = decodeUnknownOption(JsonRpcIdSchema, object.id)
+  if (id === undefined) return null
   if (!('result' in object) && !('error' in object)) return null
   const error = objectValue(object.error)
   return {
@@ -477,13 +609,9 @@ function parseServerMessage(value: unknown): CodexServerMessage | null {
   const object = objectValue(value)
   const method = stringValue(object.method)
   if (!method) return null
-  const id = idValue(object.id)
-  if (id === null) return { method, params: object.params }
+  const id = decodeUnknownOption(JsonRpcIdSchema, object.id)
+  if (id === undefined) return { method, params: object.params }
   return { id, method, params: object.params }
-}
-
-function idValue(value: unknown): JsonRpcId | null {
-  return typeof value === 'string' || typeof value === 'number' ? value : null
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -533,14 +661,40 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function cachedTurnResult(turn: unknown) {
-  const object = objectValue(turn)
-  if (object.status === 'failed' || object.status === 'interrupted') {
-    return Promise.reject(new Error(`Codex turn ${object.status}`))
+function cachedTurnResult(turn: CodexTurn) {
+  if (turn.status === 'failed' || turn.status === 'interrupted') {
+    return Promise.reject(codexAppServerError(`Codex turn ${turn.status}`))
   }
   return Promise.resolve(turn)
 }
 
+function codexAppServerError(message: string, cause?: unknown) {
+  return new CodexAppServerError(
+    cause === undefined ? { message } : { message, cause },
+  )
+}
+
 function completedTurnKey(threadId: string, turnId: string) {
   return `${threadId}:${turnId}`
+}
+
+function decodeUnknown<A>(
+  schema: DecodableSchema<A>,
+  value: unknown,
+  message: string,
+) {
+  return Schema.decodeUnknown(schema)(value).pipe(
+    Effect.mapError((cause) => codexAppServerError(message, cause)),
+  )
+}
+
+function decodeUnknownOption<A>(schema: DecodableSchema<A>, value: unknown) {
+  return Option.getOrUndefined(Schema.decodeUnknownOption(schema)(value))
+}
+
+export function decodeServerParams<A>(
+  message: CodexServerMessage,
+  schema: DecodableSchema<A>,
+) {
+  return decodeUnknownOption(schema, message.params)
 }
