@@ -36,6 +36,7 @@ import {
   runAgentTurnLifecycle,
   RuntimeLifecycleError,
   runRuntimeLifecyclePromise,
+  runRuntimeLifecycleSync,
   setRuntimeState,
 } from './runtime-lifecycle'
 
@@ -534,7 +535,7 @@ function closeClaudeSession(agentId: string) {
 }
 
 function captureClaudeGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchConfig>) {
-  Effect.runSync(captureClaudeGitDiffArtifactsEffect(config))
+  runRuntimeLifecycleSync(captureClaudeGitDiffArtifactsEffect(config))
 }
 
 function captureClaudeGitDiffArtifactsEffect(config: ReturnType<typeof getAgentLaunchConfig>) {
@@ -941,7 +942,7 @@ function recordClaudeContextUsage(
 }
 
 function setClaudeState(agentId: string, state: ClaudeRuntimeState) {
-  Effect.runSync(setRuntimeState(agentId, state))
+  runRuntimeLifecycleSync(setRuntimeState(agentId, state))
 }
 
 function claudeState(value: Record<string, unknown>): ClaudeRuntimeState {

@@ -11,7 +11,7 @@ Move Pican runtime lifecycle behavior toward Effect in safe phases, preserving r
 - [x] Phase 2 uses Effect tests and is reviewed/fixed/ready to commit.
 - [ ] Phase 3 moves Codex, Claude, then Pi protocol cores to Effect where appropriate. Codex, Claude, and Pi are implemented; Pi review remains.
 - [ ] Phase 3 is tested, reviewed, fixed, and committed per runtime chunk.
-- [ ] Phase 4 introduces Layers only where they replace real boundaries in tests.
+- [x] Phase 4 introduces Layers only where they replace real boundaries in tests.
 - [ ] Final build/test/lint pass is green.
 
 # Guardrails
@@ -29,3 +29,4 @@ Move Pican runtime lifecycle behavior toward Effect in safe phases, preserving r
 - Codex protocol-core Effect migration reviewed clean; optional future hardening is direct coverage for non-missing adapter failures preserving provider error identity.
 - Claude protocol-core Effect migration reviewed with one fixed edge: `activeTurn` is now cleared if prompt queue push or turn completion fails.
 - Pi RPC now exposes typed Effect methods while preserving Promise callers; `promptAndWaitEffect` cleans completion listeners if prompt submission fails.
+- Phase 4 uses `RuntimeProjection` as a Layer-backed DB/projection boundary; production Promise/sync helpers provide the live layer, tests can provide fakes.

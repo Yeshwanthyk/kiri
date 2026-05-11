@@ -39,6 +39,7 @@ import {
   runAgentTurnLifecycle,
   RuntimeLifecycleError,
   runRuntimeLifecyclePromise,
+  runRuntimeLifecycleSync,
   setRuntimeState,
 } from './runtime-lifecycle'
 
@@ -223,7 +224,7 @@ async function promptCodexAgentNow(
 }
 
 function captureCodexGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchConfig>) {
-  Effect.runSync(captureRuntimeDiffs(config.id, () =>
+  runRuntimeLifecycleSync(captureRuntimeDiffs(config.id, () =>
     collectGitDiffArtifactsWithFallback(
       config.cwd,
       getSessionDiffFallbackCwds(config.id),
@@ -640,7 +641,7 @@ function recordCodexItem(agentId: string, item: unknown, timestamp = new Date().
 }
 
 function setCodexState(agentId: string, state: CodexRuntimeState) {
-  Effect.runSync(setRuntimeState(agentId, state))
+  runRuntimeLifecycleSync(setRuntimeState(agentId, state))
 }
 
 function codexState(value: Record<string, unknown>): CodexRuntimeState {

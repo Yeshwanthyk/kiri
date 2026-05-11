@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from '@effect/vitest'
-import { Effect, Exit } from 'effect'
+import { Effect, Exit, Layer } from 'effect'
 import type { AgentStatus } from '../../src/lib/contracts'
 import type { RuntimeDiffArtifact } from '../../src/server/git-diff'
 import {
@@ -8,6 +8,9 @@ import {
   nextThinkingLevel,
   runAgentTurnLifecycle,
   runRuntimeLifecyclePromise,
+  runRuntimeLifecycleSync,
+  RuntimeProjection,
+  RuntimeLifecycleError,
   runtimeStateWithoutUndefined,
   setRuntimeState,
   type RuntimeLifecycleProjection,
@@ -32,7 +35,7 @@ function projection() {
       calls.push({ type: 'status', value: { agentId, status } })
     }),
   }
-  return { calls, fake }
+  return { calls, fake, layer: Layer.succeed(RuntimeProjection, fake) }
 }
 
 describe('runtime lifecycle', () => {
@@ -75,6 +78,21 @@ describe('runtime lifecycle', () => {
     expect(calls.map((call) => call.type)).toEqual(['status', 'message', 'success', 'status'])
   }))
 
+  it.effect('can replace the runtime projection through an Effect layer', () =>
+    Effect.gen(function* () {
+      const { calls, layer } = projection()
+
+      yield* runAgentTurnLifecycle({
+        agentId: 'agent-1',
+        displayText: 'layered',
+        errorEvent: { kind: 'runtime_error', label: 'Runtime error' },
+        run: () => Promise.resolve('ok'),
+      }).pipe(Effect.provide(layer))
+
+      expect(calls.map((call) => call.type)).toEqual(['status', 'message', 'status'])
+      expect(statuses(calls)).toEqual(['running', 'idle'])
+    }))
+
   it.effect('marks running then failed and records timeline errors on current turn failure', () =>
     Effect.gen(function* () {
     const { calls, fake } = projection()
@@ -103,15 +121,16 @@ describe('runtime lifecycle', () => {
 
   it.effect('preserves original turn errors at the Promise boundary', () =>
     Effect.gen(function* () {
-      const { fake } = projection()
+      const { fake, layer } = projection()
       const turnError = new Error('provider exploded')
-      const result = yield* Effect.promise(() => runRuntimeLifecyclePromise(runAgentTurnLifecycle({
-        agentId: 'agent-1',
-        displayText: 'hello',
-        errorEvent: { kind: 'runtime_error', label: 'Runtime error' },
-        projection: fake,
-        run: () => Promise.reject(turnError),
-      })).then(
+      const result = yield* Effect.promise(() => runRuntimeLifecyclePromise(
+        runAgentTurnLifecycle({
+          agentId: 'agent-1',
+          displayText: 'hello',
+          errorEvent: { kind: 'runtime_error', label: 'Runtime error' },
+          run: () => Promise.reject(turnError),
+        }).pipe(Effect.provide(layer)),
+      ).then(
         () => 'resolved' as const,
         (error: unknown) => error,
       ))
@@ -138,6 +157,15 @@ describe('runtime lifecycle', () => {
       expect(result).toBe(turnError)
       yield* enqueueAgentTurn('agent-1', queues, () => Promise.resolve())
     }))
+
+  it('preserves original runtime turn errors at the sync boundary', () => {
+    const turnError = new Error('sync provider exploded')
+
+    expect(() => runRuntimeLifecycleSync(Effect.fail(new RuntimeLifecycleError({
+      message: 'Runtime turn failed',
+      cause: turnError,
+    })))).toThrow(turnError)
+  })
 
   it.effect('does not overwrite reset sessions when a stale generation completes or fails', () =>
     Effect.gen(function* () {
