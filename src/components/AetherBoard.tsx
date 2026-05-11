@@ -40,6 +40,7 @@ import type {
   AgentCell,
   BoardMessage,
   DiffArtifact,
+  PendingQuestion,
   ProjectRow,
   RuntimeKind,
   SendMessageImage,
@@ -51,6 +52,7 @@ import { thinkingLevelSchema } from '~/lib/contracts'
 import {
   applyAetherTheme,
   defaultThemeSelection,
+  getAetherThemeTokens,
   normalizeThemeSelection,
   aetherThemeNames,
   type AetherThemeName,
@@ -59,6 +61,7 @@ import {
 } from '~/theme/aether-themes'
 import {
   addProjectMutation,
+  answerQuestionMutation,
   chooseProjectDirectoryMutation,
   deleteProjectMutation,
   deleteSessionMutation,
@@ -76,6 +79,12 @@ import {
 
 type SidebarTab = 'chat' | 'diffs'
 type DiffStyle = 'unified' | 'split'
+const THINKING_RUNTIMES = new Set<RuntimeKind>(['pi', 'codex', 'claude'])
+
+function supportsThinking(runtime: RuntimeKind) {
+  return THINKING_RUNTIMES.has(runtime)
+}
+
 type AgentTimelineRow =
   | {
       kind: 'message'
@@ -114,6 +123,12 @@ type KeymapAction =
   | 'openDiffs'
 
 type KeymapSettings = Record<KeymapAction, string>
+
+type ChatFontSize = 'compact' | 'comfortable' | 'large' | 'xlarge'
+
+type ChatTypographySettings = {
+  fontSize: ChatFontSize
+}
 
 type Selection = {
   projectId: string
@@ -156,8 +171,17 @@ const keyOptions = [
   'arrowleft',
   'arrowright',
 ]
+const chatFontSizes: Record<ChatFontSize, { label: string; size: string; lineHeight: string }> = {
+  compact: { label: 'Compact · 13px', size: '13px', lineHeight: '1.5' },
+  comfortable: { label: 'Comfortable · 14px', size: '14px', lineHeight: '1.58' },
+  large: { label: 'Large · 16px', size: '16px', lineHeight: '1.62' },
+  xlarge: { label: 'Extra large · 18px', size: '18px', lineHeight: '1.66' },
+}
+
+const defaultChatTypography: ChatTypographySettings = { fontSize: 'comfortable' }
 const keymapStorageKey = 'aether:keymap:v1'
 const themeStorageKey = 'aether:theme:v1'
+const chatTypographyStorageKey = 'aether:chat-typography:v1'
 
 export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [workspace, setWorkspace] = React.useState(snapshot)
@@ -171,9 +195,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
   const [keymap, setKeymap] = React.useState<KeymapSettings>(defaultKeymap)
   const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(defaultThemeSelection)
+  const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(defaultChatTypography)
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
   const [chatDrafts, setChatDrafts] = React.useState<Record<string, string>>({})
   const addProject = useServerFn(addProjectMutation)
+  const answerQuestion = useServerFn(answerQuestionMutation)
   const chooseProjectDirectory = useServerFn(chooseProjectDirectoryMutation)
   const deleteProject = useServerFn(deleteProjectMutation)
   const deleteSession = useServerFn(deleteSessionMutation)
@@ -211,11 +237,16 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setHydrated(true)
     setKeymap(readStoredKeymap())
     setThemeSelection(readStoredThemeSelection())
+    setChatTypography(readStoredChatTypography())
   }, [])
 
   React.useEffect(() => {
     applyAetherTheme(document.documentElement, themeSelection)
   }, [themeSelection])
+
+  React.useEffect(() => {
+    applyChatTypography(document.documentElement, chatTypography)
+  }, [chatTypography])
 
   React.useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -420,6 +451,15 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
   }
 
+  async function handleAnswerQuestion(
+    agentId: string,
+    requestId: string,
+    answers: Record<string, string | string[]>,
+  ) {
+    const next = await answerQuestion({ data: { agentId, requestId, answers } })
+    setWorkspace(next)
+  }
+
   async function handleStartSession(input: {
     projectId: string
     runtime: RuntimeKind
@@ -586,11 +626,13 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       <SettingsScreen
         keymap={keymap}
         themeSelection={themeSelection}
+        chatTypography={chatTypography}
         onKeymapChange={(action, value) =>
           setKeymap((current) => updateKeymap(current, action, value))
         }
         onKeymapReset={() => setKeymap(saveKeymap(defaultKeymap))}
         onThemeChange={(next) => setThemeSelection(saveThemeSelection(next))}
+        onChatTypographyChange={(next) => setChatTypography(saveChatTypography(next))}
         onClose={() => setSettingsOpen(false)}
       />
     )
@@ -604,6 +646,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         tab={tab}
         onTabChange={setTab}
         onOpenAgentSwitcher={() => setAgentSwitcherOpen(true)}
+        onSelectAgent={(agentId) => {
+          setSelection({ projectId: selectedProject.id, agentId })
+          setAgentSwitcherOpen(false)
+          setCommandPaletteOpen(false)
+        }}
         onStartSession={() => openSessionLauncher()}
         onOpenProjects={() => {
           setSessionLauncherOpen(false)
@@ -757,10 +804,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
                 onSend={handleSendMessage}
                 onSteer={handleSteerMessage}
                 onInterrupt={handleInterruptMessage}
-                onThinkingCommand={handleThinkingCommand}
-                onResetSession={handleResetSession}
-                onForkSession={handleForkSession}
-              />
+              onThinkingCommand={handleThinkingCommand}
+              onResetSession={handleResetSession}
+              onForkSession={handleForkSession}
+              onAnswerQuestion={handleAnswerQuestion}
+            />
             ) : null}
             {tab === 'diffs' ? (
               <DiffPanel
@@ -784,37 +832,44 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 function SettingsScreen({
   keymap,
   themeSelection,
+  chatTypography,
   onKeymapChange,
   onKeymapReset,
   onThemeChange,
+  onChatTypographyChange,
   onClose,
 }: {
   keymap: KeymapSettings
   themeSelection: ThemeSelection
+  chatTypography: ChatTypographySettings
   onKeymapChange: (action: KeymapAction, value: string) => void
   onKeymapReset: () => void
   onThemeChange: (selection: ThemeSelection) => void
+  onChatTypographyChange: (settings: ChatTypographySettings) => void
   onClose: () => void
 }) {
   return (
     <main className="settings-shell" data-testid="settings-page">
-      <header className="settings-hero">
-        <h1 className="aether-mark">AETHER</h1>
-        <button type="button" className="settings-close" onClick={onClose}>
-          Back to board
+      <header className="settings-topbar">
+        <button
+          type="button"
+          className="settings-back"
+          onClick={onClose}
+          aria-label="Back to board"
+          data-testid="settings-back"
+        >
+          <ArrowLeft size={14} aria-hidden="true" />
+          board
         </button>
+        <span className="settings-crumb">aether / settings</span>
       </header>
 
-      <section className="settings-intro" aria-label="Settings overview">
-        <div>
-          <p className="settings-kicker">Settings</p>
-          <h2>Workspace controls</h2>
-        </div>
-        <p>Keymaps and theme stay here. Project rows are managed from the board.</p>
-      </section>
+      <div className="settings-rail" role="region" aria-label="Settings">
+        <section className="settings-lane" data-lane="theme" aria-label="Theme">
+          <ThemeSettingsPanel selection={themeSelection} onChange={onThemeChange} />
+        </section>
 
-      <div className="settings-layout">
-        <section className="settings-section">
+        <section className="settings-lane" data-lane="keymap" aria-label="Keymap">
           <KeymapSettingsPanel
             keymap={keymap}
             onChange={onKeymapChange}
@@ -822,8 +877,11 @@ function SettingsScreen({
           />
         </section>
 
-        <section className="settings-section">
-          <ThemeSettingsPanel selection={themeSelection} onChange={onThemeChange} />
+        <section className="settings-lane" data-lane="chat" aria-label="Chat reading size">
+          <ChatTypographySettingsPanel
+            settings={chatTypography}
+            onChange={onChatTypographyChange}
+          />
         </section>
       </div>
     </main>
@@ -966,7 +1024,7 @@ function InlineSessionLauncher({
             <span>Thinking</span>
             <select
               value={thinkingLevel}
-              disabled={pending || (runtime !== 'pi' && runtime !== 'codex')}
+              disabled={pending || !supportsThinking(runtime)}
               data-testid="session-thinking-level"
               onChange={(event) => setThinkingLevel(event.currentTarget.value as ThinkingLevel)}
             >
@@ -1190,6 +1248,35 @@ function ProjectManagerDialog({
   )
 }
 
+const keymapGroups: { id: string; label: string; rows: { action: KeymapAction; label: string; hint: string }[] }[] = [
+  {
+    id: 'board',
+    label: 'Board navigation',
+    rows: [
+      { action: 'projectPrev', label: 'Project up', hint: 'Previous project row' },
+      { action: 'projectNext', label: 'Project down', hint: 'Next project row' },
+      { action: 'agentPrev', label: 'Agent left', hint: 'Previous session in row' },
+      { action: 'agentNext', label: 'Agent right', hint: 'Next session in row' },
+    ],
+  },
+  {
+    id: 'session',
+    label: 'Session',
+    rows: [
+      { action: 'startSession', label: 'Start session', hint: 'Open new-session dialog' },
+      { action: 'deleteSession', label: 'Remove session', hint: 'Delete the selected session' },
+    ],
+  },
+  {
+    id: 'focus',
+    label: 'Focus',
+    rows: [
+      { action: 'focusChat', label: 'Focus chat', hint: 'Jump cursor to composer' },
+      { action: 'openDiffs', label: 'Open diffs', hint: 'Switch sidebar to diffs' },
+    ],
+  },
+]
+
 function ThemeSettingsPanel({
   selection,
   onChange,
@@ -1198,48 +1285,188 @@ function ThemeSettingsPanel({
   onChange: (selection: ThemeSelection) => void
 }) {
   return (
-    <section className="settings-panel" aria-label="Theme settings">
-      <div>
-        <p className="settings-kicker">Theme</p>
-        <strong>Board palette</strong>
+    <>
+      <header className="settings-lane-head">
+        <div className="settings-lane-title">
+          <p className="settings-kicker">Theme</p>
+          <h2>Palette</h2>
+          <p>Pick a theme. Mode follows your selection across the board.</p>
+        </div>
+        <button
+          type="button"
+          className="settings-reset"
+          onClick={() => onChange(defaultThemeSelection)}
+          data-testid="theme-reset"
+        >
+          reset
+        </button>
+      </header>
+
+      <div className="theme-mode-toggle" role="tablist" aria-label="Theme mode">
+        {(['light', 'dark'] as ThemeMode[]).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            role="tab"
+            aria-selected={selection.mode === mode}
+            data-active={selection.mode === mode}
+            data-testid={`theme-mode-${mode}`}
+            onClick={() => onChange({ ...selection, mode })}
+          >
+            {mode}
+          </button>
+        ))}
       </div>
-      <label className="key-select">
-        <span>Name</span>
-        <select
-          value={selection.name}
-          onChange={(event) =>
-            onChange({ ...selection, name: event.currentTarget.value as AetherThemeName })
-          }
-          data-testid="theme-name"
+
+      <div className="theme-grid" role="radiogroup" aria-label="Theme name">
+        {aetherThemeNames.map((name) => (
+          <ThemeCard
+            key={name}
+            name={name}
+            mode={selection.mode}
+            selected={selection.name === name}
+            onSelect={() => onChange({ name, mode: selection.mode })}
+          />
+        ))}
+      </div>
+    </>
+  )
+}
+
+function ThemeCard({
+  name,
+  mode,
+  selected,
+  onSelect,
+}: {
+  name: AetherThemeName
+  mode: ThemeMode
+  selected: boolean
+  onSelect: () => void
+}) {
+  const tokens = getAetherThemeTokens({ name, mode })
+  const cardStyle = {
+    '--tc-paper': tokens.paper,
+    '--tc-panel': tokens.panel,
+    '--tc-ink': tokens.ink,
+    '--tc-muted': tokens.muted,
+    '--tc-line': tokens.line,
+    '--tc-accent': tokens.accent,
+    '--tc-warn': tokens.warn,
+  } as React.CSSProperties
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      data-selected={selected}
+      data-testid={`theme-card-${name}`}
+      className="theme-card"
+      style={cardStyle}
+      onClick={onSelect}
+    >
+      <div className="theme-card-preview" aria-hidden="true">
+        <div className="theme-card-rail">
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="theme-card-board">
+          <div className="row">
+            <span className="chip accent" />
+            <span className="chip" />
+            <span className="chip muted" />
+          </div>
+          <div className="row">
+            <span className="chip" />
+            <span className="chip muted" />
+            <span className="chip warn" />
+          </div>
+          <div className="row">
+            <span className="chip accent" />
+            <span className="chip" />
+            <span className="chip muted" />
+          </div>
+        </div>
+      </div>
+      <div className="theme-card-meta">
+        <span className="theme-card-name">{name}</span>
+        <span className="theme-card-swatches" aria-hidden="true">
+          <span style={{ background: tokens.accent }} />
+          <span style={{ background: tokens.accent2 }} />
+          <span style={{ background: tokens.paper }} />
+          <span style={{ background: tokens.ink }} />
+        </span>
+        <span className="theme-card-check" aria-hidden="true">
+          <Check size={10} strokeWidth={3} />
+        </span>
+      </div>
+    </button>
+  )
+}
+
+function ChatTypographySettingsPanel({
+  settings,
+  onChange,
+}: {
+  settings: ChatTypographySettings
+  onChange: (settings: ChatTypographySettings) => void
+}) {
+  const current = chatFontSizes[settings.fontSize]
+  const previewStyle = {
+    '--chat-preview-size': current.size,
+    '--chat-preview-line': current.lineHeight,
+  } as React.CSSProperties
+  return (
+    <>
+      <header className="settings-lane-head">
+        <div className="settings-lane-title">
+          <p className="settings-kicker">Chat</p>
+          <h2>Reading size</h2>
+          <p>Affects chat messages and the composer only.</p>
+        </div>
+        <button
+          type="button"
+          className="settings-reset"
+          onClick={() => onChange(defaultChatTypography)}
+          data-testid="chat-reset"
         >
-          {aetherThemeNames.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="key-select">
-        <span>Mode</span>
-        <select
-          value={selection.mode}
-          onChange={(event) =>
-            onChange({ ...selection, mode: event.currentTarget.value as ThemeMode })
-          }
-          data-testid="theme-mode"
-        >
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
-      </label>
-      <button
-        type="button"
-        className="reset-keymap"
-        onClick={() => onChange(defaultThemeSelection)}
-      >
-        Reset
-      </button>
-    </section>
+          reset
+        </button>
+      </header>
+
+      <div className="chat-size-options" role="radiogroup" aria-label="Chat font size">
+        {(Object.keys(chatFontSizes) as ChatFontSize[]).map((size) => {
+          const option = chatFontSizes[size]
+          const [label, spec] = option.label.split(' · ')
+          const active = settings.fontSize === size
+          return (
+            <button
+              key={size}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              data-active={active}
+              data-testid={`chat-size-${size}`}
+              className="chat-size-option"
+              onClick={() => onChange({ fontSize: size })}
+            >
+              <strong>{label}</strong>
+              <small>{spec}</small>
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="chat-size-preview" style={previewStyle} aria-live="polite">
+        <p>
+          The model is rendering a diff while you review the previous turn.
+          This is roughly how chat copy will read at the selected size.
+        </p>
+        <small>preview · {current.size} / {current.lineHeight}</small>
+      </div>
+    </>
   )
 }
 
@@ -1252,97 +1479,96 @@ function KeymapSettingsPanel({
   onChange: (action: KeymapAction, value: string) => void
   onReset: () => void
 }) {
-  return (
-    <section className="settings-panel" aria-label="Keymap settings">
-      <div>
-        <p className="settings-kicker">Keymap</p>
-        <strong>Board shortcuts use Shift plus key</strong>
-      </div>
-      <KeySelect
-        label="Project up"
-        action="projectPrev"
-        value={keymap.projectPrev}
-        onChange={onChange}
-      />
-      <KeySelect
-        label="Project down"
-        action="projectNext"
-        value={keymap.projectNext}
-        onChange={onChange}
-      />
-      <KeySelect
-        label="Agent left"
-        action="agentPrev"
-        value={keymap.agentPrev}
-        onChange={onChange}
-      />
-      <KeySelect
-        label="Agent right"
-        action="agentNext"
-        value={keymap.agentNext}
-        onChange={onChange}
-      />
-      <KeySelect
-        label="Start session"
-        action="startSession"
-        value={keymap.startSession}
-        onChange={onChange}
-      />
-      <KeySelect
-        label="Remove session"
-        action="deleteSession"
-        value={keymap.deleteSession}
-        onChange={onChange}
-      />
-      <KeySelect
-        label="Focus chat"
-        action="focusChat"
-        value={keymap.focusChat}
-        onChange={onChange}
-      />
-      <KeySelect
-        label="Open diffs"
-        action="openDiffs"
-        value={keymap.openDiffs}
-        onChange={onChange}
-      />
-      <div className="key-static" aria-label="Command menu shortcut">
-        <span>Command menu</span>
-        <strong>⌘K / Ctrl+K</strong>
-      </div>
-      <button type="button" className="reset-keymap" onClick={onReset}>
-        Reset
-      </button>
-    </section>
-  )
-}
+  const conflicts = React.useMemo(() => {
+    const counts = new Map<string, KeymapAction[]>()
+    for (const [action, value] of Object.entries(keymap) as [KeymapAction, string][]) {
+      const list = counts.get(value) ?? []
+      list.push(action)
+      counts.set(value, list)
+    }
+    const map = new Map<KeymapAction, KeymapAction[]>()
+    for (const list of counts.values()) {
+      if (list.length < 2) continue
+      for (const action of list) {
+        map.set(
+          action,
+          list.filter((other) => other !== action),
+        )
+      }
+    }
+    return map
+  }, [keymap])
 
-function KeySelect({
-  label,
-  action,
-  value,
-  onChange,
-}: {
-  label: string
-  action: KeymapAction
-  value: string
-  onChange: (action: KeymapAction, value: string) => void
-}) {
+  const actionLabels = React.useMemo(() => {
+    const labels: Partial<Record<KeymapAction, string>> = {}
+    for (const group of keymapGroups) {
+      for (const row of group.rows) labels[row.action] = row.label
+    }
+    return labels
+  }, [])
+
   return (
-    <label className="key-select">
-      <span>{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(action, event.currentTarget.value)}
-        data-testid={`keymap-${action}`}
-      >
-        {keyOptions.map((key) => (
-          <option key={key} value={key}>
-            Shift+{formatKey(key)}
-          </option>
-        ))}
-      </select>
-    </label>
+    <>
+      <header className="settings-lane-head">
+        <div className="settings-lane-title">
+          <p className="settings-kicker">Keymap</p>
+          <h2>Shortcuts</h2>
+          <p>Every action takes Shift plus the chosen key.</p>
+        </div>
+        <button
+          type="button"
+          className="settings-reset"
+          onClick={onReset}
+          data-testid="keymap-reset"
+        >
+          reset
+        </button>
+      </header>
+
+      {keymapGroups.map((group) => (
+        <div key={group.id} className="keymap-group">
+          <p className="keymap-group-label">{group.label}</p>
+          {group.rows.map((row) => {
+            const conflict = conflicts.get(row.action)
+            const conflictLabel = conflict
+              ?.map((action) => actionLabels[action] ?? action)
+              .join(', ')
+            return (
+              <div
+                key={row.action}
+                className="keymap-row"
+                data-conflict={conflict ? 'true' : 'false'}
+              >
+                <select
+                  value={keymap[row.action]}
+                  onChange={(event) => onChange(row.action, event.currentTarget.value)}
+                  data-testid={`keymap-${row.action}`}
+                  aria-label={row.label}
+                >
+                  {keyOptions.map((key) => (
+                    <option key={key} value={key}>
+                      ⇧ {formatKey(key)}
+                    </option>
+                  ))}
+                </select>
+                <div className="keymap-row-meta">
+                  <strong>{row.label}</strong>
+                  <small>{conflict ? `Shared with ${conflictLabel}` : row.hint}</small>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ))}
+
+      <div className="keymap-static" aria-label="Command menu shortcut">
+        <span className="keymap-static-chip">⌘K</span>
+        <div className="keymap-row-meta">
+          <strong>Command menu</strong>
+          <small>Fixed binding · ⌘K or Ctrl+K</small>
+        </div>
+      </div>
+    </>
   )
 }
 
@@ -1476,6 +1702,7 @@ function MobileTopBar({
   tab,
   onTabChange,
   onOpenAgentSwitcher,
+  onSelectAgent,
   onStartSession,
   onOpenProjects,
   onOpenSettings,
@@ -1485,17 +1712,18 @@ function MobileTopBar({
   tab: SidebarTab
   onTabChange: (tab: SidebarTab) => void
   onOpenAgentSwitcher: () => void
+  onSelectAgent: (agentId: string) => void
   onStartSession: () => void
   onOpenProjects: () => void
   onOpenSettings: () => void
 }) {
   return (
     <header className="mobile-topbar" aria-label="Mobile navigation">
+      <div className="mobile-project-line">
+        <span>{project.name}</span>
+        <button type="button" onClick={onOpenAgentSwitcher}>All sessions</button>
+      </div>
       <div className="mobile-topbar-main">
-        <div className="mobile-brand">
-          <span>AETHER</span>
-          <small>{project.name}</small>
-        </div>
         <button
           type="button"
           className="mobile-agent-trigger"
@@ -1505,14 +1733,11 @@ function MobileTopBar({
           <span className={`status-dot ${agent?.status ?? ''}`} aria-hidden="true" />
           <span>
             <strong>{agent?.title ?? 'No session'}</strong>
-            <small>{agent ? `${agent.runtime} · ${agent.model}` : 'Choose or start an agent'}</small>
+            <small>{agent ? `${agent.runtime} · ${agent.status}` : 'Choose or start an agent'}</small>
           </span>
           <ChevronDown size={16} aria-hidden="true" />
         </button>
         <div className="mobile-actions">
-          <button type="button" onClick={onStartSession} aria-label="Start session">
-            <Plus size={18} />
-          </button>
           <button type="button" onClick={onOpenProjects} aria-label="Projects">
             <FolderOpen size={18} />
           </button>
@@ -1520,6 +1745,23 @@ function MobileTopBar({
             <Settings2 size={18} />
           </button>
         </div>
+      </div>
+      <div className="mobile-agent-strip" aria-label="Agents in this project">
+        {project.agents.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={item.id === agent?.id ? 'active' : ''}
+            onClick={() => onSelectAgent(item.id)}
+            aria-current={item.id === agent?.id ? 'true' : undefined}
+          >
+            <span className={`status-dot ${item.status}`} aria-hidden="true" />
+            {item.title}
+          </button>
+        ))}
+        <button type="button" className="new" onClick={onStartSession}>
+          <Plus size={13} /> New
+        </button>
       </div>
       <div className="mobile-view-tabs" role="tablist" aria-label="Selected agent view">
         <button
@@ -1814,7 +2056,9 @@ function ContextUsageChip({
       title={`${usedPercent}% used (${remainingPercent}% left), ${usage.usedTokens.toLocaleString('en')} / ${usage.windowTokens.toLocaleString('en')} tokens used`}
       style={{ '--context-used': `${normalizedPercent}%` } as React.CSSProperties}
     >
-      <span className="context-chip-ring" aria-hidden="true" />
+      <span className="context-chip-battery" aria-hidden="true">
+        <span />
+      </span>
       <strong>{usedPercent}</strong>
     </button>
   )
@@ -1831,6 +2075,7 @@ function ChatPanel({
   onThinkingCommand,
   onResetSession,
   onForkSession,
+  onAnswerQuestion,
 }: {
   agent: AgentCell
   draft: string
@@ -1842,6 +2087,11 @@ function ChatPanel({
   onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
   onResetSession: (agentId: string) => Promise<void>
   onForkSession: (agentId: string) => Promise<void>
+  onAnswerQuestion: (
+    agentId: string,
+    requestId: string,
+    answers: Record<string, string | string[]>,
+  ) => Promise<void>
 }) {
   const [pending, setPending] = React.useState(false)
   const [pendingPrompt, setPendingPrompt] = React.useState<string | null>(null)
@@ -2010,6 +2260,19 @@ function ChatPanel({
     <div className="chat-panel" data-testid="chat-panel">
       <MessageTimeline rows={rows} listRef={messageListRef} />
       {error ? <span className="chat-error" role="status">{error}</span> : null}
+      {agent.pendingQuestion ? (
+        <PendingQuestionPanel
+          pendingQuestion={agent.pendingQuestion}
+          onAnswer={async (answers) => {
+            setError(null)
+            try {
+              await onAnswerQuestion(agent.id, agent.pendingQuestion!.requestId, answers)
+            } catch (cause) {
+              setError(errorMessage(cause))
+            }
+          }}
+        />
+      ) : null}
       <form className="composer" onSubmit={submit}>
         <div className="composer-fields">
           <textarea
@@ -2063,6 +2326,7 @@ function ChatPanel({
             event.currentTarget.value = ''
           }}
         />
+        <span className="composer-hint">Enter to send · Shift Enter for newline</span>
         <button
           type="button"
           className="composer-attach"
@@ -2112,6 +2376,119 @@ function MessageTimeline({
         return <MessageTimelineRow key={row.id} message={row.message} />
       })}
     </div>
+  )
+}
+
+function PendingQuestionPanel({
+  pendingQuestion,
+  onAnswer,
+}: {
+  pendingQuestion: PendingQuestion
+  onAnswer: (answers: Record<string, string | string[]>) => Promise<void>
+}) {
+  const [answers, setAnswers] = React.useState<Record<string, string | string[]>>(() =>
+    Object.fromEntries(
+      pendingQuestion.questions.map((question) => [
+        question.id,
+        question.multiSelect ? [] : question.options[0]?.label ?? '',
+      ]),
+    ),
+  )
+  const [pending, setPending] = React.useState(false)
+
+  React.useEffect(() => {
+    setAnswers(Object.fromEntries(
+      pendingQuestion.questions.map((question) => [
+        question.id,
+        question.multiSelect ? [] : question.options[0]?.label ?? '',
+      ]),
+    ))
+  }, [pendingQuestion.requestId, pendingQuestion.questions])
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setPending(true)
+    try {
+      await onAnswer(answers)
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <form className="pending-question-panel" onSubmit={submit} data-testid="pending-question">
+      <div className="pending-question-head">
+        <strong>Claude needs input</strong>
+      </div>
+      {pendingQuestion.questions.map((question) => (
+        <label key={question.id} className="pending-question-field">
+          <span>{question.question}</span>
+          {question.options.length > 0 && !question.multiSelect ? (
+	            <select
+	              value={String(answers[question.id] ?? '')}
+	              onChange={(event) => {
+	                const value = event.currentTarget.value
+	                setAnswers((current) => ({
+	                  ...current,
+	                  [question.id]: value,
+	                }))
+	              }}
+	            >
+              {question.options.map((option) => (
+                <option key={option.label} value={option.label}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          ) : question.options.length > 0 ? (
+            <div className="pending-question-options">
+              {question.options.map((option) => {
+                const selected = Array.isArray(answers[question.id])
+                  ? answers[question.id].includes(option.label)
+                  : false
+                return (
+	                  <label key={option.label}>
+	                    <input
+	                      type="checkbox"
+	                      checked={selected}
+	                      onChange={(event) => {
+	                        const checked = event.currentTarget.checked
+	                        setAnswers((current) => {
+	                          const currentAnswer = current[question.id]
+	                          const existing = Array.isArray(currentAnswer) ? currentAnswer : []
+	                          return {
+	                            ...current,
+	                            [question.id]: checked
+	                              ? [...existing, option.label]
+	                              : existing.filter((item: string) => item !== option.label),
+	                          }
+	                        })
+	                      }}
+	                    />
+                    <span>{option.label}</span>
+                  </label>
+                )
+              })}
+            </div>
+          ) : (
+	            <input
+	              value={String(answers[question.id] ?? '')}
+	              onChange={(event) => {
+	                const value = event.currentTarget.value
+	                setAnswers((current) => ({
+	                  ...current,
+	                  [question.id]: value,
+	                }))
+	              }}
+	            />
+          )}
+        </label>
+      ))}
+      <button type="submit" disabled={pending}>
+        <Check size={14} />
+        Answer
+      </button>
+    </form>
   )
 }
 
@@ -2272,7 +2649,7 @@ async function runSlashCommand(
     return
   }
   if (command.name === 'thinking') {
-    if (agent.runtime !== 'pi' && agent.runtime !== 'codex') {
+    if (!supportsThinking(agent.runtime)) {
       throw new Error(`${agent.runtime} sessions do not support /thinking yet`)
     }
     await actions.onThinkingCommand(agent.id, command.level)
@@ -2429,6 +2806,8 @@ function eventToWorkEntry(event: TimelineEvent): TimelineWorkEntry | null {
 
 function shouldShowRuntimeEvent(event: TimelineEvent) {
   if (event.kind === 'codex_context_compacted') return true
+  if (event.kind.startsWith('claude_tool_')) return true
+  if (event.kind.startsWith('claude_question_')) return true
   if (event.kind !== 'tool_execution_start') return false
   return event.label.toLowerCase() !== 'taskupdate'
 }
@@ -2826,6 +3205,35 @@ function readStoredThemeSelection(): ThemeSelection {
 function saveThemeSelection(selection: ThemeSelection): ThemeSelection {
   window.localStorage.setItem(themeStorageKey, JSON.stringify(selection))
   return selection
+}
+
+function readStoredChatTypography(): ChatTypographySettings {
+  try {
+    const stored = window.localStorage.getItem(chatTypographyStorageKey)
+    if (!stored) return defaultChatTypography
+    const record = JSON.parse(stored) as Record<string, unknown>
+    return normalizeChatTypography(record)
+  } catch {
+    return defaultChatTypography
+  }
+}
+
+function saveChatTypography(settings: ChatTypographySettings): ChatTypographySettings {
+  window.localStorage.setItem(chatTypographyStorageKey, JSON.stringify(settings))
+  return settings
+}
+
+function normalizeChatTypography(value: Record<string, unknown>): ChatTypographySettings {
+  const fontSize = typeof value.fontSize === 'string' && value.fontSize in chatFontSizes
+    ? value.fontSize as ChatFontSize
+    : defaultChatTypography.fontSize
+  return { fontSize }
+}
+
+function applyChatTypography(element: HTMLElement, settings: ChatTypographySettings): void {
+  const tokens = chatFontSizes[settings.fontSize]
+  element.style.setProperty('--chat-font-size', tokens.size)
+  element.style.setProperty('--chat-line-height', tokens.lineHeight)
 }
 
 function formatKey(key: string) {
