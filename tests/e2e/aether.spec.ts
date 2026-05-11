@@ -395,6 +395,43 @@ test('sidebar switches between chat, diffs, and terminal', async ({ page, isMobi
   await expect(page.getByTestId('chat-input')).toBeFocused()
 })
 
+test('selected agent detail loads chat, diffs, and local drafts', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'desktop selected-agent detail flow')
+  const detailAgentId = 'agent-detail-e2e'
+  const otherAgentId = 'agent-detail-other'
+
+  seedSessionWithDetail({
+    agentId: detailAgentId,
+    slot: 'session-detail',
+    title: 'Detail Session',
+    messageText: 'seeded detail assistant tail',
+  })
+  seedSessionWithDetail({
+    agentId: otherAgentId,
+    slot: 'session-other',
+    title: 'Other Session',
+    messageText: 'other session body',
+    position: 1,
+  })
+
+  await page.goto('/')
+  await expect(page.getByTestId('selected-agent')).toHaveText('Detail Session')
+  await expect(page.getByTestId('chat-panel')).toContainText('seeded detail assistant tail')
+
+  await page.getByRole('button', { name: 'Diffs' }).click()
+  await expect(page.getByTestId('diff-panel')).toContainText('1 file')
+  await expect(page.getByTestId('diff-panel')).toContainText('src/detail.ts')
+
+  await page.getByRole('button', { name: 'Chat' }).click()
+  await page.getByTestId('chat-input').fill('local unsent draft')
+  await page.getByRole('button', { name: 'Other Session' }).click()
+  await expect(page.getByTestId('chat-input')).toHaveValue('')
+  await page.getByRole('button', { name: 'Detail Session' }).click()
+  await expect(page.getByTestId('chat-input')).toHaveValue('local unsent draft')
+  await expect(page.evaluate(() => sessionStorage.getItem('aether:chat-drafts:v1')))
+    .resolves.toContain(detailAgentId)
+})
+
 test('escape leaves chat composer so board keymaps work', async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, 'desktop board keymaps only')
   const title = `Escape Session ${testInfo.project.name}`
@@ -468,6 +505,59 @@ async function createSession(
     .getByRole('button', { name: 'Start session' })
     .click()
   await expect(page.getByTestId('selected-agent')).toHaveText(title)
+}
+
+function seedSessionWithDetail(input: {
+  agentId: string
+  slot: string
+  title: string
+  messageText: string
+  position?: number
+}) {
+  const escapedTitle = input.title.replaceAll("'", "''")
+  const escapedMessage = input.messageText.replaceAll("'", "''")
+  const timestamp = new Date().toISOString()
+  const threadId = `${input.agentId}-thread`
+  const patch = [
+    'diff --git a/src/detail.ts b/src/detail.ts',
+    'index 0000000..1111111 100644',
+    '--- a/src/detail.ts',
+    '+++ b/src/detail.ts',
+    '@@ -1 +1 @@',
+    '-export const detail = false',
+    '+export const detail = true',
+    '',
+  ].join('\n').replaceAll("'", "''")
+  const database = new DatabaseSync(testDbPath)
+  database.exec(`
+    PRAGMA foreign_keys = ON;
+    INSERT INTO agent_slots (
+      id, project_id, slot, title, runtime, model, status,
+      session_dir, session_file, position
+    )
+    VALUES (
+      '${input.agentId}', 'e2e-aether', '${input.slot}', '${escapedTitle}',
+      'pi', 'openai-codex/gpt-5.5', 'idle',
+      '${projectRoot.replaceAll("'", "''")}', NULL, ${input.position ?? 0}
+    );
+    INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
+    VALUES ('${threadId}', '${input.agentId}', 1, '${escapedMessage}', 1, '${timestamp}');
+    INSERT INTO messages (id, thread_id, role, text, timestamp)
+    VALUES ('${input.agentId}-message', '${threadId}', 'assistant', '${escapedMessage}', '${timestamp}');
+    INSERT INTO timeline_events (
+      id, thread_id, kind, tone, label, detail, timestamp, payload_json
+    )
+    VALUES (
+      '${input.agentId}-event', '${threadId}', 'tool_use', 'tool',
+      'Read', 'src/detail.ts', '${timestamp}', '{}'
+    );
+    INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
+    VALUES (
+      '${input.agentId}-diff', '${input.agentId}', 'src/detail.ts',
+      'src/detail.ts', '${patch}', '${timestamp}'
+    );
+  `)
+  database.close()
 }
 
 type CodexHarnessRequest = {

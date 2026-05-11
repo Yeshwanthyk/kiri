@@ -6,6 +6,7 @@ import { z } from 'zod'
 import type {
   AddProjectInput,
   AgentStatus,
+  AgentDetail,
   ContextUsage,
   DiffArtifact,
   DeleteSessionInput,
@@ -18,6 +19,7 @@ import type {
 } from '~/lib/contracts'
 import {
   agentStatusSchema,
+  agentDetailSchema,
   messageRoleSchema,
   pendingQuestionSchema,
   runtimeKindSchema,
@@ -183,51 +185,6 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
     .all()
     .map((row) => agentDbRowSchema.parse(row))
 
-  const messages = database
-    .prepare(
-      `
-        SELECT m.id, t.agent_id AS agentId, m.role, m.text, m.timestamp
-        FROM messages m
-        INNER JOIN threads t ON t.id = m.thread_id
-        WHERE t.active = 1
-        ORDER BY m.timestamp ASC, m.id ASC
-      `,
-    )
-    .all()
-    .map((row) => messageDbRowSchema.parse(row))
-
-  const timelineEvents = database
-    .prepare(
-      `
-        SELECT
-          e.id,
-          t.agent_id AS agentId,
-          e.kind,
-          e.tone,
-          e.label,
-          e.detail,
-          e.timestamp,
-          e.payload_json AS payloadJson
-        FROM timeline_events e
-        INNER JOIN threads t ON t.id = e.thread_id
-        WHERE t.active = 1
-        ORDER BY e.timestamp ASC, e.id ASC
-      `,
-    )
-    .all()
-    .map((row) => timelineEventFromDbRow(timelineEventDbRowSchema.parse(row)))
-
-  const diffs = database
-    .prepare(
-      `
-        SELECT id, agent_id AS agentId, title, path, patch, updated_at AS updatedAt
-        FROM diff_artifacts
-        ORDER BY updated_at DESC
-      `,
-    )
-    .all()
-    .map((row) => diffDbRowSchema.parse(row))
-
   const contextUsages = database
     .prepare(
       `
@@ -244,12 +201,6 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
     .map((row) => contextUsageDbRowSchema.parse(row))
 
   const settings = getSettings()
-  const messagesByAgent = groupBy(messages, (message) => message.agentId)
-  const timelineEventsByAgent = groupBy(
-    timelineEvents,
-    (event) => event.agentId,
-  )
-  const diffsByAgent = groupBy(diffs, (diff) => diff.agentId)
   const contextUsageByAgent = new Map(
     contextUsages.map((usage) => [usage.agentId, usage]),
   )
@@ -258,13 +209,6 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   const snapshotProjectRows = projects.map((project) => ({
     ...project,
     agents: (agentsByProject.get(project.id) ?? []).map((agent) => {
-      const messages = (messagesByAgent.get(agent.id) ?? []).map(
-        ({ agentId: _agentId, ...message }) => message,
-      )
-      const timelineEvents = (timelineEventsByAgent.get(agent.id) ?? []).map(
-        ({ agentId: _agentId, ...event }) => event,
-      )
-
       return {
         id: agent.id,
         projectId: agent.projectId,
@@ -286,12 +230,10 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
         pendingQuestion: readPendingQuestion(agent.id),
         updatedAt: agent.updatedAt ?? new Date(0).toISOString(),
         isSession: agent.slot.startsWith('session-'),
-        messages,
-        timelineEvents,
-        timeline: mergeTimeline(messages, timelineEvents),
-        diffs: (diffsByAgent.get(agent.id) ?? []).map(
-          ({ agentId: _agentId, ...diff }) => diff,
-        ),
+        messages: [],
+        timelineEvents: [],
+        timeline: [],
+        diffs: [],
       }
     }),
   }))
@@ -311,6 +253,142 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   }
 
   return workspaceSnapshotSchema.parse(snapshot)
+}
+
+export function getAgentDetail(input: { agentId: string; limit?: number }): AgentDetail {
+  const database = getDb()
+  hydratePersistedPiSessions(database)
+  const agentId = input.agentId.trim()
+  const limit = normalizeDetailLimit(input.limit)
+  const settings = getSettings()
+  const agent = database
+    .prepare(
+      `
+        SELECT
+          a.id,
+          a.project_id AS projectId,
+          a.slot,
+          a.title,
+          a.runtime,
+          a.model,
+          a.status,
+          a.session_dir AS sessionDir,
+          a.session_file AS sessionFile,
+          a.position,
+          t.id AS threadId,
+          t.preview,
+          t.message_count AS messageCount,
+          t.updated_at AS updatedAt,
+          (
+            SELECT COUNT(*)
+            FROM diff_artifacts d
+            WHERE d.agent_id = a.id
+          ) AS diffCount
+        FROM agent_slots a
+        LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
+        WHERE a.id = ?
+      `,
+    )
+    .get(agentId)
+  const parsedAgent = agentDbRowSchema.parse(agent)
+  const usage = database
+    .prepare(
+      `
+        SELECT
+          agent_id AS agentId,
+          used_tokens AS usedTokens,
+          window_tokens AS windowTokens,
+          updated_at AS updatedAt,
+          session_file AS sessionFile
+        FROM agent_context_usage
+        WHERE agent_id = ?
+      `,
+    )
+    .get(agentId)
+  const messages = database
+    .prepare(
+      `
+        SELECT id, agentId, role, text, timestamp
+        FROM (
+          SELECT m.id, t.agent_id AS agentId, m.role, m.text, m.timestamp
+          FROM messages m
+          INNER JOIN threads t ON t.id = m.thread_id
+          WHERE t.active = 1 AND t.agent_id = ?
+          ORDER BY m.timestamp DESC, m.id DESC
+          LIMIT ?
+        )
+        ORDER BY timestamp ASC, id ASC
+      `,
+    )
+    .all(agentId, limit)
+    .map((row) => messageDbRowSchema.parse(row))
+  const timelineEvents = database
+    .prepare(
+      `
+        SELECT id, agentId, kind, tone, label, detail, timestamp, payloadJson
+        FROM (
+          SELECT
+            e.id,
+            t.agent_id AS agentId,
+            e.kind,
+            e.tone,
+            e.label,
+            e.detail,
+            e.timestamp,
+            e.payload_json AS payloadJson
+          FROM timeline_events e
+          INNER JOIN threads t ON t.id = e.thread_id
+          WHERE t.active = 1 AND t.agent_id = ?
+          ORDER BY e.timestamp DESC, e.id DESC
+          LIMIT ?
+        )
+        ORDER BY timestamp ASC, id ASC
+      `,
+    )
+    .all(agentId, limit)
+    .map((row) => timelineEventFromDbRow(timelineEventDbRowSchema.parse(row)))
+  const diffs = database
+    .prepare(
+      `
+        SELECT id, agent_id AS agentId, title, path, patch, updated_at AS updatedAt
+        FROM diff_artifacts
+        WHERE agent_id = ?
+        ORDER BY updated_at DESC
+      `,
+    )
+    .all(agentId)
+    .map((row) => diffDbRowSchema.parse(row))
+  const timeline = mergeTimeline(
+    messages.map(({ agentId: _agentId, ...message }) => message),
+    timelineEvents.map(({ agentId: _agentId, ...event }) => event),
+  ).slice(-limit)
+
+  return agentDetailSchema.parse({
+    id: parsedAgent.id,
+    projectId: parsedAgent.projectId,
+    slot: parsedAgent.slot,
+    title: parsedAgent.title,
+    runtime: parsedAgent.runtime,
+    model: parsedAgent.model,
+    status: parsedAgent.status,
+    sessionDir: parsedAgent.sessionDir,
+    sessionFile: parsedAgent.sessionFile,
+    preview: parsedAgent.preview ?? 'No messages yet',
+    messageCount: parsedAgent.messageCount ?? 0,
+    diffCount: parsedAgent.diffCount,
+    contextUsage: readContextUsage(
+      parsedAgent,
+      settings,
+      usage ? contextUsageDbRowSchema.parse(usage) : undefined,
+    ),
+    pendingQuestion: readPendingQuestion(parsedAgent.id),
+    updatedAt: parsedAgent.updatedAt ?? new Date(0).toISOString(),
+    isSession: parsedAgent.slot.startsWith('session-'),
+    messages: timeline.flatMap((item) => item.type === 'message' ? [item.message] : []),
+    timelineEvents: timeline.flatMap((item) => item.type === 'event' ? [item.event] : []),
+    timeline,
+    diffs: diffs.map(({ agentId: _agentId, ...diff }) => diff),
+  })
 }
 
 export function addProject(input: AddProjectInput) {
@@ -453,6 +531,22 @@ export function deleteSession(input: DeleteSessionInput) {
     throw error
   }
 
+  return getWorkspaceSnapshot()
+}
+
+export function renameSession(input: { agentId: string; title: string }) {
+  const database = getDb()
+  const agentId = input.agentId.trim()
+  const title = input.title.trim()
+  if (!title) throw new Error('Session title cannot be empty')
+  const row = database
+    .prepare('SELECT id, slot FROM agent_slots WHERE id = ?')
+    .get(agentId) as { id: string; slot: string } | undefined
+  if (!row) throw new Error(`Session not found: ${agentId}`)
+  if (!row.slot.startsWith('session-')) {
+    throw new Error('Only started sessions can be renamed')
+  }
+  database.prepare('UPDATE agent_slots SET title = ? WHERE id = ?').run(title, agentId)
   return getWorkspaceSnapshot()
 }
 
@@ -1822,6 +1916,12 @@ function compareTimelineItems(
   const byTimestamp = left.timestamp.localeCompare(right.timestamp)
   if (byTimestamp !== 0) return byTimestamp
   return left.id.localeCompare(right.id)
+}
+
+function normalizeDetailLimit(value: number | undefined) {
+  return Number.isInteger(value)
+    ? Math.max(1, Math.min(value ?? 100, 500))
+    : 100
 }
 
 function seed(database: DatabaseSync) {

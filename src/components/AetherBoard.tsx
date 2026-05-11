@@ -1,6 +1,7 @@
 'use client'
 
 import { PatchDiff } from '@pierre/diffs/react'
+import { useQuery } from '@tanstack/react-query'
 import { useServerFn } from '@tanstack/react-start'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -14,7 +15,6 @@ import {
   Check,
   ChevronDown,
   Columns2,
-  Circle,
   Command,
   Copy,
   Eye,
@@ -65,10 +65,12 @@ import {
   chooseProjectDirectoryMutation,
   deleteProjectMutation,
   deleteSessionMutation,
+  agentDetailQueryOptions,
   fetchWorkspaceSnapshot,
   forkSessionMutation,
   hideProjectMutation,
   interruptMessageMutation,
+  renameSessionMutation,
   resetSessionMutation,
   sendMessageMutation,
   setThinkingLevelMutation,
@@ -132,6 +134,24 @@ type ChatTypographySettings = {
   fontSize: ChatFontSize
 }
 
+type RefreshAgentDetail = () => Promise<void>
+
+function mergeAgentDetail(
+  summary: AgentCell | undefined,
+  detail: AgentCell | undefined,
+) {
+  if (!summary) return undefined
+  if (!detail || detail.id !== summary.id) return summary
+  return {
+    ...summary,
+    messages: detail.messages,
+    timelineEvents: detail.timelineEvents,
+    timeline: detail.timeline,
+    diffs: detail.diffs,
+    pendingQuestion: detail.pendingQuestion,
+  }
+}
+
 type GhosttyTerminalInstance = InstanceType<(typeof import('ghostty-web'))['Terminal']>
 type GhosttyFitAddonInstance = InstanceType<(typeof import('ghostty-web'))['FitAddon']>
 
@@ -189,6 +209,7 @@ const defaultChatTypography: ChatTypographySettings = { fontSize: 'comfortable' 
 const keymapStorageKey = 'aether:keymap:v1'
 const themeStorageKey = 'aether:theme:v1'
 const chatTypographyStorageKey = 'aether:chat-typography:v1'
+const chatDraftStorageKey = 'aether:chat-drafts:v1'
 
 export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [workspace, setWorkspace] = React.useState(snapshot)
@@ -204,7 +225,6 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(defaultThemeSelection)
   const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(defaultChatTypography)
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
-  const [chatDrafts, setChatDrafts] = React.useState<Record<string, string>>({})
   const addProject = useServerFn(addProjectMutation)
   const answerQuestion = useServerFn(answerQuestionMutation)
   const chooseProjectDirectory = useServerFn(chooseProjectDirectoryMutation)
@@ -218,6 +238,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const setThinkingLevel = useServerFn(setThinkingLevelMutation)
   const steerMessage = useServerFn(steerMessageMutation)
   const interruptMessage = useServerFn(interruptMessageMutation)
+  const renameSession = useServerFn(renameSessionMutation)
   const startSession = useServerFn(startSessionMutation)
   const unhideProject = useServerFn(unhideProjectMutation)
 
@@ -370,6 +391,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     return chooseProjectDirectory()
   }
 
+  async function handleRenameSession(agentId: string, title: string) {
+    const next = await renameSession({ data: { agentId, title } })
+    setWorkspace(next)
+  }
+
   async function handleDeleteSession(agentId: string) {
     const agent = selectedProject?.agents.find((item) => item.id === agentId)
     if (!agent || !selectedProject) return
@@ -393,13 +419,18 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
   }
 
-  async function withWorkspacePolling<T>(action: () => Promise<T>, onResult: (result: T) => void) {
+  async function withWorkspacePolling<T>(
+    action: () => Promise<T>,
+    onResult: (result: T) => void,
+    onPoll?: RefreshAgentDetail,
+  ) {
     let stopped = false
     let timer: number | undefined
     const poll = async () => {
       if (stopped) return
       try {
         setWorkspace(await refreshWorkspace())
+        await onPoll?.()
       } finally {
         if (!stopped) {
           timer = window.setTimeout(poll, 750)
@@ -420,11 +451,14 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     agentId: string,
     text: string,
     images: SendMessageImage[] = [],
+    onDetailRefresh?: RefreshAgentDetail,
   ) {
     await withWorkspacePolling(
       () => sendMessage({ data: { agentId, text, images } }),
       (next) => setWorkspace(next),
+      onDetailRefresh,
     )
+    await onDetailRefresh?.()
   }
 
   async function handleSteerMessage(
@@ -783,89 +817,24 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         </div>
       </section>
 
-      <aside
-        className="sidebar-pane"
-        aria-label="Selected chat"
-        data-testid="sidebar-pane"
-      >
-        {selectedAgent ? (
-          <>
-            <SidebarHeader
-              project={selectedProject}
-              agent={selectedAgent}
-              onDeleteSession={handleDeleteSession}
-            />
-            <div className="sidebar-tabs" role="tablist">
-              <button
-                type="button"
-                className={tab === 'chat' ? 'active' : ''}
-                onClick={() => setTab('chat')}
-                data-testid="tab-chat"
-              >
-                <MessageSquareText size={15} />
-                Chat
-              </button>
-              <button
-                type="button"
-                className={tab === 'diffs' ? 'active' : ''}
-                onClick={() => setTab('diffs')}
-                data-testid="tab-diffs"
-              >
-                <GitPullRequest size={15} />
-                Diffs
-              </button>
-              <button
-                type="button"
-                className={tab === 'terminal' ? 'active' : ''}
-                onClick={() => setTab('terminal')}
-                data-testid="tab-terminal"
-              >
-                <TerminalSquare size={15} />
-                Terminal
-              </button>
-            </div>
-
-            {tab === 'chat' ? (
-              <ChatPanel
-                key={selectedAgent.id}
-                agent={selectedAgent}
-                draft={chatDrafts[selectedAgent.id] ?? ''}
-                focusRequest={chatFocusRequest}
-                onDraftChange={(draft) =>
-                  setChatDrafts((current) => ({ ...current, [selectedAgent.id]: draft }))
-                }
-                onSend={handleSendMessage}
-                onSteer={handleSteerMessage}
-                onInterrupt={handleInterruptMessage}
-              onThinkingCommand={handleThinkingCommand}
-              onResetSession={handleResetSession}
-              onForkSession={handleForkSession}
-              onAnswerQuestion={handleAnswerQuestion}
-            />
-            ) : null}
-            {tab === 'diffs' ? (
-              <DiffPanel
-                key={selectedAgent.id}
-                agent={selectedAgent}
-                themeMode={themeSelection.mode}
-              />
-            ) : null}
-            {tab === 'terminal' ? (
-              <TerminalPanel
-                key={selectedAgent.id}
-                agent={selectedAgent}
-                project={selectedProject}
-                themeMode={themeSelection.mode}
-              />
-            ) : null}
-          </>
-        ) : (
-          <EmptySessionPanel
-            project={selectedProject}
-            onStart={() => setSessionLauncherOpen(true)}
-          />
-        )}
-      </aside>
+      <SelectedAgentPane
+        selectedProject={selectedProject}
+        selectedAgent={selectedAgent}
+        tab={tab}
+        onTabChange={setTab}
+        chatFocusRequest={chatFocusRequest}
+        themeMode={themeSelection.mode}
+        onStartSession={() => setSessionLauncherOpen(true)}
+        onDeleteSession={handleDeleteSession}
+        onRenameSession={handleRenameSession}
+        onSend={handleSendMessage}
+        onSteer={handleSteerMessage}
+        onInterrupt={handleInterruptMessage}
+        onThinkingCommand={handleThinkingCommand}
+        onResetSession={handleResetSession}
+        onForkSession={handleForkSession}
+        onAnswerQuestion={handleAnswerQuestion}
+      />
     </main>
   )
 }
@@ -1944,7 +1913,6 @@ function ProjectLane({
       aria-label={project.name}
     >
       <div className="project-label">
-        <strong>{project.name}</strong>
         <span>{projectSummary(project)}</span>
       </div>
       <div className="agent-row">
@@ -1988,6 +1956,148 @@ function ProjectLane({
   )
 }
 
+function SelectedAgentPane({
+  selectedProject,
+  selectedAgent,
+  tab,
+  onTabChange,
+  chatFocusRequest,
+  themeMode,
+  onStartSession,
+  onDeleteSession,
+  onRenameSession,
+  onSend,
+  onSteer,
+  onInterrupt,
+  onThinkingCommand,
+  onResetSession,
+  onForkSession,
+  onAnswerQuestion,
+}: {
+  selectedProject: ProjectRow
+  selectedAgent: AgentCell | undefined
+  tab: SidebarTab
+  onTabChange: (tab: SidebarTab) => void
+  chatFocusRequest: number
+  themeMode: ThemeMode
+  onStartSession: () => void
+  onDeleteSession: (agentId: string) => Promise<void>
+  onRenameSession: (agentId: string, title: string) => Promise<void>
+  onSend: (
+    agentId: string,
+    text: string,
+    images?: SendMessageImage[],
+    onDetailRefresh?: RefreshAgentDetail,
+  ) => Promise<void>
+  onSteer: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
+  onInterrupt: (agentId: string) => Promise<void>
+  onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
+  onResetSession: (agentId: string) => Promise<void>
+  onForkSession: (agentId: string) => Promise<void>
+  onAnswerQuestion: (
+    agentId: string,
+    requestId: string,
+    answers: Record<string, string | string[]>,
+  ) => Promise<void>
+}) {
+  const revision = selectedAgent
+    ? `${selectedAgent.updatedAt}:${selectedAgent.messageCount}:${selectedAgent.diffCount}:${selectedAgent.status}`
+    : ''
+  const detailQuery = useQuery(
+    agentDetailQueryOptions(selectedAgent?.id ?? '', 100, revision),
+  )
+  const agent = mergeAgentDetail(selectedAgent, detailQuery.data)
+  const refreshDetail = React.useCallback(async () => {
+    if (!selectedAgent) return
+    await detailQuery.refetch()
+  }, [detailQuery, selectedAgent])
+
+  return (
+    <aside
+      className="sidebar-pane"
+      aria-label="Selected chat"
+      data-testid="sidebar-pane"
+    >
+      {agent ? (
+        <>
+          <SidebarHeader
+            project={selectedProject}
+            agent={agent}
+            onDeleteSession={onDeleteSession}
+            onRenameSession={onRenameSession}
+          />
+          <div className="sidebar-tabs" role="tablist">
+            <button
+              type="button"
+              className={tab === 'chat' ? 'active' : ''}
+              onClick={() => onTabChange('chat')}
+              data-testid="tab-chat"
+            >
+              <MessageSquareText size={15} />
+              Chat
+            </button>
+            <button
+              type="button"
+              className={tab === 'diffs' ? 'active' : ''}
+              onClick={() => onTabChange('diffs')}
+              data-testid="tab-diffs"
+            >
+              <GitPullRequest size={15} />
+              Diffs
+            </button>
+            <button
+              type="button"
+              className={tab === 'terminal' ? 'active' : ''}
+              onClick={() => onTabChange('terminal')}
+              data-testid="tab-terminal"
+            >
+              <TerminalSquare size={15} />
+              Terminal
+            </button>
+          </div>
+
+          {tab === 'chat' ? (
+            <ChatPanel
+              key={agent.id}
+              agent={agent}
+              focusRequest={chatFocusRequest}
+              onSend={(agentId, text, images) =>
+                onSend(agentId, text, images, refreshDetail)
+              }
+              onSteer={onSteer}
+              onInterrupt={onInterrupt}
+              onThinkingCommand={onThinkingCommand}
+              onResetSession={onResetSession}
+              onForkSession={onForkSession}
+              onAnswerQuestion={onAnswerQuestion}
+            />
+          ) : null}
+          {tab === 'diffs' ? (
+            <DiffPanel
+              key={agent.id}
+              agent={agent}
+              themeMode={themeMode}
+            />
+          ) : null}
+          {tab === 'terminal' ? (
+            <TerminalPanel
+              key={agent.id}
+              agent={agent}
+              project={selectedProject}
+              themeMode={themeMode}
+            />
+          ) : null}
+        </>
+      ) : (
+        <EmptySessionPanel
+          project={selectedProject}
+          onStart={onStartSession}
+        />
+      )}
+    </aside>
+  )
+}
+
 function EmptySessionPanel({
   project,
   onStart,
@@ -2014,13 +2124,49 @@ function SidebarHeader({
   project,
   agent,
   onDeleteSession,
+  onRenameSession,
 }: {
   project: ProjectRow
   agent: AgentCell
   onDeleteSession: (agentId: string) => Promise<void>
+  onRenameSession: (agentId: string, title: string) => Promise<void>
 }) {
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const [editing, setEditing] = React.useState(false)
+  const [draftTitle, setDraftTitle] = React.useState(agent.title)
+  const inputRef = React.useRef<HTMLInputElement | null>(null)
+
+  React.useEffect(() => {
+    setDraftTitle(agent.title)
+  }, [agent.id, agent.title])
+
+  React.useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+  }, [editing])
+
+  async function commitTitle() {
+    const next = draftTitle.trim()
+    if (!next || next === agent.title) {
+      setEditing(false)
+      setDraftTitle(agent.title)
+      return
+    }
+    setPending(true)
+    setError(null)
+    try {
+      await onRenameSession(agent.id, next)
+      setEditing(false)
+    } catch (cause) {
+      setError(errorMessage(cause))
+      setDraftTitle(agent.title)
+    } finally {
+      setPending(false)
+    }
+  }
 
   async function removeSession() {
     if (!agent.isSession) return
@@ -2035,43 +2181,116 @@ function SidebarHeader({
     }
   }
 
+  function beginEdit() {
+    if (!agent.isSession) return
+    setDraftTitle(agent.title)
+    setEditing(true)
+  }
+
   const thinkingLevel = currentThinkingLevel(agent)
+  const thinking = formatThinkingLevel(thinkingLevel ?? 'off')
+  const canEdit = agent.isSession
+  const canRemove = agent.isSession && !pending
 
   return (
-    <header className="sidebar-header">
-      <div className="sidebar-title-row">
-        <div className="runtime-icon">
-          <Bot size={18} />
-        </div>
-        <div>
-          <p data-testid="selected-project">{project.name}</p>
-          <h2 data-testid="selected-agent">{agent.title}</h2>
-        </div>
+    <header className="chat-header">
+      <div className="chat-header-row">
+        <span
+          className={`chat-status-dot ${agent.status}`}
+          title={agent.status}
+          aria-label={`Status: ${agent.status}`}
+        />
+        <span className="chat-meta" data-testid="selected-project" title={project.name}>
+          {project.name}
+        </span>
+        <span className="chat-meta chat-meta-divider" aria-hidden="true">·</span>
+        <span className="chat-meta" title={agent.slot}>{agent.slot}</span>
+        <span className="chat-meta chat-meta-divider" aria-hidden="true">·</span>
+        <span className="chat-meta" title={`${agent.model} · thinking ${thinking}`}>
+          {agent.model}
+          <span className="chat-meta-thinking">:{thinking}</span>
+        </span>
+
+        <span className="chat-header-spacer" />
+
+        {editing ? (
+          <input
+            ref={inputRef}
+            className="chat-title-input"
+            value={draftTitle}
+            disabled={pending}
+            data-testid="chat-title-input"
+            onChange={(event) => setDraftTitle(event.currentTarget.value)}
+            onBlur={() => void commitTitle()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void commitTitle()
+              } else if (event.key === 'Escape') {
+                event.preventDefault()
+                setEditing(false)
+                setDraftTitle(agent.title)
+              }
+            }}
+            aria-label="Rename session"
+          />
+        ) : (
+          <button
+            type="button"
+            className="chat-title"
+            onClick={beginEdit}
+            disabled={!canEdit}
+            data-testid="selected-agent"
+            title={canEdit ? 'Click to rename' : agent.title}
+          >
+            {agent.title}
+          </button>
+        )}
+
         <button
           type="button"
-          className="session-remove"
-          disabled={!agent.isSession || pending}
+          className="chat-icon-button"
+          onClick={beginEdit}
+          disabled={!canEdit || editing}
+          aria-label="Rename session"
+          title="Rename session"
+          data-testid="rename-session"
+        >
+          <EditIcon />
+        </button>
+        <button
+          type="button"
+          className="chat-icon-button chat-icon-danger"
           onClick={removeSession}
+          disabled={!canRemove}
           aria-label={`Remove ${agent.title}`}
           title={agent.isSession ? 'Remove session' : 'Only sessions can be removed'}
           data-testid="remove-session"
         >
-          <Trash2 size={15} />
+          <RemoveIcon />
         </button>
       </div>
-      {error ? <span className="sidebar-error" role="status">{error}</span> : null}
-      <div className="sidebar-stats">
-        <span className={`status-pill ${agent.status}`}>
-          <Circle size={10} fill="currentColor" />
-          {agent.status}
-        </span>
-        <span>{agent.runtime}</span>
-        <span>{agent.slot}</span>
-        <span className="thinking-level-pill" data-testid="thinking-level">
-          Thinking {formatThinkingLevel(thinkingLevel ?? 'off')}
-        </span>
-      </div>
+      {error ? <span className="chat-header-error" role="status">{error}</span> : null}
+      <span className="chat-thinking-track" data-testid="thinking-level" aria-hidden="true">Thinking {thinking}</span>
     </header>
+  )
+}
+
+function EditIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9.3 2.1l2.6 2.6" />
+      <path d="M10.6 0.8l1.6 1.6a1 1 0 0 1 0 1.4l-7.2 7.2-3 0.6 0.6-3 7.2-7.2a1 1 0 0 1 1.4 0z" />
+    </svg>
+  )
+}
+
+function RemoveIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 3l8 8" />
+      <path d="M11 3l-8 8" />
+    </svg>
   )
 }
 
@@ -2118,9 +2337,7 @@ function ContextUsageChip({
 
 function ChatPanel({
   agent,
-  draft,
   focusRequest,
-  onDraftChange,
   onSend,
   onSteer,
   onInterrupt,
@@ -2130,9 +2347,7 @@ function ChatPanel({
   onAnswerQuestion,
 }: {
   agent: AgentCell
-  draft: string
   focusRequest: number
-  onDraftChange: (draft: string) => void
   onSend: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
   onSteer: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
   onInterrupt: (agentId: string) => Promise<void>
@@ -2148,16 +2363,9 @@ function ChatPanel({
   const [pending, setPending] = React.useState(false)
   const [pendingPrompt, setPendingPrompt] = React.useState<string | null>(null)
   const [localRunning, setLocalRunning] = React.useState(false)
-  const [images, setImages] = React.useState<SendMessageImage[]>([])
   const [error, setError] = React.useState<string | null>(null)
-  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
   const isBackendRunning = agent.status === 'running'
   const isRunning = isBackendRunning || localRunning
-  const hasDraftContent = draft.trim().length > 0 || images.length > 0
-  const canInterrupt = isBackendRunning && !hasDraftContent
-  const canSteer = isBackendRunning && hasDraftContent
-  const canSend = !isRunning && hasDraftContent
-  const canSubmit = !pending && (canSend || canSteer || canInterrupt)
   const pendingMessage = React.useMemo<BoardMessage | null>(
     () => {
       if (pendingPrompt === null) return null
@@ -2201,13 +2409,7 @@ function ChatPanel({
     [timelineAgent],
   )
   const messageListRef = React.useRef<HTMLDivElement | null>(null)
-  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null)
   const latestRowId = rows.at(-1)?.id ?? ''
-
-  React.useEffect(() => {
-    if (focusRequest === 0) return
-    textareaRef.current?.focus()
-  }, [focusRequest])
 
   React.useEffect(() => {
     if (agent.status !== 'running') setLocalRunning(false)
@@ -2219,38 +2421,23 @@ function ChatPanel({
     list.scrollTop = list.scrollHeight
   }, [agent.id, agent.status, latestRowId, rows.length])
 
-  async function addImageFiles(files: File[]) {
-    const imageFiles = files.filter((file) => file.type.startsWith('image/'))
-    if (!imageFiles.length) return
+  async function interrupt() {
+    setPending(true)
+    setError(null)
     try {
-      const remaining = Math.max(4 - images.length, 0)
-      const nextImages = await Promise.all(imageFiles.slice(0, remaining).map(readImageFile))
-      if (imageFiles.length > remaining) {
-        setError('Attach up to 4 images per message')
-      }
-      setImages((current) => [...current, ...nextImages].slice(0, 4))
+      await onInterrupt(agent.id)
     } catch (cause) {
       setError(errorMessage(cause))
+    } finally {
+      setPending(false)
     }
   }
 
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!canSubmit) return
-    if (canInterrupt) {
-      setPending(true)
-      setError(null)
-      try {
-        await onInterrupt(agent.id)
-      } catch (cause) {
-        setError(errorMessage(cause))
-      } finally {
-        setPending(false)
-      }
-      return
-    }
-
-    const prompt = draft.trim() || 'Please inspect the attached image files.'
+  async function submitPrompt(
+    prompt: string,
+    promptImages: SendMessageImage[],
+    clearComposer: () => void,
+  ) {
     let slashCommand: SlashCommand | null
     try {
       slashCommand = parseSlashCommand(prompt)
@@ -2259,7 +2446,7 @@ function ChatPanel({
       return
     }
     if (slashCommand) {
-      if (images.length > 0) {
+      if (promptImages.length > 0) {
         setError('Slash commands cannot include image attachments')
         return
       }
@@ -2271,7 +2458,7 @@ function ChatPanel({
           onResetSession,
           onForkSession,
         })
-        onDraftChange('')
+        clearComposer()
       } catch (cause) {
         setError(errorMessage(cause))
       } finally {
@@ -2280,11 +2467,9 @@ function ChatPanel({
       return
     }
 
-    const promptImages = images
     setPendingPrompt(pendingPromptText(prompt, promptImages))
     setError(null)
-    onDraftChange('')
-    setImages([])
+    clearComposer()
 
     if (!isBackendRunning) {
       setLocalRunning(true)
@@ -2325,85 +2510,180 @@ function ChatPanel({
           }}
         />
       ) : null}
-      <form className="composer" onSubmit={submit}>
-        <div className="composer-fields">
-          <textarea
-            ref={textareaRef}
-            value={draft}
-            onChange={(event) => onDraftChange(event.currentTarget.value)}
-            onPaste={(event) => {
-              void addImageFiles(Array.from(event.clipboardData.files))
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.currentTarget.blur()
-                return
-              }
-              if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey) return
-              event.preventDefault()
-              event.currentTarget.form?.requestSubmit()
-            }}
-            aria-label="Prompt"
-            placeholder="Type to this agent"
-            rows={3}
-            data-testid="chat-input"
-          />
-          {images.length ? (
-            <div className="composer-attachments" aria-label="Attached images">
-              {images.map((image, index) => (
-                <span key={`${image.name}-${index}`} className="composer-attachment">
-                  {image.name}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))
-                    }
-                    aria-label={`Remove ${image.name}`}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          ) : null}
-        </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif"
-          multiple
-          hidden
-          onChange={(event) => {
-            void addImageFiles(Array.from(event.currentTarget.files ?? []))
-            event.currentTarget.value = ''
-          }}
-        />
-        <span className="composer-hint">Enter to send · Shift Enter for newline</span>
-        <button
-          type="button"
-          className="composer-attach"
-          onClick={() => fileInputRef.current?.click()}
-          aria-label="Attach images"
-          title="Attach images"
-        >
-          <ImagePlus size={15} />
-        </button>
-        <ContextUsageChip usage={agent.contextUsage} />
-        <button
-          type="submit"
-          className={`composer-submit${canInterrupt ? ' interrupt' : ''}${canSteer ? ' steer' : ''}`}
-          disabled={!canSubmit}
-          aria-label={canInterrupt ? 'Stop generation' : canSteer ? 'Steer agent' : 'Send prompt'}
-          title={canInterrupt ? 'Stop generation' : canSteer ? 'Steer this turn' : localRunning ? 'Starting turn' : 'Send prompt'}
-        >
-          {canInterrupt ? <Square size={13} fill="currentColor" /> : <Send size={15} />}
-        </button>
-      </form>
+      <ChatComposer
+        agentId={agent.id}
+        contextUsage={agent.contextUsage}
+        focusRequest={focusRequest}
+        isBackendRunning={isBackendRunning}
+        isRunning={isRunning}
+        pending={pending}
+        onError={setError}
+        onInterrupt={interrupt}
+        onSubmitPrompt={submitPrompt}
+      />
     </div>
   )
 }
 
-function MessageTimeline({
+function ChatComposer({
+  agentId,
+  contextUsage,
+  focusRequest,
+  isBackendRunning,
+  isRunning,
+  pending,
+  onError,
+  onInterrupt,
+  onSubmitPrompt,
+}: {
+  agentId: string
+  contextUsage: AgentCell['contextUsage']
+  focusRequest: number
+  isBackendRunning: boolean
+  isRunning: boolean
+  pending: boolean
+  onError: React.Dispatch<React.SetStateAction<string | null>>
+  onInterrupt: () => Promise<void>
+  onSubmitPrompt: (
+    prompt: string,
+    images: SendMessageImage[],
+    clearComposer: () => void,
+  ) => Promise<void>
+}) {
+  const [draft, setDraft] = React.useState(() => readStoredChatDraft(agentId))
+  const [images, setImages] = React.useState<SendMessageImage[]>([])
+  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null)
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const hasDraftContent = draft.trim().length > 0 || images.length > 0
+  const canInterrupt = isBackendRunning && !hasDraftContent
+  const canSteer = isBackendRunning && hasDraftContent
+  const canSend = !isRunning && hasDraftContent
+  const canSubmit = !pending && (canSend || canSteer || canInterrupt)
+
+  React.useEffect(() => {
+    setDraft(readStoredChatDraft(agentId))
+    setImages([])
+  }, [agentId])
+
+  React.useEffect(() => {
+    if (focusRequest === 0) return
+    textareaRef.current?.focus()
+  }, [focusRequest])
+
+  function setStoredDraft(value: string) {
+    updateChatDraft(agentId, value, setDraft)
+  }
+
+  function clearComposer() {
+    updateChatDraft(agentId, '', setDraft)
+    setImages([])
+  }
+
+  async function addImageFiles(files: File[]) {
+    const imageFiles = files.filter((file) => file.type.startsWith('image/'))
+    if (!imageFiles.length) return
+    try {
+      const remaining = Math.max(4 - images.length, 0)
+      const nextImages = await Promise.all(imageFiles.slice(0, remaining).map(readImageFile))
+      if (imageFiles.length > remaining) {
+        onError('Attach up to 4 images per message')
+      }
+      setImages((current) => [...current, ...nextImages].slice(0, 4))
+    } catch (cause) {
+      onError(errorMessage(cause))
+    }
+  }
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!canSubmit) return
+    if (canInterrupt) {
+      await onInterrupt()
+      return
+    }
+    const prompt = draft.trim() || 'Please inspect the attached image files.'
+    await onSubmitPrompt(prompt, images, clearComposer)
+  }
+
+  return (
+    <form className="composer" onSubmit={submit}>
+      <div className="composer-fields">
+        <textarea
+          ref={textareaRef}
+          value={draft}
+          onChange={(event) => setStoredDraft(event.currentTarget.value)}
+          onPaste={(event) => {
+            void addImageFiles(Array.from(event.clipboardData.files))
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.currentTarget.blur()
+              return
+            }
+            if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey) return
+            event.preventDefault()
+            event.currentTarget.form?.requestSubmit()
+          }}
+          aria-label="Prompt"
+          placeholder="Type to this agent"
+          rows={3}
+          data-testid="chat-input"
+        />
+        {images.length ? (
+          <div className="composer-attachments" aria-label="Attached images">
+            {images.map((image, index) => (
+              <span key={`${image.name}-${index}`} className="composer-attachment">
+                {image.name}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                  }
+                  aria-label={`Remove ${image.name}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        multiple
+        hidden
+        onChange={(event) => {
+          void addImageFiles(Array.from(event.currentTarget.files ?? []))
+          event.currentTarget.value = ''
+        }}
+      />
+      <span className="composer-hint">Enter to send · Shift Enter for newline</span>
+      <button
+        type="button"
+        className="composer-attach"
+        onClick={() => fileInputRef.current?.click()}
+        aria-label="Attach images"
+        title="Attach images"
+      >
+        <ImagePlus size={15} />
+      </button>
+      <ContextUsageChip usage={contextUsage} />
+      <button
+        type="submit"
+        className={`composer-submit${canInterrupt ? ' interrupt' : ''}${canSteer ? ' steer' : ''}`}
+        disabled={!canSubmit}
+        aria-label={canInterrupt ? 'Stop generation' : canSteer ? 'Steer agent' : 'Send prompt'}
+        title={canInterrupt ? 'Stop generation' : canSteer ? 'Steer this turn' : isRunning ? 'Starting turn' : 'Send prompt'}
+      >
+        {canInterrupt ? <Square size={13} fill="currentColor" /> : <Send size={15} />}
+      </button>
+    </form>
+  )
+}
+
+const MessageTimeline = React.memo(function MessageTimeline({
   rows,
   listRef,
 }: {
@@ -2429,7 +2709,7 @@ function MessageTimeline({
       })}
     </div>
   )
-}
+})
 
 function PendingQuestionPanel({
   pendingQuestion,
@@ -2544,7 +2824,7 @@ function PendingQuestionPanel({
   )
 }
 
-function MessageTimelineRow({ message }: { message: BoardMessage }) {
+const MessageTimelineRow = React.memo(function MessageTimelineRow({ message }: { message: BoardMessage }) {
   if (message.role === 'user') {
     return (
       <article className="timeline-row user-row" data-message-role={message.role}>
@@ -2580,9 +2860,9 @@ function MessageTimelineRow({ message }: { message: BoardMessage }) {
       <RichMessageBody text={message.text} />
     </article>
   )
-}
+})
 
-function WorkTimelineRow({
+const WorkTimelineRow = React.memo(function WorkTimelineRow({
   row,
 }: {
   row: Extract<AgentTimelineRow, { kind: 'work' }>
@@ -2612,9 +2892,9 @@ function WorkTimelineRow({
       </div>
     </section>
   )
-}
+})
 
-function WorkEntryRow({ entry }: { entry: TimelineWorkEntry }) {
+const WorkEntryRow = React.memo(function WorkEntryRow({ entry }: { entry: TimelineWorkEntry }) {
   const [expanded, setExpanded] = React.useState(false)
   const preview = workEntryPreview(entry)
   const displayText = preview ? `${entry.label} - ${preview}` : entry.label
@@ -2649,7 +2929,7 @@ function WorkEntryRow({ entry }: { entry: TimelineWorkEntry }) {
       </div>
     </div>
   )
-}
+})
 
 function workEntryPreview(entry: TimelineWorkEntry) {
   return entry.detail?.trim() || null
@@ -3439,6 +3719,40 @@ function readStoredChatTypography(): ChatTypographySettings {
 function saveChatTypography(settings: ChatTypographySettings): ChatTypographySettings {
   window.localStorage.setItem(chatTypographyStorageKey, JSON.stringify(settings))
   return settings
+}
+
+function readStoredChatDraft(agentId: string) {
+  return readStoredChatDrafts()[agentId] ?? ''
+}
+
+function updateChatDraft(
+  agentId: string,
+  value: string,
+  setDraft: React.Dispatch<React.SetStateAction<string>>,
+) {
+  setDraft(value)
+  const drafts = readStoredChatDrafts()
+  if (value) {
+    drafts[agentId] = value
+  } else {
+    delete drafts[agentId]
+  }
+  window.sessionStorage.setItem(chatDraftStorageKey, JSON.stringify(drafts))
+}
+
+function readStoredChatDrafts(): Record<string, string> {
+  try {
+    const stored = window.sessionStorage.getItem(chatDraftStorageKey)
+    if (!stored) return {}
+    const parsed = JSON.parse(stored) as Record<string, unknown>
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => (
+        typeof entry[0] === 'string' && typeof entry[1] === 'string'
+      )),
+    )
+  } catch {
+    return {}
+  }
 }
 
 function normalizeChatTypography(value: Record<string, unknown>): ChatTypographySettings {

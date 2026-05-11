@@ -122,6 +122,15 @@ export const agentCellSchema = z.object({
 })
 export type AgentCell = z.infer<typeof agentCellSchema>
 
+export const agentDetailInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  limit: z.number().int().positive().max(500).default(100),
+})
+export type AgentDetailInput = z.infer<typeof agentDetailInputSchema>
+
+export const agentDetailSchema = agentCellSchema
+export type AgentDetail = z.infer<typeof agentDetailSchema>
+
 export const runtimeSettingsSchema = z.object({
   models: z.array(z.string().trim().min(1)).min(1),
   defaultModel: z.string().trim().min(1),
@@ -252,6 +261,12 @@ export const deleteSessionInputSchema = z.object({
   agentId: z.string().trim().min(1),
 })
 export type DeleteSessionInput = z.infer<typeof deleteSessionInputSchema>
+
+export const renameSessionInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  title: z.string().trim().min(1).max(160),
+})
+export type RenameSessionInput = z.infer<typeof renameSessionInputSchema>
 
 export type AgentRuntimeState = {
   kind: RuntimeKind

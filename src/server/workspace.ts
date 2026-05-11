@@ -3,9 +3,11 @@ import { createServerFn } from '@tanstack/react-start'
 import { execFileSync } from 'node:child_process'
 import {
   addProjectInputSchema,
+  agentDetailInputSchema,
   answerQuestionInputSchema,
   deleteSessionInputSchema,
   deleteProjectInputSchema,
+  renameSessionInputSchema,
   forkSessionInputSchema,
   hideProjectInputSchema,
   interruptMessageInputSchema,
@@ -21,6 +23,8 @@ import {
   addProject,
   deleteSession,
   deleteProject,
+  renameSession,
+  getAgentDetail,
   getAgentLaunchConfig,
   getWorkspaceSnapshot,
   hideProject,
@@ -41,6 +45,10 @@ import { ensureTerminalServer } from './terminal-server'
 export const fetchWorkspaceSnapshot = createServerFn({ method: 'GET' }).handler(
   async () => getWorkspaceSnapshot(),
 )
+
+export const fetchAgentDetail = createServerFn({ method: 'GET' })
+  .inputValidator(agentDetailInputSchema)
+  .handler(async ({ data }) => getAgentDetail(data))
 
 export const addProjectMutation = createServerFn({ method: 'POST' })
   .inputValidator(addProjectInputSchema)
@@ -70,6 +78,10 @@ export const chooseProjectDirectoryMutation = createServerFn({ method: 'POST' })
 export const deleteSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(deleteSessionInputSchema)
   .handler(async ({ data }) => deleteSession(data))
+
+export const renameSessionMutation = createServerFn({ method: 'POST' })
+  .inputValidator(renameSessionInputSchema)
+  .handler(async ({ data }) => renameSession(data))
 
 export const sendMessageMutation = createServerFn({ method: 'POST' })
   .inputValidator(sendMessageInputSchema)
@@ -135,4 +147,11 @@ export const workspaceQueryOptions = () =>
   queryOptions({
     queryKey: ['workspace-snapshot'],
     queryFn: () => fetchWorkspaceSnapshot(),
+  })
+
+export const agentDetailQueryOptions = (agentId: string, limit = 100, revision = '') =>
+  queryOptions({
+    queryKey: ['agent-detail', agentId, limit, revision],
+    queryFn: () => fetchAgentDetail({ data: { agentId, limit } }),
+    enabled: agentId.length > 0,
   })
