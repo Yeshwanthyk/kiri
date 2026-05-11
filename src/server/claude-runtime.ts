@@ -28,10 +28,12 @@ import {
   setAgentStatus,
 } from './db'
 import { collectGitDiffArtifacts } from './git-diff'
+import { fileOperationFromTool } from './runtime-file-operations'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
   nextThinkingLevel,
+  projectRuntimeEvent,
   runAgentTurnLifecycle,
   RuntimeLifecycleError,
   runRuntimeLifecyclePromise,
@@ -77,6 +79,7 @@ type ClaudeToolInFlight = {
   input: Record<string, unknown>
   partialInputJson: string
   lastEmittedInput?: string
+  fileOperationStarted: boolean
 }
 
 const sessions = new Map<string, ClaudeLiveSession>()
@@ -384,7 +387,9 @@ function recordClaudeStreamEvent(
       input,
       partialInputJson: '',
       lastEmittedInput: stableJson(input),
+      fileOperationStarted: false,
     }
+    tool.fileOperationStarted = recordClaudeFileOperationStarted(agentId, toolName, input)
     live.inFlightTools.set(index, tool)
     recordRuntimeTimelineEvent({
       agentId,
@@ -409,11 +414,14 @@ function recordClaudeStreamEvent(
     const input = parsedInput ?? tool.input
     const detail = parsedInput ? summarizeToolRequest(tool.toolName, parsedInput) : tool.detail
     const fingerprint = stableJson(input)
+    const fileOperationStarted = tool.fileOperationStarted ||
+      (parsedInput ? recordClaudeFileOperationStarted(agentId, tool.toolName, parsedInput) : false)
     live.inFlightTools.set(index, {
       ...tool,
       partialInputJson: nextPartial,
       input,
       detail,
+      fileOperationStarted,
       lastEmittedInput: fingerprint,
     })
     if (!parsedInput || fingerprint === tool.lastEmittedInput) return
@@ -452,6 +460,7 @@ function recordClaudeUserMessage(
         status,
       },
     })
+    recordClaudeFileOperationCompleted(agentId, tool, status)
     if (output) {
       recordRuntimeMessage({
         agentId,
@@ -461,6 +470,47 @@ function recordClaudeUserMessage(
       })
     }
     live.inFlightTools.delete(index)
+  }
+}
+
+function recordClaudeFileOperationStarted(
+  agentId: string,
+  toolName: string,
+  input: Record<string, unknown>,
+) {
+  const operation = fileOperationFromTool(toolName, input)
+  if (!operation) return false
+  try {
+    runRuntimeLifecycleSync(projectRuntimeEvent({
+      type: 'fileOperationStarted',
+      agentId,
+      ...operation,
+    }))
+    return true
+  } catch {
+    // File operation events are UI affordances; transcript capture remains authoritative.
+    return false
+  }
+}
+
+function recordClaudeFileOperationCompleted(
+  agentId: string,
+  tool: ClaudeToolInFlight,
+  status: 'completed' | 'failed',
+) {
+  const operation = fileOperationFromTool(tool.toolName, tool.input)
+  if (!operation) return
+  try {
+    runRuntimeLifecycleSync(projectRuntimeEvent({
+      type: 'fileOperationCompleted',
+      agentId,
+      status,
+      ...operation,
+    }))
+    const config = getAgentLaunchConfig(agentId)
+    runRuntimeLifecycleSync(captureRuntimeDiffs(agentId, () => collectGitDiffArtifacts(config.cwd)))
+  } catch {
+    // Diff refresh is best-effort; the completed turn still records final artifacts.
   }
 }
 

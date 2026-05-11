@@ -8,6 +8,7 @@ test.describe.configure({ mode: 'serial' })
 
 const testDbPath = resolve(process.env.AETHER_DB_PATH ?? '.aether/aether.e2e.sqlite')
 const projectRoot = process.cwd()
+const fileOperationFixturePath = resolve(projectRoot, 'src/aether-file-operation-e2e.tmp')
 let fakeCodexServer: Awaited<ReturnType<typeof startFakeCodexAppServer>>
 
 test.beforeAll(async () => {
@@ -20,6 +21,7 @@ test.afterAll(async () => {
 
 test.beforeEach(async ({ page }) => {
   if (fakeCodexServer) fakeCodexServer.requests.length = 0
+  rmSync(fileOperationFixturePath, { force: true })
   mkdirSync(dirname(testDbPath), { recursive: true })
   rmSync(resolve(projectRoot, '.aether', 'pi-sessions', 'e2e-aether'), {
     force: true,
@@ -39,6 +41,10 @@ test.beforeEach(async ({ page }) => {
 
   await page.goto('/')
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+})
+
+test.afterEach(() => {
+  rmSync(fileOperationFixturePath, { force: true })
 })
 
 test('keyboard navigation moves projects without default sessions', async ({ page, isMobile }) => {
@@ -224,6 +230,15 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
     'title',
     /45 \/ 258,000 tokens used/,
   )
+
+  const fileOperationText = `please perform file operation ${testInfo.project.name}`
+  await page.getByTestId('chat-input').fill(fileOperationText)
+  await page.getByRole('button', { name: 'Send prompt' }).click()
+  await expect(page.getByTestId('chat-panel')).toContainText('fileChange started', {
+    timeout: 30_000,
+  })
+  await expect(page.getByTestId('chat-panel')).toContainText('fileChange completed')
+  expect(diffPathsForSessionTitle(title)).toContain('src/aether-file-operation-e2e.tmp')
 
   const requests = fakeCodexServer.requests as CodexHarnessRequest[]
   expect(requests.some((request) => request.method === 'initialize')).toBe(true)
@@ -560,6 +575,24 @@ function seedSessionWithDetail(input: {
     );
   `)
   database.close()
+}
+
+function diffPathsForSessionTitle(title: string) {
+  const database = new DatabaseSync(testDbPath)
+  try {
+    return database
+      .prepare(`
+        SELECT d.path
+        FROM diff_artifacts d
+        JOIN agent_slots a ON a.id = d.agent_id
+        WHERE a.title = ?
+        ORDER BY d.path ASC
+      `)
+      .all(title)
+      .map((row) => (row as { path: string }).path)
+  } finally {
+    database.close()
+  }
 }
 
 type CodexHarnessRequest = {

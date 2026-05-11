@@ -3642,6 +3642,7 @@ function eventToWorkEntry(event: TimelineEvent): TimelineWorkEntry | null {
 
 function shouldShowRuntimeEvent(event: TimelineEvent) {
   if (event.kind === 'codex_context_compacted') return true
+  if (event.kind === 'fileOperationStarted' || event.kind === 'fileOperationCompleted') return true
   if (event.kind.startsWith('claude_tool_')) return true
   if (event.kind.startsWith('claude_question_')) return true
   if (event.kind !== 'tool_execution_start') return false

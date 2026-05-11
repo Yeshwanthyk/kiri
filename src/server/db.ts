@@ -1736,7 +1736,9 @@ function normalizeSeededModels(database: DatabaseSync) {
 
 function timelineEventFromDbRow(row: z.infer<typeof timelineEventDbRowSchema>) {
   const payload = parseEventPayload(row.payloadJson)
-  const derived = payload ? piEventDisplayFields(payload, row.kind) : undefined
+  const derived = payload && !row.kind.startsWith('fileOperation')
+    ? piEventDisplayFields(payload, row.kind)
+    : undefined
   return {
     id: row.id,
     agentId: row.agentId,

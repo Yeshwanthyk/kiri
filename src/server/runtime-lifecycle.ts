@@ -73,6 +73,10 @@ export type RuntimeLifecycleProjection = {
   project: (event: RuntimeProjectionEvent) => Effect.Effect<void>
 }
 
+export type InMemoryRuntimeProjector = RuntimeLifecycleProjection & {
+  readonly events: RuntimeProjectionEvent[]
+}
+
 export type RuntimeErrorEvent = {
   kind: string
   label: string
@@ -138,6 +142,19 @@ export class RuntimeProjector extends Context.Tag('@aether/RuntimeProjector')<
   RuntimeLifecycleProjection
 >() {
   static readonly liveLayer = Layer.succeed(RuntimeProjector, liveProjector)
+}
+
+export function inMemoryRuntimeProjectorLayer(events: RuntimeProjectionEvent[] = []) {
+  const projector: InMemoryRuntimeProjector = {
+    events,
+    project: (event) => Effect.sync(() => {
+      events.push(event)
+    }),
+  }
+  return {
+    projector,
+    layer: Layer.succeed(RuntimeProjector, projector),
+  }
 }
 
 export function enqueueAgentTurn(

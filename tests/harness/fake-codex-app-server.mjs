@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const websocketGuid = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
@@ -226,6 +228,7 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
       const prompt = message.params?.input?.[0]?.text ?? ''
       const shouldCompact = prompt.toLowerCase().includes('compact')
       const shouldSkipUsageUpdate = prompt.toLowerCase().includes('without usage')
+      const shouldEmitFileOperation = prompt.toLowerCase().includes('file operation')
       const usedTokens = shouldCompact ? 42 : 123
       const inputTokens = shouldCompact ? 18 : 45
       const outputTokens = usedTokens - inputTokens
@@ -236,6 +239,11 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
         text: responseText,
         phase: null,
         memoryCitation: null,
+      }
+      const fileItem = {
+        type: 'fileChange',
+        id: `fake-file-${nextTurn}`,
+        path: 'src/aether-file-operation-e2e.tmp',
       }
       const turn = {
         id: turnId,
@@ -258,6 +266,23 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
         method: 'turn/started',
         params: { threadId, turn: inProgressTurn },
       })
+      if (shouldEmitFileOperation) {
+        if (thread?.cwd) {
+          writeFileSync(
+            join(thread.cwd, fileItem.path),
+            `fake codex edit ${Date.now()}\n`,
+          )
+        }
+        send(socket, {
+          method: 'item/started',
+          params: {
+            threadId,
+            turnId,
+            item: fileItem,
+            startedAtMs: Date.now(),
+          },
+        })
+      }
       send(socket, {
         method: 'item/started',
         params: {
@@ -275,6 +300,12 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
         method: 'item/completed',
         params: { threadId, turnId, item, completedAtMs: Date.now() },
       })
+      if (shouldEmitFileOperation) {
+        send(socket, {
+          method: 'item/completed',
+          params: { threadId, turnId, item: fileItem, completedAtMs: Date.now() },
+        })
+      }
       if (shouldCompact) {
         send(socket, {
           method: 'thread/compacted',
@@ -309,7 +340,7 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
       }
       send(socket, {
         method: 'turn/diff/updated',
-        params: { threadId, turnId, diff: '' },
+        params: { threadId, diff: '' },
       })
       if (thread) {
         const index = thread.turns.findIndex((entry) => entry.id === turnId)

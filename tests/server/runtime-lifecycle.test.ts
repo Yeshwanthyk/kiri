@@ -5,6 +5,7 @@ import type { RuntimeDiffArtifact } from '../../src/server/git-diff'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
+  inMemoryRuntimeProjectorLayer,
   nextThinkingLevel,
   projectRuntimeEvent,
   runAgentTurnLifecycle,
@@ -87,6 +88,25 @@ describe('runtime lifecycle', () => {
 
       expect(calls.map((call) => call.type)).toEqual(['status', 'message', 'status'])
       expect(statuses(calls)).toEqual(['running', 'idle'])
+    }))
+
+  it.effect('has an in-memory projector layer for headless tests', () =>
+    Effect.gen(function* () {
+      const { projector, layer } = inMemoryRuntimeProjectorLayer()
+
+      yield* projectRuntimeEvent({
+        type: 'fileOperationStarted',
+        agentId: 'agent-1',
+        toolName: 'Write',
+        path: 'notes.md',
+      }).pipe(Effect.provide(layer))
+
+      expect(projector.events).toEqual([{
+        type: 'fileOperationStarted',
+        agentId: 'agent-1',
+        toolName: 'Write',
+        path: 'notes.md',
+      }])
     }))
 
   it.effect('marks running then failed and records timeline errors on current turn failure', () =>

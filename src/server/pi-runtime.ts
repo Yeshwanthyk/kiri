@@ -4,6 +4,11 @@ import { Effect } from 'effect'
 import type { SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import { PiRpcProcessAdapter, PiRpcProcessError } from './pi-rpc'
 import {
+  fileOperationFromPiEvent,
+  fileOperationStatusFromEvent,
+  isFileOperationCompletionEvent,
+} from './runtime-file-operations'
+import {
   appendUserMessage,
   createForkedSession,
   getAgentLaunchConfig,
@@ -18,8 +23,10 @@ import { collectGitDiffArtifacts } from './git-diff'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
+  projectRuntimeEvent,
   RuntimeLifecycleError,
   runRuntimeLifecyclePromise,
+  runRuntimeLifecycleSync,
 } from './runtime-lifecycle'
 import { getRuntimeSettings } from './settings'
 
@@ -190,6 +197,7 @@ function promptPiAgentNowEffect(
       stopRecordingEvents = adapter.onEvent((event) => {
         try {
           recordPiTimelineEvent({ agentId: config.id, event })
+          recordPiFileOperationEvent(config.id, config.cwd, event)
         } catch {
           // Runtime events are observability data; the turn transcript remains authoritative.
         }
@@ -217,6 +225,27 @@ function promptPiAgentNowEffect(
       })),
     )
   })
+}
+
+function recordPiFileOperationEvent(agentId: string, cwd: string, event: Record<string, unknown>) {
+  const operation = fileOperationFromPiEvent(event)
+  if (!operation) return
+  const completed = isFileOperationCompletionEvent(event)
+  runRuntimeLifecycleSync(projectRuntimeEvent(completed
+    ? {
+        type: 'fileOperationCompleted',
+        agentId,
+        status: fileOperationStatusFromEvent(event),
+        ...operation,
+      }
+    : {
+        type: 'fileOperationStarted',
+        agentId,
+        ...operation,
+      }))
+  if (completed) {
+    runRuntimeLifecycleSync(captureRuntimeDiffs(agentId, () => collectGitDiffArtifacts(cwd)))
+  }
 }
 
 async function waitForLivePiAdapter(config: ReturnType<typeof getAgentLaunchConfig>) {

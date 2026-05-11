@@ -18,23 +18,22 @@ import {
 import {
   appendUserMessage,
   clearAgentRuntimeState,
-  clearRuntimeContextUsage,
   getAgentLaunchConfig,
   getAgentThinkingLevel,
   getAgentRuntimeState,
   recordAgentInfoEvent,
-  recordRuntimeContextUsage,
   recordRuntimeMessage,
   recordRuntimeTimelineEvent,
-  replaceAgentDiffArtifacts,
   resetSession as resetStoredSession,
   setAgentStatus,
 } from './db'
 import { collectGitDiffArtifacts, diffArtifactsFromPatch } from './git-diff'
+import { fileOperationFromCodexItem } from './runtime-file-operations'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
   nextThinkingLevel,
+  projectRuntimeEvent,
   runAgentTurnLifecycle,
   RuntimeLifecycleError,
   runRuntimeLifecyclePromise,
@@ -52,8 +51,10 @@ const adapters = new Map<string, CodexAppServerAdapter>()
 const adapterListeners = new Set<string>()
 const threadAgents = new Map<string, string>()
 const agentThreads = new Map<string, string>()
+const threadTurns = new Map<string, string>()
 const queues = new Map<string, Promise<void>>()
 const sessionGenerations = new Map<string, number>()
+const repoDiffRefreshedTurns = new Set<string>()
 const CODEX_SANDBOX_MODE = 'danger-full-access'
 const CODEX_SANDBOX_POLICY = { type: 'dangerFullAccess' } as const
 
@@ -464,106 +465,158 @@ function getOrCreateCodexAdapter(websocketUrl: string | undefined) {
 }
 
 function handleCodexServerMessage(adapter: CodexAppServerAdapter, message: CodexServerMessage) {
-  Effect.runSync(projectCodexNotification(adapter, message))
+  runRuntimeLifecycleSync(projectCodexNotification(adapter, message))
 }
 
 function projectCodexNotification(adapter: CodexAppServerAdapter, message: CodexServerMessage) {
-  return Effect.sync(() => {
-  const params = objectValue(message.params)
-  const threadId = stringValue(params.threadId)
-  const agentId = threadId ? threadAgents.get(threadId) : undefined
-  if (agentId && agentThreads.get(agentId) !== threadId) return
+  return Effect.gen(function* () {
+    const params = objectValue(message.params)
+    const threadId = stringValue(params.threadId)
+    const agentId = threadId ? threadAgents.get(threadId) : undefined
+    if (agentId && agentThreads.get(agentId) !== threadId) return
 
-  if ('id' in message) {
-    if (agentId) {
-      setAgentStatus(agentId, 'blocked')
-      recordRuntimeTimelineEvent({
+    if ('id' in message) {
+      if (agentId) {
+        yield* projectRuntimeEvent({ type: 'status', agentId, status: 'blocked' })
+        yield* projectRuntimeEvent({
+          type: 'timelineEvent',
+          value: {
+            agentId,
+            kind: 'codex_server_request',
+            tone: 'info',
+            label: message.method,
+            detail: 'Codex requested client-side input or approval.',
+            payload: message,
+          },
+        })
+      }
+      const response = automaticServerRequestResponse(message.method)
+      if (response) {
+        adapter.respond(message.id, response)
+      } else {
+        adapter.reject(message.id, `Aether cannot handle ${message.method} yet`)
+      }
+      return
+    }
+
+    if (!agentId) return
+    if (message.method === 'thread/status/changed') {
+      const status = objectValue(params.status)
+      if (status.type === 'active') yield* projectRuntimeEvent({ type: 'status', agentId, status: 'running' })
+      else if (status.type === 'systemError') yield* projectRuntimeEvent({ type: 'status', agentId, status: 'failed' })
+      else yield* projectRuntimeEvent({ type: 'status', agentId, status: 'idle' })
+      return
+    }
+    if (message.method === 'thread/tokenUsage/updated') {
+      const decoded = decodeServerParams(message, ThreadTokenUsageUpdatedParamsSchema)
+      if (!decoded) return
+      const usage = decoded.tokenUsage
+      const total = objectValue(usage.total)
+      const last = objectValue(usage.last)
+      const usedTokens = numberValue(last.inputTokens) ?? numberValue(total.inputTokens)
+      const windowTokens = usage.modelContextWindow
+      yield* projectRuntimeEvent({ type: 'contextUsage', value: { agentId, usedTokens, windowTokens } })
+      return
+    }
+    if (message.method === 'thread/compacted') {
+      if (!decodeServerParams(message, ThreadCompactedParamsSchema)) return
+      yield* projectRuntimeEvent({ type: 'clearContextUsage', agentId })
+      yield* projectRuntimeEvent({
+        type: 'timelineEvent',
+        value: {
+          agentId,
+          kind: 'codex_context_compacted',
+          tone: 'info',
+          label: 'Context compacted',
+          detail: 'Codex compacted this thread context.',
+          payload: message,
+        },
+      })
+      return
+    }
+    if (message.method === 'turn/diff/updated') {
+      const decoded = decodeServerParams(message, TurnDiffUpdatedParamsSchema)
+      if (!decoded) return
+      const diff = decoded.diff ?? ''
+      const turnKey = codexTurnKey(threadId, codexNotificationTurnId(params, threadId))
+      if (turnKey && repoDiffRefreshedTurns.has(turnKey)) return
+      yield* projectRuntimeEvent({
+        type: 'diffsUpdated',
         agentId,
-        kind: 'codex_server_request',
-        tone: 'info',
-        label: message.method,
-        detail: 'Codex requested client-side input or approval.',
-        payload: message,
+        diffs: diffArtifactsFromPatch(diff),
       })
+      return
     }
-    const response = automaticServerRequestResponse(message.method)
-    if (response) {
-      adapter.respond(message.id, response)
-    } else {
-      adapter.reject(message.id, `Aether cannot handle ${message.method} yet`)
-    }
-    return
-  }
-
-  if (!agentId) return
-  if (message.method === 'thread/status/changed') {
-    const status = objectValue(params.status)
-    if (status.type === 'active') setAgentStatus(agentId, 'running')
-    else if (status.type === 'systemError') setAgentStatus(agentId, 'failed')
-    else setAgentStatus(agentId, 'idle')
-    return
-  }
-  if (message.method === 'thread/tokenUsage/updated') {
-    const decoded = decodeServerParams(message, ThreadTokenUsageUpdatedParamsSchema)
-    if (!decoded) return
-    const usage = decoded.tokenUsage
-    const total = objectValue(usage.total)
-    const last = objectValue(usage.last)
-    const usedTokens = numberValue(last.inputTokens) ?? numberValue(total.inputTokens)
-    const windowTokens = usage.modelContextWindow
-    recordRuntimeContextUsage({ agentId, usedTokens, windowTokens })
-    return
-  }
-  if (message.method === 'thread/compacted') {
-    if (!decodeServerParams(message, ThreadCompactedParamsSchema)) return
-    clearRuntimeContextUsage(agentId)
-    recordRuntimeTimelineEvent({
-      agentId,
-      kind: 'codex_context_compacted',
-      tone: 'info',
-      label: 'Context compacted',
-      detail: 'Codex compacted this thread context.',
-      payload: message,
-    })
-    return
-  }
-  if (message.method === 'turn/diff/updated') {
-    const decoded = decodeServerParams(message, TurnDiffUpdatedParamsSchema)
-    if (!decoded) return
-    const diff = decoded.diff ?? ''
-    replaceAgentDiffArtifacts({
-      agentId,
-      diffs: diffArtifactsFromPatch(diff),
-    })
-    return
-  }
-  if (message.method === 'turn/started') {
-    const decoded = decodeServerParams(message, TurnStartedParamsSchema)
-    if (!decoded) return
-    const turnId = decoded.turnId ?? decoded.turn?.id
-    if (turnId) {
-      const currentState = codexState(getAgentRuntimeState(agentId))
-      setCodexState(agentId, {
-        ...currentState,
-        threadId,
-        websocketUrl: adapterUrl(currentState.websocketUrl),
+    if (message.method === 'turn/started') {
+      const decoded = decodeServerParams(message, TurnStartedParamsSchema)
+      if (!decoded) return
+      const turnId = decoded.turnId ?? decoded.turn?.id
+      if (threadId && turnId) {
+        yield* Effect.sync(() => threadTurns.set(threadId, turnId))
+      }
+      if (turnId) {
+        const currentState = codexState(getAgentRuntimeState(agentId))
+        yield* setRuntimeState(agentId, {
+          ...currentState,
+          threadId,
+          websocketUrl: adapterUrl(currentState.websocketUrl),
+        })
+      }
+      yield* projectRuntimeEvent({
+        type: 'timelineEvent',
+        value: {
+          agentId,
+          kind: 'codex_turn_started',
+          tone: 'thinking',
+          label: 'Turn started',
+          payload: message,
+        },
       })
+      yield* projectCodexFileOperation(agentId, decoded.turn, 'fileOperationStarted', threadId, turnId)
+      return
     }
-    recordRuntimeTimelineEvent({
-      agentId,
-      kind: 'codex_turn_started',
-      tone: 'thinking',
-      label: 'Turn started',
-      payload: message,
-    })
-    return
-  }
-  if (message.method === 'item/completed') {
-    const decoded = decodeServerParams(message, ItemCompletedParamsSchema)
-    if (!decoded) return
-    recordCodexItem(agentId, decoded.item, timestampFromMs(decoded.completedAtMs))
-  }
+    if (message.method === 'item/started') {
+      yield* projectCodexFileOperation(agentId, objectValue(params).item, 'fileOperationStarted', threadId, codexNotificationTurnId(params, threadId))
+      return
+    }
+    if (message.method === 'item/completed') {
+      const decoded = decodeServerParams(message, ItemCompletedParamsSchema)
+      if (!decoded) return
+      recordCodexItem(agentId, decoded.item, timestampFromMs(decoded.completedAtMs))
+      yield* projectCodexFileOperation(agentId, decoded.item, 'fileOperationCompleted', threadId, codexNotificationTurnId(params, threadId))
+    }
   })
+}
+
+function projectCodexFileOperation(
+  agentId: string,
+  item: unknown,
+  type: 'fileOperationStarted' | 'fileOperationCompleted',
+  threadId: string | undefined,
+  turnId: string | undefined,
+) {
+  const operation = fileOperationFromCodexItem(objectValue(item))
+  if (!operation) return Effect.void
+  const event = type === 'fileOperationStarted'
+    ? { type, agentId, ...operation } as const
+    : { type, agentId, status: 'completed' as const, ...operation }
+  return Effect.gen(function* () {
+    yield* projectRuntimeEvent(event)
+    if (type === 'fileOperationCompleted') {
+      const config = yield* Effect.sync(() => getAgentLaunchConfig(agentId))
+      yield* captureRuntimeDiffs(agentId, () => collectGitDiffArtifacts(config.cwd))
+      const turnKey = codexTurnKey(threadId, turnId)
+      if (turnKey) yield* Effect.sync(() => repoDiffRefreshedTurns.add(turnKey))
+    }
+  })
+}
+
+function codexTurnKey(threadId: string | undefined, turnId: string | undefined) {
+  return threadId && turnId ? `${threadId}:${turnId}` : null
+}
+
+function codexNotificationTurnId(params: Record<string, unknown>, threadId: string | undefined) {
+  return stringValue(params.turnId) ?? (threadId ? threadTurns.get(threadId) : undefined)
 }
 
 async function steerCodexTurn(
