@@ -1,4 +1,5 @@
 import type { AgentStatus, ThinkingLevel, TimelineEventTone } from '~/lib/contracts'
+import { Cause, Data, Effect, Exit, Option } from 'effect'
 import {
   appendUserMessage,
   recordRuntimeTimelineEvent,
@@ -22,6 +23,11 @@ export type RuntimeErrorEvent = {
   tone?: TimelineEventTone
 }
 
+export class RuntimeLifecycleError extends Data.TaggedError('RuntimeLifecycleError')<{
+  readonly message: string
+  readonly cause?: unknown
+}> {}
+
 const defaultProjection: RuntimeLifecycleProjection = {
   appendUserMessage,
   recordRuntimeTimelineEvent,
@@ -30,15 +36,20 @@ const defaultProjection: RuntimeLifecycleProjection = {
   setAgentStatus,
 }
 
-export async function enqueueAgentTurn(
+export function enqueueAgentTurn(
   agentId: string,
   queues: Map<string, Promise<void>>,
   run: () => Promise<void>,
 ) {
-  const previous = queues.get(agentId) ?? Promise.resolve()
-  const next = previous.then(run)
-  queues.set(agentId, next.catch(() => {}))
-  await next
+  return Effect.tryPromise({
+    try: () => {
+      const previous = queues.get(agentId) ?? Promise.resolve()
+      const next = previous.then(run)
+      queues.set(agentId, next.catch(() => {}))
+      return next
+    },
+    catch: (cause) => runtimeLifecycleError('Runtime turn failed', cause),
+  })
 }
 
 export function nextThinkingLevel(current: ThinkingLevel | null) {
@@ -58,7 +69,9 @@ export function setRuntimeState(
   state: Record<string, unknown>,
   projection: Pick<RuntimeLifecycleProjection, 'setAgentRuntimeState'> = defaultProjection,
 ) {
-  projection.setAgentRuntimeState(agentId, runtimeStateWithoutUndefined(state))
+  return Effect.sync(() => {
+    projection.setAgentRuntimeState(agentId, runtimeStateWithoutUndefined(state))
+  })
 }
 
 export function setRuntimeStatus(
@@ -66,7 +79,9 @@ export function setRuntimeStatus(
   status: AgentStatus,
   projection: Pick<RuntimeLifecycleProjection, 'setAgentStatus'> = defaultProjection,
 ) {
-  projection.setAgentStatus(agentId, status)
+  return Effect.sync(() => {
+    projection.setAgentStatus(agentId, status)
+  })
 }
 
 export function recordRuntimeError(
@@ -75,12 +90,14 @@ export function recordRuntimeError(
   event: RuntimeErrorEvent,
   projection: Pick<RuntimeLifecycleProjection, 'recordRuntimeTimelineEvent'> = defaultProjection,
 ) {
-  projection.recordRuntimeTimelineEvent({
-    agentId,
-    kind: event.kind,
-    tone: event.tone ?? 'error',
-    label: event.label,
-    detail: error instanceof Error ? error.message : String(error),
+  return Effect.sync(() => {
+    projection.recordRuntimeTimelineEvent({
+      agentId,
+      kind: event.kind,
+      tone: event.tone ?? 'error',
+      label: event.label,
+      detail: runtimeErrorDetail(error),
+    })
   })
 }
 
@@ -89,17 +106,19 @@ export function captureRuntimeDiffs(
   collect: () => RuntimeDiffArtifact[],
   projection: Pick<RuntimeLifecycleProjection, 'replaceAgentDiffArtifacts'> = defaultProjection,
 ) {
-  try {
-    projection.replaceAgentDiffArtifacts({
-      agentId,
-      diffs: collect(),
-    })
-  } catch {
-    // Diff capture is an observability projection; runtime transcripts remain authoritative.
-  }
+  return Effect.sync(() => {
+    try {
+      projection.replaceAgentDiffArtifacts({
+        agentId,
+        diffs: collect(),
+      })
+    } catch {
+      // Diff capture is an observability projection; runtime transcripts remain authoritative.
+    }
+  })
 }
 
-export async function runAgentTurnLifecycle<T>(input: {
+export function runAgentTurnLifecycle<T>(input: {
   agentId: string
   displayText: string
   errorEvent: RuntimeErrorEvent
@@ -111,23 +130,75 @@ export async function runAgentTurnLifecycle<T>(input: {
   projection?: RuntimeLifecycleProjection
 }) {
   const projection = input.projection ?? defaultProjection
-  projection.setAgentStatus(input.agentId, 'running')
-  projection.appendUserMessage({ agentId: input.agentId, text: input.displayText })
+  let finalStatus: AgentStatus | null = null
 
-  try {
-    const result = await input.run()
+  return Effect.gen(function* () {
+    yield* setRuntimeStatus(input.agentId, 'running', projection)
+    yield* Effect.sync(() => {
+      projection.appendUserMessage({ agentId: input.agentId, text: input.displayText })
+    })
+    const result = yield* Effect.tryPromise({
+      try: input.run,
+      catch: (cause) => runtimeLifecycleError('Runtime turn failed', cause),
+    })
     if (input.isCurrent?.() === false) return result
-    await input.onSuccess?.(result)
-    const successStatus = typeof input.successStatus === 'function'
+    yield* callbackEffect(() => input.onSuccess?.(result), 'Runtime turn success hook failed')
+    finalStatus = typeof input.successStatus === 'function'
       ? input.successStatus(result)
       : input.successStatus ?? 'idle'
-    if (successStatus) projection.setAgentStatus(input.agentId, successStatus)
     return result
-  } catch (error) {
-    if (input.isCurrent?.() === false) return undefined
-    await input.onError?.(error)
-    projection.setAgentStatus(input.agentId, 'failed')
-    recordRuntimeError(input.agentId, error, input.errorEvent, projection)
-    throw error
+  }).pipe(
+    Effect.tapError((error) =>
+      Effect.gen(function* () {
+        if (input.isCurrent?.() === false) return
+        yield* callbackEffect(() => input.onError?.(error), 'Runtime turn error hook failed')
+        finalStatus = 'failed'
+        yield* recordRuntimeError(input.agentId, error, input.errorEvent, projection)
+      })),
+    Effect.catchAll((error) =>
+      input.isCurrent?.() === false
+        ? Effect.void
+        : Effect.fail(error)),
+    Effect.ensuring(Effect.sync(() => {
+      if (finalStatus) projection.setAgentStatus(input.agentId, finalStatus)
+    })),
+  )
+}
+
+function callbackEffect(
+  callback: () => void | Promise<void> | undefined,
+  message: string,
+) {
+  return Effect.tryPromise({
+    try: async () => {
+      await callback()
+    },
+    catch: (cause) => runtimeLifecycleError(message, cause),
+  })
+}
+
+function runtimeLifecycleError(message: string, cause: unknown) {
+  if (cause instanceof RuntimeLifecycleError) return cause
+  return new RuntimeLifecycleError({ message, cause })
+}
+
+export async function runRuntimeLifecyclePromise<A>(
+  effect: Effect.Effect<A, unknown>,
+) {
+  const exit = await Effect.runPromiseExit(effect)
+  if (Exit.isSuccess(exit)) return exit.value
+  const failure = Option.getOrUndefined(Cause.failureOption(exit.cause))
+  if (failure instanceof RuntimeLifecycleError && failure.message === 'Runtime turn failed') {
+    throw failure.cause ?? failure
   }
+  if (failure) throw failure
+  throw Cause.squash(exit.cause)
+}
+
+function runtimeErrorDetail(error: unknown): string {
+  if (error instanceof RuntimeLifecycleError) {
+    if (error.cause instanceof Error) return error.cause.message
+    if (error.cause !== undefined) return String(error.cause)
+  }
+  return error instanceof Error ? error.message : String(error)
 }

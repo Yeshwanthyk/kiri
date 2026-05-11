@@ -7,8 +7,8 @@ Move Pican runtime lifecycle behavior toward Effect in safe phases, preserving r
 - [x] Phase 1 extracts boring shared Promise-compatible lifecycle behavior.
 - [x] Phase 1 has Quint lifecycle invariants and focused tests.
 - [x] Phase 1 review feedback is fixed and ready to commit.
-- [ ] Phase 2 makes lifecycle helpers Effect-native while runtime exports stay Promise-compatible.
-- [ ] Phase 2 uses Effect tests and is reviewed/fixed/committed.
+- [x] Phase 2 makes lifecycle helpers Effect-native while runtime exports stay Promise-compatible.
+- [x] Phase 2 uses Effect tests and is reviewed/fixed/ready to commit.
 - [ ] Phase 3 moves Codex, Claude, then Pi protocol cores to Effect where appropriate.
 - [ ] Phase 3 is tested, reviewed, fixed, and committed per runtime chunk.
 - [ ] Phase 4 introduces Layers only where they replace real boundaries in tests.
@@ -25,3 +25,4 @@ Move Pican runtime lifecycle behavior toward Effect in safe phases, preserving r
 
 - Quint is available locally; use simple pure state models first, then executable action specs only where needed.
 - Review caught that Pi reset/stop semantics must remain idle/silent in Phase 1; only queue and diff helpers are shared for Pi for now.
+- Phase 2 keeps typed `RuntimeLifecycleError` inside Effect but unwraps `Runtime turn failed` at Promise runtime boundaries to preserve provider error messages.

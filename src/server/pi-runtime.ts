@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
+import { Effect } from 'effect'
 import type { SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import { PiRpcProcessAdapter } from './pi-rpc'
 import {
@@ -17,6 +18,7 @@ import { collectGitDiffArtifacts } from './git-diff'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
+  runRuntimeLifecyclePromise,
 } from './runtime-lifecycle'
 import { getRuntimeSettings } from './settings'
 
@@ -36,9 +38,9 @@ export async function promptPiAgent(input: {
   // Register the live adapter before the queued turn starts so immediate steer/interrupt
   // requests from the composer can find the process target.
   getOrCreatePiAdapter(config)
-  await enqueueAgentTurn(config.id, queues, () =>
+  await runRuntimeLifecyclePromise(enqueueAgentTurn(config.id, queues, () =>
     promptPiAgentNow(config, promptWithSavedImages(config.id, input.text, input.images ?? [])),
-  )
+  ))
 }
 
 export async function steerPiAgent(input: {
@@ -152,7 +154,7 @@ async function promptPiAgentNow(
       turnCompletedAt,
       sessionFile: after.sessionFile ?? before.sessionFile,
     })
-    captureRuntimeDiffs(config.id, () => collectGitDiffArtifacts(config.cwd))
+    Effect.runSync(captureRuntimeDiffs(config.id, () => collectGitDiffArtifacts(config.cwd)))
   } finally {
     stopRecordingEvents?.()
     setAgentStatus(config.id, 'idle')

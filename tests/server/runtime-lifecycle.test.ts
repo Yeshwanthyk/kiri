@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from '@effect/vitest'
+import { Effect, Exit } from 'effect'
 import type { AgentStatus } from '../../src/lib/contracts'
 import type { RuntimeDiffArtifact } from '../../src/server/git-diff'
 import {
@@ -6,6 +7,7 @@ import {
   enqueueAgentTurn,
   nextThinkingLevel,
   runAgentTurnLifecycle,
+  runRuntimeLifecyclePromise,
   runtimeStateWithoutUndefined,
   setRuntimeState,
   type RuntimeLifecycleProjection,
@@ -34,27 +36,30 @@ function projection() {
 }
 
 describe('runtime lifecycle', () => {
-  it('keeps an agent queue usable after a failed turn', async () => {
+  it.effect('keeps an agent queue usable after a failed turn', () =>
+    Effect.gen(function* () {
     const queues = new Map<string, Promise<void>>()
     const order: string[] = []
 
-    await expect(enqueueAgentTurn('agent-1', queues, () => {
+    const first = yield* Effect.exit(enqueueAgentTurn('agent-1', queues, () => {
       order.push('first')
       return Promise.reject(new Error('boom'))
-    })).rejects.toThrow('boom')
+    }))
+    expect(Exit.isFailure(first)).toBe(true)
 
-    await enqueueAgentTurn('agent-1', queues, () => {
+    yield* enqueueAgentTurn('agent-1', queues, () => {
       order.push('second')
       return Promise.resolve()
     })
 
     expect(order).toEqual(['first', 'second'])
-  })
+  }))
 
-  it('marks running then idle for successful current turns', async () => {
+  it.effect('marks running then idle for successful current turns', () =>
+    Effect.gen(function* () {
     const { calls, fake } = projection()
 
-    await expect(runAgentTurnLifecycle({
+    const result = yield* runAgentTurnLifecycle({
       agentId: 'agent-1',
       displayText: 'hello',
       errorEvent: { kind: 'runtime_error', label: 'Runtime error' },
@@ -63,16 +68,18 @@ describe('runtime lifecycle', () => {
       onSuccess: (result) => {
         calls.push({ type: 'success', value: result })
       },
-    })).resolves.toBe('ok')
+    })
 
+    expect(result).toBe('ok')
     expect(statuses(calls)).toEqual(['running', 'idle'])
     expect(calls.map((call) => call.type)).toEqual(['status', 'message', 'success', 'status'])
-  })
+  }))
 
-  it('marks running then failed and records timeline errors on current turn failure', async () => {
+  it.effect('marks running then failed and records timeline errors on current turn failure', () =>
+    Effect.gen(function* () {
     const { calls, fake } = projection()
 
-    await expect(runAgentTurnLifecycle({
+    const result = yield* Effect.exit(runAgentTurnLifecycle({
       agentId: 'agent-1',
       displayText: 'hello',
       errorEvent: { kind: 'runtime_error', label: 'Runtime error' },
@@ -81,8 +88,9 @@ describe('runtime lifecycle', () => {
       onError: (error) => {
         calls.push({ type: 'cleanup', value: error })
       },
-    })).rejects.toThrow('failed turn')
+    }))
 
+    expect(result).toStrictEqual(Exit.fail(expect.any(Error)))
     expect(statuses(calls)).toEqual(['running', 'failed'])
     expect(fake.recordRuntimeTimelineEvent).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'agent-1',
@@ -91,13 +99,52 @@ describe('runtime lifecycle', () => {
       detail: 'failed turn',
       tone: 'error',
     }))
-  })
+  }))
 
-  it('does not overwrite reset sessions when a stale generation completes or fails', async () => {
+  it.effect('preserves original turn errors at the Promise boundary', () =>
+    Effect.gen(function* () {
+      const { fake } = projection()
+      const turnError = new Error('provider exploded')
+      const result = yield* Effect.promise(() => runRuntimeLifecyclePromise(runAgentTurnLifecycle({
+        agentId: 'agent-1',
+        displayText: 'hello',
+        errorEvent: { kind: 'runtime_error', label: 'Runtime error' },
+        projection: fake,
+        run: () => Promise.reject(turnError),
+      })).then(
+        () => 'resolved' as const,
+        (error: unknown) => error,
+      ))
+
+      expect(result).toBe(turnError)
+      expect(fake.recordRuntimeTimelineEvent).toHaveBeenCalledWith(expect.objectContaining({
+        detail: 'provider exploded',
+      }))
+    }))
+
+  it.effect('preserves original queue errors at the Promise boundary', () =>
+    Effect.gen(function* () {
+      const queues = new Map<string, Promise<void>>()
+      const turnError = new Error('queued provider exploded')
+      const result = yield* Effect.promise(() => runRuntimeLifecyclePromise(enqueueAgentTurn(
+        'agent-1',
+        queues,
+        () => Promise.reject(turnError),
+      )).then(
+        () => 'resolved' as const,
+        (error: unknown) => error,
+      ))
+
+      expect(result).toBe(turnError)
+      yield* enqueueAgentTurn('agent-1', queues, () => Promise.resolve())
+    }))
+
+  it.effect('does not overwrite reset sessions when a stale generation completes or fails', () =>
+    Effect.gen(function* () {
     const { calls, fake } = projection()
     const current = vi.fn(() => false)
 
-    await expect(runAgentTurnLifecycle({
+    const success = yield* runAgentTurnLifecycle({
       agentId: 'agent-1',
       displayText: 'hello',
       errorEvent: { kind: 'runtime_error', label: 'Runtime error' },
@@ -107,9 +154,9 @@ describe('runtime lifecycle', () => {
       onSuccess: () => {
         calls.push({ type: 'success', value: null })
       },
-    })).resolves.toBe('ok')
+    })
 
-    await expect(runAgentTurnLifecycle({
+    const failure = yield* Effect.exit(runAgentTurnLifecycle({
       agentId: 'agent-1',
       displayText: 'again',
       errorEvent: { kind: 'runtime_error', label: 'Runtime error' },
@@ -119,14 +166,17 @@ describe('runtime lifecycle', () => {
       onError: () => {
         calls.push({ type: 'cleanup', value: null })
       },
-    })).resolves.toBeUndefined()
+    }))
 
+    expect(success).toBe('ok')
+    expect(failure).toStrictEqual(Exit.succeed(undefined))
     expect(statuses(calls)).toEqual(['running', 'running'])
     expect(calls.some((call) => call.type === 'success' || call.type === 'cleanup')).toBe(false)
     expect(fake.recordRuntimeTimelineEvent).not.toHaveBeenCalled()
-  })
+  }))
 
-  it('filters undefined runtime state values before persistence', () => {
+  it.effect('filters undefined runtime state values before persistence', () =>
+    Effect.gen(function* () {
     const { fake } = projection()
 
     expect(runtimeStateWithoutUndefined({
@@ -140,11 +190,11 @@ describe('runtime lifecycle', () => {
       nope: null,
     })
 
-    setRuntimeState('agent-1', { threadId: undefined, websocketUrl: 'ws://local' }, fake)
+    yield* setRuntimeState('agent-1', { threadId: undefined, websocketUrl: 'ws://local' }, fake)
     expect(fake.setAgentRuntimeState).toHaveBeenCalledWith('agent-1', {
       websocketUrl: 'ws://local',
     })
-  })
+  }))
 
   it('cycles thinking levels in contract order', () => {
     expect(nextThinkingLevel(null)).toBe('off')
@@ -152,18 +202,19 @@ describe('runtime lifecycle', () => {
     expect(nextThinkingLevel('xhigh')).toBe('off')
   })
 
-  it('swallows diff capture projection failures', () => {
+  it.effect('swallows diff capture projection failures', () =>
+    Effect.gen(function* () {
     const { fake } = projection()
     fake.replaceAgentDiffArtifacts = vi.fn(() => {
       throw new Error('db unavailable')
     })
 
-    expect(() => captureRuntimeDiffs('agent-1', () => [{
+    yield* captureRuntimeDiffs('agent-1', () => [{
       title: 'file.ts',
       path: 'file.ts',
       patch: 'diff --git a/file.ts b/file.ts',
-    }], fake)).not.toThrow()
-  })
+    }], fake)
+  }))
 })
 
 function statuses(calls: Array<{ type: string; value: unknown }>) {

@@ -11,6 +11,7 @@ import {
   type SettingSource,
   type ThinkingConfig,
 } from '@anthropic-ai/claude-agent-sdk'
+import { Effect } from 'effect'
 import type { AnswerQuestionInput, PendingQuestion, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import {
   appendUserMessage,
@@ -33,6 +34,7 @@ import {
   enqueueAgentTurn,
   nextThinkingLevel,
   runAgentTurnLifecycle,
+  runRuntimeLifecyclePromise,
   setRuntimeState,
 } from './runtime-lifecycle'
 
@@ -93,9 +95,9 @@ export async function promptClaudeAgent(input: {
   }
 
   const prompt = buildUserMessage(input.text, input.images ?? [])
-  await enqueueAgentTurn(config.id, queues, () =>
+  await runRuntimeLifecyclePromise(enqueueAgentTurn(config.id, queues, () =>
     promptClaudeAgentNow(config, prompt),
-  )
+  ))
 }
 
 export async function steerClaudeAgent(input: {
@@ -173,7 +175,7 @@ async function promptClaudeAgentNow(
   message: SDKUserMessage,
 ) {
   const generation = sessionGenerations.get(config.id) ?? 0
-  await runAgentTurnLifecycle({
+  await runRuntimeLifecyclePromise(runAgentTurnLifecycle({
     agentId: config.id,
     displayText: messageDisplayText(message),
     errorEvent: { kind: 'claude_error', label: 'Claude error' },
@@ -185,7 +187,7 @@ async function promptClaudeAgentNow(
       if ((sessionGenerations.get(config.id) ?? 0) !== generation) return
       captureClaudeGitDiffArtifacts(config)
     },
-  })
+  }))
 }
 
 async function prepareClaudeTurn(
@@ -489,11 +491,11 @@ function closeClaudeSession(agentId: string) {
 }
 
 function captureClaudeGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchConfig>) {
-  captureRuntimeDiffs(config.id, () =>
+  Effect.runSync(captureRuntimeDiffs(config.id, () =>
     collectGitDiffArtifactsWithFallback(
       config.cwd,
       getSessionDiffFallbackCwds(config.id),
-    ))
+    )))
 }
 
 function claudeOptions(
@@ -852,7 +854,7 @@ function recordClaudeContextUsage(
 }
 
 function setClaudeState(agentId: string, state: ClaudeRuntimeState) {
-  setRuntimeState(agentId, state)
+  Effect.runSync(setRuntimeState(agentId, state))
 }
 
 function claudeState(value: Record<string, unknown>): ClaudeRuntimeState {

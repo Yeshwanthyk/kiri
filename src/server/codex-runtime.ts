@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
+import { Effect } from 'effect'
 import type { SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import {
   CodexAppServerAdapter,
@@ -36,6 +37,7 @@ import {
   enqueueAgentTurn,
   nextThinkingLevel,
   runAgentTurnLifecycle,
+  runRuntimeLifecyclePromise,
   setRuntimeState,
 } from './runtime-lifecycle'
 
@@ -84,10 +86,10 @@ export async function promptCodexAgent(input: {
     }
   }
 
-  await enqueueAgentTurn(config.id, queues, () => promptCodexAgentNow({
+  await runRuntimeLifecyclePromise(enqueueAgentTurn(config.id, queues, () => promptCodexAgentNow({
     ...config,
     runtimeState: getAgentRuntimeState(config.id),
-  }, text))
+  }, text)))
 }
 
 export async function steerCodexAgent(input: {
@@ -193,7 +195,7 @@ async function promptCodexAgentNow(
   const state = codexState(config.runtimeState)
   const generation = sessionGenerations.get(config.id) ?? 0
   let activeThreadId = state.threadId
-  await runAgentTurnLifecycle({
+  await runRuntimeLifecyclePromise(runAgentTurnLifecycle({
     agentId: config.id,
     displayText: text,
     errorEvent: { kind: 'codex_error', label: 'Codex error' },
@@ -247,15 +249,15 @@ async function promptCodexAgentNow(
       })
       return true
     },
-  })
+  }))
 }
 
 function captureCodexGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchConfig>) {
-  captureRuntimeDiffs(config.id, () =>
+  Effect.runSync(captureRuntimeDiffs(config.id, () =>
     collectGitDiffArtifactsWithFallback(
       config.cwd,
       getSessionDiffFallbackCwds(config.id),
-    ))
+    )))
 }
 
 async function ensureCodexThread(input: {
@@ -533,7 +535,7 @@ function recordCodexItem(agentId: string, item: unknown, timestamp = new Date().
 }
 
 function setCodexState(agentId: string, state: CodexRuntimeState) {
-  setRuntimeState(agentId, state)
+  Effect.runSync(setRuntimeState(agentId, state))
 }
 
 function codexState(value: Record<string, unknown>): CodexRuntimeState {
