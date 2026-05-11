@@ -117,6 +117,46 @@ describe('CodexAppServerAdapter', () => {
     }
   })
 
+  it('starts inline reviews with a target', async () => {
+    const harness = await startHarness((socket, request) => {
+      if (request.method === 'review/start') {
+        socket.send(JSON.stringify({
+          id: request.id,
+          result: {
+            turn: { id: 'review-turn', status: 'inProgress', items: [] },
+            reviewThreadId: 'thread-1',
+          },
+        }))
+      }
+    })
+    const adapter = new CodexAppServerAdapter({
+      websocketUrl: harness.url,
+      spawnIfMissing: false,
+    })
+
+    try {
+      await expect(adapter.startReview({
+        threadId: 'thread-1',
+        target: { type: 'baseBranch', branch: 'main' },
+        delivery: 'inline',
+      })).resolves.toEqual({
+        turn: { id: 'review-turn', status: 'inProgress', items: [] },
+        reviewThreadId: 'thread-1',
+      })
+      expect(harness.requests.at(-1)).toMatchObject({
+        method: 'review/start',
+        params: {
+          threadId: 'thread-1',
+          target: { type: 'baseBranch', branch: 'main' },
+          delivery: 'inline',
+        },
+      })
+    } finally {
+      adapter.close()
+      await harness.close()
+    }
+  })
+
   it('returns completed turns that arrived before a waiter was registered', async () => {
     const harness = await startHarness()
     const adapter = new CodexAppServerAdapter({

@@ -324,6 +324,70 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
       })
       return
     }
+    if (message.method === 'review/start') {
+      const threadId = message.params?.threadId
+      const thread = threads.get(threadId)
+      const turnId = `fake-review-${++nextTurn}`
+      const target = message.params?.target ?? { type: 'uncommittedChanges' }
+      const label = target.type === 'baseBranch'
+        ? `base ${target.branch}`
+        : 'uncommitted changes'
+      const responseText = `fake codex reviewed: ${label}`
+      const item = {
+        type: 'agentMessage',
+        id: `fake-review-item-${nextTurn}`,
+        text: responseText,
+        phase: null,
+        memoryCitation: null,
+      }
+      const turn = {
+        id: turnId,
+        items: [],
+        itemsView: { type: 'full' },
+        status: 'completed',
+        error: null,
+        startedAt: Math.floor(Date.now() / 1000),
+        completedAt: Math.floor(Date.now() / 1000),
+        durationMs: 1,
+      }
+      const inProgressTurn = { ...turn, status: 'inProgress', completedAt: null }
+      if (thread) {
+        thread.status = { type: 'active', activeFlags: [] }
+        thread.turns.push(inProgressTurn)
+        thread.updatedAt = Math.floor(Date.now() / 1000)
+      }
+      send(socket, {
+        id: message.id,
+        result: { turn: { ...turn, items: [] }, reviewThreadId: threadId },
+      })
+      send(socket, {
+        method: 'turn/started',
+        params: { threadId, turn: inProgressTurn },
+      })
+      send(socket, {
+        method: 'item/completed',
+        params: { threadId, turnId, item, completedAtMs: Date.now() },
+      })
+      send(socket, {
+        method: 'turn/diff/updated',
+        params: { threadId, turnId, diff: '' },
+      })
+      if (thread) {
+        const index = thread.turns.findIndex((entry) => entry.id === turnId)
+        if (index >= 0) thread.turns[index] = { ...turn, items: [item] }
+        thread.status = { type: 'idle' }
+        thread.updatedAt = Math.floor(Date.now() / 1000)
+      }
+      send(socket, {
+        method: 'turn/completed',
+        params: { threadId, turn: { ...turn, items: [item] } },
+      })
+      send(socket, {
+        method: 'thread/status/changed',
+        params: { threadId, status: { type: 'idle' } },
+      })
+      return
+    }
     if (message.method === 'turn/interrupt') {
       send(socket, { id: message.id, result: {} })
       return

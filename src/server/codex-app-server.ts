@@ -52,6 +52,11 @@ const TurnStartResponseSchema = Schema.Struct({
   turn: CodexTurnSchema,
 })
 
+const ReviewStartResponseSchema = Schema.Struct({
+  turn: CodexTurnSchema,
+  reviewThreadId: Schema.String,
+})
+
 const TokenUsageSchema = Schema.Struct({
   total: UnknownRecord,
   last: UnknownRecord,
@@ -327,6 +332,14 @@ export class CodexAppServerAdapter {
 
   startTurn(input: Record<string, unknown>) {
     return this.requestDecoded('turn/start', input, TurnStartResponseSchema)
+  }
+
+  startReview(input: {
+    threadId: string
+    target: unknown
+    delivery?: 'inline' | 'detached'
+  }) {
+    return this.requestDecoded('review/start', input, ReviewStartResponseSchema)
   }
 
   steerTurn(input: {

@@ -233,6 +233,23 @@ export const forkSessionInputSchema = z.object({
 })
 export type ForkSessionInput = z.infer<typeof forkSessionInputSchema>
 
+export const reviewTargetSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('uncommittedChanges'),
+  }),
+  z.object({
+    type: z.literal('baseBranch'),
+    branch: z.string().trim().min(1),
+  }),
+])
+export type ReviewTarget = z.infer<typeof reviewTargetSchema>
+
+export const reviewSessionInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  target: reviewTargetSchema,
+})
+export type ReviewSessionInput = z.infer<typeof reviewSessionInputSchema>
+
 export const terminalConfigInputSchema = z.object({
   agentId: z.string().trim().min(1),
 })

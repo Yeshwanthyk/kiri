@@ -2,6 +2,9 @@ import type { AgentStatus, ThinkingLevel, TimelineEventTone } from '~/lib/contra
 import { Cause, Context, Data, Effect, Exit, Layer, Option } from 'effect'
 import {
   appendUserMessage,
+  clearRuntimeContextUsage,
+  recordRuntimeContextUsage,
+  recordRuntimeMessage,
   recordRuntimeTimelineEvent,
   replaceAgentDiffArtifacts,
   setAgentRuntimeState,
@@ -9,12 +12,65 @@ import {
 } from './db'
 import type { RuntimeDiffArtifact } from './git-diff'
 
+export type RuntimeProjectionEvent =
+  | {
+    type: 'status'
+    agentId: string
+    status: AgentStatus
+  }
+  | {
+    type: 'userMessage'
+    agentId: string
+    text: string
+  }
+  | {
+    type: 'runtimeMessage'
+    agentId: string
+    id: string
+    role: Parameters<typeof recordRuntimeMessage>[0]['role']
+    text: string
+    timestamp?: string
+  }
+  | {
+    type: 'timelineEvent'
+    value: Parameters<typeof recordRuntimeTimelineEvent>[0]
+  }
+  | {
+    type: 'contextUsage'
+    value: Parameters<typeof recordRuntimeContextUsage>[0]
+  }
+  | {
+    type: 'clearContextUsage'
+    agentId: string
+  }
+  | {
+    type: 'diffsUpdated'
+    agentId: string
+    diffs: RuntimeDiffArtifact[]
+  }
+  | {
+    type: 'runtimeState'
+    agentId: string
+    state: Record<string, unknown>
+  }
+  | {
+    type: 'fileOperationStarted'
+    agentId: string
+    toolName: string
+    path?: string
+    summary?: string
+  }
+  | {
+    type: 'fileOperationCompleted'
+    agentId: string
+    toolName: string
+    status: 'completed' | 'failed'
+    path?: string
+    summary?: string
+  }
+
 export type RuntimeLifecycleProjection = {
-  appendUserMessage: typeof appendUserMessage
-  recordRuntimeTimelineEvent: typeof recordRuntimeTimelineEvent
-  replaceAgentDiffArtifacts: typeof replaceAgentDiffArtifacts
-  setAgentRuntimeState: typeof setAgentRuntimeState
-  setAgentStatus: typeof setAgentStatus
+  project: (event: RuntimeProjectionEvent) => Effect.Effect<void>
 }
 
 export type RuntimeErrorEvent = {
@@ -28,19 +84,60 @@ export class RuntimeLifecycleError extends Data.TaggedError('RuntimeLifecycleErr
   readonly cause?: unknown
 }> {}
 
-const defaultProjection: RuntimeLifecycleProjection = {
-  appendUserMessage,
-  recordRuntimeTimelineEvent,
-  replaceAgentDiffArtifacts,
-  setAgentRuntimeState,
-  setAgentStatus,
+const liveProjector: RuntimeLifecycleProjection = {
+  project: (event) => Effect.sync(() => {
+    if (event.type === 'status') {
+      setAgentStatus(event.agentId, event.status)
+      return
+    }
+    if (event.type === 'userMessage') {
+      appendUserMessage({ agentId: event.agentId, text: event.text })
+      return
+    }
+    if (event.type === 'runtimeMessage') {
+      recordRuntimeMessage({
+        agentId: event.agentId,
+        id: event.id,
+        role: event.role,
+        text: event.text,
+        timestamp: event.timestamp,
+      })
+      return
+    }
+    if (event.type === 'timelineEvent') {
+      recordRuntimeTimelineEvent(event.value)
+      return
+    }
+    if (event.type === 'contextUsage') {
+      recordRuntimeContextUsage(event.value)
+      return
+    }
+    if (event.type === 'clearContextUsage') {
+      clearRuntimeContextUsage(event.agentId)
+      return
+    }
+    if (event.type === 'diffsUpdated') {
+      replaceAgentDiffArtifacts({
+        agentId: event.agentId,
+        diffs: event.diffs,
+      })
+      return
+    }
+    if (event.type === 'runtimeState') {
+      setAgentRuntimeState(event.agentId, runtimeStateWithoutUndefined(event.state))
+      return
+    }
+    if (event.type === 'fileOperationStarted' || event.type === 'fileOperationCompleted') {
+      recordRuntimeTimelineEvent(fileOperationTimelineEvent(event))
+    }
+  }),
 }
 
-export class RuntimeProjection extends Context.Tag('@aether/RuntimeProjection')<
-  RuntimeProjection,
+export class RuntimeProjector extends Context.Tag('@aether/RuntimeProjector')<
+  RuntimeProjector,
   RuntimeLifecycleProjection
 >() {
-  static readonly liveLayer = Layer.succeed(RuntimeProjection, defaultProjection)
+  static readonly liveLayer = Layer.succeed(RuntimeProjector, liveProjector)
 }
 
 export function enqueueAgentTurn(
@@ -74,101 +171,92 @@ export function runtimeStateWithoutUndefined<T extends Record<string, unknown>>(
 export function setRuntimeState(
   agentId: string,
   state: Record<string, unknown>,
-  projection: Pick<RuntimeLifecycleProjection, 'setAgentRuntimeState'>,
+  projection: RuntimeLifecycleProjection,
 ): Effect.Effect<void, never, never>
 export function setRuntimeState(
   agentId: string,
   state: Record<string, unknown>,
-): Effect.Effect<void, never, RuntimeProjection>
+): Effect.Effect<void, never, RuntimeProjector>
 export function setRuntimeState(
   agentId: string,
   state: Record<string, unknown>,
-  projection?: Pick<RuntimeLifecycleProjection, 'setAgentRuntimeState'>,
+  projection?: RuntimeLifecycleProjection,
 ) {
-  const persist = (projection: Pick<RuntimeLifecycleProjection, 'setAgentRuntimeState'>) => Effect.sync(() => {
-    projection.setAgentRuntimeState(agentId, runtimeStateWithoutUndefined(state))
-  })
-  return projection ? persist(projection) : Effect.flatMap(RuntimeProjection, persist)
+  const event = { type: 'runtimeState' as const, agentId, state }
+  return projection ? projectRuntimeEvent(event, projection) : projectRuntimeEvent(event)
 }
 
 export function setRuntimeStatus(
   agentId: string,
   status: AgentStatus,
-  projection: Pick<RuntimeLifecycleProjection, 'setAgentStatus'>,
+  projection: RuntimeLifecycleProjection,
 ): Effect.Effect<void, never, never>
 export function setRuntimeStatus(
   agentId: string,
   status: AgentStatus,
-): Effect.Effect<void, never, RuntimeProjection>
+): Effect.Effect<void, never, RuntimeProjector>
 export function setRuntimeStatus(
   agentId: string,
   status: AgentStatus,
-  projection?: Pick<RuntimeLifecycleProjection, 'setAgentStatus'>,
+  projection?: RuntimeLifecycleProjection,
 ) {
-  const persist = (projection: Pick<RuntimeLifecycleProjection, 'setAgentStatus'>) => Effect.sync(() => {
-    projection.setAgentStatus(agentId, status)
-  })
-  return projection ? persist(projection) : Effect.flatMap(RuntimeProjection, persist)
+  const event = { type: 'status' as const, agentId, status }
+  return projection ? projectRuntimeEvent(event, projection) : projectRuntimeEvent(event)
 }
 
 export function recordRuntimeError(
   agentId: string,
   error: unknown,
   event: RuntimeErrorEvent,
-  projection: Pick<RuntimeLifecycleProjection, 'recordRuntimeTimelineEvent'>,
+  projection: RuntimeLifecycleProjection,
 ): Effect.Effect<void, never, never>
 export function recordRuntimeError(
   agentId: string,
   error: unknown,
   event: RuntimeErrorEvent,
-): Effect.Effect<void, never, RuntimeProjection>
+): Effect.Effect<void, never, RuntimeProjector>
 export function recordRuntimeError(
   agentId: string,
   error: unknown,
   event: RuntimeErrorEvent,
-  projection?: Pick<RuntimeLifecycleProjection, 'recordRuntimeTimelineEvent'>,
+  projection?: RuntimeLifecycleProjection,
 ) {
-  const persist = (
-    projection: Pick<RuntimeLifecycleProjection, 'recordRuntimeTimelineEvent'>,
-  ) => Effect.sync(() => {
-    projection.recordRuntimeTimelineEvent({
+  const projectionEvent: RuntimeProjectionEvent = {
+    type: 'timelineEvent',
+    value: {
       agentId,
       kind: event.kind,
       tone: event.tone ?? 'error',
       label: event.label,
       detail: runtimeErrorDetail(error),
-    })
-  })
-  return projection ? persist(projection) : Effect.flatMap(RuntimeProjection, persist)
+    },
+  }
+  return projection ? projectRuntimeEvent(projectionEvent, projection) : projectRuntimeEvent(projectionEvent)
 }
 
 export function captureRuntimeDiffs(
   agentId: string,
   collect: () => RuntimeDiffArtifact[],
-  projection: Pick<RuntimeLifecycleProjection, 'replaceAgentDiffArtifacts'>,
+  projection: RuntimeLifecycleProjection,
 ): Effect.Effect<void, never, never>
 export function captureRuntimeDiffs(
   agentId: string,
   collect: () => RuntimeDiffArtifact[],
-): Effect.Effect<void, never, RuntimeProjection>
+): Effect.Effect<void, never, RuntimeProjector>
 export function captureRuntimeDiffs(
   agentId: string,
   collect: () => RuntimeDiffArtifact[],
-  projection?: Pick<RuntimeLifecycleProjection, 'replaceAgentDiffArtifacts'>,
+  projection?: RuntimeLifecycleProjection,
 ) {
-  const persist = (
-    projection: Pick<RuntimeLifecycleProjection, 'replaceAgentDiffArtifacts'>,
-  ) => Effect.sync(() => {
-    try {
-      projection.replaceAgentDiffArtifacts({
-        agentId,
-        diffs: collect(),
-      })
-    } catch {
-      // Diff capture is an observability projection; runtime transcripts remain authoritative.
-    }
-  })
-  return projection ? persist(projection) : Effect.flatMap(RuntimeProjection, persist)
+  return Effect.exit(Effect.sync(() => collect())).pipe(
+    Effect.flatMap((exit) => {
+      if (Exit.isFailure(exit)) return Effect.void
+      const diffs = exit.value
+      const event = { type: 'diffsUpdated' as const, agentId, diffs }
+      return Effect.exit(projection ? projectRuntimeEvent(event, projection) : projectRuntimeEvent(event))
+    }),
+    Effect.asVoid,
+  )
 }
 
 type RuntimeTurnLifecycleInput<T> = {
@@ -188,18 +276,20 @@ export function runAgentTurnLifecycle<T>(
 ): Effect.Effect<T, RuntimeLifecycleError, never>
 export function runAgentTurnLifecycle<T>(
   input: RuntimeTurnLifecycleInput<T> & { projection?: undefined },
-): Effect.Effect<T, RuntimeLifecycleError, RuntimeProjection>
+): Effect.Effect<T, RuntimeLifecycleError, RuntimeProjector>
 export function runAgentTurnLifecycle<T>(input: RuntimeTurnLifecycleInput<T>) {
   let finalStatus: AgentStatus | null = null
 
   return Effect.flatMap(input.projection
     ? Effect.succeed(input.projection)
-    : RuntimeProjection, (projection) =>
+    : RuntimeProjector, (projection) =>
       Effect.gen(function* () {
         yield* setRuntimeStatus(input.agentId, 'running', projection)
-        yield* Effect.sync(() => {
-          projection.appendUserMessage({ agentId: input.agentId, text: input.displayText })
-        })
+        yield* projectRuntimeEvent({
+          type: 'userMessage',
+          agentId: input.agentId,
+          text: input.displayText,
+        }, projection)
         const result = yield* Effect.tryPromise({
           try: input.run,
           catch: (cause) => runtimeLifecycleError('Runtime turn failed', cause),
@@ -222,11 +312,28 @@ export function runAgentTurnLifecycle<T>(input: RuntimeTurnLifecycleInput<T>) {
           input.isCurrent?.() === false
             ? Effect.void
             : Effect.fail(error)),
-        Effect.ensuring(Effect.sync(() => {
-          if (finalStatus) projection.setAgentStatus(input.agentId, finalStatus)
-        })),
+        Effect.ensuring(Effect.suspend(() =>
+          finalStatus
+            ? setRuntimeStatus(input.agentId, finalStatus, projection)
+            : Effect.void)),
       ),
   )
+}
+
+export function projectRuntimeEvent(
+  event: RuntimeProjectionEvent,
+  projection: RuntimeLifecycleProjection,
+): Effect.Effect<void, never, never>
+export function projectRuntimeEvent(
+  event: RuntimeProjectionEvent,
+): Effect.Effect<void, never, RuntimeProjector>
+export function projectRuntimeEvent(
+  event: RuntimeProjectionEvent,
+  projection?: RuntimeLifecycleProjection,
+) {
+  const run = (projection: RuntimeLifecycleProjection) =>
+    Effect.suspend(() => projection.project(event))
+  return projection ? run(projection) : Effect.flatMap(RuntimeProjector, run)
 }
 
 function callbackEffect(
@@ -247,9 +354,9 @@ function runtimeLifecycleError(message: string, cause: unknown) {
 }
 
 export async function runRuntimeLifecyclePromise<A>(
-  effect: Effect.Effect<A, unknown, RuntimeProjection>,
+  effect: Effect.Effect<A, unknown, RuntimeProjector>,
 ) {
-  const exit = await Effect.runPromiseExit(effect.pipe(Effect.provide(RuntimeProjection.liveLayer)))
+  const exit = await Effect.runPromiseExit(effect.pipe(Effect.provide(RuntimeProjector.liveLayer)))
   if (Exit.isSuccess(exit)) return exit.value
   const failure = Option.getOrUndefined(Cause.failureOption(exit.cause))
   if (failure instanceof RuntimeLifecycleError && failure.message === 'Runtime turn failed') {
@@ -260,9 +367,9 @@ export async function runRuntimeLifecyclePromise<A>(
 }
 
 export function runRuntimeLifecycleSync<A>(
-  effect: Effect.Effect<A, unknown, RuntimeProjection>,
+  effect: Effect.Effect<A, unknown, RuntimeProjector>,
 ) {
-  const exit = Effect.runSyncExit(effect.pipe(Effect.provide(RuntimeProjection.liveLayer)))
+  const exit = Effect.runSyncExit(effect.pipe(Effect.provide(RuntimeProjector.liveLayer)))
   if (Exit.isSuccess(exit)) return exit.value
   const failure = Option.getOrUndefined(Cause.failureOption(exit.cause))
   if (failure instanceof RuntimeLifecycleError && failure.message === 'Runtime turn failed') {
@@ -278,4 +385,22 @@ function runtimeErrorDetail(error: unknown): string {
     if (error.cause !== undefined) return String(error.cause)
   }
   return error instanceof Error ? error.message : String(error)
+}
+
+function fileOperationTimelineEvent(
+  event: Extract<RuntimeProjectionEvent, {
+    type: 'fileOperationStarted' | 'fileOperationCompleted'
+  }>,
+): Parameters<typeof recordRuntimeTimelineEvent>[0] {
+  const status = event.type === 'fileOperationStarted' ? 'started' : event.status
+  const path = event.path ? ` ${event.path}` : ''
+  const label = `${event.toolName} ${status}`
+  return {
+    agentId: event.agentId,
+    kind: event.type,
+    tone: event.type === 'fileOperationCompleted' && event.status === 'failed' ? 'error' : 'tool',
+    label,
+    detail: event.summary ?? `${event.toolName}${path}`,
+    payload: event,
+  }
 }

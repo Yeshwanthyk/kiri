@@ -1,28 +1,6 @@
-import type { SendMessageImage, ThinkingLevel } from '~/lib/contracts'
-import {
-  interruptCodexAgent,
-  promptCodexAgent,
-  resetCodexSession,
-  setCodexThinkingLevel,
-  steerCodexAgent,
-} from './codex-runtime'
-import {
-  answerClaudeQuestion,
-  interruptClaudeAgent,
-  promptClaudeAgent,
-  resetClaudeSession,
-  setClaudeThinkingLevel,
-  steerClaudeAgent,
-} from './claude-runtime'
-import {
-  forkPiSession,
-  interruptPiAgent,
-  promptPiAgent,
-  resetPiSession,
-  setPiThinkingLevel,
-  steerPiAgent,
-} from './pi-runtime'
+import type { ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import { getAgentLaunchConfig } from './db'
+import { runtimeAdapters } from './provider-runtime'
 
 export async function promptAgent(input: {
   agentId: string
@@ -30,10 +8,7 @@ export async function promptAgent(input: {
   images?: SendMessageImage[]
 }) {
   const config = getAgentLaunchConfig(input.agentId)
-  if (config.runtime === 'pi') return promptPiAgent(input)
-  if (config.runtime === 'codex') return promptCodexAgent(input)
-  if (config.runtime === 'claude') return promptClaudeAgent(input)
-  throw new Error(`${config.runtime} agents can be configured, but cannot run chat today`)
+  return runtimeAdapters[config.runtime].prompt(input)
 }
 
 export async function steerAgent(input: {
@@ -42,17 +17,15 @@ export async function steerAgent(input: {
   images?: SendMessageImage[]
 }) {
   const config = getAgentLaunchConfig(input.agentId)
-  if (config.runtime === 'pi') return steerPiAgent(input)
-  if (config.runtime === 'codex') return steerCodexAgent(input)
-  if (config.runtime === 'claude') return steerClaudeAgent(input)
+  const adapter = runtimeAdapters[config.runtime]
+  if (adapter.steer) return adapter.steer(input)
   throw new Error(`${config.runtime} agents do not support steer yet`)
 }
 
 export async function interruptAgent(input: { agentId: string }) {
   const config = getAgentLaunchConfig(input.agentId)
-  if (config.runtime === 'pi') return interruptPiAgent(input)
-  if (config.runtime === 'codex') return interruptCodexAgent(input)
-  if (config.runtime === 'claude') return interruptClaudeAgent(input)
+  const adapter = runtimeAdapters[config.runtime]
+  if (adapter.interrupt) return adapter.interrupt(input)
   throw new Error(`${config.runtime} agents do not support interrupt yet`)
 }
 
@@ -61,24 +34,33 @@ export async function setAgentThinkingLevel(input: {
   level?: ThinkingLevel
 }) {
   const config = getAgentLaunchConfig(input.agentId)
-  if (config.runtime === 'pi') return setPiThinkingLevel(input)
-  if (config.runtime === 'codex') return setCodexThinkingLevel(input)
-  if (config.runtime === 'claude') return setClaudeThinkingLevel(input)
+  const adapter = runtimeAdapters[config.runtime]
+  if (adapter.setThinkingLevel) return adapter.setThinkingLevel(input)
   throw new Error(`${config.runtime} agents do not support /thinking yet`)
 }
 
 export async function resetAgentSession(input: { agentId: string }) {
   const config = getAgentLaunchConfig(input.agentId)
-  if (config.runtime === 'pi') return resetPiSession(input)
-  if (config.runtime === 'codex') return resetCodexSession(input)
-  if (config.runtime === 'claude') return resetClaudeSession(input)
+  const adapter = runtimeAdapters[config.runtime]
+  if (adapter.reset) return adapter.reset(input)
   throw new Error(`${config.runtime} agents do not support /new yet`)
 }
 
 export async function forkAgentSession(input: { agentId: string }) {
   const config = getAgentLaunchConfig(input.agentId)
-  if (config.runtime === 'pi') return forkPiSession(input)
+  const adapter = runtimeAdapters[config.runtime]
+  if (adapter.fork) return adapter.fork(input)
   throw new Error(`${config.runtime} agents do not support /fork yet`)
+}
+
+export async function reviewAgentSession(input: {
+  agentId: string
+  target: ReviewTarget
+}) {
+  const config = getAgentLaunchConfig(input.agentId)
+  const adapter = runtimeAdapters[config.runtime]
+  if (adapter.review) return adapter.review(input)
+  throw new Error(`${config.runtime} agents do not support /review yet`)
 }
 
 export async function answerAgentQuestion(input: {
@@ -87,6 +69,7 @@ export async function answerAgentQuestion(input: {
   answers: Record<string, string | string[]>
 }) {
   const config = getAgentLaunchConfig(input.agentId)
-  if (config.runtime === 'claude') return answerClaudeQuestion(input)
+  const adapter = runtimeAdapters[config.runtime]
+  if (adapter.answerQuestion) return adapter.answerQuestion(input)
   throw new Error(`${config.runtime} agents do not support interactive questions yet`)
 }

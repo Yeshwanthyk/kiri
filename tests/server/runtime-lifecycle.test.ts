@@ -6,36 +6,32 @@ import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
   nextThinkingLevel,
+  projectRuntimeEvent,
   runAgentTurnLifecycle,
   runRuntimeLifecyclePromise,
   runRuntimeLifecycleSync,
-  RuntimeProjection,
+  RuntimeProjector,
   RuntimeLifecycleError,
   runtimeStateWithoutUndefined,
   setRuntimeState,
   type RuntimeLifecycleProjection,
+  type RuntimeProjectionEvent,
 } from '../../src/server/runtime-lifecycle'
 
 function projection() {
   const calls: Array<{ type: string; value: unknown }> = []
   const fake: RuntimeLifecycleProjection = {
-    appendUserMessage: vi.fn((value: { agentId: string; text: string }) => {
-      calls.push({ type: 'message', value })
-    }),
-    recordRuntimeTimelineEvent: vi.fn((value: Parameters<RuntimeLifecycleProjection['recordRuntimeTimelineEvent']>[0]) => {
-      calls.push({ type: 'timeline', value })
-    }),
-    replaceAgentDiffArtifacts: vi.fn((value: { agentId: string; diffs: RuntimeDiffArtifact[] }) => {
-      calls.push({ type: 'diffs', value })
-    }),
-    setAgentRuntimeState: vi.fn((agentId: string, state: Record<string, unknown>) => {
-      calls.push({ type: 'state', value: { agentId, state } })
-    }),
-    setAgentStatus: vi.fn((agentId: string, status: AgentStatus) => {
-      calls.push({ type: 'status', value: { agentId, status } })
+    project: vi.fn((event: RuntimeProjectionEvent) => {
+      if (event.type === 'status') calls.push({ type: 'status', value: event })
+      else if (event.type === 'userMessage') calls.push({ type: 'message', value: event })
+      else if (event.type === 'timelineEvent') calls.push({ type: 'timeline', value: event.value })
+      else if (event.type === 'diffsUpdated') calls.push({ type: 'diffs', value: event })
+      else if (event.type === 'runtimeState') calls.push({ type: 'state', value: event })
+      else calls.push({ type: event.type, value: event })
+      return Effect.void
     }),
   }
-  return { calls, fake, layer: Layer.succeed(RuntimeProjection, fake) }
+  return { calls, fake, layer: Layer.succeed(RuntimeProjector, fake) }
 }
 
 describe('runtime lifecycle', () => {
@@ -110,12 +106,15 @@ describe('runtime lifecycle', () => {
 
     expect(result).toStrictEqual(Exit.fail(expect.any(Error)))
     expect(statuses(calls)).toEqual(['running', 'failed'])
-    expect(fake.recordRuntimeTimelineEvent).toHaveBeenCalledWith(expect.objectContaining({
+    expect(fake.project).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'timelineEvent',
+      value: expect.objectContaining({
       agentId: 'agent-1',
       kind: 'runtime_error',
       label: 'Runtime error',
       detail: 'failed turn',
       tone: 'error',
+      }),
     }))
   }))
 
@@ -136,8 +135,11 @@ describe('runtime lifecycle', () => {
       ))
 
       expect(result).toBe(turnError)
-      expect(fake.recordRuntimeTimelineEvent).toHaveBeenCalledWith(expect.objectContaining({
-        detail: 'provider exploded',
+      expect(fake.project).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'timelineEvent',
+        value: expect.objectContaining({
+          detail: 'provider exploded',
+        }),
       }))
     }))
 
@@ -200,7 +202,9 @@ describe('runtime lifecycle', () => {
     expect(failure).toStrictEqual(Exit.succeed(undefined))
     expect(statuses(calls)).toEqual(['running', 'running'])
     expect(calls.some((call) => call.type === 'success' || call.type === 'cleanup')).toBe(false)
-    expect(fake.recordRuntimeTimelineEvent).not.toHaveBeenCalled()
+    expect(fake.project).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'timelineEvent',
+    }))
   }))
 
   it.effect('filters undefined runtime state values before persistence', () =>
@@ -219,10 +223,55 @@ describe('runtime lifecycle', () => {
     })
 
     yield* setRuntimeState('agent-1', { threadId: undefined, websocketUrl: 'ws://local' }, fake)
-    expect(fake.setAgentRuntimeState).toHaveBeenCalledWith('agent-1', {
+    expect(fake.project).toHaveBeenCalledWith({
+      type: 'runtimeState',
+      agentId: 'agent-1',
+      state: {
       websocketUrl: 'ws://local',
+      },
     })
   }))
+
+  it.effect('projects file operation events through the projector boundary', () =>
+    Effect.gen(function* () {
+      const { calls, fake } = projection()
+
+      yield* projectRuntimeEvent({
+        type: 'fileOperationStarted',
+        agentId: 'agent-1',
+        toolName: 'Edit',
+        path: 'src/file.ts',
+        summary: 'Editing src/file.ts',
+      }, fake)
+      yield* projectRuntimeEvent({
+        type: 'fileOperationCompleted',
+        agentId: 'agent-1',
+        toolName: 'Edit',
+        status: 'completed',
+        path: 'src/file.ts',
+      }, fake)
+      yield* captureRuntimeDiffs('agent-1', () => [{
+        title: 'file.ts',
+        path: 'src/file.ts',
+        patch: 'diff --git a/src/file.ts b/src/file.ts',
+      }], fake)
+
+      expect(calls.map((call) => call.type)).toEqual([
+        'fileOperationStarted',
+        'fileOperationCompleted',
+        'diffs',
+      ])
+      expect(calls.at(-1)).toMatchObject({
+        type: 'diffs',
+        value: {
+          type: 'diffsUpdated',
+          agentId: 'agent-1',
+          diffs: [{
+            path: 'src/file.ts',
+          }],
+        },
+      })
+    }))
 
   it('cycles thinking levels in contract order', () => {
     expect(nextThinkingLevel(null)).toBe('off')
@@ -233,7 +282,7 @@ describe('runtime lifecycle', () => {
   it.effect('swallows diff capture projection failures', () =>
     Effect.gen(function* () {
     const { fake } = projection()
-    fake.replaceAgentDiffArtifacts = vi.fn(() => {
+    fake.project = vi.fn(() => {
       throw new Error('db unavailable')
     })
 
@@ -243,6 +292,17 @@ describe('runtime lifecycle', () => {
       patch: 'diff --git a/file.ts b/file.ts',
     }], fake)
   }))
+
+  it.effect('preserves existing diffs when diff collection fails', () =>
+    Effect.gen(function* () {
+      const { fake } = projection()
+
+      yield* captureRuntimeDiffs('agent-1', () => {
+        throw new Error('git unavailable')
+      }, fake)
+
+      expect(fake.project).not.toHaveBeenCalled()
+    }))
 })
 
 function statuses(calls: Array<{ type: string; value: unknown }>) {

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import { Effect } from 'effect'
-import type { SendMessageImage, ThinkingLevel } from '~/lib/contracts'
+import type { ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import {
   CodexAppServerAdapter,
   defaultCodexWebsocketUrl,
@@ -188,6 +188,21 @@ export async function resetCodexSession(input: { agentId: string }) {
   resetStoredSession(input.agentId)
 }
 
+export async function reviewCodexSession(input: {
+  agentId: string
+  target: ReviewTarget
+}) {
+  const config = getAgentLaunchConfig(input.agentId)
+  if (config.runtime !== 'codex') {
+    throw new Error(`${config.runtime} agents do not support /review yet`)
+  }
+  await runRuntimeLifecyclePromise(enqueueAgentTurn(config.id, queues, () =>
+    reviewCodexSessionNow({
+      ...config,
+      runtimeState: getAgentRuntimeState(config.id),
+    }, input.target)))
+}
+
 async function promptCodexAgentNow(
   config: ReturnType<typeof getAgentLaunchConfig> & { runtimeState: Record<string, unknown> },
   text: string,
@@ -214,6 +229,41 @@ async function promptCodexAgentNow(
       config,
       state,
       text,
+      generation,
+      setActiveThreadId: (threadId) => {
+        activeThreadId = threadId
+      },
+    })),
+  }))
+}
+
+async function reviewCodexSessionNow(
+  config: ReturnType<typeof getAgentLaunchConfig> & { runtimeState: Record<string, unknown> },
+  target: ReviewTarget,
+) {
+  const adapter = getOrCreateCodexAdapter(stringValue(config.runtimeState.websocketUrl))
+  const state = codexState(config.runtimeState)
+  const generation = sessionGenerations.get(config.id) ?? 0
+  let activeThreadId = state.threadId
+  const displayText = reviewDisplayText(target)
+  await runRuntimeLifecyclePromise(runAgentTurnLifecycle({
+    agentId: config.id,
+    displayText,
+    errorEvent: { kind: 'codex_error', label: 'Codex error' },
+    isCurrent: () => (sessionGenerations.get(config.id) ?? 0) === generation,
+    successStatus: (markIdle) => markIdle ? 'idle' : null,
+    onError: () => {
+      setCodexState(config.id, {
+        ...state,
+        threadId: activeThreadId,
+        websocketUrl: adapterUrl(state.websocketUrl),
+      })
+    },
+    run: () => runRuntimeLifecyclePromise(startCodexReview({
+      adapter,
+      config,
+      state,
+      target,
       generation,
       setActiveThreadId: (threadId) => {
         activeThreadId = threadId
@@ -265,6 +315,60 @@ function startOrSteerCodexTurn(input: {
       ...codexReasoningOptions(getAgentThinkingLevel(input.config.id)),
     }))
     const turnId = turnResponse.turn.id
+    yield* Effect.sync(() => {
+      setCodexState(input.config.id, {
+        ...input.state,
+        threadId,
+        websocketUrl: adapterUrl(input.state.websocketUrl),
+      })
+    })
+    const completedTurn = yield* codexProtocolPromise(() =>
+      input.adapter.waitForTurnCompleted({ threadId, turnId }))
+    if (!isCurrentCodexGeneration(input.config.id, input.generation)) return false
+    yield* Effect.sync(() => {
+      recordCodexTurn(input.config.id, completedTurn)
+      captureCodexGitDiffArtifacts(input.config)
+      setCodexState(input.config.id, {
+        ...input.state,
+        threadId,
+        websocketUrl: adapterUrl(input.state.websocketUrl),
+      })
+    })
+    return true
+  })
+}
+
+function startCodexReview(input: {
+  adapter: CodexAppServerAdapter
+  config: ReturnType<typeof getAgentLaunchConfig>
+  state: CodexRuntimeState
+  target: ReviewTarget
+  generation: number
+  setActiveThreadId: (threadId: string) => void
+}) {
+  return Effect.gen(function* () {
+    const threadId = yield* ensureCodexThreadEffect(input)
+    if (!isCurrentCodexGeneration(input.config.id, input.generation)) return false
+    yield* Effect.sync(() => {
+      input.setActiveThreadId(threadId)
+      threadAgents.set(threadId, input.config.id)
+      agentThreads.set(input.config.id, threadId)
+    })
+    const thread = yield* readCodexThreadEffect(input.adapter, threadId)
+    const activeTurnId = activeTurnIdFromThread(thread)
+    if (activeTurnId) {
+      return yield* new RuntimeLifecycleError({
+        message: 'Runtime turn failed',
+        cause: new Error('Codex session already has an active turn'),
+      })
+    }
+
+    const review = yield* codexProtocolPromise(() => input.adapter.startReview({
+      threadId,
+      target: input.target,
+      delivery: 'inline',
+    }))
+    const turnId = review.turn.id
     yield* Effect.sync(() => {
       setCodexState(input.config.id, {
         ...input.state,
@@ -738,6 +842,11 @@ function commandText(item: Record<string, unknown>) {
   const command = stringValue(item.command) ?? 'Command'
   const output = stringValue(item.aggregatedOutput)
   return output ? `${command}\n${output}` : command
+}
+
+function reviewDisplayText(target: ReviewTarget) {
+  if (target.type === 'baseBranch') return `/review base ${target.branch}`
+  return '/review'
 }
 
 function automaticServerRequestResponse(method: string) {
