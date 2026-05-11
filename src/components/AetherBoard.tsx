@@ -2473,26 +2473,29 @@ function ChatPanel({
   onDetailRefresh: RefreshAgentDetail
 }) {
   const [pending, setPending] = React.useState(false)
-  const [pendingPrompt, setPendingPrompt] = React.useState<string | null>(null)
+  const [pendingPrompt, setPendingPrompt] = React.useState<
+    { text: string; baselineUserCount: number } | null
+  >(null)
   const [localRunning, setLocalRunning] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const isBackendRunning = agent.status === 'running'
   const isRunning = isBackendRunning || localRunning
+  const userMessageCount = React.useMemo(
+    () => agent.messages.reduce((count, message) => (message.role === 'user' ? count + 1 : count), 0),
+    [agent.messages],
+  )
   const pendingMessage = React.useMemo<BoardMessage | null>(
     () => {
       if (pendingPrompt === null) return null
-      const persisted = agent.messages.some(
-        (message) => message.role === 'user' && message.text === pendingPrompt,
-      )
-      if (persisted) return null
+      if (userMessageCount > pendingPrompt.baselineUserCount) return null
       return {
         id: `pending-${agent.id}`,
         role: 'user',
-        text: pendingPrompt,
+        text: pendingPrompt.text,
         timestamp: new Date().toISOString(),
       }
     },
-    [agent.id, agent.messages, pendingPrompt],
+    [agent.id, pendingPrompt, userMessageCount],
   )
   const visibleMessages = React.useMemo(
     () => (pendingMessage ? [...agent.messages, pendingMessage] : agent.messages),
@@ -2580,7 +2583,10 @@ function ChatPanel({
       return
     }
 
-    setPendingPrompt(pendingPromptText(prompt, promptImages))
+    setPendingPrompt({
+      text: pendingPromptText(prompt, promptImages),
+      baselineUserCount: userMessageCount,
+    })
     setError(null)
     clearComposer()
 
