@@ -28,10 +28,16 @@ import {
   recordRuntimeTimelineEvent,
   replaceAgentDiffArtifacts,
   resetSession as resetStoredSession,
-  setAgentRuntimeState,
   setAgentStatus,
 } from './db'
 import { collectGitDiffArtifactsWithFallback, diffArtifactsFromPatch } from './git-diff'
+import {
+  captureRuntimeDiffs,
+  enqueueAgentTurn,
+  nextThinkingLevel,
+  runAgentTurnLifecycle,
+  setRuntimeState,
+} from './runtime-lifecycle'
 
 type CodexRuntimeState = {
   threadId?: string
@@ -78,13 +84,10 @@ export async function promptCodexAgent(input: {
     }
   }
 
-  const previous = queues.get(config.id) ?? Promise.resolve()
-  const next = previous.then(() => promptCodexAgentNow({
+  await enqueueAgentTurn(config.id, queues, () => promptCodexAgentNow({
     ...config,
     runtimeState: getAgentRuntimeState(config.id),
   }, text))
-  queues.set(config.id, next.catch(() => {}))
-  await next
 }
 
 export async function steerCodexAgent(input: {
@@ -190,80 +193,69 @@ async function promptCodexAgentNow(
   const state = codexState(config.runtimeState)
   const generation = sessionGenerations.get(config.id) ?? 0
   let activeThreadId = state.threadId
-  setAgentStatus(config.id, 'running')
-  appendUserMessage({ agentId: config.id, text })
-
-  try {
-    const threadId = await ensureCodexThread({ adapter, config, state })
-    if ((sessionGenerations.get(config.id) ?? 0) !== generation) return
-    activeThreadId = threadId
-    threadAgents.set(threadId, config.id)
-    agentThreads.set(config.id, threadId)
-    const thread = await readCodexThread(adapter, threadId)
-    syncCodexThreadStatus(config.id, thread)
-    const activeTurnId = activeTurnIdFromThread(thread)
-    if (activeTurnId) {
-      await steerCodexTurn(config.id, {
+  await runAgentTurnLifecycle({
+    agentId: config.id,
+    displayText: text,
+    errorEvent: { kind: 'codex_error', label: 'Codex error' },
+    isCurrent: () => (sessionGenerations.get(config.id) ?? 0) === generation,
+    successStatus: (markIdle) => markIdle ? 'idle' : null,
+    onError: () => {
+      setCodexState(config.id, {
+        ...state,
+        threadId: activeThreadId,
+        websocketUrl: adapterUrl(state.websocketUrl),
+      })
+    },
+    run: async () => {
+      const threadId = await ensureCodexThread({ adapter, config, state })
+      if ((sessionGenerations.get(config.id) ?? 0) !== generation) return false
+      activeThreadId = threadId
+      threadAgents.set(threadId, config.id)
+      agentThreads.set(config.id, threadId)
+      const thread = await readCodexThread(adapter, threadId)
+      syncCodexThreadStatus(config.id, thread)
+      const activeTurnId = activeTurnIdFromThread(thread)
+      if (activeTurnId) {
+        await steerCodexTurn(config.id, {
+          ...state,
+          threadId,
+          websocketUrl: adapterUrl(state.websocketUrl),
+        }, activeTurnId, text)
+        return false
+      }
+      const turnResponse = await adapter.startTurn({
+        threadId,
+        input: textInput(text),
+        model: config.model,
+        sandboxPolicy: CODEX_SANDBOX_POLICY,
+        ...codexReasoningOptions(getAgentThinkingLevel(config.id)),
+      })
+      const turnId = turnResponse.turn.id
+      setCodexState(config.id, {
         ...state,
         threadId,
         websocketUrl: adapterUrl(state.websocketUrl),
-      }, activeTurnId, text)
-      return
-    }
-    const turnResponse = await adapter.startTurn({
-      threadId,
-      input: textInput(text),
-      model: config.model,
-      sandboxPolicy: CODEX_SANDBOX_POLICY,
-      ...codexReasoningOptions(getAgentThinkingLevel(config.id)),
-    })
-    const turnId = turnResponse.turn.id
-    setCodexState(config.id, {
-      ...state,
-      threadId,
-      websocketUrl: adapterUrl(state.websocketUrl),
-    })
-    const completedTurn = await adapter.waitForTurnCompleted({ threadId, turnId })
-    if ((sessionGenerations.get(config.id) ?? 0) !== generation) return
-    recordCodexTurn(config.id, completedTurn)
-    captureCodexGitDiffArtifacts(config)
-    setCodexState(config.id, {
-      ...state,
-      threadId,
-      websocketUrl: adapterUrl(state.websocketUrl),
-    })
-    setAgentStatus(config.id, 'idle')
-  } catch (error) {
-    if ((sessionGenerations.get(config.id) ?? 0) !== generation) return
-    setCodexState(config.id, {
-      ...state,
-      threadId: activeThreadId,
-      websocketUrl: adapterUrl(state.websocketUrl),
-    })
-    setAgentStatus(config.id, 'failed')
-    recordRuntimeTimelineEvent({
-      agentId: config.id,
-      kind: 'codex_error',
-      tone: 'error',
-      label: 'Codex error',
-      detail: error instanceof Error ? error.message : String(error),
-    })
-    throw error
-  }
+      })
+      const completedTurn = await adapter.waitForTurnCompleted({ threadId, turnId })
+      if ((sessionGenerations.get(config.id) ?? 0) !== generation) return false
+      recordCodexTurn(config.id, completedTurn)
+      captureCodexGitDiffArtifacts(config)
+      setCodexState(config.id, {
+        ...state,
+        threadId,
+        websocketUrl: adapterUrl(state.websocketUrl),
+      })
+      return true
+    },
+  })
 }
 
 function captureCodexGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchConfig>) {
-  try {
-    replaceAgentDiffArtifacts({
-      agentId: config.id,
-      diffs: collectGitDiffArtifactsWithFallback(
-        config.cwd,
-        getSessionDiffFallbackCwds(config.id),
-      ),
-    })
-  } catch {
-    // Diff capture is a projection for the UI; chat persistence is authoritative.
-  }
+  captureRuntimeDiffs(config.id, () =>
+    collectGitDiffArtifactsWithFallback(
+      config.cwd,
+      getSessionDiffFallbackCwds(config.id),
+    ))
 }
 
 async function ensureCodexThread(input: {
@@ -541,9 +533,7 @@ function recordCodexItem(agentId: string, item: unknown, timestamp = new Date().
 }
 
 function setCodexState(agentId: string, state: CodexRuntimeState) {
-  setAgentRuntimeState(agentId, Object.fromEntries(
-    Object.entries(state).filter(([, value]) => value !== undefined),
-  ))
+  setRuntimeState(agentId, state)
 }
 
 function codexState(value: Record<string, unknown>): CodexRuntimeState {
@@ -616,12 +606,6 @@ function adapterUrl(value: string | undefined) {
 function codexReasoningOptions(level: ThinkingLevel | null) {
   if (!level) return {}
   return { effort: level === 'off' ? 'none' : level }
-}
-
-function nextThinkingLevel(current: ThinkingLevel | null) {
-  const levels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
-  const index = current ? levels.indexOf(current) : -1
-  return levels[(index + 1) % levels.length]
 }
 
 function objectValue(value: unknown): Record<string, unknown> {

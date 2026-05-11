@@ -24,12 +24,17 @@ import {
   recordRuntimeContextUsage,
   recordRuntimeMessage,
   recordRuntimeTimelineEvent,
-  replaceAgentDiffArtifacts,
   resetSession as resetStoredSession,
-  setAgentRuntimeState,
   setAgentStatus,
 } from './db'
 import { collectGitDiffArtifactsWithFallback } from './git-diff'
+import {
+  captureRuntimeDiffs,
+  enqueueAgentTurn,
+  nextThinkingLevel,
+  runAgentTurnLifecycle,
+  setRuntimeState,
+} from './runtime-lifecycle'
 
 type ClaudeRuntimeState = {
   resume?: string
@@ -88,12 +93,9 @@ export async function promptClaudeAgent(input: {
   }
 
   const prompt = buildUserMessage(input.text, input.images ?? [])
-  const previous = queues.get(config.id) ?? Promise.resolve()
-  const next = previous.then(() =>
+  await enqueueAgentTurn(config.id, queues, () =>
     promptClaudeAgentNow(config, prompt),
   )
-  queues.set(config.id, next.catch(() => {}))
-  await next
 }
 
 export async function steerClaudeAgent(input: {
@@ -171,28 +173,19 @@ async function promptClaudeAgentNow(
   message: SDKUserMessage,
 ) {
   const generation = sessionGenerations.get(config.id) ?? 0
-  setAgentStatus(config.id, 'running')
-  appendUserMessage({ agentId: config.id, text: messageDisplayText(message) })
-
-  try {
-    const live = getOrCreateClaudeSession(config)
-    await prepareClaudeTurn(live, config)
-    await runClaudeTurn(live, message)
-    if ((sessionGenerations.get(config.id) ?? 0) !== generation) return
-    captureClaudeGitDiffArtifacts(config)
-    setAgentStatus(config.id, 'idle')
-  } catch (error) {
-    if ((sessionGenerations.get(config.id) ?? 0) !== generation) return
-    setAgentStatus(config.id, 'failed')
-    recordRuntimeTimelineEvent({
-      agentId: config.id,
-      kind: 'claude_error',
-      tone: 'error',
-      label: 'Claude error',
-      detail: error instanceof Error ? error.message : String(error),
-    })
-    throw error
-  }
+  await runAgentTurnLifecycle({
+    agentId: config.id,
+    displayText: messageDisplayText(message),
+    errorEvent: { kind: 'claude_error', label: 'Claude error' },
+    isCurrent: () => (sessionGenerations.get(config.id) ?? 0) === generation,
+    run: async () => {
+      const live = getOrCreateClaudeSession(config)
+      await prepareClaudeTurn(live, config)
+      await runClaudeTurn(live, message)
+      if ((sessionGenerations.get(config.id) ?? 0) !== generation) return
+      captureClaudeGitDiffArtifacts(config)
+    },
+  })
 }
 
 async function prepareClaudeTurn(
@@ -496,17 +489,11 @@ function closeClaudeSession(agentId: string) {
 }
 
 function captureClaudeGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchConfig>) {
-  try {
-    replaceAgentDiffArtifacts({
-      agentId: config.id,
-      diffs: collectGitDiffArtifactsWithFallback(
-        config.cwd,
-        getSessionDiffFallbackCwds(config.id),
-      ),
-    })
-  } catch {
-    // Diff capture is a UI projection; the Claude transcript is authoritative.
-  }
+  captureRuntimeDiffs(config.id, () =>
+    collectGitDiffArtifactsWithFallback(
+      config.cwd,
+      getSessionDiffFallbackCwds(config.id),
+    ))
 }
 
 function claudeOptions(
@@ -668,12 +655,6 @@ function thinkingTokenBudget(level: ThinkingLevel) {
   if (level === 'high') return 8_192
   if (level === 'xhigh') return 16_384
   return 0
-}
-
-function nextThinkingLevel(current: ThinkingLevel | null) {
-  const levels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
-  const index = current ? levels.indexOf(current) : -1
-  return levels[(index + 1) % levels.length]
 }
 
 function buildUserMessage(text: string, images: SendMessageImage[]) {
@@ -871,9 +852,7 @@ function recordClaudeContextUsage(
 }
 
 function setClaudeState(agentId: string, state: ClaudeRuntimeState) {
-  setAgentRuntimeState(agentId, Object.fromEntries(
-    Object.entries(state).filter(([, value]) => value !== undefined),
-  ))
+  setRuntimeState(agentId, state)
 }
 
 function claudeState(value: Record<string, unknown>): ClaudeRuntimeState {

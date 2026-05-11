@@ -10,11 +10,14 @@ import {
   recordAgentInfoEvent,
   recordPiTimelineEvent,
   recordPiMessages,
-  replaceAgentDiffArtifacts,
   resetSession,
   setAgentStatus,
 } from './db'
 import { collectGitDiffArtifacts } from './git-diff'
+import {
+  captureRuntimeDiffs,
+  enqueueAgentTurn,
+} from './runtime-lifecycle'
 import { getRuntimeSettings } from './settings'
 
 const adapters = new Map<string, PiRpcProcessAdapter>()
@@ -33,17 +36,9 @@ export async function promptPiAgent(input: {
   // Register the live adapter before the queued turn starts so immediate steer/interrupt
   // requests from the composer can find the process target.
   getOrCreatePiAdapter(config)
-  const previous = queues.get(config.id) ?? Promise.resolve()
-  const next = previous.then(() =>
+  await enqueueAgentTurn(config.id, queues, () =>
     promptPiAgentNow(config, promptWithSavedImages(config.id, input.text, input.images ?? [])),
   )
-  queues.set(
-    config.id,
-    next.catch(() => {
-      // Keep the queue alive after a failed turn.
-    }),
-  )
-  await next
 }
 
 export async function steerPiAgent(input: {
@@ -130,8 +125,8 @@ async function promptPiAgentNow(
 
   const adapter = getOrCreatePiAdapter(config)
 
-  setAgentStatus(config.id, 'running')
   appendUserMessage({ agentId: config.id, text })
+  setAgentStatus(config.id, 'running')
   let stopRecordingEvents: (() => void) | undefined
   try {
     adapter.start()
@@ -157,14 +152,7 @@ async function promptPiAgentNow(
       turnCompletedAt,
       sessionFile: after.sessionFile ?? before.sessionFile,
     })
-    try {
-      replaceAgentDiffArtifacts({
-        agentId: config.id,
-        diffs: collectGitDiffArtifacts(config.cwd),
-      })
-    } catch {
-      // Diff capture is a projection for the UI; chat persistence is authoritative.
-    }
+    captureRuntimeDiffs(config.id, () => collectGitDiffArtifacts(config.cwd))
   } finally {
     stopRecordingEvents?.()
     setAgentStatus(config.id, 'idle')
