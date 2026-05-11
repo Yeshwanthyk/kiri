@@ -2285,6 +2285,22 @@ h1 {
   padding: 8px 0;
 }
 
+.timeline-row.is-selected {
+  position: relative;
+}
+
+.timeline-row.is-selected::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
 .user-row {
   display: flex;
   justify-content: flex-end;

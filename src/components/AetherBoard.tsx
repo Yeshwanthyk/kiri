@@ -2530,6 +2530,28 @@ function ChatPanel({
   const messageListRef = React.useRef<HTMLDivElement | null>(null)
   const latestRowId = rows.at(-1)?.id ?? ''
   const [hasNewContent, setHasNewContent] = React.useState(false)
+  const [selectedMessageId, setSelectedMessageId] = React.useState<string | null>(null)
+  const [composerEmpty, setComposerEmpty] = React.useState(true)
+
+  const messageRows = React.useMemo(
+    () =>
+      rows.filter(
+        (row): row is Extract<AgentTimelineRow, { kind: 'message' }> => row.kind === 'message',
+      ),
+    [rows],
+  )
+  const selectedIndex = React.useMemo(() => {
+    if (selectedMessageId === null) return -1
+    return messageRows.findIndex((row) => row.message.id === selectedMessageId)
+  }, [messageRows, selectedMessageId])
+
+  React.useEffect(() => {
+    setSelectedMessageId(null)
+  }, [agent.id])
+
+  React.useEffect(() => {
+    if (selectedMessageId !== null && selectedIndex === -1) setSelectedMessageId(null)
+  }, [selectedIndex, selectedMessageId])
 
   React.useEffect(() => {
     if (agent.status !== 'running') setLocalRunning(false)
@@ -2543,6 +2565,7 @@ function ChatPanel({
   }, [agent.id])
 
   React.useLayoutEffect(() => {
+    if (selectedMessageId !== null) return
     const list = messageListRef.current
     if (!list) return
     const distance = list.scrollHeight - list.clientHeight - list.scrollTop
@@ -2552,7 +2575,87 @@ function ChatPanel({
     } else {
       setHasNewContent(true)
     }
-  }, [agent.status, latestRowId, rows.length])
+  }, [agent.status, latestRowId, rows.length, selectedMessageId])
+
+  React.useEffect(() => {
+    function isComposerTextarea(target: EventTarget | null): boolean {
+      return (
+        target instanceof HTMLTextAreaElement &&
+        target.dataset.testid === 'chat-input'
+      )
+    }
+
+    function scrollSelectedIntoView(messageId: string) {
+      requestAnimationFrame(() => {
+        const list = messageListRef.current
+        if (!list) return
+        const el = list.querySelector<HTMLElement>(
+          `[data-selected-id="${CSS.escape(messageId)}"]`,
+        )
+        el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      })
+    }
+
+    function selectIndex(nextIndex: number) {
+      const clamped = Math.max(0, Math.min(messageRows.length - 1, nextIndex))
+      const next = messageRows[clamped]
+      if (!next) return
+      setSelectedMessageId(next.message.id)
+      scrollSelectedIntoView(next.message.id)
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+
+      if (selectedMessageId === null) {
+        if (
+          event.key === 'ArrowUp' &&
+          !event.shiftKey &&
+          composerEmpty &&
+          isComposerTextarea(event.target) &&
+          messageRows.length > 0
+        ) {
+          event.preventDefault()
+          selectIndex(messageRows.length - 1)
+        }
+        return
+      }
+
+      if (event.shiftKey) return
+
+      const key = event.key
+      if (key === 'ArrowUp' || key === '[') {
+        event.preventDefault()
+        if (selectedIndex > 0) selectIndex(selectedIndex - 1)
+        return
+      }
+      if (key === 'ArrowDown' || key === ']') {
+        event.preventDefault()
+        if (selectedIndex >= messageRows.length - 1) {
+          setSelectedMessageId(null)
+        } else {
+          selectIndex(selectedIndex + 1)
+        }
+        return
+      }
+      if (key === 'j') {
+        event.preventDefault()
+        const list = messageListRef.current
+        if (list) list.scrollBy({ top: list.clientHeight * 0.5, behavior: 'smooth' })
+        return
+      }
+      if (key === 'k') {
+        event.preventDefault()
+        const list = messageListRef.current
+        if (list) list.scrollBy({ top: -list.clientHeight * 0.5, behavior: 'smooth' })
+        return
+      }
+      setSelectedMessageId(null)
+    }
+
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [composerEmpty, messageRows, selectedIndex, selectedMessageId])
 
   React.useEffect(() => {
     const list = messageListRef.current
@@ -2652,7 +2755,11 @@ function ChatPanel({
   return (
     <div className="chat-panel" data-testid="chat-panel">
       <div className="message-list-wrap">
-        <MessageTimeline rows={rows} listRef={messageListRef} />
+        <MessageTimeline
+          rows={rows}
+          listRef={messageListRef}
+          selectedMessageId={selectedMessageId}
+        />
         {hasNewContent ? (
           <button
             type="button"
@@ -2689,6 +2796,7 @@ function ChatPanel({
         onError={setError}
         onInterrupt={interrupt}
         onSubmitPrompt={submitPrompt}
+        onEmptyChange={setComposerEmpty}
       />
     </div>
   )
@@ -2704,6 +2812,7 @@ function ChatComposer({
   onError,
   onInterrupt,
   onSubmitPrompt,
+  onEmptyChange,
 }: {
   agentId: string
   contextUsage: AgentCell['contextUsage']
@@ -2718,12 +2827,17 @@ function ChatComposer({
     images: SendMessageImage[],
     clearComposer: () => void,
   ) => Promise<void>
+  onEmptyChange?: (empty: boolean) => void
 }) {
   const [draft, setDraft] = React.useState(() => readStoredChatDraft(agentId))
   const [images, setImages] = React.useState<SendMessageImage[]>([])
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
   const hasDraftContent = draft.trim().length > 0 || images.length > 0
+
+  React.useEffect(() => {
+    onEmptyChange?.(!hasDraftContent)
+  }, [hasDraftContent, onEmptyChange])
   const canInterrupt = isBackendRunning && !hasDraftContent
   const canSteer = isBackendRunning && hasDraftContent
   const canSend = !isRunning && hasDraftContent
@@ -2855,9 +2969,11 @@ function ChatComposer({
 const MessageTimeline = React.memo(function MessageTimeline({
   rows,
   listRef,
+  selectedMessageId,
 }: {
   rows: AgentTimelineRow[]
   listRef: React.RefObject<HTMLDivElement | null>
+  selectedMessageId: string | null
 }) {
   if (rows.length === 0) {
     return (
@@ -2881,6 +2997,7 @@ const MessageTimeline = React.memo(function MessageTimeline({
             key={row.id}
             message={row.message}
             hideTimestamp={hideTimestampByRowId.has(row.id)}
+            selected={selectedMessageId === row.message.id}
           />
         )
       })}
@@ -3041,17 +3158,24 @@ function PendingQuestionPanel({
 const MessageTimelineRow = React.memo(function MessageTimelineRow({
   message,
   hideTimestamp = false,
+  selected = false,
 }: {
   message: BoardMessage
   hideTimestamp?: boolean
+  selected?: boolean
 }) {
   const fullTime = formatTime(message.timestamp)
+  const selectedClass = selected ? ' is-selected' : ''
+  const selectedDataId = selected ? message.id : undefined
+  const ariaCurrent = selected ? ('true' as const) : undefined
 
   if (message.role === 'user') {
     return (
       <article
-        className="timeline-row user-row"
+        className={`timeline-row user-row${selectedClass}`}
         data-message-role={message.role}
+        data-selected-id={selectedDataId}
+        aria-current={ariaCurrent}
         title={hideTimestamp ? fullTime : undefined}
       >
         <div className="user-bubble">
@@ -3065,8 +3189,10 @@ const MessageTimelineRow = React.memo(function MessageTimelineRow({
   if (message.role === 'assistant') {
     return (
       <article
-        className="timeline-row assistant-row"
+        className={`timeline-row assistant-row${selectedClass}`}
         data-message-role={message.role}
+        data-selected-id={selectedDataId}
+        aria-current={ariaCurrent}
         title={hideTimestamp ? fullTime : undefined}
       >
         <RichMessageBody text={message.text} />
@@ -3080,8 +3206,10 @@ const MessageTimelineRow = React.memo(function MessageTimelineRow({
 
   return (
     <article
-      className={`timeline-row note-row ${message.role}`}
+      className={`timeline-row note-row ${message.role}${selectedClass}`}
       data-message-role={message.role}
+      data-selected-id={selectedDataId}
+      aria-current={ariaCurrent}
       title={hideTimestamp ? fullTime : undefined}
     >
       <div className="note-meta">
