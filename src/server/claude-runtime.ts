@@ -20,7 +20,6 @@ import {
   getAgentLaunchConfig,
   getAgentRuntimeState,
   getAgentThinkingLevel,
-  getSessionDiffFallbackCwds,
   recordAgentInfoEvent,
   recordRuntimeContextUsage,
   recordRuntimeMessage,
@@ -28,7 +27,7 @@ import {
   resetSession as resetStoredSession,
   setAgentStatus,
 } from './db'
-import { collectGitDiffArtifactsWithFallback } from './git-diff'
+import { collectGitDiffArtifacts } from './git-diff'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
@@ -540,10 +539,7 @@ function captureClaudeGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchC
 
 function captureClaudeGitDiffArtifactsEffect(config: ReturnType<typeof getAgentLaunchConfig>) {
   return captureRuntimeDiffs(config.id, () =>
-    collectGitDiffArtifactsWithFallback(
-      config.cwd,
-      getSessionDiffFallbackCwds(config.id),
-    ))
+    collectGitDiffArtifacts(config.cwd))
 }
 
 function claudeOptions(

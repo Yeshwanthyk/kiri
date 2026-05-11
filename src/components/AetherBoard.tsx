@@ -3586,7 +3586,7 @@ function deriveAgentTimelineRows(agent: AgentCell): AgentTimelineRow[] {
     if (workEntries.length === 0) return
     rows.push({
       kind: 'work',
-      id: `work:${workEntries[0]?.id}:${workEntries[workEntries.length - 1]?.id}`,
+      id: `work:${workEntries[0]?.id}`,
       startedAt: workEntries[0]?.timestamp ?? new Date(0).toISOString(),
       entries: workEntries,
     })

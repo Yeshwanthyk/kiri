@@ -20,7 +20,6 @@ import {
   clearAgentRuntimeState,
   clearRuntimeContextUsage,
   getAgentLaunchConfig,
-  getSessionDiffFallbackCwds,
   getAgentThinkingLevel,
   getAgentRuntimeState,
   recordAgentInfoEvent,
@@ -31,7 +30,7 @@ import {
   resetSession as resetStoredSession,
   setAgentStatus,
 } from './db'
-import { collectGitDiffArtifactsWithFallback, diffArtifactsFromPatch } from './git-diff'
+import { collectGitDiffArtifacts, diffArtifactsFromPatch } from './git-diff'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
@@ -225,10 +224,7 @@ async function promptCodexAgentNow(
 
 function captureCodexGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchConfig>) {
   runRuntimeLifecycleSync(captureRuntimeDiffs(config.id, () =>
-    collectGitDiffArtifactsWithFallback(
-      config.cwd,
-      getSessionDiffFallbackCwds(config.id),
-    )))
+    collectGitDiffArtifacts(config.cwd)))
 }
 
 function startOrSteerCodexTurn(input: {
