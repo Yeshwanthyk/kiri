@@ -1541,7 +1541,7 @@ h1 {
 
 .agent-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(128px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 8px;
 }
 
@@ -1597,40 +1597,76 @@ h1 {
 }
 
 .agent-cell-top {
+  justify-content: space-between;
   min-width: 0;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 800;
+  gap: 8px;
 }
 
-.agent-cell-top > span:nth-child(2) {
+.agent-cell-title {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-cell-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-cell-state[data-status="running"],
+.agent-cell-state[data-status="queued"] {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.agent-cell-state[data-status="blocked"],
+.agent-cell-state[data-status="failed"] {
+  color: var(--danger);
+  font-weight: 700;
 }
 
 .agent-cell p {
   flex: 1;
   display: -webkit-box;
-  margin-top: 7px;
+  margin-top: 8px;
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.32;
+  line-height: 1.38;
   text-wrap: pretty;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
 }
 
 .agent-cell-meta {
-  justify-content: space-between;
-  gap: 6px;
+  gap: 14px;
   min-width: 0;
+  margin-top: 10px;
   color: var(--muted);
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 9px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
+}
+
+.diff-token {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.agent-cell-runtime {
+  margin-left: auto;
+  color: var(--muted);
 }
 
 .agent-cell-meta span {
@@ -1983,7 +2019,8 @@ h1 {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 12px 14px;
 }
 
