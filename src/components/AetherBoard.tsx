@@ -56,7 +56,6 @@ import type {
   RuntimeKind,
   SendMessageImage,
   ThinkingLevel,
-  TimelineEvent,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import { thinkingLevelSchema } from '~/lib/contracts'
@@ -92,44 +91,29 @@ import {
   terminalConfigQuery,
   unhideProjectMutation,
 } from '~/server/workspace'
+import {
+  classifyToolName,
+  compactWorkEntries,
+  deriveAgentTimelineRows,
+  diffLineStats,
+  displayPath,
+  isCommandEntry,
+  normalizeDiffPath,
+  summarizeWorkEntries,
+  timelineRowsContentVersion,
+  type AgentTimelineRow,
+  type TimelineWorkEntry,
+  workCallLabel,
+} from './aether-board/timeline'
+import {
+  parseSlashCommand,
+  runSlashCommand,
+  supportsThinking,
+  type SlashCommand,
+} from './aether-board/slash-commands'
 
 type SidebarTab = 'chat' | 'diffs' | 'terminal'
 type DiffStyle = 'unified' | 'split'
-const THINKING_RUNTIMES = new Set<RuntimeKind>(['pi', 'codex', 'claude'])
-
-function supportsThinking(runtime: RuntimeKind) {
-  return THINKING_RUNTIMES.has(runtime)
-}
-
-type AgentTimelineRow =
-  | {
-      kind: 'message'
-      id: string
-      message: BoardMessage
-    }
-  | {
-      kind: 'work'
-      id: string
-      startedAt: string
-      entries: TimelineWorkEntry[]
-    }
-  | {
-      kind: 'working'
-      id: string
-      startedAt: string | null
-    }
-
-type TimelineWorkEntry = {
-  id: string
-  kind: string
-  tone: TimelineEvent['tone']
-  label: string
-  detail: string | null
-  path?: string
-  diff?: DiffArtifact
-  count?: number
-  timestamp: string
-}
 
 type KeymapAction =
   | 'projectPrev'
@@ -3632,20 +3616,6 @@ function InlineDiffPreview({
   )
 }
 
-function summarizeWorkEntries(entries: TimelineWorkEntry[]) {
-  const edited = entries.filter((entry) => entry.diff).length
-  const commands = entries.filter((entry) =>
-    isCommandEntry(entry),
-  ).length
-  const explored = entries.length - edited - commands
-  const parts = [
-    edited ? `edited ${edited} ${edited === 1 ? 'file' : 'files'}` : null,
-    explored ? `explored ${explored}` : null,
-    commands ? `ran ${commands} ${commands === 1 ? 'command' : 'commands'}` : null,
-  ].filter(Boolean)
-  return parts.length ? parts.join(', ') : `${entries.length} activities`
-}
-
 function workEntryIcon(entry: TimelineWorkEntry) {
   const call = workCallLabel(entry)
   if (entry.diff) {
@@ -3662,93 +3632,6 @@ function workEntryIcon(entry: TimelineWorkEntry) {
   }
   if (isCommandEntry(entry)) return null
   return <TerminalSquare size={13} className={`work-entry-icon ${entry.tone}`} />
-}
-
-function compactWorkEntries(entries: TimelineWorkEntry[]) {
-  const compacted: TimelineWorkEntry[] = []
-  for (const entry of entries) {
-    if (isEmptyWorkEntry(entry)) continue
-    const previous = compacted[compacted.length - 1]
-    if (previous && workEntryKey(previous) === workEntryKey(entry)) {
-      compacted[compacted.length - 1] = {
-        ...previous,
-        count: (previous.count ?? 1) + 1,
-        timestamp: entry.timestamp,
-      }
-      continue
-    }
-    compacted.push(entry)
-  }
-  return compacted
-}
-
-function workEntryKey(entry: TimelineWorkEntry) {
-  return [
-    entry.label,
-    entry.detail?.trim() ?? '',
-    entry.path ?? '',
-    entry.diff?.id ?? '',
-  ].join('\0')
-}
-
-function isCommandEntry(entry: TimelineWorkEntry) {
-  const label = entry.label.toLowerCase()
-  return label.includes('command') || label === 'bash' || entry.kind === 'tool.message'
-}
-
-function workCallLabel(entry: TimelineWorkEntry) {
-  const detail = entry.detail?.trim() ?? ''
-  const colonIndex = detail.indexOf(': ')
-  if (colonIndex > 0 && colonIndex <= 32) {
-    return normalizeWorkCallLabel(detail.slice(0, colonIndex))
-  }
-  const label = normalizeWorkCallLabel(entry.label)
-  if (label.includes('command') || label === 'bash') return 'bash'
-  return label || 'tool'
-}
-
-function normalizeWorkCallLabel(value: string) {
-  const normalized = value.trim().toLowerCase()
-  if (normalized === 'commandexecution' || normalized === 'command run' || normalized === 'ran command') {
-    return 'bash'
-  }
-  if (normalized === 'multi_edit') return 'multiedit'
-  return normalized
-}
-
-function isEmptyWorkEntry(entry: TimelineWorkEntry) {
-  const detail = entry.detail?.trim()
-  if (!detail || detail === '{}' || detail === '[]') return !entry.path && !entry.diff
-  return false
-}
-
-function isEmptyCommandEvent(event: TimelineEvent) {
-  const detail = event.detail?.trim()
-  return runtimeEventLabel(event).toLowerCase().includes('command') &&
-    (!detail || detail === '{}' || detail === '[]')
-}
-
-function isNoisyFileOperationEvent(
-  event: TimelineEvent,
-  path: string | undefined,
-  diff: DiffArtifact | undefined,
-) {
-  if (event.kind !== 'fileOperationStarted' && event.kind !== 'fileOperationCompleted') return false
-  if (diff) return false
-  const detail = event.detail?.trim().toLowerCase()
-  if (!path) return true
-  return detail === 'edit' || detail === 'write' || detail === 'multiedit' || detail === 'filechange'
-}
-
-function diffLineStats(patch: string) {
-  let added = 0
-  let deleted = 0
-  for (const line of patch.split('\n')) {
-    if (line.startsWith('+++') || line.startsWith('---')) continue
-    if (line.startsWith('+')) added += 1
-    if (line.startsWith('-')) deleted += 1
-  }
-  return { added, deleted }
 }
 
 type WorkPreview = { node: React.ReactNode; text: string }
@@ -3775,16 +3658,6 @@ function formatWorkPreview(entry: TimelineWorkEntry): WorkPreview | null {
   return { node: detail, text: detail }
 }
 
-function classifyToolName(name: string): 'path' | 'command' | 'pattern' | 'unknown' {
-  const normalized = name.toLowerCase()
-  if (['read', 'edit', 'write', 'multiedit', 'notebookedit'].includes(normalized)) return 'path'
-  if (normalized === 'bash' || normalized.includes('shell') || normalized.includes('command')) {
-    return 'command'
-  }
-  if (normalized === 'grep' || normalized === 'glob') return 'pattern'
-  return 'unknown'
-}
-
 function renderPathPreview(rawPath: string): WorkPreview {
   const path = displayPath(rawPath.replace(/^["']|["']$/g, '').trim())
   const slash = path.lastIndexOf('/')
@@ -3801,88 +3674,6 @@ function renderPathPreview(rawPath: string): WorkPreview {
       </span>
     ),
     text: path,
-  }
-}
-
-function displayPath(path: string) {
-  const normalized = normalizeDiffPath(path)
-  const srcIndex = normalized.lastIndexOf('/src/')
-  if (srcIndex >= 0) return normalized.slice(srcIndex + 1)
-  const testsIndex = normalized.lastIndexOf('/tests/')
-  if (testsIndex >= 0) return normalized.slice(testsIndex + 1)
-  const parts = normalized.split('/').filter(Boolean)
-  if (normalized.startsWith('/') && parts.length > 3) return parts.slice(-3).join('/')
-  return normalized
-}
-
-type SlashCommand = {
-  name: 'thinking' | 'new' | 'fork' | 'review'
-  level?: ThinkingLevel
-  reviewTarget?: ReviewTarget
-}
-
-function parseSlashCommand(prompt: string): SlashCommand | null {
-  const [command = '', ...args] = prompt.trim().split(/\s+/)
-  if (command === '/new') {
-    if (args.length > 0) throw new Error('Usage: /new')
-    return { name: 'new' }
-  }
-  if (command === '/fork') {
-    if (args.length > 0) throw new Error('Usage: /fork')
-    return { name: 'fork' }
-  }
-  if (command === '/review') {
-    if (args.length === 0) {
-      return { name: 'review', reviewTarget: { type: 'uncommittedChanges' } }
-    }
-    if (args.length === 2 && args[0] === 'base') {
-      return { name: 'review', reviewTarget: { type: 'baseBranch', branch: args[1] } }
-    }
-    throw new Error('Usage: /review or /review base <branch>')
-  }
-  if (command !== '/thinking') return null
-  if (args.length === 0) return { name: 'thinking' }
-  if (args.length > 1) {
-    throw new Error('Usage: /thinking [off|minimal|low|medium|high|xhigh]')
-  }
-  if (args[0] === 'cycle') return { name: 'thinking' }
-  const parsed = thinkingLevelSchema.safeParse(args[0])
-  if (!parsed.success) {
-    throw new Error('Usage: /thinking [off|minimal|low|medium|high|xhigh]')
-  }
-  return { name: 'thinking', level: parsed.data }
-}
-
-async function runSlashCommand(
-  command: SlashCommand,
-  agent: AgentCell,
-  actions: {
-    onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
-    onResetSession: (agentId: string) => Promise<void>
-    onForkSession: (agentId: string) => Promise<void>
-    onReviewSession: (agentId: string, target: ReviewTarget) => Promise<void>
-  },
-) {
-  if (command.name === 'new') {
-    await actions.onResetSession(agent.id)
-    return
-  }
-  if (command.name === 'fork') {
-    await actions.onForkSession(agent.id)
-    return
-  }
-  if (command.name === 'review') {
-    if (agent.runtime !== 'codex') {
-      throw new Error(`${agent.runtime} sessions do not support /review yet`)
-    }
-    await actions.onReviewSession(agent.id, command.reviewTarget ?? { type: 'uncommittedChanges' })
-    return
-  }
-  if (command.name === 'thinking') {
-    if (!supportsThinking(agent.runtime)) {
-      throw new Error(`${agent.runtime} sessions do not support /thinking yet`)
-    }
-    await actions.onThinkingCommand(agent.id, command.level)
   }
 }
 
@@ -4030,164 +3821,6 @@ function CopyTextButton({ text, label }: { text: string; label: string }) {
 
 function bottomDistance(list: HTMLElement) {
   return list.scrollHeight - list.clientHeight - list.scrollTop
-}
-
-function timelineRowsContentVersion(rows: AgentTimelineRow[]) {
-  return rows.map((row) => {
-    if (row.kind === 'message') return `${row.id}:${row.message.text.length}`
-    if (row.kind === 'work') {
-      const last = row.entries.at(-1)
-      return `${row.id}:${row.entries.length}:${last?.id ?? ''}:${last?.detail?.length ?? 0}`
-    }
-    return row.id
-  }).join('|')
-}
-
-function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTimelineRow[] {
-  const rows: AgentTimelineRow[] = []
-  let workEntries: TimelineWorkEntry[] = []
-  const diffByPath = createDiffPathMap(agent.diffs, cwd)
-  const timeline = agent.timeline.length
-    ? agent.timeline
-    : agent.messages.map((message) => ({
-        type: 'message' as const,
-        id: `message:${message.id}`,
-        timestamp: message.timestamp,
-        message,
-      }))
-
-  function flushWork() {
-    if (workEntries.length === 0) return
-    rows.push({
-      kind: 'work',
-      id: `work:${workEntries[0]?.id}`,
-      startedAt: workEntries[0]?.timestamp ?? new Date(0).toISOString(),
-      entries: workEntries,
-    })
-    workEntries = []
-  }
-
-  for (const item of timeline) {
-    if (item.type === 'event') {
-      const entry = eventToWorkEntry(item.event, diffByPath, cwd)
-      if (entry) workEntries.push(entry)
-      continue
-    }
-
-    if (item.message.role === 'tool') {
-      const entry = toolMessageToWorkEntry(item.message, diffByPath, cwd)
-      if (entry) workEntries.push(entry)
-      continue
-    }
-
-    flushWork()
-    rows.push({
-      kind: 'message',
-      id: `message:${item.message.id}`,
-      message: item.message,
-    })
-  }
-
-  flushWork()
-
-  if (agent.status === 'running') {
-    const lastRow = rows[rows.length - 1]
-    rows.push({
-      kind: 'working',
-      id: 'working-indicator',
-      startedAt: lastRow?.kind === 'message' ? lastRow.message.timestamp : null,
-    })
-  }
-
-  return rows
-}
-
-function eventToWorkEntry(
-  event: TimelineEvent,
-  diffByPath: Map<string, DiffArtifact>,
-  cwd?: string,
-): TimelineWorkEntry | null {
-  if (!shouldShowRuntimeEvent(event)) return null
-  const path = event.path ? normalizeTimelinePath(event.path, cwd) : undefined
-  const diff = path && event.kind === 'fileOperationCompleted'
-    ? diffByPath.get(path)
-    : undefined
-  if (isEmptyCommandEvent(event)) return null
-  if (isNoisyFileOperationEvent(event, path, diff)) return null
-
-  return {
-    id: event.id,
-    kind: event.kind,
-    tone: event.tone,
-    label: runtimeEventLabel(event, diff),
-    detail: event.detail,
-    ...(path ? { path } : {}),
-    ...(diff ? { diff } : {}),
-    timestamp: event.timestamp,
-  }
-}
-
-function shouldShowRuntimeEvent(event: TimelineEvent) {
-  if (event.kind === 'codex_context_compacted') return true
-  if (event.kind === 'fileOperationStarted' || event.kind === 'fileOperationCompleted') return true
-  if (event.kind.startsWith('claude_tool_')) return true
-  if (event.kind.startsWith('claude_question_')) return true
-  if (event.kind !== 'tool_execution_start') return false
-  return event.label.toLowerCase() !== 'taskupdate'
-}
-
-function runtimeEventLabel(event: TimelineEvent, diff?: DiffArtifact) {
-  if (event.kind === 'fileOperationCompleted' && diff) return 'Edited'
-  if (event.kind === 'fileOperationCompleted') return 'Changed file'
-  if (event.kind === 'fileOperationStarted') return 'Editing'
-  const label = event.label.trim()
-  if (label.toLowerCase() === 'bash') return 'Ran command'
-  if (!label || label === 'tool execution start') return 'Tool'
-  return label
-}
-
-function toolMessageToWorkEntry(
-  message: BoardMessage,
-  diffByPath: Map<string, DiffArtifact>,
-  cwd: string,
-): TimelineWorkEntry | null {
-  const [firstLine, ...rest] = message.text.split('\n')
-  const parsed = parseToolInvocation(firstLine?.trim() ?? '')
-  const label = parsed?.label ?? firstLine?.trim() ?? 'Tool output'
-  const detail = rest.join('\n').trim() || message.text
-  const path = parsed?.path ? normalizeTimelinePath(parsed.path, cwd) : undefined
-  const diff = path ? diffByPath.get(path) : undefined
-  if (isNoisyToolMessage(label, detail) && !diff) return null
-  return {
-    id: message.id,
-    kind: 'tool.message',
-    tone: 'tool',
-    label: diff ? 'Edited' : label,
-    detail,
-    ...(path ? { path } : {}),
-    ...(diff ? { diff } : {}),
-    timestamp: message.timestamp,
-  }
-}
-
-function parseToolInvocation(line: string) {
-  const colonIndex = line.indexOf(': ')
-  if (colonIndex <= 0 || colonIndex > 32) return null
-  const label = line.slice(0, colonIndex).trim()
-  const value = line.slice(colonIndex + 2).trim()
-  if (!value || classifyToolName(label) !== 'path') return null
-  return { label, path: value }
-}
-
-function isNoisyToolMessage(label: string, detail: string) {
-  const normalizedLabel = normalizeWorkCallLabel(label)
-  const normalizedDetail = detail.trim().toLowerCase()
-  if (!normalizedDetail || normalizedDetail === '{}' || normalizedDetail === '[]') return true
-  if (normalizedDetail.includes('has been updated successfully') &&
-    normalizedDetail.includes('no need to read it back')) {
-    return true
-  }
-  return normalizedLabel === 'edit' || normalizedLabel === 'write' || normalizedLabel === 'multiedit'
 }
 
 function TerminalPanel({
@@ -4660,10 +4293,6 @@ const diffTreeUnsafeCSS = `
   }
 `
 
-function normalizeDiffPath(path: string) {
-  return path.replace(/\\/g, '/')
-}
-
 function diffGitStatus(patch: string): GitStatus {
   if (/^(?:new file mode|--- \/dev\/null$)/m.test(patch)) return 'added'
   if (/^(?:deleted file mode|\+\+\+ \/dev\/null$)/m.test(patch)) return 'deleted'
@@ -4702,25 +4331,6 @@ function diffGitStatusTitle(status: GitStatus) {
     case 'modified':
       return 'modified'
   }
-}
-
-function normalizeTimelinePath(path: string, cwd: string | undefined) {
-  const normalized = normalizeDiffPath(path.replace(/^["']|["']$/g, '').trim())
-  const normalizedCwd = cwd ? normalizeDiffPath(cwd).replace(/\/+$/g, '') : ''
-  if (normalizedCwd && normalized === normalizedCwd) return ''
-  if (normalizedCwd && normalized.startsWith(`${normalizedCwd}/`)) {
-    return normalized.slice(normalizedCwd.length + 1)
-  }
-  return normalized
-}
-
-function createDiffPathMap(diffs: DiffArtifact[], cwd: string) {
-  const map = new Map<string, DiffArtifact>()
-  for (const diff of diffs) {
-    map.set(normalizeDiffPath(diff.path), diff)
-    map.set(normalizeTimelinePath(diff.path, cwd), diff)
-  }
-  return map
 }
 
 function RuntimeBadge({ runtime }: { runtime: string }) {
