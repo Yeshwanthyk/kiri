@@ -2818,6 +2818,8 @@ const MessageTimeline = React.memo(function MessageTimeline({
     )
   }
 
+  const hideTimestampByRowId = computeHiddenTimestamps(rows)
+
   return (
     <div className="message-list" ref={listRef}>
       {rows.map((row) => {
@@ -2825,11 +2827,34 @@ const MessageTimeline = React.memo(function MessageTimeline({
         if (row.kind === 'working') {
           return <WorkingTimelineRow key={row.id} row={row} />
         }
-        return <MessageTimelineRow key={row.id} message={row.message} />
+        return (
+          <MessageTimelineRow
+            key={row.id}
+            message={row.message}
+            hideTimestamp={hideTimestampByRowId.has(row.id)}
+          />
+        )
       })}
     </div>
   )
 })
+
+function computeHiddenTimestamps(rows: AgentTimelineRow[]): Set<string> {
+  const hidden = new Set<string>()
+  let prevRole: string | null = null
+  let prevTimeMs: number | null = null
+  for (const row of rows) {
+    if (row.kind !== 'message') continue
+    const ts = new Date(row.message.timestamp).getTime()
+    const valid = !Number.isNaN(ts)
+    const sameRole = prevRole === row.message.role
+    const within = prevTimeMs !== null && valid && ts - prevTimeMs <= 60_000
+    if (sameRole && within) hidden.add(row.id)
+    prevRole = row.message.role
+    if (valid) prevTimeMs = ts
+  }
+  return hidden
+}
 
 function PendingQuestionPanel({
   pendingQuestion,
@@ -2944,13 +2969,25 @@ function PendingQuestionPanel({
   )
 }
 
-const MessageTimelineRow = React.memo(function MessageTimelineRow({ message }: { message: BoardMessage }) {
+const MessageTimelineRow = React.memo(function MessageTimelineRow({
+  message,
+  hideTimestamp = false,
+}: {
+  message: BoardMessage
+  hideTimestamp?: boolean
+}) {
+  const fullTime = formatTime(message.timestamp)
+
   if (message.role === 'user') {
     return (
-      <article className="timeline-row user-row" data-message-role={message.role}>
+      <article
+        className="timeline-row user-row"
+        data-message-role={message.role}
+        title={hideTimestamp ? fullTime : undefined}
+      >
         <div className="user-bubble">
           <RichMessageBody text={message.text} />
-          <MessageMeta message={message} align="right" />
+          <MessageMeta message={message} align="right" hideTime={hideTimestamp} />
         </div>
       </article>
     )
@@ -2958,10 +2995,14 @@ const MessageTimelineRow = React.memo(function MessageTimelineRow({ message }: {
 
   if (message.role === 'assistant') {
     return (
-      <article className="timeline-row assistant-row" data-message-role={message.role}>
+      <article
+        className="timeline-row assistant-row"
+        data-message-role={message.role}
+        title={hideTimestamp ? fullTime : undefined}
+      >
         <RichMessageBody text={message.text} />
         <div className="assistant-meta-row">
-          <MessageMeta message={message} />
+          <MessageMeta message={message} hideTime={hideTimestamp} />
           <CopyTextButton text={message.text} label="Copy response" />
         </div>
       </article>
@@ -2972,10 +3013,11 @@ const MessageTimelineRow = React.memo(function MessageTimelineRow({ message }: {
     <article
       className={`timeline-row note-row ${message.role}`}
       data-message-role={message.role}
+      title={hideTimestamp ? fullTime : undefined}
     >
       <div className="note-meta">
         <span>{message.role}</span>
-        <time>{formatTime(message.timestamp)}</time>
+        {hideTimestamp ? null : <time>{fullTime}</time>}
       </div>
       <RichMessageBody text={message.text} />
     </article>
@@ -3190,14 +3232,16 @@ function formatElapsed(totalSeconds: number) {
 function MessageMeta({
   message,
   align = 'left',
+  hideTime = false,
 }: {
   message: BoardMessage
   align?: 'left' | 'right'
+  hideTime?: boolean
 }) {
   return (
     <div className={`message-meta ${align}`}>
       <span>{message.role}</span>
-      <time>{formatTime(message.timestamp)}</time>
+      {hideTime ? null : <time>{formatTime(message.timestamp)}</time>}
     </div>
   )
 }
