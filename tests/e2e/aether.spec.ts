@@ -105,18 +105,51 @@ test('start and remove session with keymaps', async ({ page }, testInfo) => {
     .click()
 
   await expect(page.getByTestId('selected-agent')).toHaveText(title)
-  await expect(page.getByTestId('board-pane')).toContainText(
-    'vibeproxy-anthropic/claude-opus-4-7',
-  )
 
-  page.once('dialog', async (dialog) => {
-    expect(dialog.message()).toContain(title)
-    await dialog.accept()
-  })
   await pressShiftKey(page, 'KeyX')
+  await expect(page.getByTestId('confirm-dialog')).toContainText(title)
+  await page.getByTestId('confirm-dialog-confirm').click()
 
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
   await expect(page.getByTestId('board-pane')).not.toContainText(title)
+})
+
+test('session launcher resumes an existing local session', async ({ page }, testInfo) => {
+  const firstTitle = `Resume First ${testInfo.project.name}`
+  const secondTitle = `Resume Second ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, firstTitle)
+  await createSession(page, secondTitle)
+  await expect(page.getByTestId('selected-agent')).toHaveText(secondTitle)
+
+  await pressShiftKey(page, 'KeyN')
+  await page.getByTestId('session-launcher').getByRole('tab', { name: 'Resume' }).click()
+  await page.getByTestId('session-launcher').getByRole('button', { name: new RegExp(firstTitle) }).click()
+
+  await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
+  await expect(page.getByTestId('session-launcher')).toBeHidden()
+})
+
+test('removed sessions are archived and can be restored from resume', async ({ page }, testInfo) => {
+  const title = `Archived Session ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+
+  await pressShiftKey(page, 'KeyX')
+  await expect(page.getByTestId('confirm-dialog')).toContainText(title)
+  await page.getByTestId('confirm-dialog-confirm').click()
+  await expect(page.getByTestId('selected-agent')).toHaveText('No session')
+  await expect(page.getByTestId('board-pane')).not.toContainText(title)
+
+  await pressShiftKey(page, 'KeyN')
+  await page.getByTestId('session-launcher').getByRole('tab', { name: 'Resume' }).click()
+  await expect(page.getByTestId('session-launcher')).toContainText('archived')
+  await page.getByTestId('session-launcher').getByRole('button', { name: new RegExp(title) }).click()
+
+  await expect(page.getByTestId('selected-agent')).toHaveText(title)
+  await expect(page.getByTestId('board-pane')).toContainText(title)
 })
 
 test('command menu starts, switches, and ends sessions', async ({ page }, testInfo) => {
@@ -150,13 +183,11 @@ test('command menu starts, switches, and ends sessions', async ({ page }, testIn
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
 
-  page.once('dialog', async (dialog) => {
-    expect(dialog.message()).toContain(firstTitle)
-    await dialog.accept()
-  })
   await page.keyboard.press('Control+K')
   await page.getByTestId('command-search').fill('end selected')
   await page.keyboard.press('Enter')
+  await expect(page.getByTestId('confirm-dialog')).toContainText(firstTitle)
+  await page.getByTestId('confirm-dialog-confirm').click()
 
   await expect(page.getByTestId('board-pane')).not.toContainText(firstTitle)
   await expect(page.getByTestId('selected-agent')).toHaveText(secondTitle)
@@ -293,6 +324,23 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
     'title',
     /18 \/ 258,000 tokens used/,
   )
+
+  await page.getByTestId('chat-input').fill('/review')
+  await page.getByRole('button', { name: 'Send prompt' }).click()
+  await expect(page.getByTestId('chat-panel')).toContainText(
+    'fake codex reviewed: uncommitted changes',
+    { timeout: 30_000 },
+  )
+
+  await page.getByTestId('chat-input').fill('/review base main')
+  await page.getByRole('button', { name: 'Send prompt' }).click()
+  await expect(page.getByTestId('chat-panel')).toContainText('fake codex reviewed: base main', {
+    timeout: 30_000,
+  })
+
+  const reviewRequests = requests.filter((request) => request.method === 'review/start')
+  expect(reviewRequests.at(-2)?.params?.target).toEqual({ type: 'uncommittedChanges' })
+  expect(reviewRequests.at(-1)?.params?.target).toEqual({ type: 'baseBranch', branch: 'main' })
 })
 
 test('claude runtime runs through claude-agent-sdk harness', async ({ page }, testInfo) => {
@@ -602,6 +650,7 @@ type CodexHarnessRequest = {
     includeTurns?: boolean
     sandbox?: string
     sandboxPolicy?: { type: string }
+    target?: unknown
     threadId?: string
   }
 }

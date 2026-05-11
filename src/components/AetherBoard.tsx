@@ -1,6 +1,11 @@
 'use client'
 
 import { PatchDiff } from '@pierre/diffs/react'
+import type { GitStatus } from '@pierre/trees'
+import {
+  FileTree as PierreFileTree,
+  useFileTree,
+} from '@pierre/trees/react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useServerFn } from '@tanstack/react-start'
 import ReactMarkdown, { type Components } from 'react-markdown'
@@ -27,7 +32,10 @@ import {
   MessageSquareText,
   Minimize2,
   Plus,
+  PencilLine,
+  FileText,
   Rows3,
+  Search,
   Send,
   Settings2,
   Square,
@@ -39,10 +47,12 @@ import {
 import * as React from 'react'
 import type {
   AgentCell,
+  ArchivedSessionSummary,
   BoardMessage,
   DiffArtifact,
   PendingQuestion,
   ProjectRow,
+  ReviewTarget,
   RuntimeKind,
   SendMessageImage,
   ThinkingLevel,
@@ -73,6 +83,8 @@ import {
   interruptMessageMutation,
   renameSessionMutation,
   resetSessionMutation,
+  restoreSessionMutation,
+  reviewSessionMutation,
   sendMessageMutation,
   setThinkingLevelMutation,
   startSessionMutation,
@@ -113,6 +125,9 @@ type TimelineWorkEntry = {
   tone: TimelineEvent['tone']
   label: string
   detail: string | null
+  path?: string
+  diff?: DiffArtifact
+  count?: number
   timestamp: string
 }
 
@@ -131,8 +146,11 @@ type KeymapSettings = Record<KeymapAction, string>
 
 type ChatFontSize = 'compact' | 'comfortable' | 'large' | 'xlarge'
 
+type MonoFont = 'jetbrains' | 'fira' | 'plex' | 'system'
+
 type ChatTypographySettings = {
   fontSize: ChatFontSize
+  monoFont: MonoFont
 }
 
 type RefreshAgentDetail = () => Promise<void>
@@ -207,7 +225,29 @@ const chatFontSizes: Record<ChatFontSize, { label: string; size: string; lineHei
   xlarge: { label: 'Extra large · 18px', size: '18px', lineHeight: '1.66' },
 }
 
-const defaultChatTypography: ChatTypographySettings = { fontSize: 'comfortable' }
+const monoFonts: Record<MonoFont, { label: string; stack: string }> = {
+  jetbrains: {
+    label: 'JetBrains Mono',
+    stack: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+  },
+  fira: {
+    label: 'Fira Code',
+    stack: '"Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace',
+  },
+  plex: {
+    label: 'IBM Plex Mono',
+    stack: '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+  },
+  system: {
+    label: 'System Mono',
+    stack: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  },
+}
+
+const defaultChatTypography: ChatTypographySettings = {
+  fontSize: 'comfortable',
+  monoFont: 'jetbrains',
+}
 const keymapStorageKey = 'aether:keymap:v1'
 const themeStorageKey = 'aether:theme:v1'
 const chatTypographyStorageKey = 'aether:chat-typography:v1'
@@ -238,6 +278,8 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const hideProject = useServerFn(hideProjectMutation)
   const refreshWorkspace = useServerFn(fetchWorkspaceSnapshot)
   const resetSession = useServerFn(resetSessionMutation)
+  const restoreSession = useServerFn(restoreSessionMutation)
+  const reviewSession = useServerFn(reviewSessionMutation)
   const sendMessage = useServerFn(sendMessageMutation)
   const setThinkingLevel = useServerFn(setThinkingLevelMutation)
   const steerMessage = useServerFn(steerMessageMutation)
@@ -517,6 +559,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
   }
 
+  async function handleReviewSession(agentId: string, target: ReviewTarget) {
+    const next = await reviewSession({ data: { agentId, target } })
+    setWorkspace(next)
+  }
+
   async function handleAnswerQuestion(
     agentId: string,
     requestId: string,
@@ -545,6 +592,19 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       setSelection({ projectId: project.id, agentId: agent.id })
     }
     setAgentSwitcherOpen(false)
+    setSessionLauncherOpen(false)
+  }
+
+  async function handleResumeSession(projectId: string, agentId: string, archived: boolean) {
+    if (!archived) {
+      selectAgent(projectId, agentId)
+      setSessionLauncherOpen(false)
+      return
+    }
+    const next = await restoreSession({ data: { agentId } })
+    setWorkspace(next)
+    setChatFocusRequest(0)
+    setSelection({ projectId, agentId })
     setSessionLauncherOpen(false)
   }
 
@@ -766,8 +826,12 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       {sessionLauncherOpen ? (
         <InlineSessionLauncher
           project={selectedProject}
+          projects={workspace.projects}
+          archivedSessions={workspace.archivedSessions}
+          selectedAgentId={selection.agentId}
           settings={workspace.settings}
           onStartSession={handleStartSession}
+          onResumeSession={handleResumeSession}
           onCancel={() => setSessionLauncherOpen(false)}
         />
       ) : null}
@@ -789,12 +853,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           title="Remove session?"
           body={
             <>
-              <strong>{pendingDelete.title}</strong> and its history will be permanently deleted. This can&rsquo;t be undone.
+              <strong>{pendingDelete.title}</strong> will be hidden from the board. You can restore it from Resume.
             </>
           }
           confirmLabel="Remove session"
           cancelLabel="Keep"
-          destructive
           busy={deleteInFlight}
           onConfirm={() => void confirmDeleteSession()}
           onCancel={() => {
@@ -873,6 +936,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onThinkingCommand={handleThinkingCommand}
         onResetSession={handleResetSession}
         onForkSession={handleForkSession}
+        onReviewSession={handleReviewSession}
         onAnswerQuestion={handleAnswerQuestion}
       />
     </main>
@@ -940,11 +1004,18 @@ function SettingsScreen({
 
 function InlineSessionLauncher({
   project,
+  projects,
+  archivedSessions,
+  selectedAgentId,
   settings,
   onStartSession,
+  onResumeSession,
   onCancel,
 }: {
   project: ProjectRow
+  projects: ProjectRow[]
+  archivedSessions: ArchivedSessionSummary[]
+  selectedAgentId: string
   settings: WorkspaceSnapshot['settings']
   onStartSession: (input: {
     projectId: string
@@ -953,8 +1024,10 @@ function InlineSessionLauncher({
     title?: string
     thinkingLevel: ThinkingLevel
   }) => Promise<void>
+  onResumeSession: (projectId: string, agentId: string, archived: boolean) => void | Promise<void>
   onCancel: () => void
 }) {
+  const [mode, setMode] = React.useState<'new' | 'resume'>('new')
   const [runtime, setRuntime] = React.useState<RuntimeKind>('pi')
   const [model, setModel] = React.useState(settings.runtimes.pi.defaultModel)
   const [title, setTitle] = React.useState('')
@@ -964,10 +1037,42 @@ function InlineSessionLauncher({
   const titleRef = React.useRef<HTMLInputElement>(null)
   const runtimes = Object.keys(settings.runtimes) as RuntimeKind[]
   const models = settings.runtimes[runtime].models
+  const activeResumableSessions = projects
+    .flatMap((item) =>
+      item.agents
+        .filter((agent) => agent.isSession)
+        .map((agent) => ({
+          archived: false as const,
+          id: agent.id,
+          projectId: item.id,
+          projectName: item.name,
+          title: agent.title,
+          runtime: agent.runtime,
+          model: agent.model,
+          status: agent.status,
+          preview: agent.preview,
+          updatedAt: agent.updatedAt,
+        })),
+    )
+  const archivedResumableSessions = archivedSessions.map((agent) => ({
+    archived: true as const,
+    id: agent.id,
+    projectId: agent.projectId,
+    projectName: agent.projectName,
+    title: agent.title,
+    runtime: agent.runtime,
+    model: agent.model,
+    status: agent.status,
+    preview: agent.preview,
+    updatedAt: agent.updatedAt,
+  }))
+  const resumableSessions = [...activeResumableSessions, ...archivedResumableSessions]
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .slice(0, 10)
 
   React.useEffect(() => {
-    titleRef.current?.focus()
-  }, [])
+    if (mode === 'new') titleRef.current?.focus()
+  }, [mode])
 
   function updateRuntime(nextRuntime: RuntimeKind) {
     setRuntime(nextRuntime)
@@ -1016,84 +1121,149 @@ function InlineSessionLauncher({
             <Bot size={16} />
           </span>
           <div>
-            <p className="settings-kicker">New session</p>
+            <p className="settings-kicker">Session launcher</p>
             <strong id="session-dialog-title">{project.name}</strong>
-            <small>Pick a runtime, then launch into chat.</small>
+            <small>{mode === 'new' ? 'Pick a runtime, then launch into chat.' : 'Jump back into a local session.'}</small>
           </div>
-          <button type="button" onClick={onCancel} aria-label="Cancel new session">
+          <button type="button" onClick={onCancel} aria-label="Close session launcher">
             ×
           </button>
         </div>
 
-        <label className="session-command-field">
-          <Command size={16} aria-hidden="true" />
-          <input
-            ref={titleRef}
-            value={title}
-            disabled={pending}
-            placeholder="Name this session (optional)"
-            aria-label="Session name"
-            data-testid="session-title"
-            onChange={(event) => setTitle(event.currentTarget.value)}
-          />
-          <span>optional</span>
-        </label>
-
-        <div className="session-dialog-grid">
-          <label>
-            <span>Runtime</span>
-            <select
-              value={runtime}
-              disabled={pending}
-              data-testid="session-runtime"
-              onChange={(event) => updateRuntime(event.currentTarget.value as RuntimeKind)}
-            >
-              {runtimes.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Model</span>
-            <select
-              value={model}
-              disabled={pending}
-              data-testid="session-model"
-              onChange={(event) => setModel(event.currentTarget.value)}
-            >
-              {models.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Thinking</span>
-            <select
-              value={thinkingLevel}
-              disabled={pending || !supportsThinking(runtime)}
-              data-testid="session-thinking-level"
-              onChange={(event) => setThinkingLevel(event.currentTarget.value as ThinkingLevel)}
-            >
-              {sessionThinkingLevels.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <div className="session-dialog-actions">
-          {error ? <span role="status">{error}</span> : null}
-          <button type="submit" disabled={pending}>
-            <Plus size={14} />
-            Start session
+        <div className="session-launcher-tabs" role="tablist" aria-label="Session launcher mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'new'}
+            data-active={mode === 'new' ? 'true' : undefined}
+            onClick={() => setMode('new')}
+          >
+            New
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'resume'}
+            data-active={mode === 'resume' ? 'true' : undefined}
+            onClick={() => setMode('resume')}
+          >
+            Resume
           </button>
         </div>
+
+        {mode === 'new' ? (
+          <>
+            <label className="session-command-field">
+              <Command size={16} aria-hidden="true" />
+              <input
+                ref={titleRef}
+                value={title}
+                disabled={pending}
+                placeholder="Name this session (optional)"
+                aria-label="Session name"
+                data-testid="session-title"
+                onChange={(event) => setTitle(event.currentTarget.value)}
+              />
+              <span>optional</span>
+            </label>
+
+            <div className="session-dialog-grid">
+              <label className="session-runtime-field">
+                <span>Runtime</span>
+                <select
+                  value={runtime}
+                  disabled={pending}
+                  data-testid="session-runtime"
+                  onChange={(event) => updateRuntime(event.currentTarget.value as RuntimeKind)}
+                >
+                  {runtimes.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="session-thinking-field">
+                <span>Thinking</span>
+                <select
+                  value={thinkingLevel}
+                  disabled={pending || !supportsThinking(runtime)}
+                  data-testid="session-thinking-level"
+                  onChange={(event) => setThinkingLevel(event.currentTarget.value as ThinkingLevel)}
+                >
+                  {sessionThinkingLevels.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="session-model-field">
+                <span>Model</span>
+                <select
+                  value={model}
+                  disabled={pending}
+                  data-testid="session-model"
+                  onChange={(event) => setModel(event.currentTarget.value)}
+                >
+                  {models.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="session-dialog-actions">
+              {error ? <span role="status">{error}</span> : null}
+              <button type="submit" disabled={pending}>
+                <Plus size={14} />
+                Start session
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="session-resume-panel" role="tabpanel">
+            {resumableSessions.length === 0 ? (
+              <div className="session-resume-empty">
+                <strong>No local sessions</strong>
+                <span>Start one first, then it will appear here.</span>
+              </div>
+            ) : (
+              <>
+                <div className="session-resume-kicker">Last {resumableSessions.length} local sessions</div>
+                <div className="session-resume-list">
+                  {resumableSessions.map((agent) => {
+                    const selected = agent.id === selectedAgentId
+                    return (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        className="session-resume-row"
+                        data-active={selected ? 'true' : undefined}
+                        onClick={() => onResumeSession(agent.projectId, agent.id, agent.archived)}
+                      >
+                        <span className={`status-dot ${agent.status}`} aria-hidden="true" />
+                        <span className="session-resume-main">
+                          <strong>{agent.title}</strong>
+                          <span>{agent.projectName}: {agent.preview || 'Ready.'}</span>
+                        </span>
+                        <span className="session-resume-meta">
+                          {agent.archived ? <span>archived</span> : null}
+                          <span>{agent.runtime}</span>
+                          <span>{agent.model}</span>
+                          <span>{formatAgo(agent.updatedAt)}</span>
+                        </span>
+                        {selected ? <Check size={14} aria-hidden="true" /> : null}
+                      </button>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </form>
     </>
   )
@@ -1553,9 +1723,9 @@ function ChatTypographySettingsPanel({
     <>
       <header className="settings-lane-head">
         <div className="settings-lane-title">
-          <p className="settings-kicker">Chat</p>
-          <h2>Reading size</h2>
-          <p>Affects chat messages and the composer only.</p>
+          <p className="settings-kicker">Typography</p>
+          <h2>Reading size &amp; code font</h2>
+          <p>Affects chat messages, the composer, and diff rendering.</p>
         </div>
         <button
           type="button"
@@ -1567,35 +1737,73 @@ function ChatTypographySettingsPanel({
         </button>
       </header>
 
-      <div className="chat-size-options" role="radiogroup" aria-label="Chat font size">
-        {(Object.keys(chatFontSizes) as ChatFontSize[]).map((size) => {
-          const option = chatFontSizes[size]
-          const [label, spec] = option.label.split(' · ')
-          const active = settings.fontSize === size
-          return (
-            <button
-              key={size}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              data-active={active}
-              data-testid={`chat-size-${size}`}
-              className="chat-size-option"
-              onClick={() => onChange({ fontSize: size })}
-            >
-              <strong>{label}</strong>
-              <small>{spec}</small>
-            </button>
-          )
-        })}
+      <div className="settings-subsection">
+        <p className="settings-subsection-label">Chat reading size</p>
+        <div className="chat-size-options" role="radiogroup" aria-label="Chat font size">
+          {(Object.keys(chatFontSizes) as ChatFontSize[]).map((size) => {
+            const option = chatFontSizes[size]
+            const [label, spec] = option.label.split(' · ')
+            const active = settings.fontSize === size
+            return (
+              <button
+                key={size}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                data-active={active}
+                data-testid={`chat-size-${size}`}
+                className="chat-size-option"
+                onClick={() => onChange({ ...settings, fontSize: size })}
+              >
+                <strong>{label}</strong>
+                <small>{spec}</small>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="chat-size-preview" style={previewStyle} aria-live="polite">
+          <p>
+            The model is rendering a diff while you review the previous turn.
+            This is roughly how chat copy will read at the selected size.
+          </p>
+          <small>preview · {current.size} / {current.lineHeight}</small>
+        </div>
       </div>
 
-      <div className="chat-size-preview" style={previewStyle} aria-live="polite">
-        <p>
-          The model is rendering a diff while you review the previous turn.
-          This is roughly how chat copy will read at the selected size.
-        </p>
-        <small>preview · {current.size} / {current.lineHeight}</small>
+      <div className="settings-subsection">
+        <p className="settings-subsection-label">Code &amp; diff font</p>
+        <div className="mono-font-options" role="radiogroup" aria-label="Code font">
+          {(Object.keys(monoFonts) as MonoFont[]).map((key) => {
+            const option = monoFonts[key]
+            const active = settings.monoFont === key
+            return (
+              <button
+                key={key}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                data-active={active}
+                data-testid={`mono-font-${key}`}
+                className="mono-font-option"
+                onClick={() => onChange({ ...settings, monoFont: key })}
+                style={{ '--mono-preview-stack': option.stack } as React.CSSProperties}
+              >
+                <span className="mono-font-option-text">
+                  <strong>{option.label}</strong>
+                  <small>0Oo il1 =&gt; !=</small>
+                </span>
+                {active ? (
+                  <span className="mono-font-check" aria-hidden="true">
+                    <Check size={10} strokeWidth={3} />
+                  </span>
+                ) : (
+                  <span className="mono-font-sample" aria-hidden="true">Aa 1·0</span>
+                )}
+              </button>
+            )
+          })}
+        </div>
       </div>
     </>
   )
@@ -2093,6 +2301,7 @@ function SelectedAgentPane({
   onThinkingCommand,
   onResetSession,
   onForkSession,
+  onReviewSession,
   onAnswerQuestion,
 }: {
   selectedProject: ProjectRow
@@ -2115,6 +2324,7 @@ function SelectedAgentPane({
   onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
   onResetSession: (agentId: string) => Promise<void>
   onForkSession: (agentId: string) => Promise<void>
+  onReviewSession: (agentId: string, target: ReviewTarget) => Promise<void>
   onAnswerQuestion: (
     agentId: string,
     requestId: string,
@@ -2182,6 +2392,8 @@ function SelectedAgentPane({
             <ChatPanel
               key={agent.id}
               agent={agent}
+              cwd={selectedProject.cwd}
+              themeMode={themeMode}
               focusRequest={chatFocusRequest}
               onSend={(agentId, text, images) =>
                 onSend(agentId, text, images, refreshDetail)
@@ -2191,6 +2403,7 @@ function SelectedAgentPane({
               onThinkingCommand={onThinkingCommand}
               onResetSession={onResetSession}
               onForkSession={onForkSession}
+              onReviewSession={onReviewSession}
               onAnswerQuestion={onAnswerQuestion}
               onDetailRefresh={refreshDetail}
             />
@@ -2452,6 +2665,8 @@ function ContextUsageChip({
 
 function ChatPanel({
   agent,
+  cwd,
+  themeMode,
   focusRequest,
   onSend,
   onSteer,
@@ -2459,10 +2674,13 @@ function ChatPanel({
   onThinkingCommand,
   onResetSession,
   onForkSession,
+  onReviewSession,
   onAnswerQuestion,
   onDetailRefresh,
 }: {
   agent: AgentCell
+  cwd: string
+  themeMode: ThemeMode
   focusRequest: number
   onSend: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
   onSteer: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
@@ -2470,6 +2688,7 @@ function ChatPanel({
   onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
   onResetSession: (agentId: string) => Promise<void>
   onForkSession: (agentId: string) => Promise<void>
+  onReviewSession: (agentId: string, target: ReviewTarget) => Promise<void>
   onAnswerQuestion: (
     agentId: string,
     requestId: string,
@@ -2525,8 +2744,8 @@ function ChatPanel({
     [agent, pendingMessage, visibleMessages],
   )
   const rows = React.useMemo(
-    () => deriveAgentTimelineRows(timelineAgent),
-    [timelineAgent],
+    () => deriveAgentTimelineRows(timelineAgent, cwd),
+    [cwd, timelineAgent],
   )
   const messageListRef = React.useRef<HTMLDivElement | null>(null)
   const timelineContentVersion = React.useMemo(() => timelineRowsContentVersion(rows), [rows])
@@ -2728,6 +2947,7 @@ function ChatPanel({
           onThinkingCommand,
           onResetSession,
           onForkSession,
+          onReviewSession,
         })
         await onDetailRefresh()
         clearComposer()
@@ -2774,6 +2994,7 @@ function ChatPanel({
       <div className="message-list-wrap">
         <MessageTimeline
           rows={rows}
+          themeMode={themeMode}
           listRef={messageListRef}
           selectedMessageId={selectedMessageId}
         />
@@ -2985,10 +3206,12 @@ function ChatComposer({
 
 const MessageTimeline = React.memo(function MessageTimeline({
   rows,
+  themeMode,
   listRef,
   selectedMessageId,
 }: {
   rows: AgentTimelineRow[]
+  themeMode: ThemeMode
   listRef: React.RefObject<HTMLDivElement | null>
   selectedMessageId: string | null
 }) {
@@ -3005,7 +3228,9 @@ const MessageTimeline = React.memo(function MessageTimeline({
   return (
     <div className="message-list" ref={listRef}>
       {rows.map((row) => {
-        if (row.kind === 'work') return <WorkTimelineRow key={row.id} row={row} />
+        if (row.kind === 'work') {
+          return <WorkTimelineRow key={row.id} row={row} themeMode={themeMode} />
+        }
         if (row.kind === 'working') {
           return <WorkingTimelineRow key={row.id} row={row} />
         }
@@ -3240,20 +3465,22 @@ const MessageTimelineRow = React.memo(function MessageTimelineRow({
 
 const WorkTimelineRow = React.memo(function WorkTimelineRow({
   row,
+  themeMode,
 }: {
   row: Extract<AgentTimelineRow, { kind: 'work' }>
+  themeMode: ThemeMode
 }) {
   const [expanded, setExpanded] = React.useState(false)
-  const visibleEntries = expanded ? row.entries : row.entries.slice(0, 6)
-  const hiddenCount = row.entries.length - visibleEntries.length
-  const title = row.entries.some((entry) => entry.kind !== 'tool_execution_start')
-    ? 'Activity'
-    : 'Tool calls'
+  const [expandedDiffEntryId, setExpandedDiffEntryId] = React.useState<string | null>(null)
+  const entries = React.useMemo(() => compactWorkEntries(row.entries), [row.entries])
+  const visibleEntries = expanded ? entries : entries.slice(0, 6)
+  const hiddenCount = entries.length - visibleEntries.length
+  const summary = summarizeWorkEntries(entries)
 
   return (
     <section className="timeline-row work-row" aria-label="Runtime activity">
       <div className="work-row-header">
-        <span>{title} ({row.entries.length})</span>
+        <span>{summary}</span>
         {hiddenCount > 0 ? (
           <button type="button" onClick={() => setExpanded((value) => !value)}>
             <ChevronDown size={13} className={expanded ? 'expanded' : ''} />
@@ -3263,56 +3490,273 @@ const WorkTimelineRow = React.memo(function WorkTimelineRow({
       </div>
       <div className="work-entry-list">
         {visibleEntries.map((entry) => (
-          <WorkEntryRow key={entry.id} entry={entry} />
+          <WorkEntryRow
+            key={entry.id}
+            entry={entry}
+            themeMode={themeMode}
+            diffExpanded={expandedDiffEntryId === entry.id}
+            onToggleDiff={() =>
+              setExpandedDiffEntryId((current) => current === entry.id ? null : entry.id)
+            }
+          />
         ))}
       </div>
     </section>
   )
 })
 
-const WorkEntryRow = React.memo(function WorkEntryRow({ entry }: { entry: TimelineWorkEntry }) {
+const WorkEntryRow = React.memo(function WorkEntryRow({
+  entry,
+  themeMode,
+  diffExpanded,
+  onToggleDiff,
+}: {
+  entry: TimelineWorkEntry
+  themeMode: ThemeMode
+  diffExpanded: boolean
+  onToggleDiff: () => void
+}) {
   const [expanded, setExpanded] = React.useState(false)
   const preview = formatWorkPreview(entry)
   const previewText = preview?.text ?? null
+  const stats = entry.diff ? diffLineStats(entry.diff.patch) : null
   const displayText = previewText ? `${entry.label} - ${previewText}` : entry.label
   const fullText = entry.detail?.trim() || displayText
-  const canExpand = displayText.length > 72 || fullText.includes('\n')
+  const canExpand = !entry.path && (displayText.length > 72 || fullText.includes('\n'))
+  const canToggle = canExpand || Boolean(entry.diff)
+  const icon = workEntryIcon(entry)
+  const command = isCommandEntry(entry)
 
   return (
-    <div className={`work-entry ${entry.tone} ${expanded ? 'expanded' : ''}`}>
-      <TerminalSquare size={13} className={`work-entry-icon ${entry.tone}`} />
+    <div className={`work-entry ${entry.tone} ${entry.diff ? 'has-diff' : ''} ${command ? 'is-command' : ''} ${icon ? '' : 'no-icon'} ${expanded ? 'expanded' : ''}`}>
+      {icon}
       <div className="work-entry-content">
         <div className="work-entry-title">
           <button
             type="button"
             onClick={() => {
+              if (entry.diff) {
+                onToggleDiff()
+                return
+              }
               if (canExpand) setExpanded((value) => !value)
             }}
-            className={`work-entry-toggle ${canExpand ? 'expandable' : ''}`}
-            aria-expanded={expanded}
-            disabled={!canExpand}
-            title={displayText}
+            className={`work-entry-toggle ${canToggle ? 'expandable' : ''}`}
+            aria-expanded={entry.diff ? diffExpanded : expanded}
+            disabled={!canToggle}
+            title={entry.diff ? `Show diff for ${previewText ?? entry.diff.path}` : displayText}
           >
             <span suppressHydrationWarning>
-              <strong>{entry.label}</strong>
-              {preview ? <> - {preview.node}</> : null}
+              {command && preview ? null : <strong>{entry.label}</strong>}
+              {command ? <span className="work-call-pill">{workCallLabel(entry)}</span> : null}
+              {preview ? (
+                <>
+                  {command ? null : <span className="work-entry-separator">{entry.diff ? '' : '-'}</span>}
+                  {preview.node}
+                </>
+              ) : null}
+              {entry.count && entry.count > 1 ? (
+                <span className="work-repeat-count">×{entry.count}</span>
+              ) : null}
+              {stats ? (
+                <span className="work-diff-stats">
+                  <span className="add">+{stats.added}</span>
+                  <span className="del">-{stats.deleted}</span>
+                </span>
+              ) : null}
+              {entry.diff ? (
+                <ChevronDown size={13} className={`work-entry-chevron ${diffExpanded ? 'expanded' : ''}`} />
+              ) : null}
             </span>
           </button>
-          <time>{formatTime(entry.timestamp)}</time>
         </div>
         {expanded && canExpand ? (
           <pre className="work-entry-detail"><code>{fullText}</code></pre>
+        ) : null}
+        {entry.diff ? (
+          <InlineDiffPreview
+            diff={entry.diff}
+            themeMode={themeMode}
+            expanded={diffExpanded}
+            onToggle={onToggleDiff}
+          />
         ) : null}
       </div>
     </div>
   )
 })
 
+function InlineDiffPreview({
+  diff,
+  themeMode,
+  expanded,
+  onToggle,
+}: {
+  diff: DiffArtifact
+  themeMode: ThemeMode
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const stats = React.useMemo(() => diffLineStats(diff.patch), [diff.patch])
+  return (
+    <div className={`inline-diff-card${expanded ? ' expanded' : ''}`}>
+      <button
+        type="button"
+        className="inline-diff-summary"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <GitPullRequest size={13} />
+        <span className="inline-diff-path">{diff.path}</span>
+        <span className="inline-diff-counts">
+          <span className="add">+{stats.added}</span>
+          <span className="del">-{stats.deleted}</span>
+        </span>
+        <ChevronDown size={13} className={expanded ? 'expanded' : ''} />
+      </button>
+      {expanded ? (
+        <div className="inline-pierre-host">
+          <PatchDiff
+            key={`${diff.id}:inline:${themeMode}`}
+            patch={diff.patch}
+            disableWorkerPool
+            options={{
+              diffStyle: 'unified',
+              overflow: 'wrap',
+              themeType: themeMode,
+            }}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function summarizeWorkEntries(entries: TimelineWorkEntry[]) {
+  const edited = entries.filter((entry) => entry.diff).length
+  const commands = entries.filter((entry) =>
+    isCommandEntry(entry),
+  ).length
+  const explored = entries.length - edited - commands
+  const parts = [
+    edited ? `edited ${edited} ${edited === 1 ? 'file' : 'files'}` : null,
+    explored ? `explored ${explored}` : null,
+    commands ? `ran ${commands} ${commands === 1 ? 'command' : 'commands'}` : null,
+  ].filter(Boolean)
+  return parts.length ? parts.join(', ') : `${entries.length} activities`
+}
+
+function workEntryIcon(entry: TimelineWorkEntry) {
+  const call = workCallLabel(entry)
+  if (entry.diff) {
+    return <PencilLine size={13} className="work-entry-icon diff" />
+  }
+  if (call === 'grep' || call === 'glob' || call === 'search') {
+    return <Search size={13} className="work-entry-icon search" />
+  }
+  if (call === 'read') {
+    return <FileText size={13} className="work-entry-icon file" />
+  }
+  if (call === 'edit' || call === 'write' || call === 'multiedit') {
+    return <PencilLine size={13} className="work-entry-icon diff" />
+  }
+  if (isCommandEntry(entry)) return null
+  return <TerminalSquare size={13} className={`work-entry-icon ${entry.tone}`} />
+}
+
+function compactWorkEntries(entries: TimelineWorkEntry[]) {
+  const compacted: TimelineWorkEntry[] = []
+  for (const entry of entries) {
+    if (isEmptyWorkEntry(entry)) continue
+    const previous = compacted[compacted.length - 1]
+    if (previous && workEntryKey(previous) === workEntryKey(entry)) {
+      compacted[compacted.length - 1] = {
+        ...previous,
+        count: (previous.count ?? 1) + 1,
+        timestamp: entry.timestamp,
+      }
+      continue
+    }
+    compacted.push(entry)
+  }
+  return compacted
+}
+
+function workEntryKey(entry: TimelineWorkEntry) {
+  return [
+    entry.label,
+    entry.detail?.trim() ?? '',
+    entry.path ?? '',
+    entry.diff?.id ?? '',
+  ].join('\0')
+}
+
+function isCommandEntry(entry: TimelineWorkEntry) {
+  const label = entry.label.toLowerCase()
+  return label.includes('command') || label === 'bash' || entry.kind === 'tool.message'
+}
+
+function workCallLabel(entry: TimelineWorkEntry) {
+  const detail = entry.detail?.trim() ?? ''
+  const colonIndex = detail.indexOf(': ')
+  if (colonIndex > 0 && colonIndex <= 32) {
+    return normalizeWorkCallLabel(detail.slice(0, colonIndex))
+  }
+  const label = normalizeWorkCallLabel(entry.label)
+  if (label.includes('command') || label === 'bash') return 'bash'
+  return label || 'tool'
+}
+
+function normalizeWorkCallLabel(value: string) {
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'commandexecution' || normalized === 'command run' || normalized === 'ran command') {
+    return 'bash'
+  }
+  if (normalized === 'multi_edit') return 'multiedit'
+  return normalized
+}
+
+function isEmptyWorkEntry(entry: TimelineWorkEntry) {
+  const detail = entry.detail?.trim()
+  if (!detail || detail === '{}' || detail === '[]') return !entry.path && !entry.diff
+  return false
+}
+
+function isEmptyCommandEvent(event: TimelineEvent) {
+  const detail = event.detail?.trim()
+  return runtimeEventLabel(event).toLowerCase().includes('command') &&
+    (!detail || detail === '{}' || detail === '[]')
+}
+
+function isNoisyFileOperationEvent(
+  event: TimelineEvent,
+  path: string | undefined,
+  diff: DiffArtifact | undefined,
+) {
+  if (event.kind !== 'fileOperationStarted' && event.kind !== 'fileOperationCompleted') return false
+  if (diff) return false
+  const detail = event.detail?.trim().toLowerCase()
+  if (!path) return true
+  return detail === 'edit' || detail === 'write' || detail === 'multiedit' || detail === 'filechange'
+}
+
+function diffLineStats(patch: string) {
+  let added = 0
+  let deleted = 0
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) continue
+    if (line.startsWith('+')) added += 1
+    if (line.startsWith('-')) deleted += 1
+  }
+  return { added, deleted }
+}
+
 type WorkPreview = { node: React.ReactNode; text: string }
 
 function formatWorkPreview(entry: TimelineWorkEntry): WorkPreview | null {
+  if (entry.path) return renderPathPreview(entry.path)
   const detail = entry.detail?.trim()
-  if (!detail) return null
+  if (!detail || detail === '{}' || detail === '[]') return null
 
   const colonIndex = detail.indexOf(': ')
   if (colonIndex > 0 && colonIndex <= 32) {
@@ -3342,7 +3786,7 @@ function classifyToolName(name: string): 'path' | 'command' | 'pattern' | 'unkno
 }
 
 function renderPathPreview(rawPath: string): WorkPreview {
-  const path = rawPath.replace(/^["']|["']$/g, '').trim()
+  const path = displayPath(rawPath.replace(/^["']|["']$/g, '').trim())
   const slash = path.lastIndexOf('/')
   if (slash <= 0 || slash >= path.length - 1) {
     return { node: <span className="work-arg-path">{path}</span>, text: path }
@@ -3360,9 +3804,21 @@ function renderPathPreview(rawPath: string): WorkPreview {
   }
 }
 
+function displayPath(path: string) {
+  const normalized = normalizeDiffPath(path)
+  const srcIndex = normalized.lastIndexOf('/src/')
+  if (srcIndex >= 0) return normalized.slice(srcIndex + 1)
+  const testsIndex = normalized.lastIndexOf('/tests/')
+  if (testsIndex >= 0) return normalized.slice(testsIndex + 1)
+  const parts = normalized.split('/').filter(Boolean)
+  if (normalized.startsWith('/') && parts.length > 3) return parts.slice(-3).join('/')
+  return normalized
+}
+
 type SlashCommand = {
-  name: 'thinking' | 'new' | 'fork'
+  name: 'thinking' | 'new' | 'fork' | 'review'
   level?: ThinkingLevel
+  reviewTarget?: ReviewTarget
 }
 
 function parseSlashCommand(prompt: string): SlashCommand | null {
@@ -3374,6 +3830,15 @@ function parseSlashCommand(prompt: string): SlashCommand | null {
   if (command === '/fork') {
     if (args.length > 0) throw new Error('Usage: /fork')
     return { name: 'fork' }
+  }
+  if (command === '/review') {
+    if (args.length === 0) {
+      return { name: 'review', reviewTarget: { type: 'uncommittedChanges' } }
+    }
+    if (args.length === 2 && args[0] === 'base') {
+      return { name: 'review', reviewTarget: { type: 'baseBranch', branch: args[1] } }
+    }
+    throw new Error('Usage: /review or /review base <branch>')
   }
   if (command !== '/thinking') return null
   if (args.length === 0) return { name: 'thinking' }
@@ -3395,6 +3860,7 @@ async function runSlashCommand(
     onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
     onResetSession: (agentId: string) => Promise<void>
     onForkSession: (agentId: string) => Promise<void>
+    onReviewSession: (agentId: string, target: ReviewTarget) => Promise<void>
   },
 ) {
   if (command.name === 'new') {
@@ -3403,6 +3869,13 @@ async function runSlashCommand(
   }
   if (command.name === 'fork') {
     await actions.onForkSession(agent.id)
+    return
+  }
+  if (command.name === 'review') {
+    if (agent.runtime !== 'codex') {
+      throw new Error(`${agent.runtime} sessions do not support /review yet`)
+    }
+    await actions.onReviewSession(agent.id, command.reviewTarget ?? { type: 'uncommittedChanges' })
     return
   }
   if (command.name === 'thinking') {
@@ -3570,9 +4043,10 @@ function timelineRowsContentVersion(rows: AgentTimelineRow[]) {
   }).join('|')
 }
 
-function deriveAgentTimelineRows(agent: AgentCell): AgentTimelineRow[] {
+function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTimelineRow[] {
   const rows: AgentTimelineRow[] = []
   let workEntries: TimelineWorkEntry[] = []
+  const diffByPath = createDiffPathMap(agent.diffs, cwd)
   const timeline = agent.timeline.length
     ? agent.timeline
     : agent.messages.map((message) => ({
@@ -3595,13 +4069,14 @@ function deriveAgentTimelineRows(agent: AgentCell): AgentTimelineRow[] {
 
   for (const item of timeline) {
     if (item.type === 'event') {
-      const entry = eventToWorkEntry(item.event)
+      const entry = eventToWorkEntry(item.event, diffByPath, cwd)
       if (entry) workEntries.push(entry)
       continue
     }
 
     if (item.message.role === 'tool') {
-      workEntries.push(toolMessageToWorkEntry(item.message))
+      const entry = toolMessageToWorkEntry(item.message, diffByPath, cwd)
+      if (entry) workEntries.push(entry)
       continue
     }
 
@@ -3627,15 +4102,27 @@ function deriveAgentTimelineRows(agent: AgentCell): AgentTimelineRow[] {
   return rows
 }
 
-function eventToWorkEntry(event: TimelineEvent): TimelineWorkEntry | null {
+function eventToWorkEntry(
+  event: TimelineEvent,
+  diffByPath: Map<string, DiffArtifact>,
+  cwd?: string,
+): TimelineWorkEntry | null {
   if (!shouldShowRuntimeEvent(event)) return null
+  const path = event.path ? normalizeTimelinePath(event.path, cwd) : undefined
+  const diff = path && event.kind === 'fileOperationCompleted'
+    ? diffByPath.get(path)
+    : undefined
+  if (isEmptyCommandEvent(event)) return null
+  if (isNoisyFileOperationEvent(event, path, diff)) return null
 
   return {
     id: event.id,
     kind: event.kind,
     tone: event.tone,
-    label: runtimeEventLabel(event),
+    label: runtimeEventLabel(event, diff),
     detail: event.detail,
+    ...(path ? { path } : {}),
+    ...(diff ? { diff } : {}),
     timestamp: event.timestamp,
   }
 }
@@ -3649,23 +4136,58 @@ function shouldShowRuntimeEvent(event: TimelineEvent) {
   return event.label.toLowerCase() !== 'taskupdate'
 }
 
-function runtimeEventLabel(event: TimelineEvent) {
+function runtimeEventLabel(event: TimelineEvent, diff?: DiffArtifact) {
+  if (event.kind === 'fileOperationCompleted' && diff) return 'Edited'
+  if (event.kind === 'fileOperationCompleted') return 'Changed file'
+  if (event.kind === 'fileOperationStarted') return 'Editing'
   const label = event.label.trim()
   if (label.toLowerCase() === 'bash') return 'Ran command'
   if (!label || label === 'tool execution start') return 'Tool'
   return label
 }
 
-function toolMessageToWorkEntry(message: BoardMessage): TimelineWorkEntry {
+function toolMessageToWorkEntry(
+  message: BoardMessage,
+  diffByPath: Map<string, DiffArtifact>,
+  cwd: string,
+): TimelineWorkEntry | null {
   const [firstLine, ...rest] = message.text.split('\n')
+  const parsed = parseToolInvocation(firstLine?.trim() ?? '')
+  const label = parsed?.label ?? firstLine?.trim() ?? 'Tool output'
+  const detail = rest.join('\n').trim() || message.text
+  const path = parsed?.path ? normalizeTimelinePath(parsed.path, cwd) : undefined
+  const diff = path ? diffByPath.get(path) : undefined
+  if (isNoisyToolMessage(label, detail) && !diff) return null
   return {
     id: message.id,
     kind: 'tool.message',
     tone: 'tool',
-    label: firstLine?.trim() || 'Tool output',
-    detail: rest.join('\n').trim() || message.text,
+    label: diff ? 'Edited' : label,
+    detail,
+    ...(path ? { path } : {}),
+    ...(diff ? { diff } : {}),
     timestamp: message.timestamp,
   }
+}
+
+function parseToolInvocation(line: string) {
+  const colonIndex = line.indexOf(': ')
+  if (colonIndex <= 0 || colonIndex > 32) return null
+  const label = line.slice(0, colonIndex).trim()
+  const value = line.slice(colonIndex + 2).trim()
+  if (!value || classifyToolName(label) !== 'path') return null
+  return { label, path: value }
+}
+
+function isNoisyToolMessage(label: string, detail: string) {
+  const normalizedLabel = normalizeWorkCallLabel(label)
+  const normalizedDetail = detail.trim().toLowerCase()
+  if (!normalizedDetail || normalizedDetail === '{}' || normalizedDetail === '[]') return true
+  if (normalizedDetail.includes('has been updated successfully') &&
+    normalizedDetail.includes('no need to read it back')) {
+    return true
+  }
+  return normalizedLabel === 'edit' || normalizedLabel === 'write' || normalizedLabel === 'multiedit'
 }
 
 function TerminalPanel({
@@ -3838,25 +4360,16 @@ function DiffPanel({ agent, themeMode }: { agent: AgentCell; themeMode: ThemeMod
   const [selectedDiffId, setSelectedDiffId] = React.useState<string | null>(null)
   const [diffStyle, setDiffStyle] = React.useState<DiffStyle>('unified')
   const [fullscreen, setFullscreen] = React.useState(false)
-  const fileButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([])
   const diffBodyRef = React.useRef<HTMLDivElement | null>(null)
   const diff =
     agent.diffs.find((item) => item.id === selectedDiffId) ?? agent.diffs[0]
   const selectedIndex = diff
     ? Math.max(0, agent.diffs.findIndex((item) => item.id === diff.id))
     : -1
-  const duplicateFileNames = React.useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const item of agent.diffs) {
-      const name = diffFileName(item)
-      counts.set(name, (counts.get(name) ?? 0) + 1)
-    }
-    return new Set(
-      [...counts.entries()]
-        .filter(([, count]) => count > 1)
-        .map(([name]) => name),
-    )
-  }, [agent.diffs])
+  const diffByPath = React.useMemo(
+    () => new Map(agent.diffs.map((item) => [normalizeDiffPath(item.path), item])),
+    [agent.diffs],
+  )
 
   React.useEffect(() => {
     setSelectedDiffId(null)
@@ -3881,12 +4394,12 @@ function DiffPanel({ agent, themeMode }: { agent: AgentCell; themeMode: ThemeMod
       }
       if (key === 'h') {
         event.preventDefault()
-        selectRelative(-1, false)
+        selectRelative(-1)
         return
       }
       if (key === 'l') {
         event.preventDefault()
-        selectRelative(1, false)
+        selectRelative(1)
         return
       }
       if (key === 'j') {
@@ -3904,49 +4417,16 @@ function DiffPanel({ agent, themeMode }: { agent: AgentCell; themeMode: ThemeMod
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [fullscreen, selectedIndex, agent.diffs])
 
-  React.useEffect(() => {
-    fileButtonRefs.current[selectedIndex]?.scrollIntoView({
-      block: 'nearest',
-      inline: 'nearest',
-    })
-  }, [selectedIndex])
-
-  function selectIndex(index: number, focus = false) {
+  function selectIndex(index: number) {
     if (!agent.diffs.length) return
     const nextIndex = Math.max(0, Math.min(index, agent.diffs.length - 1))
     setSelectedDiffId(agent.diffs[nextIndex]?.id ?? null)
-    if (focus) {
-      window.requestAnimationFrame(() => fileButtonRefs.current[nextIndex]?.focus())
-    }
   }
 
-  function selectRelative(delta: -1 | 1, focus = false) {
+  function selectRelative(delta: -1 | 1) {
     if (!agent.diffs.length || selectedIndex === -1) return
     const nextIndex = (selectedIndex + delta + agent.diffs.length) % agent.diffs.length
-    selectIndex(nextIndex, focus)
-  }
-
-  function onFileListKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    const key = event.key.toLowerCase()
-    if (key === 'h') {
-      event.preventDefault()
-      selectRelative(-1, true)
-      return
-    }
-    if (key === 'l') {
-      event.preventDefault()
-      selectRelative(1, true)
-      return
-    }
-    if (key === 'j') {
-      event.preventDefault()
-      scrollDiff(320)
-      return
-    }
-    if (key === 'k') {
-      event.preventDefault()
-      scrollDiff(-320)
-    }
+    selectIndex(nextIndex)
   }
 
   function scrollDiff(delta: number) {
@@ -4020,62 +4500,227 @@ function DiffPanel({ agent, themeMode }: { agent: AgentCell; themeMode: ThemeMod
           </button>
         </div>
       </div>
-      <div
-        className="diff-file-list"
-        role="tablist"
-        aria-label="Changed files"
-        onKeyDown={onFileListKeyDown}
-      >
-        {agent.diffs.map((item, index) => {
-          const fileName = diffFileName(item)
-          const folder = duplicateFileNames.has(fileName)
-            ? diffFileFolder(item.path)
-            : null
-          return (
-            <button
-              key={item.id}
-              ref={(element) => {
-                fileButtonRefs.current[index] = element
-              }}
-              type="button"
-              role="tab"
-              className={item.id === diff.id ? 'active' : ''}
-              onClick={() => setSelectedDiffId(item.id)}
-              aria-selected={item.id === diff.id}
-              tabIndex={item.id === diff.id ? 0 : -1}
-              title={item.path}
-            >
-              <span className="diff-file-name">{fileName}</span>
-              {folder ? <span className="diff-file-folder">{folder}</span> : null}
-            </button>
-          )
-        })}
-      </div>
-      <div className="pierre-host" ref={diffBodyRef}>
-        <PatchDiff
-          key={`${diff.id}:${diffStyle}:${themeMode}`}
-          patch={diff.patch}
-          disableWorkerPool
-          options={{
-            diffStyle,
-            overflow: 'wrap',
-            themeType: themeMode,
+      <div className="diff-body">
+        <DiffFileTree
+          diffs={agent.diffs}
+          selectedPath={normalizeDiffPath(diff.path)}
+          onSelectPath={(path) => {
+            const next = diffByPath.get(path)
+            if (next) setSelectedDiffId(next.id)
           }}
         />
+        <div className="pierre-host" ref={diffBodyRef}>
+          <PatchDiff
+            key={`${diff.id}:${diffStyle}:${themeMode}`}
+            patch={diff.patch}
+            disableWorkerPool
+            options={{
+              diffStyle,
+              overflow: 'wrap',
+              themeType: themeMode,
+            }}
+          />
+        </div>
       </div>
     </div>
   )
 }
 
-function diffFileName(file: Pick<DiffArtifact, 'path' | 'title'>) {
-  const normalized = file.path.replace(/\\/g, '/')
-  return normalized.split('/').filter(Boolean).at(-1) ?? file.title
+function DiffFileTree({
+  diffs,
+  selectedPath,
+  onSelectPath,
+}: {
+  diffs: DiffArtifact[]
+  selectedPath: string
+  onSelectPath: (path: string) => void
+}) {
+  const paths = React.useMemo(
+    () => diffs.map((diff) => normalizeDiffPath(diff.path)),
+    [diffs],
+  )
+  const statusByPath = React.useMemo(
+    () => new Map(
+      diffs.map((diff) => [
+        normalizeDiffPath(diff.path),
+        diffGitStatus(diff.patch),
+      ]),
+    ),
+    [diffs],
+  )
+  const pathSignature = paths.join('\0')
+  const selectablePathsRef = React.useRef(new Set(paths))
+  const onSelectPathRef = React.useRef(onSelectPath)
+  const selectedPathRef = React.useRef(selectedPath)
+  selectablePathsRef.current = new Set(paths)
+  onSelectPathRef.current = onSelectPath
+  selectedPathRef.current = selectedPath
+  const { model } = useFileTree({
+    density: 'compact',
+    flattenEmptyDirectories: false,
+    initialExpansion: 'open',
+    initialSelectedPaths: selectedPath ? [selectedPath] : [],
+    onSelectionChange: (selectedPaths) => {
+      const nextPath = selectedPaths[0]
+      if (
+        nextPath &&
+        nextPath !== selectedPathRef.current &&
+        selectablePathsRef.current.has(nextPath)
+      ) {
+        onSelectPathRef.current(nextPath)
+      }
+    },
+    paths,
+    renderRowDecoration: ({ item }) => {
+      if (item.kind !== 'file') return null
+      const status = statusByPath.get(item.path)
+      if (!status) return null
+      return {
+        text: diffGitStatusLabel(status),
+        title: `Changed file: ${diffGitStatusTitle(status)}`,
+      }
+    },
+    search: diffs.length > 8,
+    unsafeCSS: diffTreeUnsafeCSS,
+  })
+
+  React.useEffect(() => {
+    model.resetPaths(paths)
+  }, [model, pathSignature, paths])
+
+  React.useEffect(() => {
+    if (!selectedPath) return
+    const selectedPaths = model.getSelectedPaths()
+    if (selectedPaths.length === 1 && selectedPaths[0] === selectedPath) return
+    for (const path of selectedPaths) {
+      model.getItem(path)?.deselect()
+    }
+    const item = model.getItem(selectedPath)
+    if (item) {
+      item.select()
+      item.focus()
+      return
+    }
+    model.focusNearestPath(selectedPath)
+  }, [model, selectedPath])
+
+  return (
+    <aside className="diff-tree-pane" aria-label="Changed files">
+      <PierreFileTree
+        model={model}
+        header={<span className="diff-tree-header">Changed files</span>}
+        style={diffTreeStyle}
+      />
+    </aside>
+  )
 }
 
-function diffFileFolder(path: string) {
-  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean)
-  if (parts.length <= 1) return null
-  return parts.slice(0, -1).join('/')
+const diffTreeStyle: React.CSSProperties = {
+  height: '100%',
+  minHeight: 0,
+  width: '100%',
+  '--trees-bg-override': 'var(--panel-2)',
+  '--trees-bg-muted-override': 'color-mix(in oklab, var(--paper) 7%, var(--panel-2))',
+  '--trees-border-color-override': 'transparent',
+  '--trees-border-radius-override': '6px',
+  '--trees-fg-override': 'var(--ink)',
+  '--trees-muted-fg-override': 'var(--muted)',
+  '--trees-font-family-override': 'var(--font-mono)',
+  '--trees-font-size-override': '12px',
+  '--trees-item-padding-x-override': '6px',
+  '--trees-padding-inline-override': '10px',
+  '--trees-level-gap-override': '7px',
+  '--trees-icon-width-override': '14px',
+  '--trees-git-lane-width-override': '0px',
+  '--trees-selected-bg-override': 'var(--accent-soft)',
+  '--trees-selected-fg-override': 'var(--accent)',
+} as React.CSSProperties
+
+const diffTreeUnsafeCSS = `
+  [data-type='item'] {
+    letter-spacing: 0;
+  }
+
+  [data-item-section='content'] {
+    flex: 1 1 auto;
+  }
+
+  [data-item-section='decoration'] {
+    flex: 0 0 18px;
+    color: var(--trees-status-modified);
+    font-weight: var(--trees-font-weight-semibold);
+  }
+
+  [data-item-section='spacing-item'] {
+    opacity: 0.45;
+  }
+
+  :host(:hover) [data-item-section='spacing-item'] {
+    opacity: 0.7;
+  }
+`
+
+function normalizeDiffPath(path: string) {
+  return path.replace(/\\/g, '/')
+}
+
+function diffGitStatus(patch: string): GitStatus {
+  if (/^(?:new file mode|--- \/dev\/null$)/m.test(patch)) return 'added'
+  if (/^(?:deleted file mode|\+\+\+ \/dev\/null$)/m.test(patch)) return 'deleted'
+  if (/^rename (?:from|to) /m.test(patch)) return 'renamed'
+  return 'modified'
+}
+
+function diffGitStatusLabel(status: GitStatus) {
+  switch (status) {
+    case 'added':
+    case 'untracked':
+      return 'A'
+    case 'deleted':
+      return 'D'
+    case 'renamed':
+      return 'R'
+    case 'ignored':
+      return ''
+    case 'modified':
+      return 'M'
+  }
+}
+
+function diffGitStatusTitle(status: GitStatus) {
+  switch (status) {
+    case 'added':
+      return 'added'
+    case 'deleted':
+      return 'deleted'
+    case 'ignored':
+      return 'ignored'
+    case 'renamed':
+      return 'renamed'
+    case 'untracked':
+      return 'untracked'
+    case 'modified':
+      return 'modified'
+  }
+}
+
+function normalizeTimelinePath(path: string, cwd: string | undefined) {
+  const normalized = normalizeDiffPath(path.replace(/^["']|["']$/g, '').trim())
+  const normalizedCwd = cwd ? normalizeDiffPath(cwd).replace(/\/+$/g, '') : ''
+  if (normalizedCwd && normalized === normalizedCwd) return ''
+  if (normalizedCwd && normalized.startsWith(`${normalizedCwd}/`)) {
+    return normalized.slice(normalizedCwd.length + 1)
+  }
+  return normalized
+}
+
+function createDiffPathMap(diffs: DiffArtifact[], cwd: string) {
+  const map = new Map<string, DiffArtifact>()
+  for (const diff of diffs) {
+    map.set(normalizeDiffPath(diff.path), diff)
+    map.set(normalizeTimelinePath(diff.path, cwd), diff)
+  }
+  return map
 }
 
 function RuntimeBadge({ runtime }: { runtime: string }) {
@@ -4299,13 +4944,17 @@ function normalizeChatTypography(value: Record<string, unknown>): ChatTypography
   const fontSize = typeof value.fontSize === 'string' && value.fontSize in chatFontSizes
     ? value.fontSize as ChatFontSize
     : defaultChatTypography.fontSize
-  return { fontSize }
+  const monoFont = typeof value.monoFont === 'string' && value.monoFont in monoFonts
+    ? value.monoFont as MonoFont
+    : defaultChatTypography.monoFont
+  return { fontSize, monoFont }
 }
 
 function applyChatTypography(element: HTMLElement, settings: ChatTypographySettings): void {
   const tokens = chatFontSizes[settings.fontSize]
   element.style.setProperty('--chat-font-size', tokens.size)
   element.style.setProperty('--chat-line-height', tokens.lineHeight)
+  element.style.setProperty('--font-mono', monoFonts[settings.monoFont].stack)
 }
 
 function formatKey(key: string) {
