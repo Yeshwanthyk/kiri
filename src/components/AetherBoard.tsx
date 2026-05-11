@@ -1,7 +1,7 @@
 'use client'
 
 import { PatchDiff } from '@pierre/diffs/react'
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useServerFn } from '@tanstack/react-start'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -2124,9 +2124,10 @@ function SelectedAgentPane({
   const revision = selectedAgent
     ? `${selectedAgent.updatedAt}:${selectedAgent.messageCount}:${selectedAgent.diffCount}:${selectedAgent.status}`
     : ''
-  const detailQuery = useQuery(
-    agentDetailQueryOptions(selectedAgent?.id ?? '', 100, revision),
-  )
+  const detailQuery = useQuery({
+    ...agentDetailQueryOptions(selectedAgent?.id ?? '', 100, revision),
+    placeholderData: keepPreviousData,
+  })
   const agent = mergeAgentDetail(selectedAgent, detailQuery.data)
   const refreshDetail = React.useCallback(async () => {
     if (!selectedAgent) return
@@ -2528,10 +2529,12 @@ function ChatPanel({
     [timelineAgent],
   )
   const messageListRef = React.useRef<HTMLDivElement | null>(null)
-  const latestRowId = rows.at(-1)?.id ?? ''
+  const timelineContentVersion = React.useMemo(() => timelineRowsContentVersion(rows), [rows])
   const [hasNewContent, setHasNewContent] = React.useState(false)
   const [selectedMessageId, setSelectedMessageId] = React.useState<string | null>(null)
   const [composerEmpty, setComposerEmpty] = React.useState(true)
+  const didInitialScrollRef = React.useRef(false)
+  const wasAtBottomRef = React.useRef(true)
 
   const messageRows = React.useMemo(
     () =>
@@ -2560,22 +2563,34 @@ function ChatPanel({
   React.useLayoutEffect(() => {
     const list = messageListRef.current
     if (!list) return
-    list.scrollTop = list.scrollHeight
-    setHasNewContent(false)
-  }, [agent.id])
 
-  React.useLayoutEffect(() => {
-    if (selectedMessageId !== null) return
-    const list = messageListRef.current
-    if (!list) return
-    const distance = list.scrollHeight - list.clientHeight - list.scrollTop
-    if (distance <= 24) {
+    if (!didInitialScrollRef.current) {
+      if (rows.length === 0) return
       list.scrollTop = list.scrollHeight
+      didInitialScrollRef.current = true
+      wasAtBottomRef.current = true
       setHasNewContent(false)
-    } else {
-      setHasNewContent(true)
+      return
     }
-  }, [agent.status, latestRowId, rows.length, selectedMessageId])
+
+    if (selectedMessageId !== null) {
+      const distance = bottomDistance(list)
+      wasAtBottomRef.current = distance <= 24
+      if (!wasAtBottomRef.current) setHasNewContent(true)
+      return
+    }
+
+    if (wasAtBottomRef.current) {
+      list.scrollTop = list.scrollHeight
+      wasAtBottomRef.current = true
+      setHasNewContent(false)
+      return
+    }
+
+    const distance = bottomDistance(list)
+    wasAtBottomRef.current = distance <= 24
+    setHasNewContent(distance > 24)
+  }, [rows.length, selectedMessageId, timelineContentVersion])
 
   React.useEffect(() => {
     function isComposerTextarea(target: EventTarget | null): boolean {
@@ -2661,9 +2676,11 @@ function ChatPanel({
     const list = messageListRef.current
     if (!list) return
     const onScroll = () => {
-      const distance = list.scrollHeight - list.clientHeight - list.scrollTop
-      if (distance <= 24) setHasNewContent(false)
+      const distance = bottomDistance(list)
+      wasAtBottomRef.current = distance <= 24
+      if (wasAtBottomRef.current) setHasNewContent(false)
     }
+    onScroll()
     list.addEventListener('scroll', onScroll, { passive: true })
     return () => list.removeEventListener('scroll', onScroll)
   }, [agent.id])
@@ -3536,6 +3553,21 @@ function CopyTextButton({ text, label }: { text: string; label: string }) {
       {copied ? <Check size={13} /> : <Copy size={13} />}
     </button>
   )
+}
+
+function bottomDistance(list: HTMLElement) {
+  return list.scrollHeight - list.clientHeight - list.scrollTop
+}
+
+function timelineRowsContentVersion(rows: AgentTimelineRow[]) {
+  return rows.map((row) => {
+    if (row.kind === 'message') return `${row.id}:${row.message.text.length}`
+    if (row.kind === 'work') {
+      const last = row.entries.at(-1)
+      return `${row.id}:${row.entries.length}:${last?.id ?? ''}:${last?.detail?.length ?? 0}`
+    }
+    return row.id
+  }).join('|')
 }
 
 function deriveAgentTimelineRows(agent: AgentCell): AgentTimelineRow[] {
