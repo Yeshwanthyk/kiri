@@ -2635,7 +2635,7 @@ function WorkEntryRow({ entry }: { entry: TimelineWorkEntry }) {
             disabled={!canExpand}
             title={displayText}
           >
-            <span>
+            <span suppressHydrationWarning>
               <strong>{entry.label}</strong>
               {preview ? <> - {preview}</> : null}
             </span>

@@ -644,35 +644,22 @@ h1 {
 .settings-rail {
   display: flex;
   flex: 1 1 auto;
+  flex-wrap: wrap;
   align-items: stretch;
   gap: 32px;
   padding: 28px 24px 40px;
-  overflow-x: auto;
-  scroll-snap-type: x proximity;
-  scrollbar-color: var(--line) transparent;
-}
-
-.settings-rail::-webkit-scrollbar {
-  height: 10px;
-}
-
-.settings-rail::-webkit-scrollbar-thumb {
-  background: var(--line);
-  border-radius: 99px;
 }
 
 .settings-lane {
-  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 14px;
   min-width: 0;
-  scroll-snap-align: start;
 }
 
-.settings-lane[data-lane='theme']    { width: clamp(560px, 46vw, 760px); }
-.settings-lane[data-lane='keymap']   { width: clamp(440px, 32vw, 540px); }
-.settings-lane[data-lane='chat']     { width: clamp(320px, 22vw, 380px); }
+.settings-lane[data-lane='theme']    { flex: 2 1 420px; max-width: 760px; }
+.settings-lane[data-lane='keymap']   { flex: 1.4 1 340px; max-width: 540px; }
+.settings-lane[data-lane='chat']     { flex: 1 1 280px; max-width: 380px; }
 
 .settings-lane-head {
   display: flex;
@@ -3086,13 +3073,13 @@ h1 {
     flex-direction: column;
     gap: 28px;
     padding: 20px 16px 32px;
-    overflow-x: visible;
   }
 
   .settings-lane[data-lane='theme'],
   .settings-lane[data-lane='keymap'],
   .settings-lane[data-lane='chat'] {
-    width: 100%;
+    flex: 1 1 100%;
+    max-width: none;
   }
 
   .theme-grid {
