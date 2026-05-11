@@ -7,6 +7,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   Activity,
+  AlertTriangle,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
@@ -148,6 +149,7 @@ function mergeAgentDetail(
     timelineEvents: detail.timelineEvents,
     timeline: detail.timeline,
     diffs: detail.diffs,
+    contextUsage: detail.contextUsage,
     pendingQuestion: detail.pendingQuestion,
   }
 }
@@ -221,6 +223,8 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [sessionLauncherOpen, setSessionLauncherOpen] = React.useState(false)
   const [agentSwitcherOpen, setAgentSwitcherOpen] = React.useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
+  const [pendingDelete, setPendingDelete] = React.useState<{ agentId: string; title: string } | null>(null)
+  const [deleteInFlight, setDeleteInFlight] = React.useState(false)
   const [keymap, setKeymap] = React.useState<KeymapSettings>(defaultKeymap)
   const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(defaultThemeSelection)
   const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(defaultChatTypography)
@@ -396,26 +400,36 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setWorkspace(next)
   }
 
-  async function handleDeleteSession(agentId: string) {
+  function handleDeleteSession(agentId: string) {
     const agent = selectedProject?.agents.find((item) => item.id === agentId)
     if (!agent || !selectedProject) return
-    if (!window.confirm(`Remove session "${agent.title}"?`)) return
+    setPendingDelete({ agentId, title: agent.title })
+  }
 
+  async function confirmDeleteSession() {
+    if (!pendingDelete || !selectedProject) return
+    const { agentId } = pendingDelete
     const currentProjectId = selectedProject.id
     const currentProject = selectedProject
     const currentIndex = currentProject.agents.findIndex((agent) => agent.id === agentId)
-    const next = await deleteSession({ data: { agentId } })
-    setWorkspace(next)
-    const project =
-      next.projects.find((item) => item.id === currentProjectId) ?? next.projects[0]
-    if (!project) return
-    const fallbackAgent =
-      project.agents[Math.max(0, Math.min(currentIndex - 1, project.agents.length - 1))]
-    setChatFocusRequest(0)
-    if (fallbackAgent) {
-      setSelection({ projectId: project.id, agentId: fallbackAgent.id })
-    } else {
-      setSelection({ projectId: project.id, agentId: '' })
+    setDeleteInFlight(true)
+    try {
+      const next = await deleteSession({ data: { agentId } })
+      setWorkspace(next)
+      const project =
+        next.projects.find((item) => item.id === currentProjectId) ?? next.projects[0]
+      if (!project) return
+      const fallbackAgent =
+        project.agents[Math.max(0, Math.min(currentIndex - 1, project.agents.length - 1))]
+      setChatFocusRequest(0)
+      if (fallbackAgent) {
+        setSelection({ projectId: project.id, agentId: fallbackAgent.id })
+      } else {
+        setSelection({ projectId: project.id, agentId: '' })
+      }
+    } finally {
+      setDeleteInFlight(false)
+      setPendingDelete(null)
     }
   }
 
@@ -429,7 +443,9 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     const poll = async () => {
       if (stopped) return
       try {
-        setWorkspace(await refreshWorkspace())
+        const next = await refreshWorkspace()
+        if (stopped) return
+        setWorkspace(next)
         await onPoll?.()
       } finally {
         if (!stopped) {
@@ -764,6 +780,26 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         />
       ) : null}
 
+      {pendingDelete ? (
+        <ConfirmDialog
+          title="Remove session?"
+          body={
+            <>
+              <strong>{pendingDelete.title}</strong> and its history will be permanently deleted. This can&rsquo;t be undone.
+            </>
+          }
+          confirmLabel="Remove session"
+          cancelLabel="Keep"
+          destructive
+          busy={deleteInFlight}
+          onConfirm={() => void confirmDeleteSession()}
+          onCancel={() => {
+            if (deleteInFlight) return
+            setPendingDelete(null)
+          }}
+        />
+      ) : null}
+
       <section
         className="board-pane"
         aria-label="Projects and agents"
@@ -1055,6 +1091,86 @@ function InlineSessionLauncher({
           </button>
         </div>
       </form>
+    </>
+  )
+}
+
+function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  cancelLabel,
+  destructive,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  title: string
+  body: React.ReactNode
+  confirmLabel: string
+  cancelLabel: string
+  destructive?: boolean
+  busy?: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  const confirmRef = React.useRef<HTMLButtonElement | null>(null)
+
+  React.useEffect(() => {
+    confirmRef.current?.focus()
+  }, [])
+
+  return (
+    <>
+      <div className="session-dialog-scrim" onClick={onCancel} />
+      <div
+        className={`session-dialog confirm-dialog${destructive ? ' confirm-dialog-destructive' : ''}`}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            onCancel()
+          } else if (event.key === 'Enter') {
+            event.preventDefault()
+            if (!busy) onConfirm()
+          }
+        }}
+        data-testid="confirm-dialog"
+      >
+        <div className="confirm-dialog-head">
+          <span className="confirm-dialog-icon" aria-hidden="true">
+            <AlertTriangle size={16} />
+          </span>
+          <div>
+            <p className="settings-kicker">Confirm</p>
+            <strong id="confirm-dialog-title">{title}</strong>
+          </div>
+        </div>
+        <p className="confirm-dialog-body">{body}</p>
+        <div className="session-dialog-actions">
+          <button
+            type="button"
+            className="confirm-dialog-cancel"
+            onClick={onCancel}
+            disabled={busy}
+            data-testid="confirm-dialog-cancel"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            ref={confirmRef}
+            type="button"
+            className="confirm-dialog-confirm"
+            onClick={onConfirm}
+            disabled={busy}
+            data-testid="confirm-dialog-confirm"
+          >
+            {busy ? 'Removing…' : confirmLabel}
+          </button>
+        </div>
+      </div>
     </>
   )
 }
@@ -1982,7 +2098,7 @@ function SelectedAgentPane({
   chatFocusRequest: number
   themeMode: ThemeMode
   onStartSession: () => void
-  onDeleteSession: (agentId: string) => Promise<void>
+  onDeleteSession: (agentId: string) => void
   onRenameSession: (agentId: string, title: string) => Promise<void>
   onSend: (
     agentId: string,
@@ -2130,7 +2246,7 @@ function SidebarHeader({
 }: {
   project: ProjectRow
   agent: AgentCell
-  onDeleteSession: (agentId: string) => Promise<void>
+  onDeleteSession: (agentId: string) => void
   onRenameSession: (agentId: string, title: string) => Promise<void>
 }) {
   const [pending, setPending] = React.useState(false)
@@ -2170,17 +2286,9 @@ function SidebarHeader({
     }
   }
 
-  async function removeSession() {
+  function removeSession() {
     if (!agent.isSession) return
-    setPending(true)
-    setError(null)
-    try {
-      await onDeleteSession(agent.id)
-    } catch (cause) {
-      setError(errorMessage(cause))
-    } finally {
-      setPending(false)
-    }
+    onDeleteSession(agent.id)
   }
 
   function beginEdit() {
@@ -2202,13 +2310,13 @@ function SidebarHeader({
           title={agent.status}
           aria-label={`Status: ${agent.status}`}
         />
-        <span className="chat-meta" data-testid="selected-project" title={project.name}>
+        <span className="chat-meta" data-meta="project" data-testid="selected-project" title={project.name}>
           {project.name}
         </span>
-        <span className="chat-meta chat-meta-divider" aria-hidden="true">·</span>
-        <span className="chat-meta" title={agent.slot}>{agent.slot}</span>
-        <span className="chat-meta chat-meta-divider" aria-hidden="true">·</span>
-        <span className="chat-meta" title={`${agent.model} · thinking ${thinking}`}>
+        <span className="chat-meta chat-meta-divider" data-divider="slot" aria-hidden="true">·</span>
+        <span className="chat-meta" data-meta="slot" title={agent.slot}>{agent.slot}</span>
+        <span className="chat-meta chat-meta-divider" data-divider="model" aria-hidden="true">·</span>
+        <span className="chat-meta" data-meta="model" title={`${agent.model} · thinking ${thinking}`}>
           {agent.model}
           <span className="chat-meta-thinking">:{thinking}</span>
         </span>

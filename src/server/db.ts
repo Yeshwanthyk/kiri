@@ -1614,20 +1614,13 @@ function readContextUsage(
   settings: ReturnType<typeof getSettings>,
   persistedUsage: z.infer<typeof contextUsageDbRowSchema> | undefined,
 ): ContextUsage | null {
+  if (!persistedUsage) return null
+
   const windowTokens =
-    persistedUsage?.windowTokens ?? settings.runtimes[agent.runtime].contextWindows?.[agent.model]
+    persistedUsage.windowTokens ?? settings.runtimes[agent.runtime].contextWindows?.[agent.model]
   if (!windowTokens) return null
 
-  const usedTokens = persistedUsage?.usedTokens
-  if (usedTokens === undefined) {
-    return {
-      usedTokens: 0,
-      remainingTokens: windowTokens,
-      windowTokens,
-      usedPercent: 0,
-    }
-  }
-
+  const usedTokens = persistedUsage.usedTokens
   return {
     usedTokens,
     remainingTokens: Math.max(windowTokens - usedTokens, 0),
