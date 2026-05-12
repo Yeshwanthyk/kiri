@@ -13,6 +13,7 @@ const settingsPath = resolve(process.env.AETHER_SETTINGS_PATH ?? join(rootDir, '
 const dbPath = resolve(process.env.AETHER_DB_PATH ?? join(stateDir, 'aether.sqlite'))
 const host = process.env.AETHER_BACKEND_HOST ?? '127.0.0.1'
 const port = Number(process.env.AETHER_BACKEND_PORT ?? 0)
+const browserHost = process.env.AETHER_BACKEND_BROWSER_HOST ?? (host === '0.0.0.0' ? '127.0.0.1' : host)
 const environmentPath = '/.well-known/aether/environment'
 let appReady = false
 
@@ -60,11 +61,13 @@ const server = serve({
 })
 
 await server.ready()
-const readyResponse = await fetch(new URL(environmentPath, server.url))
+const browserUrl = new URL(server.url)
+browserUrl.hostname = browserHost
+const readyResponse = await fetch(new URL(environmentPath, browserUrl))
 if (!readyResponse.ok) {
   throw new Error(`Backend readiness failed: ${await readyResponse.text()}`)
 }
-process.stdout.write(`${JSON.stringify({ type: 'ready', url: server.url })}\n`)
+process.stdout.write(`${JSON.stringify({ type: 'ready', url: browserUrl.toString() })}\n`)
 
 async function checkReadiness(request) {
   if (!existsSync(settingsPath)) throw new Error(`settings.json not found: ${settingsPath}`)

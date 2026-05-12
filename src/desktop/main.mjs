@@ -108,8 +108,9 @@ async function startBackend() {
       AETHER_HOME: join(app.getPath('home'), '.aether'),
       AETHER_SETTINGS_PATH: settingsPath,
       AETHER_DEFAULT_PROJECT_CWD: app.getPath('home'),
-      AETHER_BACKEND_HOST: '127.0.0.1',
-      AETHER_BACKEND_PORT: '0',
+      AETHER_BACKEND_HOST: '0.0.0.0',
+      AETHER_BACKEND_PORT: '3090',
+      AETHER_BACKEND_BROWSER_HOST: '127.0.0.1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

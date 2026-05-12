@@ -14,7 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "desktop:dev": "AETHER_DESKTOP_DEV_URL=http://127.0.0.1:3000 electron src/desktop/main.mjs",
+    "desktop:dev": "AETHER_DESKTOP_DEV_URL=http://127.0.0.1:3090 electron src/desktop/main.mjs",
     "desktop:start": "pnpm build && electron src/desktop/main.mjs",
     "desktop:backend": "node scripts/aether-desktop-backend.mjs",
     "dist:desktop": "pnpm build && electron-builder --mac dir && node scripts/normalize-desktop-app.mjs && node scripts/create-desktop-dmg.mjs",
