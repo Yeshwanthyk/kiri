@@ -654,7 +654,7 @@ function claudeOptions(
     settings: { autoCompactEnabled: true },
     canUseTool: (toolName, input, options) =>
       runRuntimeLifecyclePromise(handleClaudePermissionEffect(config.id, pendingQuestions, toolName, input, options)),
-    env: claudeEnvironment(state, config.id),
+    env: claudeEnvironment(state),
     ...extraArgsOption(),
     ...claudeThinkingOptions(getAgentThinkingLevel(config.id)),
   }
@@ -1095,8 +1095,8 @@ function normalizeTaskStatus(value: string | undefined): AgentTask['status'] | u
   return undefined
 }
 
-function claudeEnvironment(state: ClaudeRuntimeState, agentId: string): NodeJS.ProcessEnv {
-  const env = runtimeProcessEnv({ AETHER_AGENT_ID: agentId })
+function claudeEnvironment(state: ClaudeRuntimeState): NodeJS.ProcessEnv {
+  const env = runtimeProcessEnv()
   if (process.env.AETHER_CLAUDE_USE_EXTERNAL_API_KEY !== '1') {
     delete env.ANTHROPIC_API_KEY
     delete env.ANTHROPIC_AUTH_TOKEN

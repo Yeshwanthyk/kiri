@@ -1,10 +1,4 @@
 {
-  "titleGeneration": {
-    "enabled": true,
-    "runtime": "codex",
-    "model": "gpt-5.4",
-    "timeoutMs": 8000
-  },
   "runtimes": {
     "pi": {
       "models": [

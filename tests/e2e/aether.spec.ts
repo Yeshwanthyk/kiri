@@ -468,47 +468,6 @@ test('claude runtime runs through claude-agent-sdk harness', async ({ page }, te
   await expect(page.getByTestId('thinking-level')).toContainText('Thinking off')
 })
 
-test('codex title generation is scheduled without blocking the first turn', async ({ page }, testInfo) => {
-  test.setTimeout(60_000)
-  const text = `build title generation ${testInfo.project.name}`
-
-  await page.goto('/')
-  await createSession(page, '', 'codex', 'low')
-
-  await page.getByTestId('chat-input').fill(text)
-  await page.getByRole('button', { name: 'Send prompt' }).click()
-
-  await expect(page.getByTestId('chat-panel')).toContainText(`fake codex received: ${text}`, {
-    timeout: 30_000,
-  })
-  await expect(page.getByTestId('selected-agent')).toHaveText('Generated Codex Title', {
-    timeout: 30_000,
-  })
-
-  await expect.poll(() => (
-    (fakeCodexServer.requests as CodexHarnessRequest[])
-      .filter((request) => request.method === 'thread/name/set')
-      .length
-  )).toBeGreaterThan(0)
-
-  const requests = fakeCodexServer.requests as CodexHarnessRequest[]
-  const titleTurnStartIndex = requests.findIndex((request) => (
-    request.method === 'turn/start'
-    && request.params?.input?.[0]?.text?.includes('AETHER_SESSION_TITLE_GENERATION')
-  ))
-  const mainTurnStartIndex = requests.findIndex((request) => (
-    request.method === 'turn/start'
-    && request.params?.input?.[0]?.text === text
-  ))
-  const nameSetIndex = requests.findIndex((request) => (
-    request.method === 'thread/name/set'
-    && request.params?.name === 'Generated Codex Title'
-  ))
-  expect(titleTurnStartIndex).toBeGreaterThanOrEqual(0)
-  expect(mainTurnStartIndex).toBeGreaterThanOrEqual(0)
-  expect(nameSetIndex).toBeGreaterThan(mainTurnStartIndex)
-})
-
 test('claude runtime answers AskUserQuestion requests', async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, 'mobile composer currently overlays pending-question controls')
 
@@ -703,11 +662,7 @@ async function createSession(
     .getByTestId('session-launcher')
     .getByRole('button', { name: 'Start session' })
     .click()
-  if (title) {
-    await expect(page.getByTestId('selected-agent')).toHaveText(title)
-  } else {
-    await expect(page.getByTestId('selected-agent')).toHaveText(/^Session \d+$/)
-  }
+  await expect(page.getByTestId('selected-agent')).toHaveText(title)
 }
 
 function seedSessionWithDetail(input: {
@@ -787,8 +742,6 @@ type CodexHarnessRequest = {
   params?: {
     effort?: string
     includeTurns?: boolean
-    input?: Array<{ text?: string }>
-    name?: string
     sandbox?: string
     sandboxPolicy?: { type: string }
     target?: unknown

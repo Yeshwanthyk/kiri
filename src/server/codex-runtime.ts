@@ -26,13 +26,11 @@ import {
   recordAgentInfoEvent,
   recordRuntimeMessage,
   recordRuntimeTimelineEvent,
-  renameSessionSummary,
   resetSession as resetStoredSession,
   setAgentStatus,
 } from './db'
 import { collectGitDiffArtifacts, diffArtifactsFromPatch } from './git-diff'
 import { fileOperationFromCodexItem } from './runtime-file-operations'
-import { getSettings } from './settings'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
@@ -49,7 +47,6 @@ type CodexRuntimeState = {
   threadId?: string
   websocketUrl?: string
   userAgent?: string
-  autoTitle?: string
 }
 
 const adapters = new Map<string, CodexAppServerAdapter>()
@@ -60,10 +57,8 @@ const threadTurns = new Map<string, string>()
 const queues = new Map<string, Promise<void>>()
 const sessionGenerations = new Map<string, number>()
 const repoDiffRefreshedTurns = new Set<string>()
-const generatedSessionTitles = new Map<string, string>()
 const CODEX_SANDBOX_MODE = 'danger-full-access'
 const CODEX_SANDBOX_POLICY = { type: 'dangerFullAccess' } as const
-const TITLE_GENERATION_MARKER = 'AETHER_SESSION_TITLE_GENERATION'
 
 export async function promptCodexAgent(input: {
   agentId: string
@@ -315,10 +310,6 @@ function startOrSteerCodexTurn(input: {
       return false
     }
 
-    yield* Effect.sync(() => {
-      scheduleCodexTitleGeneration(input, threadId)
-    })
-
     const turnResponse = yield* codexProtocolPromise(() => input.adapter.startTurn({
       threadId,
       input: textInput(input.text),
@@ -402,162 +393,6 @@ function startCodexReview(input: {
     })
     return true
   })
-}
-
-function scheduleCodexTitleGeneration(input: {
-  adapter: CodexAppServerAdapter
-  config: ReturnType<typeof getAgentLaunchConfig>
-  text: string
-}, threadId: string) {
-  if (!shouldGenerateSessionTitle(input.config.title)) return
-  const settings = getSettings().titleGeneration
-  if (!settings?.enabled || settings.runtime !== 'codex') return
-
-  const operation = generateCodexTitleFromSideThread(input, settings)
-  let settled = false
-  const timeout = setTimeout(() => {
-    if (settled) return
-    void applyGeneratedCodexTitle(input, threadId, fallbackSessionTitle(input.text))
-  }, settings.timeoutMs)
-
-  operation.then(
-    (rawTitle) => {
-      settled = true
-      clearTimeout(timeout)
-      void applyGeneratedCodexTitle(input, threadId, cleanGeneratedTitle(rawTitle))
-    },
-    () => {
-      settled = true
-      clearTimeout(timeout)
-      void applyGeneratedCodexTitle(input, threadId, fallbackSessionTitle(input.text))
-    },
-  )
-}
-
-async function applyGeneratedCodexTitle(
-  input: {
-    adapter: CodexAppServerAdapter
-    config: ReturnType<typeof getAgentLaunchConfig>
-    text: string
-  },
-  threadId: string,
-  title: string | null,
-) {
-  if (!title) return
-  const currentConfig = getAgentLaunchConfig(input.config.id)
-  if (!canReplaceSessionTitle(input.config.id, currentConfig.title)) return
-  generatedSessionTitles.set(input.config.id, title)
-  setCodexState(input.config.id, {
-    ...codexState(getAgentRuntimeState(input.config.id)),
-    autoTitle: title,
-  })
-  renameSessionSummary({ agentId: input.config.id, title })
-  input.adapter.setThreadName({ threadId, name: title }).catch(() => {})
-}
-
-async function generateCodexTitleFromSideThread(
-  input: {
-    adapter: CodexAppServerAdapter
-    config: ReturnType<typeof getAgentLaunchConfig>
-    text: string
-  },
-  settings: NonNullable<ReturnType<typeof getSettings>['titleGeneration']>,
-) {
-  let titleThreadId: string | null = null
-  try {
-    const response = await input.adapter.startThread({
-      cwd: input.config.cwd,
-      model: settings.model,
-      approvalPolicy: 'never',
-      sandbox: CODEX_SANDBOX_MODE,
-    })
-    titleThreadId = response.thread.id ?? null
-    if (!titleThreadId) return null
-    const turnResponse = await input.adapter.startTurn({
-      threadId: titleThreadId,
-      input: textInput(titlePrompt(input.text, input.config.projectName)),
-      model: settings.model,
-      sandboxPolicy: CODEX_SANDBOX_POLICY,
-      effort: 'minimal',
-    })
-    const completedTurn = await input.adapter.waitForTurnCompleted({
-      threadId: titleThreadId,
-      turnId: turnResponse.turn.id,
-    })
-    const title = extractAgentText(completedTurn)
-    if (title) return title
-    const thread = await input.adapter.readThread({ threadId: titleThreadId, includeTurns: true })
-    return extractThreadAgentText(thread.thread)
-  } finally {
-    if (titleThreadId) {
-      input.adapter.archiveThread({ threadId: titleThreadId }).catch(() => {})
-    }
-  }
-}
-
-function shouldGenerateSessionTitle(title: string) {
-  return /^Session \d+$/.test(title.trim())
-}
-
-function canReplaceSessionTitle(agentId: string, title: string) {
-  return (
-    shouldGenerateSessionTitle(title)
-    || generatedSessionTitles.get(agentId) === title
-    || codexState(getAgentRuntimeState(agentId)).autoTitle === title
-  )
-}
-
-function titlePrompt(prompt: string, projectName: string) {
-  return [
-    TITLE_GENERATION_MARKER,
-    'Generate a short title for this Aether coding session.',
-    'Return only the title. No quotes. No punctuation-only labels.',
-    'Keep it under 7 words and use Title Case.',
-    `Project: ${projectName}`,
-    'User prompt:',
-    prompt.trim(),
-  ].join('\n')
-}
-
-function extractAgentText(turn: CodexTurn) {
-  for (const item of turn.items ?? []) {
-    const object = objectValue(item)
-    if (stringValue(object.type) === 'agentMessage') {
-      const text = stringValue(object.text)
-      if (text) return text
-    }
-  }
-  return null
-}
-
-function extractThreadAgentText(thread: CodexThread) {
-  for (const turn of [...(thread.turns ?? [])].reverse()) {
-    const text = extractAgentText(turn)
-    if (text) return text
-  }
-  return null
-}
-
-function cleanGeneratedTitle(value: string | null | undefined) {
-  const cleaned = (value ?? '')
-    .replace(/^["'`]+|["'`.]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!cleaned) return null
-  return cleaned.slice(0, 80)
-}
-
-function fallbackSessionTitle(prompt: string) {
-  const words = prompt
-    .replace(/[`*_#[\]()>-]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 6)
-  if (words.length === 0) return null
-  return words
-    .join(' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase())
-    .slice(0, 80)
 }
 
 function ensureCodexThreadEffect(input: {
@@ -994,7 +829,6 @@ function codexState(value: Record<string, unknown>): CodexRuntimeState {
     threadId: stringValue(value.threadId),
     websocketUrl: stringValue(value.websocketUrl),
     userAgent: stringValue(value.userAgent),
-    autoTitle: stringValue(value.autoTitle),
   }
 }
 

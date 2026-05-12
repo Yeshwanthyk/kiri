@@ -236,21 +236,6 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }, [snapshot])
 
   React.useEffect(() => {
-    let cancelled = false
-    const timer = window.setInterval(() => {
-      void refreshWorkspace()
-        .then((next) => {
-          if (!cancelled) setWorkspace(next)
-        })
-        .catch(() => {})
-    }, 1000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [refreshWorkspace])
-
-  React.useEffect(() => {
     if (!selectedProject) return
     const agentId = selectedAgent?.id ?? ''
     if (selectedProject.id !== selection.projectId || agentId !== selection.agentId) {
