@@ -183,11 +183,23 @@ export const projectRowSchema = z.object({
 })
 export type ProjectRow = z.infer<typeof projectRowSchema>
 
+export const scratchpadBlockSchema = z.object({
+  id: z.string(),
+  projectId: z.string().nullable(),
+  projectName: z.string().nullable(),
+  body: z.string(),
+  createdAt: z.string(),
+  triggeredAt: z.string().nullable(),
+  triggeredAgentId: z.string().nullable(),
+})
+export type ScratchpadBlock = z.infer<typeof scratchpadBlockSchema>
+
 export const workspaceSnapshotSchema = z.object({
   settings: aetherSettingsSchema,
   projects: z.array(projectRowSchema),
   hiddenProjects: z.array(projectRowSchema),
   archivedSessions: z.array(archivedSessionSummarySchema).default([]),
+  scratchpadBlocks: z.array(scratchpadBlockSchema).default([]),
   selected: z.object({
     projectId: z.string(),
     agentId: z.string(),
@@ -315,6 +327,27 @@ export const renameSessionInputSchema = z.object({
   title: z.string().trim().min(1).max(160),
 })
 export type RenameSessionInput = z.infer<typeof renameSessionInputSchema>
+
+export const addScratchpadBlockInputSchema = z.object({
+  body: z.string().trim().min(1).max(4000),
+  projectId: z.string().trim().min(1).nullable().default(null),
+})
+export type AddScratchpadBlockInput = z.infer<typeof addScratchpadBlockInputSchema>
+
+export const deleteScratchpadBlockInputSchema = z.object({
+  id: z.string().trim().min(1),
+})
+export type DeleteScratchpadBlockInput = z.infer<typeof deleteScratchpadBlockInputSchema>
+
+export const triggerScratchpadBlockInputSchema = z.object({
+  id: z.string().trim().min(1),
+  projectId: z.string().trim().min(1),
+  runtime: runtimeKindSchema.optional(),
+  model: z.string().trim().optional(),
+  title: z.string().trim().optional(),
+  thinkingLevel: thinkingLevelSchema.default('medium'),
+})
+export type TriggerScratchpadBlockInput = z.infer<typeof triggerScratchpadBlockInputSchema>
 
 export type AgentRuntimeState = {
   kind: RuntimeKind

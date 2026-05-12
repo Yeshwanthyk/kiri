@@ -5,12 +5,14 @@ import { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import type {
   AddProjectInput,
+  AddScratchpadBlockInput,
   AgentStatus,
   AgentDetail,
   ContextUsage,
   DiffArtifact,
   DeleteSessionInput,
   RestoreSessionInput,
+  ScratchpadBlock,
   StartSessionInput,
   MessageRole,
   ThinkingLevel,
@@ -127,6 +129,16 @@ const contextUsageDbRowSchema = z.object({
   windowTokens: z.number().int().positive().nullable(),
   updatedAt: z.string(),
   sessionFile: z.string().nullable(),
+})
+
+const scratchpadBlockDbRowSchema = z.object({
+  id: z.string(),
+  projectId: z.string().nullable(),
+  projectName: z.string().nullable(),
+  body: z.string(),
+  createdAt: z.string(),
+  triggeredAt: z.string().nullable(),
+  triggeredAgentId: z.string().nullable(),
 })
 
 const agentLaunchConfigSchema = z.object({
@@ -335,12 +347,14 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   const hiddenProjects = snapshotProjectRows.filter((project) => project.hiddenAt)
   const selectedProject = snapshotProjects[0]
   const selectedAgent = selectedProject?.agents[0]
+  const scratchpadBlocks = listScratchpadBlocks()
 
   const snapshot = {
     settings,
     projects: snapshotProjects,
     hiddenProjects,
     archivedSessions,
+    scratchpadBlocks,
     selected: {
       projectId: selectedProject?.id ?? '',
       agentId: selectedAgent?.id ?? '',
@@ -1057,6 +1071,98 @@ function unhideProjectRow(id: string) {
   return projectId
 }
 
+export function listScratchpadBlocks(): ScratchpadBlock[] {
+  return getDb()
+    .prepare(
+      `
+        SELECT
+          s.id,
+          s.project_id AS projectId,
+          p.name AS projectName,
+          s.body,
+          s.created_at AS createdAt,
+          s.triggered_at AS triggeredAt,
+          s.triggered_agent_id AS triggeredAgentId
+        FROM scratchpad_blocks s
+        LEFT JOIN projects p ON p.id = s.project_id
+        ORDER BY s.created_at DESC
+      `,
+    )
+    .all()
+    .map((row) => scratchpadBlockDbRowSchema.parse(row))
+}
+
+export function addScratchpadBlock(input: AddScratchpadBlockInput) {
+  const body = input.body.trim()
+  if (!body) throw new Error('Block body is required')
+  const projectId = input.projectId?.trim() || null
+  const database = getDb()
+  if (projectId) {
+    const project = database
+      .prepare('SELECT id FROM projects WHERE id = ?')
+      .get(projectId)
+    if (!project) throw new Error(`Project not found: ${projectId}`)
+  }
+  const id = `block-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  const createdAt = new Date().toISOString()
+  database
+    .prepare(
+      `
+        INSERT INTO scratchpad_blocks (id, project_id, body, created_at)
+        VALUES (?, ?, ?, ?)
+      `,
+    )
+    .run(id, projectId, body, createdAt)
+  return getWorkspaceSnapshot()
+}
+
+export function deleteScratchpadBlock(id: string) {
+  const blockId = id.trim()
+  if (!blockId) throw new Error('Block id is required')
+  getDb().prepare('DELETE FROM scratchpad_blocks WHERE id = ?').run(blockId)
+  return getWorkspaceSnapshot()
+}
+
+export function markScratchpadBlockTriggered(blockId: string, agentId: string) {
+  const id = blockId.trim()
+  if (!id) throw new Error('Block id is required')
+  getDb()
+    .prepare(
+      `
+        UPDATE scratchpad_blocks
+        SET triggered_at = ?, triggered_agent_id = ?
+        WHERE id = ?
+      `,
+    )
+    .run(new Date().toISOString(), agentId, id)
+}
+
+export function getScratchpadBlock(id: string) {
+  const row = getDb()
+    .prepare(
+      `
+        SELECT
+          s.id,
+          s.project_id AS projectId,
+          p.name AS projectName,
+          s.body,
+          s.created_at AS createdAt,
+          s.triggered_at AS triggeredAt,
+          s.triggered_agent_id AS triggeredAgentId
+        FROM scratchpad_blocks s
+        LEFT JOIN projects p ON p.id = s.project_id
+        WHERE s.id = ?
+      `,
+    )
+    .get(id.trim())
+  if (!row) return undefined
+  return scratchpadBlockDbRowSchema.parse(row)
+}
+
+export function startSessionAndGetId(input: StartSessionInput) {
+  return insertSession(input)
+}
+
 export function getAgentLaunchConfig(agentId: string) {
   const row = getDb()
     .prepare(
@@ -1582,6 +1688,18 @@ function migrate(database: DatabaseSync) {
       updated_at TEXT NOT NULL,
       session_file TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS scratchpad_blocks (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      triggered_at TEXT,
+      triggered_agent_id TEXT REFERENCES agent_slots(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS scratchpad_blocks_created_at
+      ON scratchpad_blocks(created_at);
   `)
   widenRuntimeCheck(database)
   addContextUsageWindowTokensColumn(database)
