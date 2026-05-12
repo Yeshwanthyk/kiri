@@ -71,7 +71,7 @@ function migrate(database) {
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       slot TEXT NOT NULL,
       title TEXT NOT NULL,
-      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude', 'opencode')),
+      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude')),
       model TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
       session_dir TEXT NOT NULL,

@@ -1668,7 +1668,7 @@ function migrate(database: DatabaseSync) {
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       slot TEXT NOT NULL,
       title TEXT NOT NULL,
-      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude', 'opencode')),
+      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude')),
       model TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
       session_dir TEXT NOT NULL,
@@ -1715,7 +1715,7 @@ function migrate(database: DatabaseSync) {
 
     CREATE TABLE IF NOT EXISTS agent_tasks (
       thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-      source TEXT NOT NULL CHECK (source IN ('pi', 'codex', 'claude', 'opencode')),
+      source TEXT NOT NULL CHECK (source IN ('pi', 'codex', 'claude')),
       task_id TEXT NOT NULL,
       position INTEGER NOT NULL,
       title TEXT NOT NULL,
@@ -1824,7 +1824,7 @@ function widenRuntimeCheck(database: DatabaseSync) {
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       slot TEXT NOT NULL,
       title TEXT NOT NULL,
-      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude', 'opencode')),
+      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude')),
       model TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
       session_dir TEXT NOT NULL,

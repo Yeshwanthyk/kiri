@@ -101,8 +101,6 @@ describe('runSlashCommand', () => {
       onReviewSession: vi.fn().mockResolvedValue(undefined),
     }
 
-    await expect(runSlashCommand({ name: 'thinking' }, agent('opencode'), actions))
-      .rejects.toThrow('opencode sessions do not support /thinking yet')
     await expect(runSlashCommand({ name: 'review' }, agent('pi'), actions))
       .rejects.toThrow('pi sessions do not support /review yet')
   })
@@ -113,6 +111,5 @@ describe('supportsThinking', () => {
     expect(supportsThinking('pi')).toBe(true)
     expect(supportsThinking('codex')).toBe(true)
     expect(supportsThinking('claude')).toBe(true)
-    expect(supportsThinking('opencode')).toBe(false)
   })
 })

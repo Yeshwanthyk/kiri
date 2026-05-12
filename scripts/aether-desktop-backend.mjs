@@ -80,7 +80,7 @@ async function checkReadiness() {
 function validateSettings(settings) {
   const runtimes = settings?.runtimes
   if (!runtimes || typeof runtimes !== 'object') throw new Error('settings.json missing runtimes')
-  for (const runtime of ['pi', 'codex', 'claude', 'opencode']) {
+  for (const runtime of ['pi', 'codex', 'claude']) {
     const config = runtimes[runtime]
     if (!config || !Array.isArray(config.models) || config.models.length === 0) {
       throw new Error(`settings.json ${runtime}.models must be a non-empty array`)

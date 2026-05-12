@@ -7,7 +7,7 @@ product
 ## Users
 
 Senior engineers running multiple AI coding agents in parallel across local
-repos. They live in a terminal and editor flow (Pi, Codex, Claude, OpenCode),
+repos. They live in a terminal and editor flow (Pi, Codex, Claude),
 prefer keyboard over mouse, and use Aether as a control plane to start, watch,
 and discard sessions without leaving the keyboard. Many of them run tiling
 window managers and treat their tools as one continuous workspace.

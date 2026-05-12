@@ -15,7 +15,7 @@ pnpm aether:ctl models list --json
 pnpm aether:ctl models list --runtime pi --json
 ```
 
-- Runtime is the provider boundary: `pi`, `codex`, `claude`, `opencode`.
+- Runtime is the provider boundary: `pi`, `codex`, `claude`.
 - Valid models come from `settings.json`; do not hard-code or invent model ids.
 
 ## Projects

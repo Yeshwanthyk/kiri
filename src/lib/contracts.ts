@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const runtimeKinds = ['pi', 'codex', 'claude', 'opencode'] as const
+export const runtimeKinds = ['pi', 'codex', 'claude'] as const
 export const runtimeKindSchema = z.enum(runtimeKinds)
 export type RuntimeKind = z.infer<typeof runtimeKindSchema>
 
@@ -181,7 +181,6 @@ export const aetherSettingsSchema = z.object({
     pi: runtimeSettingsSchema,
     codex: runtimeSettingsSchema,
     claude: runtimeSettingsSchema,
-    opencode: runtimeSettingsSchema,
   }),
   titleGeneration: titleGenerationSettingsSchema,
 })
