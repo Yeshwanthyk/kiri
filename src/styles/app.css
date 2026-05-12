@@ -2861,6 +2861,57 @@ h1 {
   background: transparent;
 }
 
+.rich-message-body .shiki-block {
+  max-width: 100%;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--code-bg);
+  overflow: hidden;
+}
+
+.rich-message-body .shiki-block pre.shiki {
+  margin: 0;
+  padding: 10px;
+  max-width: 100%;
+  overflow: auto;
+  background: transparent !important;
+  color: var(--shiki-light, var(--ink));
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.rich-message-body .shiki-block pre.shiki code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.rich-message-body .shiki-block pre.shiki span {
+  color: var(--shiki-light, inherit);
+  background-color: var(--shiki-light-bg, transparent);
+  font-style: var(--shiki-light-font-style, inherit);
+  font-weight: var(--shiki-light-font-weight, inherit);
+  text-decoration: var(--shiki-light-text-decoration, inherit);
+}
+
+@media (prefers-color-scheme: dark) {
+  .rich-message-body .shiki-block pre.shiki {
+    color: var(--shiki-dark, var(--ink));
+  }
+  .rich-message-body .shiki-block pre.shiki span {
+    color: var(--shiki-dark, inherit);
+    background-color: var(--shiki-dark-bg, transparent);
+    font-style: var(--shiki-dark-font-style, inherit);
+    font-weight: var(--shiki-dark-font-weight, inherit);
+    text-decoration: var(--shiki-dark-text-decoration, inherit);
+  }
+}
+
 .rich-message-body table {
   display: block;
   max-width: 100%;
