@@ -3,8 +3,10 @@ import { createServerFn } from '@tanstack/react-start'
 import { execFileSync } from 'node:child_process'
 import {
   addProjectInputSchema,
+  addScratchpadBlockInputSchema,
   agentDetailInputSchema,
   answerQuestionInputSchema,
+  deleteScratchpadBlockInputSchema,
   deleteSessionInputSchema,
   deleteProjectInputSchema,
   renameSessionInputSchema,
@@ -19,12 +21,17 @@ import {
   startSessionInputSchema,
   steerMessageInputSchema,
   terminalConfigInputSchema,
+  triggerScratchpadBlockInputSchema,
   unhideProjectInputSchema,
 } from '~/lib/contracts'
 import {
   addProject,
+  addScratchpadBlock,
+  deleteScratchpadBlock,
   deleteSession,
   deleteProject,
+  getScratchpadBlock,
+  markScratchpadBlockTriggered,
   renameSession,
   restoreSession,
   getAgentDetail,
@@ -32,6 +39,7 @@ import {
   getWorkspaceSnapshot,
   hideProject,
   startSession,
+  startSessionAndGetId,
   unhideProject,
 } from './db'
 import {
@@ -157,6 +165,31 @@ export const terminalConfigQuery = createServerFn({ method: 'GET' })
 export const startSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(startSessionInputSchema)
   .handler(async ({ data }) => startSession(data))
+
+export const addScratchpadBlockMutation = createServerFn({ method: 'POST' })
+  .inputValidator(addScratchpadBlockInputSchema)
+  .handler(async ({ data }) => addScratchpadBlock(data))
+
+export const deleteScratchpadBlockMutation = createServerFn({ method: 'POST' })
+  .inputValidator(deleteScratchpadBlockInputSchema)
+  .handler(async ({ data }) => deleteScratchpadBlock(data.id))
+
+export const triggerScratchpadBlockMutation = createServerFn({ method: 'POST' })
+  .inputValidator(triggerScratchpadBlockInputSchema)
+  .handler(async ({ data }) => {
+    const block = getScratchpadBlock(data.id)
+    if (!block) throw new Error(`Scratchpad block not found: ${data.id}`)
+    const agentId = startSessionAndGetId({
+      projectId: data.projectId,
+      runtime: data.runtime,
+      model: data.model,
+      title: data.title,
+      thinkingLevel: data.thinkingLevel,
+    })
+    await promptAgent({ agentId, text: block.body, images: [] })
+    markScratchpadBlockTriggered(data.id, agentId)
+    return { agentId, snapshot: getWorkspaceSnapshot() }
+  })
 
 export const workspaceQueryOptions = () =>
   queryOptions({
