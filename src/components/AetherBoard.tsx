@@ -2132,22 +2132,15 @@ function MobileTopBar({
   return (
     <header className="mobile-topbar" aria-label="Mobile navigation">
       <div className="mobile-project-line">
-        <span>{project.name}</span>
-        <button type="button" onClick={onOpenAgentSwitcher}>All sessions</button>
-      </div>
-      <div className="mobile-topbar-main">
         <button
           type="button"
-          className="mobile-agent-trigger"
+          className="mobile-project-trigger"
           onClick={onOpenAgentSwitcher}
-          aria-label="Switch agent"
+          aria-label="Open all sessions"
         >
-          <span className={`status-dot ${agent?.status ?? ''}`} aria-hidden="true" />
-          <span>
-            <strong>{agent?.title ?? 'No session'}</strong>
-            <small>{agent ? `${agent.runtime} · ${agent.status}` : 'Choose or start an agent'}</small>
-          </span>
-          <ChevronDown size={16} aria-hidden="true" />
+          <span>Aether</span>
+          <strong>{project.name}</strong>
+          <ChevronDown size={13} aria-hidden="true" />
         </button>
         <div className="mobile-actions">
           <button type="button" onClick={onOpenProjects} aria-label="Projects">

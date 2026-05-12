@@ -177,7 +177,7 @@ button {
 .agent-switcher-project-head,
 .agent-switcher-row,
 .mobile-topbar-main,
-.mobile-agent-trigger,
+.mobile-project-trigger,
 .mobile-actions,
 .mobile-view-tabs {
   display: flex;
@@ -3892,12 +3892,12 @@ h1 {
     z-index: 20;
     top: 0;
     display: grid;
-    gap: 8px;
-    padding: calc(9px + env(safe-area-inset-top)) 12px 10px;
+    gap: 9px;
+    padding: calc(8px + env(safe-area-inset-top)) 10px 9px;
     border-bottom: 1px solid color-mix(in oklab, var(--line) 82%, transparent);
     background: var(--panel-translucent);
     backdrop-filter: blur(14px);
-    box-shadow: 0 10px 30px color-mix(in oklab, var(--ink) 10%, transparent);
+    box-shadow: 0 10px 26px color-mix(in oklab, var(--ink) 9%, transparent);
   }
 
   .mobile-project-line {
@@ -3905,115 +3905,57 @@ h1 {
     min-width: 0;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
-    padding: 0 2px;
-  }
-
-  .mobile-project-line span {
-    overflow: hidden;
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 780;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .mobile-project-line button {
-    flex: 0 0 auto;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--accent);
-    font-size: 11px;
-    font-weight: 850;
-  }
-
-  .mobile-topbar-main {
-    min-width: 0;
     gap: 8px;
   }
 
-  .mobile-brand {
-    display: grid;
-    min-width: 58px;
-    gap: 1px;
-  }
-
-  .mobile-brand span {
-    font-size: 15px;
-    font-weight: 900;
-    letter-spacing: 0.08em;
-  }
-
-  .mobile-brand small {
-    max-width: 58px;
-    overflow: hidden;
+  .mobile-project-trigger {
+    display: inline-flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 34px;
+    align-items: center;
+    gap: 7px;
+    padding: 0 3px;
+    border: 0;
+    background: transparent;
     color: var(--muted);
-    font-size: 10px;
-    font-weight: 700;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .mobile-agent-trigger {
-    flex: 1 1 auto;
-    min-width: 0;
-    min-height: 50px;
-    gap: 9px;
-    padding: 7px 10px;
-    border: 1px solid var(--accent-muted);
-    border-radius: 17px;
-    background: var(--panel);
-    color: var(--ink);
-    box-shadow: 0 6px 18px color-mix(in oklab, var(--ink) 8%, transparent);
     text-align: left;
-    transition-property: transform, border-color, background-color;
-    transition-duration: 150ms;
-    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
   }
 
-  .mobile-agent-trigger:active {
-    transform: scale(0.96);
-  }
-
-  .mobile-agent-trigger > span:nth-child(2) {
-    display: grid;
-    min-width: 0;
-    flex: 1 1 auto;
-    gap: 1px;
-  }
-
-  .mobile-agent-trigger strong,
-  .mobile-agent-trigger small {
+  .mobile-project-trigger span,
+  .mobile-project-trigger strong {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .mobile-agent-trigger strong {
-    font-size: 13px;
+  .mobile-project-trigger span {
+    flex: 0 0 auto;
+    color: var(--ink);
+    font-size: 15px;
     font-weight: 850;
   }
 
-  .mobile-agent-trigger small {
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 650;
+  .mobile-project-trigger strong {
+    min-width: 0;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 760;
   }
 
   .mobile-actions {
     flex: 0 0 auto;
-    gap: 6px;
+    gap: 5px;
   }
 
   .mobile-actions button {
     display: grid;
-    width: 40px;
-    min-height: 40px;
+    width: 34px;
+    min-height: 34px;
     place-items: center;
     border: 1px solid var(--line);
-    border-radius: 14px;
-    background: var(--panel);
+    border-radius: 11px;
+    background: color-mix(in oklab, var(--panel) 86%, transparent);
     color: var(--muted);
     transition-property: transform, background-color, color;
     transition-duration: 150ms;
@@ -4027,11 +3969,11 @@ h1 {
   .mobile-agent-strip {
     display: flex;
     min-width: 0;
-    gap: 6px;
+    gap: 7px;
     overflow-x: auto;
-    padding: 1px 1px 2px;
+    padding: 0 1px 1px;
     scrollbar-width: none;
-    mask-image: linear-gradient(to right, black calc(100% - 18px), transparent);
+    mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
   }
 
   .mobile-agent-strip::-webkit-scrollbar {
@@ -4040,16 +3982,16 @@ h1 {
 
   .mobile-agent-strip button {
     display: inline-flex;
-    min-height: 32px;
+    min-height: 35px;
     max-width: 168px;
     flex: 0 0 auto;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     overflow: hidden;
-    padding: 0 10px;
+    padding: 0 12px;
     border: 1px solid var(--line);
-    border-radius: 999px;
-    background: var(--panel);
+    border-radius: 13px;
+    background: color-mix(in oklab, var(--paper) 72%, var(--panel));
     color: var(--muted);
     font-size: 12px;
     font-weight: 780;
@@ -4061,11 +4003,15 @@ h1 {
     border-color: var(--accent-muted);
     background: var(--accent-soft);
     color: var(--ink);
-    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 18%, transparent);
+    box-shadow:
+      inset 0 0 0 1px color-mix(in oklab, var(--accent) 20%, transparent),
+      0 6px 18px color-mix(in oklab, var(--ink) 8%, transparent);
   }
 
   .mobile-agent-strip button.new {
-    border-style: dashed;
+    border-style: solid;
+    border-color: color-mix(in oklab, var(--accent) 38%, var(--line));
+    background: color-mix(in oklab, var(--accent-soft) 70%, transparent);
     color: var(--accent);
   }
 
@@ -4076,20 +4022,21 @@ h1 {
 
   .mobile-view-tabs {
     gap: 2px;
-    padding: 2px;
-    border-radius: 11px;
-    background: var(--panel-2);
+    padding: 3px;
+    border: 1px solid color-mix(in oklab, var(--line) 68%, transparent);
+    border-radius: 13px;
+    background: color-mix(in oklab, var(--panel-2) 78%, transparent);
   }
 
   .mobile-view-tabs button {
     display: inline-flex;
-    min-height: 28px;
+    min-height: 31px;
     flex: 1 1 0;
     align-items: center;
     justify-content: center;
     gap: 5px;
     border: 0;
-    border-radius: 9px;
+    border-radius: 10px;
     background: transparent;
     color: var(--muted);
     font-size: 12px;
@@ -4107,7 +4054,7 @@ h1 {
   .mobile-view-tabs button.active {
     background: var(--panel);
     color: var(--ink);
-    box-shadow: 0 1px 2px color-mix(in oklab, var(--ink) 10%, transparent);
+    box-shadow: 0 1px 3px color-mix(in oklab, var(--ink) 12%, transparent);
   }
 
   .mobile-view-tabs button:active {
@@ -4170,46 +4117,8 @@ h1 {
   }
 
   .chat-header {
-    padding: 10px 12px;
-  }
-
-  .chat-header-row {
-    flex-wrap: wrap;
-    row-gap: 4px;
-    column-gap: 6px;
-  }
-
-  .chat-header-row::after {
-    content: none;
-    order: 4;
-    flex-basis: 100%;
-    height: 0;
-  }
-
-  .chat-header-row .chat-status-dot { order: 0; }
-  .chat-header-row .chat-title,
-  .chat-header-row .chat-title-input {
-    order: 1;
-    flex: 1 1 0;
-    min-width: 0;
-    max-width: none;
-    text-align: left;
-    font-size: 14px;
-  }
-  .chat-header-row .chat-icon-button { order: 2; }
-  .chat-header-row .chat-icon-button.chat-icon-danger { order: 3; }
-  .chat-header-row .chat-header-spacer { display: none; }
-
-  .chat-header-row .chat-meta,
-  .chat-thinking-track {
     display: none;
   }
-
-  .chat-header-row [data-meta="project"] { order: 5; max-width: 40%; }
-  .chat-header-row [data-divider="slot"],
-  .chat-header-row [data-meta="slot"] { display: none; }
-  .chat-header-row [data-divider="model"] { order: 6; }
-  .chat-header-row [data-meta="model"] { order: 7; flex: 1 1 auto; min-width: 0; }
 
   .sidebar-header,
   .sidebar-tabs {

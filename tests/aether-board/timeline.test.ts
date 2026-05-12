@@ -111,6 +111,109 @@ describe('deriveAgentTimelineRows', () => {
     })
   })
 
+  it('keeps runtime tool calls grouped after the turn completes', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        runtime: 'claude',
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'check it'),
+          },
+          {
+            type: 'event',
+            id: 'event:e1',
+            timestamp: now,
+            event: {
+              id: 'e1',
+              kind: 'claude_tool_completed',
+              tone: 'tool',
+              label: 'Read completed',
+              detail: 'Read: src/app.ts',
+              timestamp: now,
+            },
+          },
+          {
+            type: 'event',
+            id: 'event:e2',
+            timestamp: now,
+            event: {
+              id: 'e2',
+              kind: 'claude_tool_completed',
+              tone: 'tool',
+              label: 'Bash completed',
+              detail: 'Bash: pnpm test',
+              timestamp: now,
+            },
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'done'),
+          },
+        ],
+      }),
+      '/repo',
+    )
+
+    expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [
+        { kind: 'claude_tool_completed', label: 'Read completed', detail: 'Read: src/app.ts' },
+        { kind: 'claude_tool_completed', label: 'Bash completed', detail: 'Bash: pnpm test' },
+      ],
+    })
+    expect(rows[2]).toMatchObject({ kind: 'message', message: { text: 'done' } })
+  })
+
+  it('surfaces edited-file diffs inside grouped runtime work', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        runtime: 'pi',
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'edit it'),
+          },
+          {
+            type: 'event',
+            id: 'event:e1',
+            timestamp: now,
+            event: {
+              id: 'e1',
+              kind: 'fileOperationCompleted',
+              tone: 'tool',
+              label: 'Edit',
+              detail: 'edit',
+              path: '/repo/src/app.ts',
+              timestamp: now,
+            },
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'done'),
+          },
+        ],
+        diffs: [diff('src/app.ts')],
+      }),
+      '/repo',
+    )
+
+    expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [{ label: 'Edited', path: 'src/app.ts', diff: { id: 'diff:src/app.ts' } }],
+    })
+  })
+
   it('folds interim assistant updates into runtime work', () => {
     const rows = deriveAgentTimelineRows(
       agent({
@@ -155,7 +258,7 @@ describe('deriveAgentTimelineRows', () => {
     expect(rows[2]).toMatchObject({ kind: 'message', message: { text: 'done' } })
   })
 
-  it('keeps interim assistant updates visible for pi sessions', () => {
+  it('folds interim assistant updates for pi sessions without hiding the final reply', () => {
     const rows = deriveAgentTimelineRows(
       agent({
         runtime: 'pi',
@@ -183,7 +286,12 @@ describe('deriveAgentTimelineRows', () => {
       '/repo',
     )
 
-    expect(rows.map((row) => row.kind)).toEqual(['message', 'message', 'message'])
+    expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [{ kind: 'assistant.status', label: 'Update', detail: 'I am checking the repo.' }],
+    })
+    expect(rows[2]).toMatchObject({ kind: 'message', message: { text: 'done' } })
   })
 
   it('adds a working row for running agents', () => {

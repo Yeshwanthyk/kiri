@@ -70,9 +70,7 @@ export function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTim
     workEntries = []
   }
 
-  const compactAssistantMessageIds = agent.runtime === 'codex'
-    ? compactedAssistantMessageIds(timeline)
-    : new Set<string>()
+  const compactAssistantMessageIds = compactedAssistantMessageIds(timeline)
 
   for (const item of timeline) {
     if (item.type === 'event') {
