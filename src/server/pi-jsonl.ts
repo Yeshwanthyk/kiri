@@ -114,11 +114,13 @@ export function projectPiSessionJsonl(content: string): PiSessionProjection {
 function toBoardMessage(entry: z.infer<typeof piMessageEntrySchema>): BoardMessage | null {
   const role = normalizeRole(entry.message.role)
   if (!role) return null
+  const text = contentToText(entry.message.content)
+  if (!text) return null
 
   return boardMessageSchema.parse({
     id: entry.id,
     role,
-    text: contentToText(entry.message.content),
+    text,
     timestamp: entry.timestamp ?? new Date(0).toISOString(),
   })
 }
@@ -157,9 +159,6 @@ function contentToText(content: unknown): string {
       if ('text' in part && typeof part.text === 'string') return part.text
       if ('thinking' in part && typeof part.thinking === 'string') {
         return part.thinking
-      }
-      if ('name' in part && typeof part.name === 'string') {
-        return `tool call: ${part.name}`
       }
       return ''
     })

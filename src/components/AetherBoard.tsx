@@ -58,6 +58,7 @@ import type {
   ThinkingLevel,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
+import { getAetherHostBridge, pickProjectDirectory } from '~/lib/host-capabilities'
 import { thinkingLevelSchema } from '~/lib/contracts'
 import {
   applyAetherTheme,
@@ -92,10 +93,12 @@ import {
 } from '~/server/workspace'
 import {
   classifyToolName,
+  collapsedWorkEntries,
   compactWorkEntries,
   deriveAgentTimelineRows,
   diffLineStats,
   displayPath,
+  isAssistantStatusEntry,
   isCommandEntry,
   normalizeDiffPath,
   summarizeWorkEntries,
@@ -189,6 +192,8 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
   const [pendingDelete, setPendingDelete] = React.useState<{ agentId: string; title: string } | null>(null)
   const [deleteInFlight, setDeleteInFlight] = React.useState(false)
+  const [pendingProjectDelete, setPendingProjectDelete] = React.useState<ProjectRow | null>(null)
+  const [projectDeleteInFlight, setProjectDeleteInFlight] = React.useState(false)
   const [keymap, setKeymap] = React.useState<KeymapSettings>(defaultKeymap)
   const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(defaultThemeSelection)
   const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(defaultChatTypography)
@@ -296,6 +301,13 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       }
 
       if (action === 'startSession') {
+        if (!selectedProject) {
+          setSettingsOpen(false)
+          setAgentSwitcherOpen(false)
+          setCommandPaletteOpen(false)
+          setProjectManagerOpen(true)
+          return
+        }
         setSettingsOpen(false)
         setAgentSwitcherOpen(false)
         setCommandPaletteOpen(false)
@@ -334,7 +346,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [agentSwitcherOpen, commandPaletteOpen, projectManagerOpen, keymap, workspace.projects])
+  }, [agentSwitcherOpen, commandPaletteOpen, projectManagerOpen, keymap, selectedProject, workspace.projects])
 
   async function handleAddProject(input: { id?: string; name: string; cwd: string }) {
     const next = await addProject({ data: input })
@@ -346,6 +358,17 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   async function handleDeleteProject(projectId: string) {
     const next = await deleteProject({ data: { id: projectId } })
     setWorkspace(next)
+    if (selection.projectId === projectId) setSelection(next.selected)
+  }
+
+  async function confirmDeleteProject(projectId: string) {
+    setProjectDeleteInFlight(true)
+    try {
+      await handleDeleteProject(projectId)
+      setPendingProjectDelete(null)
+    } finally {
+      setProjectDeleteInFlight(false)
+    }
   }
 
   async function handleHideProject(projectId: string) {
@@ -362,7 +385,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   async function handleChooseProjectDirectory() {
-    return chooseProjectDirectory()
+    return pickProjectDirectory(() => chooseProjectDirectory())
   }
 
   async function handleRenameSession(agentId: string, title: string) {
@@ -556,7 +579,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         title: 'Start session',
         detail: selectedProject?.name ?? 'Current project',
         icon: Plus,
-        disabled: false,
+        disabled: !selectedProject,
         run: () => openSessionLauncher(),
       },
       {
@@ -615,7 +638,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         title: `Hide ${selectedProject?.name ?? 'current project'}`,
         detail: 'Keep sessions, remove from board',
         icon: EyeOff,
-        disabled: workspace.projects.length <= 1,
+        disabled: !selectedProject || workspace.projects.length <= 1,
         run: () => {
           if (!selectedProject) return
           setCommandPaletteOpen(false)
@@ -639,10 +662,10 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         title: `Remove ${project.name}`,
         detail: 'Project',
         icon: Trash2,
-        disabled: workspace.projects.length <= 1,
+        disabled: !selectedProject || workspace.projects.length <= 1,
         run: () => {
           setCommandPaletteOpen(false)
-          void handleDeleteProject(project.id)
+          setPendingProjectDelete(project)
         },
       })),
       ...workspace.projects.flatMap((project) => [
@@ -678,9 +701,14 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     [selectedAgent, selectedProject, workspace.hiddenProjects, workspace.projects],
   )
 
-  if (!selectedProject) {
-    return <div className="empty-shell">No projects configured.</div>
-  }
+  React.useEffect(() => {
+    const unsubscribe = getAetherHostBridge()?.onMenuAction?.((actionId) => {
+      const action = commandActions.find((item) => item.id === actionId)
+      if (!action || action.disabled) return
+      action.run()
+    })
+    return unsubscribe
+  }, [commandActions])
 
   if (settingsOpen) {
     return (
@@ -696,6 +724,66 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onChatTypographyChange={(next) => setChatTypography(saveChatTypography(next))}
         onClose={() => setSettingsOpen(false)}
       />
+    )
+  }
+
+  if (!selectedProject) {
+    return (
+      <main
+        className="empty-project-shell"
+        data-hydrated={hydrated ? 'true' : 'false'}
+        data-testid="empty-project-state"
+      >
+        {commandPaletteOpen ? (
+          <CommandPalette
+            actions={commandActions}
+            onClose={() => setCommandPaletteOpen(false)}
+          />
+        ) : null}
+
+        {projectManagerOpen ? (
+          <ProjectManagerDialog
+            projects={workspace.projects}
+            hiddenProjects={workspace.hiddenProjects}
+            onAdd={handleAddProject}
+            onChooseDirectory={handleChooseProjectDirectory}
+            onDelete={handleDeleteProject}
+            onHide={handleHideProject}
+            onUnhide={handleUnhideProject}
+            onClose={() => setProjectManagerOpen(false)}
+          />
+        ) : null}
+
+        <section className="empty-project-state" aria-label="No projects configured">
+          <div className="empty-project-mark" aria-hidden="true">
+            <FolderOpen size={22} />
+          </div>
+          <div>
+            <p className="empty-project-kicker">Aether</p>
+            <h1>No projects yet</h1>
+            <p>Add a local repo to start sessions on this machine.</p>
+          </div>
+          <div className="empty-project-actions">
+            <button
+              type="button"
+              className="project-add-button"
+              onClick={() => setProjectManagerOpen(true)}
+              data-testid="empty-add-project"
+            >
+              <Plus size={14} />
+              Add project
+            </button>
+            <button
+              type="button"
+              className="empty-project-secondary"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings2 size={14} />
+              Settings
+            </button>
+          </div>
+        </section>
+      </main>
     )
   }
 
@@ -766,6 +854,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           hiddenProjects={workspace.hiddenProjects}
           onAdd={handleAddProject}
           onChooseDirectory={handleChooseProjectDirectory}
+          onDelete={handleDeleteProject}
           onHide={handleHideProject}
           onUnhide={handleUnhideProject}
           onClose={() => setProjectManagerOpen(false)}
@@ -787,6 +876,26 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           onCancel={() => {
             if (deleteInFlight) return
             setPendingDelete(null)
+          }}
+        />
+      ) : null}
+
+      {pendingProjectDelete ? (
+        <ConfirmDialog
+          title="Remove project?"
+          body={
+            <>
+              <strong>{pendingProjectDelete.name}</strong> will be removed from Aether. The project directory and files stay on disk.
+            </>
+          }
+          confirmLabel="Remove project"
+          cancelLabel="Keep"
+          destructive
+          busy={projectDeleteInFlight}
+          onConfirm={() => void confirmDeleteProject(pendingProjectDelete.id)}
+          onCancel={() => {
+            if (projectDeleteInFlight) return
+            setPendingProjectDelete(null)
           }}
         />
       ) : null}
@@ -1278,6 +1387,7 @@ function ProjectManagerDialog({
   hiddenProjects,
   onAdd,
   onChooseDirectory,
+  onDelete,
   onHide,
   onUnhide,
   onClose,
@@ -1286,6 +1396,7 @@ function ProjectManagerDialog({
   hiddenProjects: ProjectRow[]
   onAdd: (input: { id?: string; name: string; cwd: string }) => Promise<void>
   onChooseDirectory: () => Promise<string>
+  onDelete: (projectId: string) => Promise<void>
   onHide: (projectId: string) => Promise<void>
   onUnhide: (projectId: string) => Promise<void>
   onClose: () => void
@@ -1295,7 +1406,10 @@ function ProjectManagerDialog({
   const [cwd, setCwd] = React.useState('')
   const [showHidden, setShowHidden] = React.useState(hiddenProjects.length > 0)
   const [pending, setPending] = React.useState(false)
+  const [pendingRemoveProject, setPendingRemoveProject] = React.useState<ProjectRow | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  const canDeleteVisibleProject = projects.length > 1
+  const canDeleteHiddenProject = projects.length + hiddenProjects.length > 1
 
   React.useEffect(() => {
     if (hiddenProjects.length > 0) setShowHidden(true)
@@ -1355,7 +1469,21 @@ function ProjectManagerDialog({
     }
   }
 
+  async function removeProject(projectId: string) {
+    setPending(true)
+    setError(null)
+    try {
+      await onDelete(projectId)
+      setPendingRemoveProject(null)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
   return (
+    <>
     <div className="project-manager-overlay" role="dialog" aria-modal="true">
       <section className="project-settings project-manager" aria-label="Project manager">
         <div className="project-manager-head">
@@ -1423,14 +1551,25 @@ function ProjectManagerDialog({
                 <strong>{project.name}</strong>
                 <span>{projectSummary(project)}</span>
               </div>
-              <button
-                type="button"
-                disabled={pending || projects.length <= 1}
-                onClick={() => hide(project.id)}
-                aria-label={`Hide ${project.name}`}
-              >
-                <EyeOff size={14} />
-              </button>
+              <div className="project-row-actions">
+                <button
+                  type="button"
+                  disabled={pending || projects.length <= 1}
+                  onClick={() => hide(project.id)}
+                  aria-label={`Hide ${project.name}`}
+                >
+                  <EyeOff size={14} />
+                </button>
+	                <button
+	                  type="button"
+	                  disabled={pending || !canDeleteVisibleProject}
+	                  onClick={() => setPendingRemoveProject(project)}
+	                  aria-label={`Remove ${project.name}`}
+	                  className="project-remove-button"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -1456,19 +1595,50 @@ function ProjectManagerDialog({
                 <strong>{project.name}</strong>
                 <span>{projectSummary(project)}</span>
               </div>
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => unhide(project.id)}
-                aria-label={`Unhide ${project.name}`}
-              >
-                <Eye size={14} />
-              </button>
+              <div className="project-row-actions">
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => unhide(project.id)}
+                  aria-label={`Unhide ${project.name}`}
+                >
+                  <Eye size={14} />
+                </button>
+	                <button
+	                  type="button"
+	                  disabled={pending || !canDeleteHiddenProject}
+	                  onClick={() => setPendingRemoveProject(project)}
+	                  aria-label={`Remove ${project.name}`}
+                  className="project-remove-button"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
           ))}
         </div> : null}
       </section>
     </div>
+    {pendingRemoveProject ? (
+      <ConfirmDialog
+        title="Remove project?"
+        body={
+          <>
+            <strong>{pendingRemoveProject.name}</strong> will be removed from Aether. The project directory and files stay on disk.
+          </>
+        }
+        confirmLabel="Remove project"
+        cancelLabel="Keep"
+        destructive
+        busy={pending}
+        onConfirm={() => void removeProject(pendingRemoveProject.id)}
+        onCancel={() => {
+          if (pending) return
+          setPendingRemoveProject(null)
+        }}
+      />
+    ) : null}
+    </>
   )
 }
 
@@ -2131,7 +2301,7 @@ function ProjectLane({
 
   return (
     <section
-      className={`project-lane ${isProjectSelected ? 'selected' : ''}`}
+      className={`project-lane ${project.agents.length === 0 ? 'empty' : ''} ${isProjectSelected ? 'selected' : ''}`}
       aria-label={project.name}
     >
       <div className="project-label">
@@ -2229,7 +2399,7 @@ function SelectedAgentPane({
     ? `${selectedAgent.updatedAt}:${selectedAgent.messageCount}:${selectedAgent.diffCount}:${selectedAgent.status}`
     : ''
   const detailQuery = useQuery({
-    ...agentDetailQueryOptions(selectedAgent?.id ?? '', 100, revision),
+    ...agentDetailQueryOptions(selectedAgent?.id ?? '', 500, revision),
     placeholderData: keepPreviousData,
   })
   const agent = mergeAgentDetail(selectedAgent, detailQuery.data)
@@ -2337,15 +2507,22 @@ function EmptySessionPanel({
 }) {
   return (
     <div className="empty-sidebar-session" data-testid="empty-session-panel">
-      <div className="runtime-icon">
-        <Bot size={18} />
+      <div className="empty-session-surface">
+        <div className="empty-session-head">
+          <div className="runtime-icon">
+            <Bot size={18} />
+          </div>
+          <p data-testid="selected-project">{project.name}</p>
+        </div>
+        <h2 data-testid="selected-agent">No session</h2>
+        <div className="empty-session-command">
+          <span>agent slot ready</span>
+          <button type="button" onClick={onStart}>
+            <Plus size={14} />
+            Start session
+          </button>
+        </div>
       </div>
-      <p data-testid="selected-project">{project.name}</p>
-      <h2 data-testid="selected-agent">No session</h2>
-      <button type="button" onClick={onStart}>
-        <Plus size={14} />
-        Start session
-      </button>
     </div>
   )
 }
@@ -3367,34 +3544,59 @@ const WorkTimelineRow = React.memo(function WorkTimelineRow({
   const [expanded, setExpanded] = React.useState(false)
   const [expandedDiffEntryId, setExpandedDiffEntryId] = React.useState<string | null>(null)
   const entries = React.useMemo(() => compactWorkEntries(row.entries), [row.entries])
-  const visibleEntries = expanded ? entries : entries.slice(0, 6)
+  const collapsedEntries = React.useMemo(
+    () => collapsedWorkEntries(entries),
+    [entries],
+  )
+  const visibleEntries = expanded ? entries : collapsedEntries
   const hiddenCount = entries.length - visibleEntries.length
   const summary = summarizeWorkEntries(entries)
+  const canExpand = hiddenCount > 0
+  const totalCount = entries.reduce((sum, entry) => sum + (entry.count ?? 1), 0)
+  const tickEntries = entries.slice(0, 12)
+
+  const headerInner = (
+    <>
+      <span className="work-row-ticks" aria-hidden="true">
+        {tickEntries.map((entry) => (
+          <span key={entry.id} className={`work-row-tick tone-${workEntryTickTone(entry)}`} />
+        ))}
+      </span>
+      <span className="work-row-summary">{summary}</span>
+      {totalCount > 1 ? <span className="work-row-badge">{totalCount}</span> : null}
+    </>
+  )
 
   return (
     <section className="timeline-row work-row" aria-label="Runtime activity">
-      <div className="work-row-header">
-        <span>{summary}</span>
-        {hiddenCount > 0 ? (
-          <button type="button" onClick={() => setExpanded((value) => !value)}>
-            <ChevronDown size={13} className={expanded ? 'expanded' : ''} />
-            {expanded ? 'Show less' : `Show ${hiddenCount} more`}
-          </button>
-        ) : null}
-      </div>
-      <div className="work-entry-list">
-        {visibleEntries.map((entry) => (
-          <WorkEntryRow
-            key={entry.id}
-            entry={entry}
-            themeMode={themeMode}
-            diffExpanded={expandedDiffEntryId === entry.id}
-            onToggleDiff={() =>
-              setExpandedDiffEntryId((current) => current === entry.id ? null : entry.id)
-            }
-          />
-        ))}
-      </div>
+      {canExpand ? (
+        <button
+          type="button"
+          className="work-row-header is-toggle"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          aria-label={expanded ? 'Hide activity details' : `Show ${hiddenCount} more activities`}
+        >
+          {headerInner}
+        </button>
+      ) : (
+        <div className="work-row-header">{headerInner}</div>
+      )}
+      {visibleEntries.length > 0 ? (
+        <div className="work-entry-list">
+          {visibleEntries.map((entry) => (
+            <WorkEntryRow
+              key={entry.id}
+              entry={entry}
+              themeMode={themeMode}
+              diffExpanded={expandedDiffEntryId === entry.id}
+              onToggleDiff={() =>
+                setExpandedDiffEntryId((current) => current === entry.id ? null : entry.id)
+              }
+            />
+          ))}
+        </div>
+      ) : null}
     </section>
   )
 })
@@ -3420,9 +3622,10 @@ const WorkEntryRow = React.memo(function WorkEntryRow({
   const canToggle = canExpand || Boolean(entry.diff)
   const icon = workEntryIcon(entry)
   const command = isCommandEntry(entry)
+  const status = isAssistantStatusEntry(entry)
 
   return (
-    <div className={`work-entry ${entry.tone} ${entry.diff ? 'has-diff' : ''} ${command ? 'is-command' : ''} ${icon ? '' : 'no-icon'} ${expanded ? 'expanded' : ''}`}>
+    <div className={`work-entry ${entry.tone} ${entry.diff ? 'has-diff' : ''} ${command ? 'is-command' : ''} ${status ? 'is-status' : ''} ${icon ? '' : 'no-icon'} ${expanded ? 'expanded' : ''}`}>
       {icon}
       <div className="work-entry-content">
         <div className="work-entry-title">
@@ -3526,8 +3729,18 @@ function InlineDiffPreview({
   )
 }
 
+function workEntryTickTone(entry: TimelineWorkEntry) {
+  if (entry.diff) return 'edit'
+  if (isCommandEntry(entry)) return 'bash'
+  if (isAssistantStatusEntry(entry)) return 'status'
+  return 'read'
+}
+
 function workEntryIcon(entry: TimelineWorkEntry) {
   const call = workCallLabel(entry)
+  if (isAssistantStatusEntry(entry)) {
+    return <MessageSquareText size={13} className="work-entry-icon status" />
+  }
   if (entry.diff) {
     return <PencilLine size={13} className="work-entry-icon diff" />
   }
@@ -3863,7 +4076,7 @@ function appendTerminalTranscript(
 }
 
 function terminalWebSocketUrl(
-  config: { host: string; port: number; path: string },
+  config: { host: string; port: number; path: string; token?: string },
   agentId: string,
   cols: number,
   rows: number,
@@ -3879,6 +4092,7 @@ function terminalWebSocketUrl(
   url.searchParams.set('agentId', agentId)
   url.searchParams.set('cols', String(cols))
   url.searchParams.set('rows', String(rows))
+  if (config.token) url.searchParams.set('token', config.token)
   return url.toString()
 }
 
@@ -4318,7 +4532,7 @@ function projectNameFromPath(path: string) {
 
 function projectSummary(project: ProjectRow) {
   const sessions = project.agents.length
-  return `${project.id} · ${sessions} ${sessions === 1 ? 'session' : 'sessions'}`
+  return `${project.name} · ${sessions} ${sessions === 1 ? 'session' : 'sessions'}`
 }
 
 async function readImageFile(file: File): Promise<SendMessageImage> {

@@ -70,10 +70,19 @@ export function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTim
     workEntries = []
   }
 
+  const compactAssistantMessageIds = agent.runtime === 'codex'
+    ? compactedAssistantMessageIds(timeline)
+    : new Set<string>()
+
   for (const item of timeline) {
     if (item.type === 'event') {
       const entry = eventToWorkEntry(item.event, diffByPath, cwd)
       if (entry) workEntries.push(entry)
+      continue
+    }
+
+    if (item.message.role === 'assistant' && compactAssistantMessageIds.has(item.message.id)) {
+      workEntries.push(assistantMessageToWorkEntry(item.message))
       continue
     }
 
@@ -123,18 +132,27 @@ export function compactWorkEntries(entries: TimelineWorkEntry[]) {
   return compacted
 }
 
+export function collapsedWorkEntries(entries: TimelineWorkEntry[], limit = 2) {
+  const diffEntries = entries.filter((entry) => entry.diff)
+  return (diffEntries.length ? diffEntries : entries).slice(0, limit)
+}
+
 export function summarizeWorkEntries(entries: TimelineWorkEntry[]) {
-  const edited = entries.filter((entry) => entry.diff).length
-  const commands = entries.filter((entry) =>
-    isCommandEntry(entry),
-  ).length
-  const explored = entries.length - edited - commands
+  const edited = countEntries(entries.filter((entry) => entry.diff))
+  const updates = countEntries(entries.filter((entry) => isAssistantStatusEntry(entry)))
+  const commands = countEntries(entries.filter((entry) => isCommandEntry(entry)))
+  const explored = countEntries(entries) - edited - updates - commands
   const parts = [
     edited ? `edited ${edited} ${edited === 1 ? 'file' : 'files'}` : null,
+    updates ? `${updates} ${updates === 1 ? 'update' : 'updates'}` : null,
     explored ? `explored ${explored}` : null,
     commands ? `ran ${commands} ${commands === 1 ? 'command' : 'commands'}` : null,
   ].filter(Boolean)
   return parts.length ? parts.join(', ') : `${entries.length} activities`
+}
+
+export function isAssistantStatusEntry(entry: TimelineWorkEntry) {
+  return entry.kind === 'assistant.status'
 }
 
 export function isCommandEntry(entry: TimelineWorkEntry) {
@@ -283,6 +301,47 @@ function toolMessageToWorkEntry(
     ...(diff ? { diff } : {}),
     timestamp: message.timestamp,
   }
+}
+
+function assistantMessageToWorkEntry(message: BoardMessage): TimelineWorkEntry {
+  return {
+    id: message.id,
+    kind: 'assistant.status',
+    tone: 'info',
+    label: 'Update',
+    detail: message.text,
+    timestamp: message.timestamp,
+  }
+}
+
+function compactedAssistantMessageIds(
+  timeline: AgentCell['timeline'],
+): Set<string> {
+  const ids = new Set<string>()
+  let turnAssistantIds: string[] = []
+
+  function flushTurn() {
+    if (turnAssistantIds.length > 1) {
+      for (const id of turnAssistantIds.slice(0, -1)) ids.add(id)
+    }
+    turnAssistantIds = []
+  }
+
+  for (const item of timeline) {
+    if (item.type !== 'message') continue
+    if (item.message.role === 'user') {
+      flushTurn()
+      continue
+    }
+    if (item.message.role === 'assistant') turnAssistantIds.push(item.message.id)
+  }
+  flushTurn()
+
+  return ids
+}
+
+function countEntries(entries: TimelineWorkEntry[]) {
+  return entries.reduce((count, entry) => count + (entry.count ?? 1), 0)
 }
 
 function parseToolInvocation(line: string) {

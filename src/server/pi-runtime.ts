@@ -19,6 +19,7 @@ import {
   resetSession,
   setAgentStatus,
 } from './db'
+import { attachmentDirPath, getAetherConfig } from './aether-config'
 import { collectGitDiffArtifacts } from './git-diff'
 import {
   captureRuntimeDiffs,
@@ -371,7 +372,7 @@ function savePromptImage(agentId: string, image: SendMessageImage, index: number
     throw new Error(`Image "${image.name}" is larger than 5MB`)
   }
 
-  const dir = join(process.cwd(), '.aether', 'attachments', safePathSegment(agentId))
+  const dir = attachmentDirPath(getAetherConfig(), agentId)
   mkdirSync(dir, { recursive: true })
   const extension = imageExtension(image)
   const path = join(

@@ -164,7 +164,7 @@ export const workspaceQueryOptions = () =>
     queryFn: () => fetchWorkspaceSnapshot(),
   })
 
-export const agentDetailQueryOptions = (agentId: string, limit = 100, revision = '') =>
+export const agentDetailQueryOptions = (agentId: string, limit = 500, revision = '') =>
   queryOptions({
     queryKey: ['agent-detail', agentId, limit, revision],
     queryFn: () => fetchAgentDetail({ data: { agentId, limit } }),

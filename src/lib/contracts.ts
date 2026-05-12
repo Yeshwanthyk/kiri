@@ -140,7 +140,7 @@ export type ArchivedSessionSummary = z.infer<typeof archivedSessionSummarySchema
 
 export const agentDetailInputSchema = z.object({
   agentId: z.string().trim().min(1),
-  limit: z.number().int().positive().max(500).default(100),
+  limit: z.number().int().positive().max(500).default(500),
 })
 export type AgentDetailInput = z.infer<typeof agentDetailInputSchema>
 

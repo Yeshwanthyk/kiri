@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -32,10 +32,7 @@ import {
 import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
-
-const dbPath = process.env.AETHER_DB_PATH
-  ? resolve(process.env.AETHER_DB_PATH)
-  : join(process.cwd(), '.aether', 'aether.sqlite')
+import { getAetherConfig, runtimeSessionDirPath } from './aether-config'
 
 let db: DatabaseSync | undefined
 
@@ -73,6 +70,28 @@ const agentDetailDbRowSchema = agentDbRowSchema.extend({
 const archivedSessionDbRowSchema = agentDbRowSchema.extend({
   projectName: z.string(),
   archivedAt: z.string(),
+})
+
+const projectSummaryDbRowSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  cwd: z.string(),
+  hiddenAt: z.string().nullable(),
+  sessionCount: z.number().int().nonnegative(),
+})
+
+const sessionSummaryDbRowSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  projectName: z.string(),
+  title: z.string(),
+  runtime: runtimeKindSchema,
+  model: z.string(),
+  status: agentStatusSchema,
+  preview: z.string().nullable(),
+  messageCount: z.number().int().nonnegative().nullable(),
+  updatedAt: z.string().nullable(),
+  archivedAt: z.string().nullable(),
 })
 
 const messageDbRowSchema = z.object({
@@ -142,14 +161,43 @@ const deletedSessionDbRowSchema = z.object({
 
 export function getDb() {
   if (db) return db
+  const config = getAetherConfig()
+  migrateLegacyRepoState(config)
+  const dbPath = config.dbPath
   mkdirSync(dirname(dbPath), { recursive: true })
   db = new DatabaseSync(dbPath)
+  db.exec('PRAGMA busy_timeout = 5000')
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
   migrate(db)
   normalizeSeededModels(db)
-  seed(db)
+  removeLegacySeedProject(db)
   return db
+}
+
+function migrateLegacyRepoState(config: ReturnType<typeof getAetherConfig>) {
+  const legacyStateDir = resolve(config.rootDir, '.aether')
+  if (resolve(legacyStateDir) === resolve(config.stateDir)) return
+  if (!existsSync(join(legacyStateDir, 'aether.sqlite'))) return
+  if (existsSync(config.dbPath) && !isEmptyAetherDatabase(config.dbPath)) return
+  mkdirSync(dirname(config.stateDir), { recursive: true })
+  cpSync(legacyStateDir, config.stateDir, { recursive: true, errorOnExist: false })
+}
+
+function isEmptyAetherDatabase(dbPath: string) {
+  const database = new DatabaseSync(dbPath)
+  try {
+    const hasProjectsTable = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projects'")
+      .get()
+    if (!hasProjectsTable) return true
+    const count = database
+      .prepare('SELECT COUNT(*) AS count FROM projects')
+      .get() as { count: number }
+    return count.count === 0
+  } finally {
+    database.close()
+  }
 }
 
 export function getWorkspaceSnapshot(): WorkspaceSnapshot {
@@ -430,7 +478,161 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
   })
 }
 
+export function listProjectSummaries(includeHidden = false) {
+  return getDb()
+    .prepare(
+      `
+        SELECT
+          p.id,
+          p.name,
+          p.cwd,
+          p.hidden_at AS hiddenAt,
+          (
+            SELECT COUNT(*)
+            FROM agent_slots a
+            WHERE a.project_id = p.id
+              AND a.archived_at IS NULL
+          ) AS sessionCount
+        FROM projects p
+        ${includeHidden ? '' : 'WHERE p.hidden_at IS NULL'}
+        ORDER BY p.position ASC, p.id ASC
+      `,
+    )
+    .all()
+    .map(projectSummaryFromDbRow)
+}
+
+export function requireProjectSummary(id: string, includeHidden = false) {
+  const project = getDb()
+    .prepare(
+      `
+        SELECT
+          p.id,
+          p.name,
+          p.cwd,
+          p.hidden_at AS hiddenAt,
+          (
+            SELECT COUNT(*)
+            FROM agent_slots a
+            WHERE a.project_id = p.id
+              AND a.archived_at IS NULL
+          ) AS sessionCount
+        FROM projects p
+        WHERE p.id = ?
+          AND (? = 1 OR p.hidden_at IS NULL)
+      `,
+    )
+    .get(id, includeHidden ? 1 : 0)
+  if (!project) throw new Error(`Project not found: ${id}`)
+  return projectSummaryFromDbRow(project)
+}
+
+export function listSessionSummaries(input: {
+  readonly projectId?: string
+  readonly includeArchived?: boolean
+} = {}) {
+  const rows = getDb()
+    .prepare(
+      `
+        SELECT
+          a.id,
+          a.project_id AS projectId,
+          p.name AS projectName,
+          a.title,
+          a.runtime,
+          a.model,
+          a.status,
+          t.preview,
+          t.message_count AS messageCount,
+          t.updated_at AS updatedAt,
+          a.archived_at AS archivedAt
+        FROM agent_slots a
+        INNER JOIN projects p ON p.id = a.project_id
+        LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
+        WHERE a.slot LIKE 'session-%'
+          AND (? IS NULL OR a.project_id = ?)
+          AND (? = 1 OR a.archived_at IS NULL)
+        ORDER BY COALESCE(t.updated_at, '') DESC, a.position ASC, a.id ASC
+      `,
+    )
+    .all(
+      input.projectId ?? null,
+      input.projectId ?? null,
+      input.includeArchived ? 1 : 0,
+    )
+
+  return rows.map(sessionSummaryFromDbRow)
+}
+
+export function requireSessionSummary(agentId: string, includeArchived = false) {
+  const id = agentId.trim()
+  const session = getDb()
+    .prepare(
+      `
+        SELECT
+          a.id,
+          a.project_id AS projectId,
+          p.name AS projectName,
+          a.title,
+          a.runtime,
+          a.model,
+          a.status,
+          t.preview,
+          t.message_count AS messageCount,
+          t.updated_at AS updatedAt,
+          a.archived_at AS archivedAt
+        FROM agent_slots a
+        INNER JOIN projects p ON p.id = a.project_id
+        LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
+        WHERE a.id = ?
+          AND a.slot LIKE 'session-%'
+          AND (? = 1 OR a.archived_at IS NULL)
+      `,
+    )
+    .get(id, includeArchived ? 1 : 0)
+  if (!session) throw new Error(`Session not found: ${id}`)
+  return sessionSummaryFromDbRow(session)
+}
+
+function projectSummaryFromDbRow(row: unknown) {
+  const parsed = projectSummaryDbRowSchema.parse(row)
+  return {
+    id: parsed.id,
+    name: parsed.name,
+    cwd: parsed.cwd,
+    hidden: parsed.hiddenAt !== null,
+    sessionCount: parsed.sessionCount,
+  }
+}
+
+function sessionSummaryFromDbRow(row: unknown) {
+  const parsed = sessionSummaryDbRowSchema.parse(row)
+  return {
+    id: parsed.id,
+    projectId: parsed.projectId,
+    projectName: parsed.projectName,
+    title: parsed.title,
+    runtime: parsed.runtime,
+    model: parsed.model,
+    status: parsed.status,
+    preview: parsed.preview ?? 'No messages yet',
+    messageCount: parsed.messageCount ?? 0,
+    updatedAt: parsed.updatedAt ?? new Date(0).toISOString(),
+    archivedAt: parsed.archivedAt,
+  }
+}
+
 export function addProject(input: AddProjectInput) {
+  insertProject(input)
+  return getWorkspaceSnapshot()
+}
+
+export function addProjectSummary(input: AddProjectInput) {
+  const id = insertProject(input)
+  return requireProjectSummary(id, true)
+}
+
+function insertProject(input: AddProjectInput) {
   const database = getDb()
   const id = input.id?.trim() || slugify(input.name)
   const name = input.name.trim()
@@ -461,10 +663,20 @@ export function addProject(input: AddProjectInput) {
     throw error
   }
 
-  return getWorkspaceSnapshot()
+  return id
 }
 
 export function startSession(input: StartSessionInput) {
+  const id = insertSession(input)
+  return getWorkspaceSnapshot()
+}
+
+export function startSessionSummary(input: StartSessionInput) {
+  const id = insertSession(input)
+  return requireSessionSummary(id, true)
+}
+
+function insertSession(input: StartSessionInput) {
   const database = getDb()
   const projectId = input.projectId.trim()
   const project = database
@@ -529,10 +741,20 @@ export function startSession(input: StartSessionInput) {
     throw error
   }
 
-  return getWorkspaceSnapshot()
+  return id
 }
 
 export function deleteSession(input: DeleteSessionInput) {
+  archiveSession(input)
+  return getWorkspaceSnapshot()
+}
+
+export function deleteSessionSummary(input: DeleteSessionInput) {
+  const id = archiveSession(input)
+  return requireSessionSummary(id, true)
+}
+
+function archiveSession(input: DeleteSessionInput) {
   const database = getDb()
   const agentId = input.agentId.trim()
   const row = database
@@ -565,10 +787,20 @@ export function deleteSession(input: DeleteSessionInput) {
     throw error
   }
 
-  return getWorkspaceSnapshot()
+  return agentId
 }
 
 export function restoreSession(input: RestoreSessionInput) {
+  restoreSessionRow(input)
+  return getWorkspaceSnapshot()
+}
+
+export function restoreSessionSummary(input: RestoreSessionInput) {
+  const id = restoreSessionRow(input)
+  return requireSessionSummary(id, true)
+}
+
+function restoreSessionRow(input: RestoreSessionInput) {
   const database = getDb()
   const agentId = input.agentId.trim()
   const row = database
@@ -582,10 +814,20 @@ export function restoreSession(input: RestoreSessionInput) {
   database
     .prepare('UPDATE agent_slots SET archived_at = NULL WHERE id = ?')
     .run(agentId)
-  return getWorkspaceSnapshot()
+  return agentId
 }
 
 export function renameSession(input: { agentId: string; title: string }) {
+  renameSessionRow(input)
+  return getWorkspaceSnapshot()
+}
+
+export function renameSessionSummary(input: { agentId: string; title: string }) {
+  const id = renameSessionRow(input)
+  return requireSessionSummary(id, true)
+}
+
+function renameSessionRow(input: { agentId: string; title: string }) {
   const database = getDb()
   const agentId = input.agentId.trim()
   const title = input.title.trim()
@@ -598,7 +840,7 @@ export function renameSession(input: { agentId: string; title: string }) {
     throw new Error('Only started sessions can be renamed')
   }
   database.prepare('UPDATE agent_slots SET title = ? WHERE id = ?').run(title, agentId)
-  return getWorkspaceSnapshot()
+  return agentId
 }
 
 export function resetSession(agentId: string) {
@@ -668,7 +910,7 @@ export function createForkedSession(input: {
   const suffix = Math.random().toString(36).slice(2, 8)
   const slot = `session-${Date.now().toString(36)}-${suffix}`
   const id = `${source.projectId}-${slot}`
-  const sessionDir = join(process.cwd(), '.aether', 'pi-sessions', source.projectId, slot)
+  const sessionDir = runtimeSessionDirPath(getAetherConfig(), 'pi', source.projectId, slot)
   mkdirSync(sessionDir, { recursive: true })
   const sessionFile = join(sessionDir, basename(input.sessionFile))
   if (resolve(sessionFile) !== resolve(input.sessionFile)) {
@@ -725,6 +967,17 @@ export function createForkedSession(input: {
 }
 
 export function deleteProject(id: string) {
+  deleteProjectRow(id)
+  return getWorkspaceSnapshot()
+}
+
+export function deleteProjectSummary(id: string) {
+  const project = requireProjectSummary(id, true)
+  deleteProjectRow(id)
+  return project
+}
+
+function deleteProjectRow(id: string) {
   const database = getDb()
   const projectId = id.trim()
   if (!projectId) throw new Error('Project id is required')
@@ -755,11 +1008,19 @@ export function deleteProject(id: string) {
     database.exec('ROLLBACK')
     throw error
   }
-
-  return getWorkspaceSnapshot()
 }
 
 export function hideProject(id: string) {
+  hideProjectRow(id)
+  return getWorkspaceSnapshot()
+}
+
+export function hideProjectSummary(id: string) {
+  const projectId = hideProjectRow(id)
+  return requireProjectSummary(projectId, true)
+}
+
+function hideProjectRow(id: string) {
   const database = getDb()
   const projectId = id.trim()
   if (!projectId) throw new Error('Project id is required')
@@ -777,11 +1038,20 @@ export function hideProject(id: string) {
   database
     .prepare('UPDATE projects SET hidden_at = ? WHERE id = ?')
     .run(new Date().toISOString(), projectId)
-
-  return getWorkspaceSnapshot()
+  return projectId
 }
 
 export function unhideProject(id: string) {
+  unhideProjectRow(id)
+  return getWorkspaceSnapshot()
+}
+
+export function unhideProjectSummary(id: string) {
+  const projectId = unhideProjectRow(id)
+  return requireProjectSummary(projectId, true)
+}
+
+function unhideProjectRow(id: string) {
   const database = getDb()
   const projectId = id.trim()
   if (!projectId) throw new Error('Project id is required')
@@ -792,7 +1062,7 @@ export function unhideProject(id: string) {
   if (!existing) throw new Error(`Project not found: ${projectId}`)
 
   database.prepare('UPDATE projects SET hidden_at = NULL WHERE id = ?').run(projectId)
-  return getWorkspaceSnapshot()
+  return projectId
 }
 
 export function getAgentLaunchConfig(agentId: string) {
@@ -1407,8 +1677,7 @@ function widenRuntimeCheck(database: DatabaseSync) {
 }
 
 function runtimeSessionDir(runtime: string, projectId: string, slot: string) {
-  if (runtime === 'pi') return join(process.cwd(), '.aether', 'pi-sessions', projectId, slot)
-  return join(process.cwd(), '.aether', 'runtime-sessions', runtime, projectId, slot)
+  return runtimeSessionDirPath(getAetherConfig(), runtime, projectId, slot)
 }
 
 function diffPathIsDirty(cwd: string, path: string) {
@@ -1485,7 +1754,7 @@ function hydratePersistedPiSessions(database: DatabaseSync) {
   const piSettings = getRuntimeSettings('pi')
 
   for (const project of projects) {
-    const projectSessionRoot = join(process.cwd(), '.aether', 'pi-sessions', project.id)
+    const projectSessionRoot = join(getAetherConfig().piSessionsDir, project.id)
     if (!existsSync(projectSessionRoot)) continue
     const deletedSlots = new Set(
       database
@@ -2017,28 +2286,25 @@ function compareTimelineItems(
 
 function normalizeDetailLimit(value: number | undefined) {
   return Number.isInteger(value)
-    ? Math.max(1, Math.min(value ?? 100, 500))
-    : 100
+    ? Math.max(1, Math.min(value ?? 500, 500))
+    : 500
 }
 
-function seed(database: DatabaseSync) {
-  const count = database
-    .prepare('SELECT COUNT(*) AS count FROM projects')
-    .get() as { count: number }
-  if (count.count > 0) return
-
-  const root = process.cwd()
-
-  const insertProject = database.prepare(`
-    INSERT INTO projects (id, name, cwd, position)
-    VALUES (?, ?, ?, ?)
+function removeLegacySeedProject(database: DatabaseSync) {
+  database.exec(`
+    DELETE FROM projects
+    WHERE id = 'aether'
+      AND name = 'Aether Orchestrator'
+      AND (
+        SELECT COUNT(*)
+        FROM projects
+      ) = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM agent_slots
+        WHERE project_id = 'aether'
+      )
   `)
-
-  const projects = [['aether', 'Aether Orchestrator', root, 0]] as const
-
-  for (const project of projects) {
-    insertProject.run(...project)
-  }
 }
 
 function slugify(value: string) {
@@ -2089,9 +2355,6 @@ function piMessageToText(message: PiRpcMessage) {
       if ('text' in part && typeof part.text === 'string') return part.text
       if ('thinking' in part && typeof part.thinking === 'string') {
         return part.thinking
-      }
-      if ('name' in part && typeof part.name === 'string') {
-        return `tool call: ${part.name}`
       }
       return ''
     })

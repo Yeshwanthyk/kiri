@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentCell, BoardMessage, DiffArtifact } from '~/lib/contracts'
 import {
+  collapsedWorkEntries,
   compactWorkEntries,
   deriveAgentTimelineRows,
   diffLineStats,
   normalizeTimelinePath,
   summarizeWorkEntries,
 } from '~/components/aether-board/timeline'
+import type { TimelineWorkEntry } from '~/components/aether-board/timeline'
 
 const now = '2026-05-11T12:00:00.000Z'
 
@@ -109,6 +111,81 @@ describe('deriveAgentTimelineRows', () => {
     })
   })
 
+  it('folds interim assistant updates into runtime work', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'make it'),
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'I am checking the repo.'),
+          },
+          {
+            type: 'message',
+            id: 'message:t1',
+            timestamp: now,
+            message: message('t1', 'tool', 'pnpm test\nok'),
+          },
+          {
+            type: 'message',
+            id: 'message:a2',
+            timestamp: now,
+            message: message('a2', 'assistant', 'done'),
+          },
+        ],
+      }),
+      '/repo',
+    )
+
+    expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [
+        { kind: 'assistant.status', label: 'Update', detail: 'I am checking the repo.' },
+        { kind: 'tool.message', label: 'pnpm test' },
+      ],
+    })
+    expect(rows[2]).toMatchObject({ kind: 'message', message: { text: 'done' } })
+  })
+
+  it('keeps interim assistant updates visible for pi sessions', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        runtime: 'pi',
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'make it'),
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'I am checking the repo.'),
+          },
+          {
+            type: 'message',
+            id: 'message:a2',
+            timestamp: now,
+            message: message('a2', 'assistant', 'done'),
+          },
+        ],
+      }),
+      '/repo',
+    )
+
+    expect(rows.map((row) => row.kind)).toEqual(['message', 'message', 'message'])
+  })
+
   it('adds a working row for running agents', () => {
     const rows = deriveAgentTimelineRows(
       agent({ status: 'running', messages: [message('u1', 'user', 'go')] }),
@@ -160,7 +237,63 @@ describe('timeline helpers', () => {
 
     expect(entries).toHaveLength(2)
     expect(entries[0]?.count).toBe(2)
-    expect(summarizeWorkEntries(entries)).toBe('edited 1 file, ran 1 command')
+    expect(summarizeWorkEntries(entries)).toBe('edited 1 file, ran 2 commands')
+  })
+
+  it('shows non-diff tool calls when collapsed work has no diffs', () => {
+    const entries = [
+      {
+        id: '1',
+        kind: 'claude_tool_completed',
+        tone: 'tool',
+        label: 'Grep completed',
+        detail: 'Grep: source',
+        timestamp: now,
+      },
+      {
+        id: '2',
+        kind: 'claude_tool_completed',
+        tone: 'tool',
+        label: 'Read completed',
+        detail: 'Read: src/app.ts',
+        timestamp: now,
+      },
+      {
+        id: '3',
+        kind: 'claude_tool_completed',
+        tone: 'tool',
+        label: 'Skill completed',
+        detail: 'Skill: impeccable',
+        timestamp: now,
+      },
+    ] satisfies TimelineWorkEntry[]
+
+    expect(collapsedWorkEntries(entries)).toEqual(entries.slice(0, 2))
+  })
+
+  it('prefers diff entries when collapsed work includes edits', () => {
+    const edit = {
+      id: '2',
+      kind: 'fileOperationCompleted',
+      tone: 'tool',
+      label: 'Edited',
+      detail: 'write',
+      diff: diff('src/app.ts'),
+      timestamp: now,
+    } satisfies TimelineWorkEntry
+    const entries = [
+      {
+        id: '1',
+        kind: 'claude_tool_completed',
+        tone: 'tool',
+        label: 'Read completed',
+        detail: 'Read: src/app.ts',
+        timestamp: now,
+      },
+      edit,
+    ] satisfies TimelineWorkEntry[]
+
+    expect(collapsedWorkEntries(entries)).toEqual([edit])
   })
 
   it('counts patch line changes without headers', () => {
