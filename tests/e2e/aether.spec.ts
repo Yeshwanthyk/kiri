@@ -208,6 +208,27 @@ test('removed sessions are archived and can be restored from resume', async ({ p
   await expect(page.getByTestId('board-pane')).toContainText(title)
 })
 
+test('shift delete removes the selected session, not the first session', async ({ page }, testInfo) => {
+  const firstTitle = `Delete First ${testInfo.project.name}`
+  const secondTitle = `Delete Second ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, firstTitle)
+  await createSession(page, secondTitle)
+
+  await page.getByTestId('agent-cell').filter({ hasText: firstTitle }).dispatchEvent('click')
+  await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
+  await page.getByTestId('agent-cell').filter({ hasText: secondTitle }).dispatchEvent('click')
+  await expect(page.getByTestId('selected-agent')).toHaveText(secondTitle)
+
+  await pressShiftKey(page, 'KeyX')
+  await expect(page.getByTestId('confirm-dialog')).toContainText(secondTitle)
+  await page.getByTestId('confirm-dialog-confirm').click()
+
+  await expect(page.getByTestId('board-pane')).toContainText(firstTitle)
+  await expect(page.getByTestId('board-pane')).not.toContainText(secondTitle)
+})
+
 test('command menu starts, switches, and ends sessions', async ({ page }, testInfo) => {
   const firstTitle = `Command First ${testInfo.project.name}`
   const secondTitle = `Command Second ${testInfo.project.name}`

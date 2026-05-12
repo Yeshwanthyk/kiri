@@ -346,7 +346,16 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [agentSwitcherOpen, commandPaletteOpen, projectManagerOpen, keymap, selectedProject, workspace.projects])
+  }, [
+    agentSwitcherOpen,
+    commandPaletteOpen,
+    projectManagerOpen,
+    keymap,
+    selectedProject,
+    selection.agentId,
+    selection.projectId,
+    workspace.projects,
+  ])
 
   async function handleAddProject(input: { id?: string; name: string; cwd: string }) {
     const next = await addProject({ data: input })
