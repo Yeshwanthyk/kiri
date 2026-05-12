@@ -24,6 +24,7 @@
     "aethercli": "tsx src/cli/aetherctl.ts",
     "aether:ctl": "tsx src/cli/aetherctl.ts",
     "aether:agent-harness": "tsx tests/harness/aether-agent-cli-harness.ts",
+    "aether:history-harness": "tsx tests/harness/aether-agent-detail-history-harness.ts",
     "aether:models": "node scripts/sync-models-dev.mjs",
     "aether:projects": "tsx src/cli/aetherctl.ts projects",
     "preview": "vite preview",

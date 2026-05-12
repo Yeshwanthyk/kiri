@@ -352,7 +352,6 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
   const database = getDb()
   hydratePersistedPiSessions(database)
   const agentId = input.agentId.trim()
-  const limit = normalizeDetailLimit(input.limit)
   const settings = getSettings()
   const agent = database
     .prepare(
@@ -401,53 +400,45 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
       `,
     )
     .get(agentId)
-  const messages = database
+  const messageRows = database
     .prepare(
       `
-        SELECT id, agentId, role, text, timestamp
-        FROM (
-          SELECT m.id, t.agent_id AS agentId, m.role, m.text, m.timestamp
-          FROM messages m
-          INNER JOIN threads t ON t.id = m.thread_id
-          WHERE t.active = 1 AND t.agent_id = ?
-          ORDER BY m.timestamp DESC, m.id DESC
-          LIMIT ?
-        )
-        ORDER BY timestamp ASC, id ASC
+        SELECT m.id, t.agent_id AS agentId, m.role, m.text, m.timestamp
+        FROM messages m
+        INNER JOIN threads t ON t.id = m.thread_id
+        WHERE t.active = 1 AND t.agent_id = ?
+        ORDER BY m.timestamp ASC, m.id ASC
       `,
     )
-    .all(agentId, limit)
+    .all(agentId)
     .map((row) => messageDbRowSchema.parse(row))
-  const timelineEvents = database
+  const eventRows = database
     .prepare(
       `
-        SELECT id, agentId, kind, tone, label, detail, timestamp, payloadJson
-        FROM (
-          SELECT
-            e.id,
-            t.agent_id AS agentId,
-            e.kind,
-            e.tone,
-            e.label,
-            e.detail,
-            e.timestamp,
-            e.payload_json AS payloadJson
-          FROM timeline_events e
-          INNER JOIN threads t ON t.id = e.thread_id
-          WHERE t.active = 1 AND t.agent_id = ?
-          ORDER BY e.timestamp DESC, e.id DESC
-          LIMIT ?
-        )
-        ORDER BY timestamp ASC, id ASC
+        SELECT
+          e.id,
+          t.agent_id AS agentId,
+          e.kind,
+          e.tone,
+          e.label,
+          e.detail,
+          e.timestamp,
+          e.payload_json AS payloadJson
+        FROM timeline_events e
+        INNER JOIN threads t ON t.id = e.thread_id
+        WHERE t.active = 1 AND t.agent_id = ?
+        ORDER BY e.timestamp ASC, e.id ASC
       `,
     )
-    .all(agentId, limit)
+    .all(agentId)
+  const messages = messageRows
+  const timelineEvents = eventRows
     .map((row) => timelineEventFromDbRow(timelineEventDbRowSchema.parse(row)))
   const diffs = readDiffs(database, agentId)
   const timeline = mergeTimeline(
     messages.map(({ agentId: _agentId, ...message }) => message),
     timelineEvents.map(({ agentId: _agentId, ...event }) => event),
-  ).slice(-limit)
+  )
 
   return agentDetailSchema.parse({
     id: parsedAgent.id,
