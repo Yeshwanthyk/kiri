@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentCell, BoardMessage, DiffArtifact } from '~/lib/contracts'
 import {
-  collapsedWorkEntries,
   compactWorkEntries,
   deriveAgentTimelineRows,
   diffLineStats,
   normalizeTimelinePath,
   summarizeWorkEntries,
 } from '~/components/aether-board/timeline'
-import type { TimelineWorkEntry } from '~/components/aether-board/timeline'
 
 const now = '2026-05-11T12:00:00.000Z'
 
@@ -214,6 +212,111 @@ describe('deriveAgentTimelineRows', () => {
     })
   })
 
+  it('adds persisted diffs to the latest work row when no tool event names the file', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'change it'),
+          },
+          {
+            type: 'event',
+            id: 'event:e1',
+            timestamp: now,
+            event: {
+              id: 'e1',
+              kind: 'tool_execution_start',
+              tone: 'tool',
+              label: 'Bash',
+              detail: "Bash: git status --short",
+              timestamp: now,
+            },
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'done'),
+          },
+        ],
+        diffs: [diff('src/app.ts')],
+      }),
+      '/repo',
+    )
+
+    expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [
+        { kind: 'tool_execution_start', label: 'Ran command' },
+        { kind: 'diff.artifact', label: 'Edited', path: 'src/app.ts', diff: { id: 'diff:src/app.ts' } },
+      ],
+    })
+  })
+
+  it('renders raw git diff command output as an inline diff', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'show diff'),
+          },
+          {
+            type: 'message',
+            id: 'message:t1',
+            timestamp: now,
+            message: message(
+              't1',
+              'tool',
+              [
+                'git diff',
+                'diff --git a/src/app.ts b/src/app.ts',
+                'index 111..222 100644',
+                '--- a/src/app.ts',
+                '+++ b/src/app.ts',
+                '@@ -1 +1 @@',
+                '-old',
+                '+new',
+              ].join('\n'),
+            ),
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'done'),
+          },
+        ],
+      }),
+      '/repo',
+    )
+
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [
+        {
+          kind: 'tool.message',
+          label: 'git diff',
+        },
+        {
+          kind: 'tool.message.diff',
+          label: 'Diff',
+          path: 'src/app.ts',
+          diff: {
+            id: 't1:patch:0',
+            path: 'src/app.ts',
+          },
+        },
+      ],
+    })
+  })
+
   it('folds interim assistant updates into runtime work', () => {
     const rows = deriveAgentTimelineRows(
       agent({
@@ -346,62 +449,6 @@ describe('timeline helpers', () => {
     expect(entries).toHaveLength(2)
     expect(entries[0]?.count).toBe(2)
     expect(summarizeWorkEntries(entries)).toBe('edited 1 file, ran 2 commands')
-  })
-
-  it('shows non-diff tool calls when collapsed work has no diffs', () => {
-    const entries = [
-      {
-        id: '1',
-        kind: 'claude_tool_completed',
-        tone: 'tool',
-        label: 'Grep completed',
-        detail: 'Grep: source',
-        timestamp: now,
-      },
-      {
-        id: '2',
-        kind: 'claude_tool_completed',
-        tone: 'tool',
-        label: 'Read completed',
-        detail: 'Read: src/app.ts',
-        timestamp: now,
-      },
-      {
-        id: '3',
-        kind: 'claude_tool_completed',
-        tone: 'tool',
-        label: 'Skill completed',
-        detail: 'Skill: impeccable',
-        timestamp: now,
-      },
-    ] satisfies TimelineWorkEntry[]
-
-    expect(collapsedWorkEntries(entries)).toEqual(entries.slice(0, 2))
-  })
-
-  it('prefers diff entries when collapsed work includes edits', () => {
-    const edit = {
-      id: '2',
-      kind: 'fileOperationCompleted',
-      tone: 'tool',
-      label: 'Edited',
-      detail: 'write',
-      diff: diff('src/app.ts'),
-      timestamp: now,
-    } satisfies TimelineWorkEntry
-    const entries = [
-      {
-        id: '1',
-        kind: 'claude_tool_completed',
-        tone: 'tool',
-        label: 'Read completed',
-        detail: 'Read: src/app.ts',
-        timestamp: now,
-      },
-      edit,
-    ] satisfies TimelineWorkEntry[]
-
-    expect(collapsedWorkEntries(entries)).toEqual([edit])
   })
 
   it('counts patch line changes without headers', () => {

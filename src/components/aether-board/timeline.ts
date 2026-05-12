@@ -49,6 +49,7 @@ export function timelineRowsContentVersion(rows: AgentTimelineRow[]) {
 export function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTimelineRow[] {
   const rows: AgentTimelineRow[] = []
   let workEntries: TimelineWorkEntry[] = []
+  const usedDiffIds = new Set<string>()
   const diffByPath = createDiffPathMap(agent.diffs, cwd)
   const timeline = agent.timeline.length
     ? agent.timeline
@@ -75,7 +76,13 @@ export function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTim
   for (const item of timeline) {
     if (item.type === 'event') {
       const entry = eventToWorkEntry(item.event, diffByPath, cwd)
-      if (entry) workEntries.push(entry)
+      if (entry) {
+        const entries = inlinePatchDiffEntries(entry, cwd)
+        for (const item of entries) {
+          if (item.diff) usedDiffIds.add(item.diff.id)
+        }
+        workEntries.push(...entries)
+      }
       continue
     }
 
@@ -86,7 +93,13 @@ export function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTim
 
     if (item.message.role === 'tool') {
       const entry = toolMessageToWorkEntry(item.message, diffByPath, cwd)
-      if (entry) workEntries.push(entry)
+      if (entry) {
+        const entries = inlinePatchDiffEntries(entry, cwd)
+        for (const item of entries) {
+          if (item.diff) usedDiffIds.add(item.diff.id)
+        }
+        workEntries.push(...entries)
+      }
       continue
     }
 
@@ -99,6 +112,7 @@ export function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTim
   }
 
   flushWork()
+  appendUnmatchedDiffEntries(rows, agent.diffs, usedDiffIds, cwd)
 
   if (agent.status === 'running') {
     const lastRow = rows[rows.length - 1]
@@ -110,6 +124,46 @@ export function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTim
   }
 
   return rows
+}
+
+function appendUnmatchedDiffEntries(
+  rows: AgentTimelineRow[],
+  diffs: DiffArtifact[],
+  usedDiffIds: Set<string>,
+  cwd: string,
+) {
+  const entries = diffs
+    .filter((diff) => !usedDiffIds.has(diff.id))
+    .map((diff) => diffArtifactToWorkEntry(diff, cwd))
+  if (entries.length === 0) return
+
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (row?.kind !== 'work') continue
+    row.entries.push(...entries)
+    return
+  }
+
+  rows.push({
+    kind: 'work',
+    id: `work:${entries[0]?.id}`,
+    startedAt: entries[0]?.timestamp ?? new Date(0).toISOString(),
+    entries,
+  })
+}
+
+function diffArtifactToWorkEntry(diff: DiffArtifact, cwd: string): TimelineWorkEntry {
+  const path = normalizeTimelinePath(diff.path, cwd)
+  return {
+    id: `diff:${diff.id}`,
+    kind: 'diff.artifact',
+    tone: 'tool',
+    label: 'Edited',
+    detail: diff.title,
+    path,
+    diff,
+    timestamp: diff.updatedAt,
+  }
 }
 
 export function compactWorkEntries(entries: TimelineWorkEntry[]) {
@@ -128,11 +182,6 @@ export function compactWorkEntries(entries: TimelineWorkEntry[]) {
     compacted.push(entry)
   }
   return compacted
-}
-
-export function collapsedWorkEntries(entries: TimelineWorkEntry[], limit = 2) {
-  const diffEntries = entries.filter((entry) => entry.diff)
-  return (diffEntries.length ? diffEntries : entries).slice(0, limit)
 }
 
 export function summarizeWorkEntries(entries: TimelineWorkEntry[]) {
@@ -299,6 +348,63 @@ function toolMessageToWorkEntry(
     ...(diff ? { diff } : {}),
     timestamp: message.timestamp,
   }
+}
+
+function inlinePatchDiffEntries(entry: TimelineWorkEntry, cwd?: string): TimelineWorkEntry[] {
+  if (entry.diff) return [entry]
+  const patch = entry.detail?.trim()
+  if (!patch?.includes('diff --git ')) return [entry]
+
+  const patches = splitPatchByFile(patch)
+  if (patches.length === 0) return [entry]
+
+  const diffEntries = patches.map((item, index) => {
+    const path = normalizeTimelinePath(item.path, cwd)
+    return {
+      ...entry,
+      id: `${entry.id}:patch:${index}`,
+      kind: `${entry.kind}.diff`,
+      label: 'Diff',
+      detail: item.patch,
+      path,
+      diff: {
+        id: `${entry.id}:patch:${index}`,
+        title: entry.label,
+        path,
+        patch: item.patch,
+        updatedAt: entry.timestamp,
+      },
+    } satisfies TimelineWorkEntry
+  })
+
+  return [{
+    ...entry,
+    detail: entry.detail?.split('\n')[0] ?? entry.detail,
+  }, ...diffEntries]
+}
+
+function splitPatchByFile(patch: string) {
+  const patches: Array<{ path: string; patch: string }> = []
+  let currentPath: string | null = null
+  let currentLines: string[] = []
+
+  function flush() {
+    if (!currentPath || currentLines.length === 0) return
+    patches.push({ path: currentPath, patch: currentLines.join('\n') })
+  }
+
+  for (const line of patch.trim().split('\n')) {
+    const match = /^diff --git a\/(.+?) b\/(.+)$/.exec(line)
+    if (match?.[2]) {
+      flush()
+      currentPath = match[2]
+      currentLines = [line]
+      continue
+    }
+    if (currentPath) currentLines.push(line)
+  }
+  flush()
+  return patches
 }
 
 function assistantMessageToWorkEntry(message: BoardMessage): TimelineWorkEntry {

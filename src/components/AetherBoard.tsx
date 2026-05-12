@@ -93,7 +93,6 @@ import {
 } from '~/server/workspace'
 import {
   classifyToolName,
-  collapsedWorkEntries,
   compactWorkEntries,
   deriveAgentTimelineRows,
   diffLineStats,
@@ -2825,6 +2824,7 @@ function ChatPanel({
   const [hasNewContent, setHasNewContent] = React.useState(false)
   const [selectedMessageId, setSelectedMessageId] = React.useState<string | null>(null)
   const [composerEmpty, setComposerEmpty] = React.useState(true)
+  const [expandedDiffIds, setExpandedDiffIds] = React.useState<ReadonlySet<string>>(() => new Set())
   const didInitialScrollRef = React.useRef(false)
   const wasAtBottomRef = React.useRef(true)
 
@@ -2842,7 +2842,20 @@ function ChatPanel({
 
   React.useEffect(() => {
     setSelectedMessageId(null)
+    setExpandedDiffIds(new Set())
   }, [agent.id])
+
+  const toggleDiff = React.useCallback((diffId: string) => {
+    setExpandedDiffIds((current) => {
+      const next = new Set(current)
+      if (next.has(diffId)) {
+        next.delete(diffId)
+      } else {
+        next.add(diffId)
+      }
+      return next
+    })
+  }, [])
 
   React.useEffect(() => {
     if (selectedMessageId !== null && selectedIndex === -1) setSelectedMessageId(null)
@@ -3070,6 +3083,8 @@ function ChatPanel({
           themeMode={themeMode}
           listRef={messageListRef}
           selectedMessageId={selectedMessageId}
+          expandedDiffIds={expandedDiffIds}
+          onToggleDiff={toggleDiff}
         />
         {hasNewContent ? (
           <button
@@ -3282,11 +3297,15 @@ const MessageTimeline = React.memo(function MessageTimeline({
   themeMode,
   listRef,
   selectedMessageId,
+  expandedDiffIds,
+  onToggleDiff,
 }: {
   rows: AgentTimelineRow[]
   themeMode: ThemeMode
   listRef: React.RefObject<HTMLDivElement | null>
   selectedMessageId: string | null
+  expandedDiffIds: ReadonlySet<string>
+  onToggleDiff: (diffId: string) => void
 }) {
   if (rows.length === 0) {
     return (
@@ -3302,7 +3321,15 @@ const MessageTimeline = React.memo(function MessageTimeline({
     <div className="message-list" ref={listRef}>
       {rows.map((row) => {
         if (row.kind === 'work') {
-          return <WorkTimelineRow key={row.id} row={row} themeMode={themeMode} />
+          return (
+            <WorkTimelineRow
+              key={row.id}
+              row={row}
+              themeMode={themeMode}
+              expandedDiffIds={expandedDiffIds}
+              onToggleDiff={onToggleDiff}
+            />
+          )
         }
         if (row.kind === 'working') {
           return <WorkingTimelineRow key={row.id} row={row} />
@@ -3539,21 +3566,16 @@ const MessageTimelineRow = React.memo(function MessageTimelineRow({
 const WorkTimelineRow = React.memo(function WorkTimelineRow({
   row,
   themeMode,
+  expandedDiffIds,
+  onToggleDiff,
 }: {
   row: Extract<AgentTimelineRow, { kind: 'work' }>
   themeMode: ThemeMode
+  expandedDiffIds: ReadonlySet<string>
+  onToggleDiff: (diffId: string) => void
 }) {
-  const [expanded, setExpanded] = React.useState(false)
-  const [expandedDiffEntryId, setExpandedDiffEntryId] = React.useState<string | null>(null)
   const entries = React.useMemo(() => compactWorkEntries(row.entries), [row.entries])
-  const collapsedEntries = React.useMemo(
-    () => collapsedWorkEntries(entries),
-    [entries],
-  )
-  const visibleEntries = expanded ? entries : collapsedEntries
-  const hiddenCount = entries.length - visibleEntries.length
   const summary = summarizeWorkEntries(entries)
-  const canExpand = hiddenCount > 0
   const totalCount = entries.reduce((sum, entry) => sum + (entry.count ?? 1), 0)
   const tickEntries = entries.slice(0, 12)
 
@@ -3571,30 +3593,18 @@ const WorkTimelineRow = React.memo(function WorkTimelineRow({
 
   return (
     <section className="timeline-row work-row" aria-label="Runtime activity">
-      {canExpand ? (
-        <button
-          type="button"
-          className="work-row-header is-toggle"
-          onClick={() => setExpanded((value) => !value)}
-          aria-expanded={expanded}
-          aria-label={expanded ? 'Hide activity details' : `Show ${hiddenCount} more activities`}
-        >
-          {headerInner}
-        </button>
-      ) : (
-        <div className="work-row-header">{headerInner}</div>
-      )}
-      {visibleEntries.length > 0 ? (
+      <div className="work-row-header">{headerInner}</div>
+      {entries.length > 0 ? (
         <div className="work-entry-list">
-          {visibleEntries.map((entry) => (
+          {entries.map((entry) => (
             <WorkEntryRow
               key={entry.id}
               entry={entry}
               themeMode={themeMode}
-              diffExpanded={expandedDiffEntryId === entry.id}
-              onToggleDiff={() =>
-                setExpandedDiffEntryId((current) => current === entry.id ? null : entry.id)
-              }
+              diffExpanded={entry.diff ? expandedDiffIds.has(entry.diff.id) : false}
+              onToggleDiff={() => {
+                if (entry.diff) onToggleDiff(entry.diff.id)
+              }}
             />
           ))}
         </div>
