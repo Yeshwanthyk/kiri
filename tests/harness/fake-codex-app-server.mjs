@@ -229,10 +229,13 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
       const shouldCompact = prompt.toLowerCase().includes('compact')
       const shouldSkipUsageUpdate = prompt.toLowerCase().includes('without usage')
       const shouldEmitFileOperation = prompt.toLowerCase().includes('file operation')
+      const isTitleGeneration = prompt.includes('AETHER_SESSION_TITLE_GENERATION')
       const usedTokens = shouldCompact ? 42 : 123
       const inputTokens = shouldCompact ? 18 : 45
       const outputTokens = usedTokens - inputTokens
-      const responseText = `fake codex received: ${prompt}`
+      const responseText = isTitleGeneration
+        ? 'Generated Codex Title'
+        : `fake codex received: ${prompt}`
       const item = {
         type: 'agentMessage',
         id: `fake-item-${nextTurn}`,
@@ -348,7 +351,7 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
         thread.status = { type: 'idle' }
         thread.updatedAt = Math.floor(Date.now() / 1000)
       }
-      send(socket, { method: 'turn/completed', params: { threadId, turn } })
+      send(socket, { method: 'turn/completed', params: { threadId, turn: { ...turn, items: [item] } } })
       send(socket, {
         method: 'thread/status/changed',
         params: { threadId, status: { type: 'idle' } },

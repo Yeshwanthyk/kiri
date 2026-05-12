@@ -154,6 +154,14 @@ export const runtimeSettingsSchema = z.object({
 })
 export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>
 
+export const titleGenerationSettingsSchema = z.object({
+  enabled: z.boolean(),
+  runtime: runtimeKindSchema,
+  model: z.string().trim().min(1),
+  timeoutMs: z.number().int().positive().max(10_000),
+}).optional()
+export type TitleGenerationSettings = z.infer<typeof titleGenerationSettingsSchema>
+
 export const aetherSettingsSchema = z.object({
   runtimes: z.object({
     pi: runtimeSettingsSchema,
@@ -161,6 +169,7 @@ export const aetherSettingsSchema = z.object({
     claude: runtimeSettingsSchema,
     opencode: runtimeSettingsSchema,
   }),
+  titleGeneration: titleGenerationSettingsSchema,
 })
 export type AetherSettings = z.infer<typeof aetherSettingsSchema>
 

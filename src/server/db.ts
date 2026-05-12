@@ -131,11 +131,13 @@ const contextUsageDbRowSchema = z.object({
 
 const agentLaunchConfigSchema = z.object({
   id: z.string(),
+  title: z.string(),
   runtime: runtimeKindSchema,
   sessionDir: z.string(),
   sessionFile: z.string().nullable(),
   model: z.string(),
   cwd: z.string(),
+  projectName: z.string(),
   runtimeStateJson: z.string().nullable().default(null),
 })
 
@@ -1061,11 +1063,13 @@ export function getAgentLaunchConfig(agentId: string) {
       `
         SELECT
           a.id,
+          a.title,
           a.runtime,
           a.session_dir AS sessionDir,
           a.session_file AS sessionFile,
           a.model,
           a.runtime_state_json AS runtimeStateJson,
+          p.name AS projectName,
           p.cwd
         FROM agent_slots a
         INNER JOIN projects p ON p.id = a.project_id
