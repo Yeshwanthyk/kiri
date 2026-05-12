@@ -15,7 +15,6 @@ const host = process.env.AETHER_BACKEND_HOST ?? '127.0.0.1'
 const port = Number(process.env.AETHER_BACKEND_PORT ?? 0)
 const browserHost = process.env.AETHER_BACKEND_BROWSER_HOST ?? (host === '0.0.0.0' ? '127.0.0.1' : host)
 const environmentPath = '/.well-known/aether/environment'
-let appReady = false
 
 const serverEntryPath = join(rootDir, 'dist', 'server', 'server.js')
 const staticDir = join(rootDir, 'dist', 'client')
@@ -69,21 +68,13 @@ if (!readyResponse.ok) {
 }
 process.stdout.write(`${JSON.stringify({ type: 'ready', url: browserUrl.toString() })}\n`)
 
-async function checkReadiness(request) {
+async function checkReadiness() {
   if (!existsSync(settingsPath)) throw new Error(`settings.json not found: ${settingsPath}`)
   validateSettings(JSON.parse(readFileSync(settingsPath, 'utf8')))
   mkdirSync(dirname(dbPath), { recursive: true })
   const db = new DatabaseSync(dbPath)
   db.exec('PRAGMA journal_mode = WAL')
   db.close()
-  if (appReady) return
-
-  const response = await appFetch(new Request(new URL('/', request.url)))
-  const body = await response.text()
-  if (response.status >= 500) {
-    throw new Error(`SSR readiness failed with ${response.status}: ${body.slice(0, 300)}`)
-  }
-  appReady = true
 }
 
 function validateSettings(settings) {
