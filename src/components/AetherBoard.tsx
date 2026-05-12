@@ -152,7 +152,7 @@ type DiffStyle = 'unified' | 'split'
 
 type RefreshAgentDetail = () => Promise<void>
 
-function mergeAgentDetail(
+export function mergeAgentDetail(
   summary: AgentCell | undefined,
   detail: AgentCell | undefined,
 ) {
@@ -164,6 +164,7 @@ function mergeAgentDetail(
     timelineEvents: detail.timelineEvents,
     timeline: detail.timeline,
     diffs: detail.diffs,
+    tasks: detail.tasks,
     contextUsage: detail.contextUsage,
     pendingQuestion: detail.pendingQuestion,
   }
@@ -3081,6 +3082,63 @@ function ContextUsageChip({
   )
 }
 
+function TaskProgressStrip({
+  tasks,
+}: {
+  tasks: AgentCell['tasks']
+}) {
+  const [expanded, setExpanded] = React.useState(false)
+  const taskVersion = tasks.map((task) => `${task.source}:${task.id}:${task.title}`).join('|')
+  React.useEffect(() => {
+    setExpanded(false)
+  }, [taskVersion])
+
+  if (tasks.length === 0) return null
+
+  const completed = tasks.filter((task) => task.status === 'completed').length
+  const failed = tasks.filter((task) => task.status === 'failed').length
+  const active = tasks.find((task) => task.status === 'inProgress') ??
+    tasks.find((task) => task.status === 'pending') ??
+    tasks[0]
+  const summary = `${completed}/${tasks.length} done${failed ? `, ${failed} failed` : ''}`
+
+  return (
+    <section className={`task-strip${expanded ? ' expanded' : ''}`} aria-label="Agent tasks">
+      <button
+        type="button"
+        className="task-strip-toggle"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+      >
+        <span className={`task-status-dot ${active?.status ?? 'pending'}`} aria-hidden="true" />
+        <span className="task-strip-active">{active?.title ?? 'Tasks'}</span>
+        <span className="task-strip-summary">{summary}</span>
+        <ChevronDown size={14} className="task-strip-chevron" aria-hidden="true" />
+      </button>
+      {expanded ? (
+        <ol className="task-list">
+          {tasks.map((task) => (
+            <li key={`${task.source}:${task.id}`} className={`task-item ${task.status}`}>
+              <TaskStatusIcon status={task.status} />
+              <span>{task.title}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </section>
+  )
+}
+
+function TaskStatusIcon({
+  status,
+}: {
+  status: AgentCell['tasks'][number]['status']
+}) {
+  if (status === 'completed') return <Check size={13} className="task-item-icon" aria-hidden="true" />
+  if (status === 'failed') return <AlertTriangle size={13} className="task-item-icon" aria-hidden="true" />
+  return <span className={`task-item-dot ${status}`} aria-hidden="true" />
+}
+
 function ChatPanel({
   agent,
   cwd,
@@ -3410,6 +3468,7 @@ function ChatPanel({
   return (
     <div className="chat-panel" data-testid="chat-panel">
       <div className="message-list-wrap">
+        <TaskProgressStrip tasks={agent.tasks} />
         <MessageTimeline
           rows={rows}
           themeMode={themeMode}

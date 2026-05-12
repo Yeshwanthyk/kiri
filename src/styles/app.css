@@ -2544,6 +2544,118 @@ h1 {
   min-height: 0;
 }
 
+.task-strip {
+  width: min(100%, 860px);
+  margin: 14px auto 0;
+  padding: 0 24px;
+}
+
+.task-strip-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in oklab, var(--line) 78%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--panel) 86%, var(--paper));
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.task-strip-toggle:hover {
+  border-color: color-mix(in oklab, var(--accent) 34%, var(--line));
+  background: color-mix(in oklab, var(--accent) 5%, var(--panel));
+}
+
+.task-status-dot,
+.task-item-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--muted) 48%, transparent);
+}
+
+.task-status-dot.inProgress,
+.task-item-dot.inProgress {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 14%, transparent);
+}
+
+.task-status-dot.completed {
+  background: var(--success);
+}
+
+.task-status-dot.failed {
+  background: var(--danger);
+}
+
+.task-strip-active {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.task-strip-summary {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.task-strip-chevron {
+  color: var(--muted);
+  transition: transform 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.task-strip.expanded .task-strip-chevron {
+  transform: rotate(180deg);
+}
+
+.task-list {
+  display: grid;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 6px 10px 8px;
+  border: 1px solid color-mix(in oklab, var(--line) 58%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--panel) 58%, transparent);
+  list-style: none;
+}
+
+.task-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-height: 25px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.task-item.inProgress {
+  color: var(--ink);
+}
+
+.task-item.completed {
+  color: color-mix(in oklab, var(--muted) 72%, transparent);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklab, var(--muted) 28%, transparent);
+}
+
+.task-item.failed {
+  color: var(--danger);
+}
+
+.task-item-icon {
+  margin-top: 2px;
+}
+
 .message-list {
   display: grid;
   align-content: start;
