@@ -38,12 +38,15 @@ pnpm aether:ctl projects delete --id stable-id --yes --json
 pnpm aether:ctl sessions list --all --json
 pnpm aether:ctl sessions create --project project-id --runtime pi --model openai-codex/gpt-5.5 --title "Build API" --json
 pnpm aether:ctl sessions rename --agent agent-id --title "New title" --json
+pnpm aether:title --agent agent-id --title "Current task" --json
 pnpm aether:ctl sessions delete --agent agent-id --yes --json
 pnpm aether:ctl sessions restore --agent agent-id --json
 pnpm aether:ctl sessions resume --agent agent-id --json
 ```
 
 - Session identity is `agentId`.
+- For frequent in-session title updates, prefer `pnpm aether:title`; it is a tiny direct updater for low-latency agent heartbeats. If `AETHER_AGENT_ID` is set, `--agent` can be omitted.
+- Keep the title short and task-shaped, and update it when the current goal changes rather than on every token.
 - `delete` archives the session; use `resume` or `restore` to bring it back.
 - Model/runtime selection happens at session creation.
 

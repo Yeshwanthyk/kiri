@@ -45,6 +45,13 @@ const sessionSchema = z.object({
   archivedAt: z.string().nullable(),
 })
 const sessionRowsSchema = z.array(sessionSchema)
+const titleUpdateSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  previousTitle: z.string(),
+  changed: z.boolean(),
+  archivedAt: z.string().nullable(),
+})
 
 try {
   assertSkillTeachesAgents()
@@ -141,6 +148,30 @@ try {
     throw new Error('Session rename did not persist')
   }
 
+  const fastTitle = sessionSchema.parse(runCtl([
+    'sessions',
+    'rename',
+    '--agent',
+    session.id,
+    '--title',
+    'Agent Harness Fast Title Baseline',
+    '--json',
+  ]))
+  if (fastTitle.title !== 'Agent Harness Fast Title Baseline') {
+    throw new Error('Session rename baseline did not persist')
+  }
+
+  const fastTitleUpdate = titleUpdateSchema.parse(runTitle([
+    '--agent',
+    session.id,
+    '--title',
+    'Agent Harness Fast Title',
+    '--json',
+  ]))
+  if (!fastTitleUpdate.changed || fastTitleUpdate.title !== 'Agent Harness Fast Title') {
+    throw new Error('Fast title updater did not report the title change')
+  }
+
   const activeSessions = sessionRowsSchema.parse(runCtl([
     'sessions',
     'list',
@@ -150,6 +181,9 @@ try {
   ]))
   if (!activeSessions.some((candidate) => candidate.id === session.id)) {
     throw new Error('Session list did not include active session')
+  }
+  if (!activeSessions.some((candidate) => candidate.id === session.id && candidate.title === 'Agent Harness Fast Title')) {
+    throw new Error('Fast title updater did not persist to session list')
   }
 
   const archived = sessionSchema.parse(runCtl([
@@ -194,6 +228,7 @@ try {
       'projects:delete',
       'sessions:create',
       'sessions:rename',
+      'aether:title',
       'sessions:delete',
       'sessions:resume',
       'aether:projects compatibility',
@@ -215,6 +250,7 @@ function assertSkillTeachesAgents() {
     'pnpm aether:ctl projects add',
     'pnpm aether:ctl sessions create',
     'pnpm aether:ctl sessions rename',
+    'pnpm aether:title',
     'pnpm aether:ctl sessions delete',
     'pnpm aether:ctl sessions resume',
   ]
@@ -239,6 +275,10 @@ function runAetherCli(args: string[]) {
 
 function runProjectsCompat(args: string[]) {
   return runJson(['aether:projects', ...args])
+}
+
+function runTitle(args: string[]) {
+  return runJson(['aether:title', ...args])
 }
 
 function runJson(args: string[]) {

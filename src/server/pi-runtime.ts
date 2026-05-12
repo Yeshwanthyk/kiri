@@ -345,6 +345,7 @@ function getOrCreatePiAdapter(config: ReturnType<typeof getAgentLaunchConfig>) {
 
   if (!adapter) {
     adapter = new PiRpcProcessAdapter({
+      agentId: config.id,
       cwd: config.cwd,
       sessionDir: config.sessionDir,
       sessionFile: config.sessionFile ?? undefined,

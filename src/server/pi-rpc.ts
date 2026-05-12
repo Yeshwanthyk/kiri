@@ -57,6 +57,7 @@ export class PiRpcProcessAdapter {
 
   constructor(
     private readonly options: {
+      agentId?: string
       cwd: string
       sessionDir: string
       sessionFile?: string
@@ -87,7 +88,7 @@ export class PiRpcProcessAdapter {
       this.stderr = ''
       const child = spawn(resolveRuntimeExecutable('pi', process.env.AETHER_PI_BIN), args, {
         cwd: this.options.cwd,
-        env: runtimeProcessEnv(),
+        env: runtimeProcessEnv(this.options.agentId ? { AETHER_AGENT_ID: this.options.agentId } : undefined),
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       this.child = child
