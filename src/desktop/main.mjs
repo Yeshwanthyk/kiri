@@ -94,20 +94,13 @@ async function resolvePackagedBackendUrl() {
 
 async function existingBackendUrl() {
   const url = 'http://127.0.0.1:3090/'
-  const deadline = Date.now() + 4_000
-  do {
-    const existing = await probeExistingBackendUrl(url)
-    if (existing) return existing
-    await new Promise((resolve) => setTimeout(resolve, 250))
-  } while (Date.now() < deadline)
-
-  return null
+  return probeExistingBackendUrl(url)
 }
 
 async function probeExistingBackendUrl(url) {
   try {
     const response = await fetch(new URL('/.well-known/aether/environment', url), {
-      signal: AbortSignal.timeout(500),
+      signal: AbortSignal.timeout(250),
     })
     if (!response.ok) return null
     const environment = await response.json()
@@ -140,7 +133,7 @@ async function startBackend() {
       AETHER_SETTINGS_PATH: settingsPath,
       AETHER_DEFAULT_PROJECT_CWD: app.getPath('home'),
       AETHER_BACKEND_HOST: '0.0.0.0',
-      AETHER_BACKEND_PORT: '3090',
+      AETHER_BACKEND_PORT: '0',
       AETHER_BACKEND_BROWSER_HOST: '127.0.0.1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
