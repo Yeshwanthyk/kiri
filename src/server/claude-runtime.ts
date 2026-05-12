@@ -1,7 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
 import {
   query as claudeQuery,
   type Options as ClaudeOptions,
@@ -32,6 +29,7 @@ import {
 } from './db'
 import { collectGitDiffArtifacts } from './git-diff'
 import { fileOperationFromTool } from './runtime-file-operations'
+import { resolveRuntimeExecutable, runtimeProcessEnv } from './runtime-binaries'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
@@ -1049,9 +1047,7 @@ function numberValue(value: unknown) {
 }
 
 function claudeEnvironment(state: ClaudeRuntimeState): NodeJS.ProcessEnv {
-  const env = {
-    ...process.env,
-  }
+  const env = runtimeProcessEnv()
   if (process.env.AETHER_CLAUDE_USE_EXTERNAL_API_KEY !== '1') {
     delete env.ANTHROPIC_API_KEY
     delete env.ANTHROPIC_AUTH_TOKEN
@@ -1064,25 +1060,7 @@ function claudeEnvironment(state: ClaudeRuntimeState): NodeJS.ProcessEnv {
 
 function resolveClaudeExecutable(state: ClaudeRuntimeState) {
   const configuredPath = process.env.AETHER_CLAUDE_BIN ?? state.binaryPath
-  if (configuredPath?.trim()) return configuredPath
-
-  return executableOnPath('claude') ?? firstExistingPath([
-    join(process.env.HOME ?? homedir(), '.local', 'bin', 'claude'),
-    join(process.env.HOME ?? homedir(), '.claude', 'local', 'claude'),
-  ])
-}
-
-function executableOnPath(command: string) {
-  for (const entry of process.env.PATH?.split(delimiter) ?? []) {
-    if (!entry) continue
-    const candidate = join(entry, command)
-    if (existsSync(candidate)) return candidate
-  }
-  return undefined
-}
-
-function firstExistingPath(paths: ReadonlyArray<string>) {
-  return paths.find((path) => existsSync(path))
+  return resolveRuntimeExecutable('claude', configuredPath)
 }
 
 function extraArgsOption(): Pick<ClaudeOptions, 'extraArgs'> {

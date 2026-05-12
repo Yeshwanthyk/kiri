@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { Cause, Data, Effect, Exit, Option, Schema } from 'effect'
 import type { RuntimeKind } from '~/lib/contracts'
+import { resolveRuntimeExecutable, runtimeProcessEnv } from './runtime-binaries'
 
 const JsonRpcIdSchema = Schema.Union(Schema.String, Schema.Number)
 type JsonRpcId = typeof JsonRpcIdSchema.Type
@@ -473,14 +474,12 @@ export class CodexAppServerAdapter {
     const port = portFromWebsocketUrl(this.options.websocketUrl)
     if (!port) throw new Error(`Cannot spawn Codex app-server for ${this.options.websocketUrl}`)
 
-    const child = spawn('codex', [
+    const child = spawn(resolveRuntimeExecutable('codex', process.env.AETHER_CODEX_BIN), [
       'app-server',
       '--listen',
       this.options.websocketUrl,
     ], {
-      env: this.options.codexHome
-        ? { ...process.env, CODEX_HOME: this.options.codexHome }
-        : process.env,
+      env: runtimeProcessEnv(this.options.codexHome ? { CODEX_HOME: this.options.codexHome } : undefined),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.child = child
