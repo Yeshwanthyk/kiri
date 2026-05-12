@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -35,7 +34,6 @@ import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settin
 import { getAetherConfig, runtimeSessionDirPath } from './aether-config'
 
 let db: DatabaseSync | undefined
-type DirtyPathCache = Map<string, Set<string> | undefined>
 
 const projectDbRowSchema = z.object({
   id: z.string(),
@@ -204,7 +202,6 @@ function isEmptyAetherDatabase(dbPath: string) {
 export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   const database = getDb()
   hydratePersistedPiSessions(database)
-  const dirtyPathCache: DirtyPathCache = new Map()
   const projects = database
     .prepare(
       `
@@ -289,7 +286,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
         sessionFile: agent.sessionFile,
         preview: agent.preview ?? 'No messages yet',
         messageCount: agent.messageCount ?? 0,
-        diffCount: readDirtyDiffs(database, agent.id, agent.cwd, dirtyPathCache).length,
+        diffCount: agent.diffCount,
         contextUsage: readContextUsage(
           agent,
           settings,
@@ -446,7 +443,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
     )
     .all(agentId, limit)
     .map((row) => timelineEventFromDbRow(timelineEventDbRowSchema.parse(row)))
-  const diffs = readDirtyDiffs(database, agentId, parsedAgent.cwd)
+  const diffs = readDiffs(database, agentId)
   const timeline = mergeTimeline(
     messages.map(({ agentId: _agentId, ...message }) => message),
     timelineEvents.map(({ agentId: _agentId, ...event }) => event),
@@ -1457,17 +1454,13 @@ export function replaceAgentDiffArtifacts(input: {
   const row = database
     .prepare(
       `
-        SELECT p.cwd
+        SELECT a.id
         FROM agent_slots a
-        INNER JOIN projects p ON p.id = a.project_id
         WHERE a.id = ?
       `,
     )
-    .get(input.agentId) as { cwd: string } | undefined
+    .get(input.agentId)
   if (!row) return
-  const dirtyPaths = dirtyGitPaths(row.cwd)
-  if (!dirtyPaths) return
-  const diffs = input.diffs.filter((diff) => dirtyPaths.has(diff.path))
   const updatedAt = new Date().toISOString()
   database.exec('BEGIN')
   try {
@@ -1476,7 +1469,7 @@ export function replaceAgentDiffArtifacts(input: {
       INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `)
-    for (const diff of diffs) {
+    for (const diff of input.diffs) {
       const hash = createHash('sha256')
         .update(`${input.agentId}\n${diff.path}\n${diff.patch}`)
         .digest('hex')
@@ -1497,14 +1490,7 @@ export function replaceAgentDiffArtifacts(input: {
   }
 }
 
-function readDirtyDiffs(
-  database: DatabaseSync,
-  agentId: string,
-  cwd: string,
-  dirtyPathCache?: DirtyPathCache,
-) {
-  const dirtyPaths = cachedDirtyGitPaths(cwd, dirtyPathCache)
-  if (!dirtyPaths) return []
+function readDiffs(database: DatabaseSync, agentId: string) {
   return database
     .prepare(
       `
@@ -1516,7 +1502,6 @@ function readDirtyDiffs(
     )
     .all(agentId)
     .map((row) => diffDbRowSchema.parse(row))
-    .filter((diff) => dirtyPaths.has(diff.path))
 }
 
 function migrate(database: DatabaseSync) {
@@ -1688,38 +1673,6 @@ function widenRuntimeCheck(database: DatabaseSync) {
 
 function runtimeSessionDir(runtime: string, projectId: string, slot: string) {
   return runtimeSessionDirPath(getAetherConfig(), runtime, projectId, slot)
-}
-
-function cachedDirtyGitPaths(cwd: string, cache: DirtyPathCache | undefined) {
-  if (!cache) return dirtyGitPaths(cwd)
-  const key = resolve(cwd)
-  if (!cache.has(key)) cache.set(key, dirtyGitPaths(cwd))
-  return cache.get(key)
-}
-
-function dirtyGitPaths(cwd: string) {
-  try {
-    const records = execFileSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
-      cwd,
-      encoding: 'utf8',
-      maxBuffer: 20 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 3000,
-    }).split('\0')
-    const paths = new Set<string>()
-    for (let index = 0; index < records.length; index += 1) {
-      const record = records[index]
-      if (!record) continue
-      const path = record.slice(3)
-      if (path) paths.add(path)
-      if (record.slice(0, 2).includes('R') || record.slice(0, 2).includes('C')) {
-        index += 1
-      }
-    }
-    return paths
-  } catch {
-    return undefined
-  }
 }
 
 function repairAgentSlotReferences(database: DatabaseSync) {
