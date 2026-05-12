@@ -2761,7 +2761,7 @@ h1 {
 .note-meta,
 .message-meta,
 .work-row-header,
-.work-entry-title {
+.work-entry-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2893,7 +2893,7 @@ h1 {
 .work-row {
   position: relative;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   margin: 7px 0 8px;
   padding: 4px 0;
 }
@@ -2903,11 +2903,12 @@ h1 {
 }
 
 .work-row-header {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 5px;
-  padding: 3px 8px 3px 4px;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+  padding: 3px 0;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -2920,13 +2921,11 @@ h1 {
   max-width: 100%;
 }
 
-.work-row-header.is-toggle {
-  cursor: pointer;
-  transition: background-color 120ms ease-out;
-}
-
-.work-row-header.is-toggle:hover {
-  background: color-mix(in oklab, var(--panel-2) 60%, transparent);
+.work-row-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
 }
 
 .work-row-ticks {
@@ -2962,9 +2961,15 @@ h1 {
 }
 
 .work-row-summary {
-  flex: 1;
+  flex: 0 0 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.work-row-breakdown {
   min-width: 0;
   overflow: hidden;
+  color: color-mix(in oklab, var(--muted) 74%, transparent);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2986,9 +2991,28 @@ h1 {
   flex-shrink: 0;
 }
 
+.work-row-hide {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.work-row-hide:hover {
+  background: color-mix(in oklab, var(--panel-2) 50%, transparent);
+  color: var(--ink);
+}
+
 .work-entry-list {
   display: grid;
-  gap: 3px;
+  gap: 8px;
   padding-left: 20px;
 }
 
@@ -2999,8 +3023,9 @@ h1 {
   gap: 7px;
   min-width: 0;
   align-items: start;
-  padding: 3px 6px;
+  padding: 7px 8px;
   border-radius: 6px;
+  background: color-mix(in oklab, var(--panel-2) 18%, transparent);
 }
 
 .work-entry.no-icon {
@@ -3062,73 +3087,49 @@ h1 {
 
 .work-entry-content {
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
-.work-entry-title {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.work-entry-toggle {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  cursor: default;
-  font: inherit;
-  letter-spacing: 0;
-  text-align: left;
-  text-transform: none;
-}
-
-.work-entry-toggle.expandable {
-  cursor: pointer;
-}
-
-.work-entry-toggle.expandable:hover strong,
-.work-entry-toggle.expandable:focus-visible strong {
-  color: var(--ink);
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
-}
-
-.work-entry-toggle:disabled {
-  color: var(--muted);
-}
-
-.work-entry-toggle span {
+.work-entry-heading {
   display: flex;
   align-items: baseline;
-  gap: 5px;
-  max-width: 100%;
+  justify-content: space-between;
+  gap: 12px;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
+}
+
+.work-entry-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
   color: color-mix(in oklab, var(--muted) 86%, var(--ink));
   font-family: var(--font-mono);
   font-size: 12.5px;
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.work-entry-title strong {
+.work-entry-label strong {
   flex: 0 0 auto;
   color: color-mix(in oklab, var(--muted) 72%, var(--ink));
   font-weight: 500;
 }
 
-.work-entry.has-diff .work-entry-title strong {
+.work-entry-meta {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.work-entry.has-diff .work-entry-label strong {
   color: color-mix(in oklab, var(--ink) 74%, var(--accent));
 }
 
@@ -3184,7 +3185,7 @@ h1 {
   color: color-mix(in oklab, var(--muted) 70%, transparent);
 }
 
-.work-entry-title time {
+.work-entry-heading time {
   color: var(--muted);
   font-size: 11px;
   white-space: nowrap;
@@ -3207,22 +3208,6 @@ h1 {
   padding: 0;
 }
 
-.work-entry-chevron {
-  flex: 0 0 auto;
-  color: color-mix(in oklab, var(--muted) 72%, transparent);
-  transform: rotate(-90deg);
-  transition: transform 140ms ease-out, color 140ms ease-out;
-}
-
-.work-entry-toggle:hover .work-entry-chevron,
-.work-entry-toggle:focus-visible .work-entry-chevron {
-  color: var(--ink);
-}
-
-.work-entry-chevron.expanded {
-  transform: rotate(0deg);
-}
-
 .work-diff-stats .add,
 .inline-diff-counts .add {
   color: var(--success);
@@ -3236,7 +3221,7 @@ h1 {
 .work-entry-detail {
   min-width: 0;
   max-width: 100%;
-  max-height: 220px;
+  max-height: none;
   overflow: auto;
   margin: 7px 0 0;
   padding: 8px 9px;
@@ -3262,7 +3247,7 @@ h1 {
 
 .inline-diff-summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   width: 100%;
   min-height: 30px;
   align-items: center;
@@ -3271,22 +3256,8 @@ h1 {
   border: 0;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   font: inherit;
   text-align: left;
-}
-
-.inline-diff-summary:hover {
-  background: color-mix(in oklab, var(--panel-2) 66%, transparent);
-  color: var(--ink);
-}
-
-.inline-diff-summary svg {
-  transition: transform 140ms ease-out;
-}
-
-.inline-diff-summary svg.expanded {
-  transform: rotate(180deg);
 }
 
 .inline-diff-path {

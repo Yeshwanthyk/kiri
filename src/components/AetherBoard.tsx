@@ -93,14 +93,12 @@ import {
 } from '~/server/workspace'
 import {
   classifyToolName,
-  compactWorkEntries,
   deriveAgentTimelineRows,
   diffLineStats,
   displayPath,
   isAssistantStatusEntry,
   isCommandEntry,
   normalizeDiffPath,
-  summarizeWorkEntries,
   timelineRowsContentVersion,
   type AgentTimelineRow,
   type TimelineWorkEntry,
@@ -2839,7 +2837,6 @@ function ChatPanel({
   const [hasNewContent, setHasNewContent] = React.useState(false)
   const [selectedMessageId, setSelectedMessageId] = React.useState<string | null>(null)
   const [composerEmpty, setComposerEmpty] = React.useState(true)
-  const [expandedDiffIds, setExpandedDiffIds] = React.useState<ReadonlySet<string>>(() => new Set())
   const didInitialScrollRef = React.useRef(false)
   const wasAtBottomRef = React.useRef(true)
 
@@ -2857,20 +2854,7 @@ function ChatPanel({
 
   React.useEffect(() => {
     setSelectedMessageId(null)
-    setExpandedDiffIds(new Set())
   }, [agent.id])
-
-  const toggleDiff = React.useCallback((diffId: string) => {
-    setExpandedDiffIds((current) => {
-      const next = new Set(current)
-      if (next.has(diffId)) {
-        next.delete(diffId)
-      } else {
-        next.add(diffId)
-      }
-      return next
-    })
-  }, [])
 
   React.useEffect(() => {
     if (selectedMessageId !== null && selectedIndex === -1) setSelectedMessageId(null)
@@ -3098,8 +3082,6 @@ function ChatPanel({
           themeMode={themeMode}
           listRef={messageListRef}
           selectedMessageId={selectedMessageId}
-          expandedDiffIds={expandedDiffIds}
-          onToggleDiff={toggleDiff}
         />
         {hasNewContent ? (
           <button
@@ -3312,15 +3294,11 @@ const MessageTimeline = React.memo(function MessageTimeline({
   themeMode,
   listRef,
   selectedMessageId,
-  expandedDiffIds,
-  onToggleDiff,
 }: {
   rows: AgentTimelineRow[]
   themeMode: ThemeMode
   listRef: React.RefObject<HTMLDivElement | null>
   selectedMessageId: string | null
-  expandedDiffIds: ReadonlySet<string>
-  onToggleDiff: (diffId: string) => void
 }) {
   if (rows.length === 0) {
     return (
@@ -3341,8 +3319,6 @@ const MessageTimeline = React.memo(function MessageTimeline({
               key={row.id}
               row={row}
               themeMode={themeMode}
-              expandedDiffIds={expandedDiffIds}
-              onToggleDiff={onToggleDiff}
             />
           )
         }
@@ -3581,45 +3557,51 @@ const MessageTimelineRow = React.memo(function MessageTimelineRow({
 const WorkTimelineRow = React.memo(function WorkTimelineRow({
   row,
   themeMode,
-  expandedDiffIds,
-  onToggleDiff,
 }: {
   row: Extract<AgentTimelineRow, { kind: 'work' }>
   themeMode: ThemeMode
-  expandedDiffIds: ReadonlySet<string>
-  onToggleDiff: (diffId: string) => void
 }) {
-  const entries = React.useMemo(() => compactWorkEntries(row.entries), [row.entries])
-  const summary = summarizeWorkEntries(entries)
-  const totalCount = entries.reduce((sum, entry) => sum + (entry.count ?? 1), 0)
-  const tickEntries = entries.slice(0, 12)
+  const [hidden, setHidden] = React.useState(false)
+  const entries = row.entries
+  const counts = React.useMemo(() => activityCounts(entries), [entries])
+  const tickEntries = entries.slice(0, 24)
 
-  const headerInner = (
-    <>
-      <span className="work-row-ticks" aria-hidden="true">
-        {tickEntries.map((entry) => (
-          <span key={entry.id} className={`work-row-tick tone-${workEntryTickTone(entry)}`} />
-        ))}
-      </span>
-      <span className="work-row-summary">{summary}</span>
-      {totalCount > 1 ? <span className="work-row-badge">{totalCount}</span> : null}
-    </>
-  )
+  const summary = [
+    counts.updates ? `${counts.updates} updates` : null,
+    counts.edits ? `${counts.edits} edits` : null,
+    counts.commands ? `${counts.commands} commands` : null,
+    counts.other ? `${counts.other} other` : null,
+  ].filter(Boolean).join(', ')
 
   return (
     <section className="timeline-row work-row" aria-label="Runtime activity">
-      <div className="work-row-header">{headerInner}</div>
-      {entries.length > 0 ? (
+      <div className="work-row-header">
+        <div className="work-row-heading">
+          <span className="work-row-ticks" aria-hidden="true">
+            {tickEntries.map((entry) => (
+              <span key={entry.id} className={`work-row-tick tone-${workEntryTickTone(entry)}`} />
+            ))}
+          </span>
+          <span className="work-row-summary">Activity log</span>
+          <span className="work-row-badge">{entries.length}</span>
+          {summary ? <span className="work-row-breakdown">{summary}</span> : null}
+        </div>
+        <button
+          type="button"
+          className="work-row-hide"
+          onClick={() => setHidden((value) => !value)}
+          aria-expanded={!hidden}
+        >
+          {hidden ? 'Show' : 'Hide'}
+        </button>
+      </div>
+      {!hidden && entries.length > 0 ? (
         <div className="work-entry-list">
           {entries.map((entry) => (
             <WorkEntryRow
               key={entry.id}
               entry={entry}
               themeMode={themeMode}
-              diffExpanded={entry.diff ? expandedDiffIds.has(entry.diff.id) : false}
-              onToggleDiff={() => {
-                if (entry.diff) onToggleDiff(entry.diff.id)
-              }}
             />
           ))}
         </div>
@@ -3631,78 +3613,45 @@ const WorkTimelineRow = React.memo(function WorkTimelineRow({
 const WorkEntryRow = React.memo(function WorkEntryRow({
   entry,
   themeMode,
-  diffExpanded,
-  onToggleDiff,
 }: {
   entry: TimelineWorkEntry
   themeMode: ThemeMode
-  diffExpanded: boolean
-  onToggleDiff: () => void
 }) {
-  const [expanded, setExpanded] = React.useState(false)
   const preview = formatWorkPreview(entry)
   const previewText = preview?.text ?? null
   const stats = entry.diff ? diffLineStats(entry.diff.patch) : null
   const displayText = previewText ? `${entry.label} - ${previewText}` : entry.label
   const fullText = entry.detail?.trim() || displayText
-  const canExpand = !entry.path && (displayText.length > 72 || fullText.includes('\n'))
-  const canToggle = canExpand || Boolean(entry.diff)
   const icon = workEntryIcon(entry)
   const command = isCommandEntry(entry)
   const status = isAssistantStatusEntry(entry)
 
   return (
-    <div className={`work-entry ${entry.tone} ${entry.diff ? 'has-diff' : ''} ${command ? 'is-command' : ''} ${status ? 'is-status' : ''} ${icon ? '' : 'no-icon'} ${expanded ? 'expanded' : ''}`}>
+    <div className={`work-entry ${entry.tone} ${entry.diff ? 'has-diff' : ''} ${command ? 'is-command' : ''} ${status ? 'is-status' : ''} ${icon ? '' : 'no-icon'}`}>
       {icon}
       <div className="work-entry-content">
-        <div className="work-entry-title">
-          <button
-            type="button"
-            onClick={() => {
-              if (entry.diff) {
-                onToggleDiff()
-                return
-              }
-              if (canExpand) setExpanded((value) => !value)
-            }}
-            className={`work-entry-toggle ${canToggle ? 'expandable' : ''}`}
-            aria-expanded={entry.diff ? diffExpanded : expanded}
-            disabled={!canToggle}
-            title={entry.diff ? `Show diff for ${previewText ?? entry.diff.path}` : displayText}
-          >
-            <span suppressHydrationWarning>
-              {command && preview ? null : <strong>{entry.label}</strong>}
-              {command ? <span className="work-call-pill">{workCallLabel(entry)}</span> : null}
-              {preview ? (
-                <>
-                  {command ? null : <span className="work-entry-separator">{entry.diff ? '' : '-'}</span>}
-                  {preview.node}
-                </>
-              ) : null}
-              {entry.count && entry.count > 1 ? (
-                <span className="work-repeat-count">×{entry.count}</span>
-              ) : null}
-              {stats ? (
-                <span className="work-diff-stats">
-                  <span className="add">+{stats.added}</span>
-                  <span className="del">-{stats.deleted}</span>
-                </span>
-              ) : null}
-              {entry.diff ? (
-                <ChevronDown size={13} className={`work-entry-chevron ${diffExpanded ? 'expanded' : ''}`} />
-              ) : null}
-            </span>
-          </button>
+        <div className="work-entry-heading">
+          <span className="work-entry-label">
+            {command ? <span className="work-call-pill">{workCallLabel(entry)}</span> : <strong>{entry.label}</strong>}
+            {previewText && entry.path && preview ? <span className="work-entry-path">{preview.node}</span> : null}
+          </span>
+          <span className="work-entry-meta">
+            {stats ? (
+              <span className="work-diff-stats">
+                <span className="add">+{stats.added}</span>
+                <span className="del">-{stats.deleted}</span>
+              </span>
+            ) : null}
+            <time>{formatTime(entry.timestamp)}</time>
+          </span>
         </div>
-        {expanded && canExpand ? (
+        {fullText ? (
           <pre className="work-entry-detail"><code>{fullText}</code></pre>
         ) : null}
         {entry.diff ? (
           <InlineDiffPreview
             diff={entry.diff}
             themeMode={themeMode}
-            expanded={diffExpanded}
-            onToggle={onToggleDiff}
           />
         ) : null}
       </div>
@@ -3713,47 +3662,54 @@ const WorkEntryRow = React.memo(function WorkEntryRow({
 function InlineDiffPreview({
   diff,
   themeMode,
-  expanded,
-  onToggle,
 }: {
   diff: DiffArtifact
   themeMode: ThemeMode
-  expanded: boolean
-  onToggle: () => void
 }) {
   const stats = React.useMemo(() => diffLineStats(diff.patch), [diff.patch])
   return (
-    <div className={`inline-diff-card${expanded ? ' expanded' : ''}`}>
-      <button
-        type="button"
-        className="inline-diff-summary"
-        onClick={onToggle}
-        aria-expanded={expanded}
-      >
+    <div className="inline-diff-card expanded">
+      <div className="inline-diff-summary">
         <GitPullRequest size={13} />
         <span className="inline-diff-path">{diff.path}</span>
         <span className="inline-diff-counts">
           <span className="add">+{stats.added}</span>
           <span className="del">-{stats.deleted}</span>
         </span>
-        <ChevronDown size={13} className={expanded ? 'expanded' : ''} />
-      </button>
-      {expanded ? (
-        <div className="inline-pierre-host">
-          <PatchDiff
-            key={`${diff.id}:inline:${themeMode}`}
-            patch={diff.patch}
-            disableWorkerPool
-            options={{
-              diffStyle: 'unified',
-              overflow: 'wrap',
-              themeType: themeMode,
-            }}
-          />
-        </div>
-      ) : null}
+      </div>
+      <div className="inline-pierre-host">
+        <PatchDiff
+          key={`${diff.id}:inline:${themeMode}`}
+          patch={diff.patch}
+          disableWorkerPool
+          options={{
+            diffStyle: 'unified',
+            overflow: 'wrap',
+            themeType: themeMode,
+          }}
+        />
+      </div>
     </div>
   )
+}
+
+function activityCounts(entries: TimelineWorkEntry[]) {
+  let updates = 0
+  let edits = 0
+  let commands = 0
+  let other = 0
+  for (const entry of entries) {
+    if (entry.diff) {
+      edits += 1
+    } else if (isAssistantStatusEntry(entry)) {
+      updates += 1
+    } else if (isCommandEntry(entry)) {
+      commands += 1
+    } else {
+      other += 1
+    }
+  }
+  return { updates, edits, commands, other }
 }
 
 function workEntryTickTone(entry: TimelineWorkEntry) {
