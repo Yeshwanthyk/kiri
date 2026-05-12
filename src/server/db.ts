@@ -35,6 +35,7 @@ import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settin
 import { getAetherConfig, runtimeSessionDirPath } from './aether-config'
 
 let db: DatabaseSync | undefined
+type DirtyPathCache = Map<string, Set<string> | undefined>
 
 const projectDbRowSchema = z.object({
   id: z.string(),
@@ -203,6 +204,7 @@ function isEmptyAetherDatabase(dbPath: string) {
 export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   const database = getDb()
   hydratePersistedPiSessions(database)
+  const dirtyPathCache: DirtyPathCache = new Map()
   const projects = database
     .prepare(
       `
@@ -287,7 +289,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
         sessionFile: agent.sessionFile,
         preview: agent.preview ?? 'No messages yet',
         messageCount: agent.messageCount ?? 0,
-        diffCount: readDirtyDiffs(database, agent.id, agent.cwd).length,
+        diffCount: readDirtyDiffs(database, agent.id, agent.cwd, dirtyPathCache).length,
         contextUsage: readContextUsage(
           agent,
           settings,
@@ -1462,9 +1464,10 @@ export function replaceAgentDiffArtifacts(input: {
       `,
     )
     .get(input.agentId) as { cwd: string } | undefined
-  const diffs = row
-    ? input.diffs.filter((diff) => diffPathIsDirty(row.cwd, diff.path))
-    : []
+  if (!row) return
+  const dirtyPaths = dirtyGitPaths(row.cwd)
+  if (!dirtyPaths) return
+  const diffs = input.diffs.filter((diff) => dirtyPaths.has(diff.path))
   const updatedAt = new Date().toISOString()
   database.exec('BEGIN')
   try {
@@ -1494,7 +1497,14 @@ export function replaceAgentDiffArtifacts(input: {
   }
 }
 
-function readDirtyDiffs(database: DatabaseSync, agentId: string, cwd: string) {
+function readDirtyDiffs(
+  database: DatabaseSync,
+  agentId: string,
+  cwd: string,
+  dirtyPathCache?: DirtyPathCache,
+) {
+  const dirtyPaths = cachedDirtyGitPaths(cwd, dirtyPathCache)
+  if (!dirtyPaths) return []
   return database
     .prepare(
       `
@@ -1506,7 +1516,7 @@ function readDirtyDiffs(database: DatabaseSync, agentId: string, cwd: string) {
     )
     .all(agentId)
     .map((row) => diffDbRowSchema.parse(row))
-    .filter((diff) => diffPathIsDirty(cwd, diff.path))
+    .filter((diff) => dirtyPaths.has(diff.path))
 }
 
 function migrate(database: DatabaseSync) {
@@ -1680,15 +1690,35 @@ function runtimeSessionDir(runtime: string, projectId: string, slot: string) {
   return runtimeSessionDirPath(getAetherConfig(), runtime, projectId, slot)
 }
 
-function diffPathIsDirty(cwd: string, path: string) {
+function cachedDirtyGitPaths(cwd: string, cache: DirtyPathCache | undefined) {
+  if (!cache) return dirtyGitPaths(cwd)
+  const key = resolve(cwd)
+  if (!cache.has(key)) cache.set(key, dirtyGitPaths(cwd))
+  return cache.get(key)
+}
+
+function dirtyGitPaths(cwd: string) {
   try {
-    return execFileSync('git', ['status', '--porcelain=v1', '--', path], {
+    const records = execFileSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
       cwd,
       encoding: 'utf8',
+      maxBuffer: 20 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim().length > 0
+      timeout: 3000,
+    }).split('\0')
+    const paths = new Set<string>()
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index]
+      if (!record) continue
+      const path = record.slice(3)
+      if (path) paths.add(path)
+      if (record.slice(0, 2).includes('R') || record.slice(0, 2).includes('C')) {
+        index += 1
+      }
+    }
+    return paths
   } catch {
-    return false
+    return undefined
   }
 }
 
