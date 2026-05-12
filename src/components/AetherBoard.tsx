@@ -3561,7 +3561,7 @@ const WorkTimelineRow = React.memo(function WorkTimelineRow({
   row: Extract<AgentTimelineRow, { kind: 'work' }>
   themeMode: ThemeMode
 }) {
-  const [hidden, setHidden] = React.useState(false)
+  const [hidden, setHidden] = React.useState(true)
   const entries = row.entries
   const counts = React.useMemo(() => activityCounts(entries), [entries])
   const tickEntries = entries.slice(0, 24)
@@ -3622,6 +3622,7 @@ const WorkEntryRow = React.memo(function WorkEntryRow({
   const stats = entry.diff ? diffLineStats(entry.diff.patch) : null
   const displayText = previewText ? `${entry.label} - ${previewText}` : entry.label
   const fullText = entry.detail?.trim() || displayText
+  const visibleText = truncateWorkEntryDetail(fullText)
   const icon = workEntryIcon(entry)
   const command = isCommandEntry(entry)
   const status = isAssistantStatusEntry(entry)
@@ -3645,8 +3646,8 @@ const WorkEntryRow = React.memo(function WorkEntryRow({
             <time>{formatTime(entry.timestamp)}</time>
           </span>
         </div>
-        {fullText ? (
-          <pre className="work-entry-detail"><code>{fullText}</code></pre>
+        {visibleText ? (
+          <pre className="work-entry-detail"><code>{visibleText}</code></pre>
         ) : null}
         {entry.diff ? (
           <InlineDiffPreview
@@ -3658,6 +3659,33 @@ const WorkEntryRow = React.memo(function WorkEntryRow({
     </div>
   )
 })
+
+const WORK_ENTRY_DETAIL_MAX_CHARS = 12_000
+const WORK_ENTRY_DETAIL_MAX_LINES = 240
+
+function truncateWorkEntryDetail(text: string) {
+  if (text.length <= WORK_ENTRY_DETAIL_MAX_CHARS && countLines(text) <= WORK_ENTRY_DETAIL_MAX_LINES) {
+    return text
+  }
+
+  const lines = text.split('\n')
+  const lineLimited = lines.length > WORK_ENTRY_DETAIL_MAX_LINES
+    ? lines.slice(0, WORK_ENTRY_DETAIL_MAX_LINES).join('\n')
+    : text
+  const charLimited = lineLimited.length > WORK_ENTRY_DETAIL_MAX_CHARS
+    ? lineLimited.slice(0, WORK_ENTRY_DETAIL_MAX_CHARS).trimEnd()
+    : lineLimited
+
+  return `${charLimited}\n[truncated]`
+}
+
+function countLines(text: string) {
+  let lines = 1
+  for (const char of text) {
+    if (char === '\n') lines += 1
+  }
+  return lines
+}
 
 function InlineDiffPreview({
   diff,
