@@ -10,6 +10,7 @@ const source = resolve(`dist/mac-${arch}`, appName)
 const applicationsDir = join(homedir(), 'Applications')
 const destination = join(applicationsDir, appName)
 const appProcessPattern = `${appName}/Contents/MacOS/${appProcessName}`
+const appBundlePattern = `${appName}/Contents/`
 
 if (!existsSync(source)) {
   console.error(`Desktop app bundle not found: ${source}`)
@@ -17,7 +18,7 @@ if (!existsSync(source)) {
   process.exit(1)
 }
 
-terminateRunningApp(appProcessPattern)
+terminateRunningApp([appProcessPattern, appBundlePattern])
 
 mkdirSync(applicationsDir, { recursive: true })
 rmSync(destination, { recursive: true, force: true })
@@ -36,24 +37,28 @@ if (result.status !== 0) {
 
 console.log(`Installed and opened ${destination}`)
 
-function terminateRunningApp(pattern) {
-  const firstPass = runningPids(pattern)
+function terminateRunningApp(patterns) {
+  const firstPass = runningPids(patterns)
   if (firstPass.length === 0) return
 
   spawnSync('kill', firstPass, { stdio: 'ignore' })
   spawnSync('sleep', ['1'], { stdio: 'ignore' })
 
-  const remaining = runningPids(pattern)
+  const remaining = runningPids(patterns)
   if (remaining.length > 0) {
     spawnSync('kill', ['-9', ...remaining], { stdio: 'ignore' })
   }
 }
 
-function runningPids(pattern) {
-  const result = spawnSync('pgrep', ['-f', pattern], { encoding: 'utf8' })
-  if (result.status !== 0) return []
-  return result.stdout
-    .split('\n')
-    .map((pid) => pid.trim())
-    .filter(Boolean)
+function runningPids(patterns) {
+  const pids = new Set()
+  for (const pattern of patterns) {
+    const result = spawnSync('pgrep', ['-f', pattern], { encoding: 'utf8' })
+    if (result.status !== 0) continue
+    for (const pid of result.stdout.split('\n')) {
+      const trimmed = pid.trim()
+      if (trimmed) pids.add(trimmed)
+    }
+  }
+  return [...pids]
 }

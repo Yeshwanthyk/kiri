@@ -82,8 +82,39 @@ function createWindow(appUrl) {
 async function resolveAppUrl() {
   if (process.env.AETHER_DESKTOP_DEV_URL) return process.env.AETHER_DESKTOP_DEV_URL
   if (backendUrlPromise) return backendUrlPromise
-  backendUrlPromise = startBackend()
+  backendUrlPromise = resolvePackagedBackendUrl()
   return backendUrlPromise
+}
+
+async function resolvePackagedBackendUrl() {
+  const existing = await existingBackendUrl()
+  if (existing) return existing
+  return startBackend()
+}
+
+async function existingBackendUrl() {
+  const url = 'http://127.0.0.1:3090/'
+  const deadline = Date.now() + 4_000
+  do {
+    const existing = await probeExistingBackendUrl(url)
+    if (existing) return existing
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  } while (Date.now() < deadline)
+
+  return null
+}
+
+async function probeExistingBackendUrl(url) {
+  try {
+    const response = await fetch(new URL('/.well-known/aether/environment', url), {
+      signal: AbortSignal.timeout(500),
+    })
+    if (!response.ok) return null
+    const environment = await response.json()
+    return environment?.name === 'aether' && environment?.mode === 'desktop' ? url : null
+  } catch {
+    return null
+  }
 }
 
 async function startBackend() {
@@ -136,6 +167,7 @@ function resolveApplicationRoot() {
 function waitForBackendUrl(child) {
   return new Promise((resolve, reject) => {
     let output = ''
+    let stderr = ''
     const timeout = setTimeout(() => {
       if (!child.killed) child.kill()
       reject(new Error('Aether backend did not become ready'))
@@ -143,7 +175,12 @@ function waitForBackendUrl(child) {
 
     child.once('exit', (code) => {
       clearTimeout(timeout)
-      reject(new Error(`Aether backend exited before ready: ${code ?? 'unknown'}`))
+      const detail = stderr.trim()
+      reject(new Error(`Aether backend exited before ready: ${code ?? 'unknown'}${detail ? `\n\n${detail}` : ''}`))
+    })
+
+    child.stderr.on('data', (chunk) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-4_000)
     })
 
     child.stdout.on('data', (chunk) => {
