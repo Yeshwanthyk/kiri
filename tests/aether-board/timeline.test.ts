@@ -36,6 +36,7 @@ function agent(overrides: Partial<AgentCell>): AgentCell {
     timelineEvents: [],
     timeline: [],
     diffs: [],
+    tasks: [],
     ...overrides,
   }
 }

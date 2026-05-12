@@ -6,6 +6,7 @@ import { z } from 'zod'
 import type {
   AddProjectInput,
   AddScratchpadBlockInput,
+  AgentTask,
   AgentStatus,
   AgentDetail,
   ContextUsage,
@@ -21,6 +22,7 @@ import type {
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import {
+  agentTaskSchema,
   agentStatusSchema,
   agentDetailSchema,
   messageRoleSchema,
@@ -112,6 +114,15 @@ const timelineEventDbRowSchema = z.object({
   detail: z.string().nullable(),
   timestamp: z.string(),
   payloadJson: z.string(),
+})
+
+const agentTaskDbRowSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: agentTaskSchema.shape.status,
+  source: runtimeKindSchema,
+  updatedAt: z.string(),
+  position: z.number().int().nonnegative(),
 })
 
 const diffDbRowSchema = z.object({
@@ -313,6 +324,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
         timelineEvents: [],
         timeline: [],
         diffs: [],
+        tasks: [],
       }
     }),
   }))
@@ -451,6 +463,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
   const timelineEvents = eventRows
     .map((row) => timelineEventFromDbRow(timelineEventDbRowSchema.parse(row)))
   const diffs = readDiffs(database, agentId)
+  const tasks = readAgentTasks(database, agentId)
   const timeline = mergeTimeline(
     messages.map(({ agentId: _agentId, ...message }) => message),
     timelineEvents.map(({ agentId: _agentId, ...event }) => event),
@@ -481,6 +494,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
     timelineEvents: timeline.flatMap((item) => item.type === 'event' ? [item.event] : []),
     timeline,
     diffs: diffs.map(({ agentId: _agentId, ...diff }) => diff),
+    tasks,
   })
 }
 
@@ -862,6 +876,7 @@ export function resetSession(agentId: string) {
   try {
     database.prepare('DELETE FROM messages WHERE thread_id = ?').run(thread.id)
     database.prepare('DELETE FROM timeline_events WHERE thread_id = ?').run(thread.id)
+    database.prepare('DELETE FROM agent_tasks WHERE thread_id = ?').run(thread.id)
     database.prepare('DELETE FROM diff_artifacts WHERE agent_id = ?').run(id)
     database.prepare('DELETE FROM agent_context_usage WHERE agent_id = ?').run(id)
     database
@@ -1329,6 +1344,33 @@ export function recordRuntimeTimelineEvent(input: {
     )
 }
 
+export function replaceAgentTasks(input: {
+  agentId: string
+  source: AgentTask['source']
+  tasks: AgentTask[]
+  updatedAt?: string
+}) {
+  const database = getDb()
+  const threadId = ensureThreadForAgent(database, input.agentId, undefined)
+  const updatedAt = input.updatedAt ?? new Date().toISOString()
+  database.exec('BEGIN')
+  try {
+    replaceAgentTasksForThread(database, {
+      threadId,
+      source: input.source,
+      tasks: input.tasks,
+      updatedAt,
+    })
+    database
+      .prepare('UPDATE threads SET updated_at = ? WHERE id = ?')
+      .run(updatedAt, threadId)
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+}
+
 export function recordRuntimeContextUsage(input: {
   agentId: string
   usedTokens: number | undefined
@@ -1376,6 +1418,12 @@ export function recordPiMessages(input: {
           )
           .run(thread.id, input.promptText.trim(), `user-${input.agentId}-%`)
         hydrateProjectionMessages(database, input.agentId, projection)
+        replaceAgentTasksForThread(database, {
+          threadId: thread.id,
+          source: 'pi',
+          tasks: projection.tasks,
+          updatedAt: projection.updatedAt ?? new Date().toISOString(),
+        })
         upsertAgentContextUsage(database, {
           agentId: input.agentId,
           usedTokens: projection.contextUsedTokens,
@@ -1665,6 +1713,20 @@ function migrate(database: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS timeline_events_thread_timestamp
       ON timeline_events(thread_id, timestamp, id);
 
+    CREATE TABLE IF NOT EXISTS agent_tasks (
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      source TEXT NOT NULL CHECK (source IN ('pi', 'codex', 'claude', 'opencode')),
+      task_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'inProgress', 'completed', 'failed')),
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (thread_id, source, task_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS agent_tasks_thread_position
+      ON agent_tasks(thread_id, position, task_id);
+
     CREATE TABLE IF NOT EXISTS deleted_sessions (
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       slot TEXT NOT NULL,
@@ -1902,9 +1964,17 @@ function hydratePersistedPiSessions(database: DatabaseSync) {
           .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
           .run(sessionFile, id)
       }
-      ensureThreadForAgent(database, id, projection)
-      if (projection?.messages.length) {
+      const threadId = ensureThreadForAgent(database, id, projection)
+      if (projection) {
         hydrateProjectionMessages(database, id, projection)
+        replaceAgentTasksForThread(database, {
+          threadId,
+          source: 'pi',
+          tasks: projection.tasks,
+          updatedAt: projection.updatedAt ?? new Date().toISOString(),
+        })
+      }
+      if (projection?.messages.length) {
         upsertAgentContextUsage(database, {
           agentId: id,
           usedTokens: projection.contextUsedTokens,
@@ -2025,6 +2095,68 @@ function hydrateProjectionMessages(
     projection.preview || projection.messages.at(-1)?.text || null,
     projection.updatedAt ?? projection.messages.at(-1)?.timestamp,
   )
+}
+
+function replaceAgentTasksForThread(
+  database: DatabaseSync,
+  input: {
+    threadId: string
+    source: AgentTask['source']
+    tasks: AgentTask[]
+    updatedAt: string
+  },
+) {
+  const parsedTasks = input.tasks.map((task) => agentTaskSchema.parse(task))
+  database
+    .prepare('DELETE FROM agent_tasks WHERE thread_id = ? AND source = ?')
+    .run(input.threadId, input.source)
+  const insertTask = database.prepare(`
+    INSERT OR REPLACE INTO agent_tasks (
+      thread_id, source, task_id, position, title, status, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+  parsedTasks.forEach((task, index) => {
+    insertTask.run(
+      input.threadId,
+      input.source,
+      task.id,
+      index,
+      task.title,
+      task.status,
+      task.updatedAt || input.updatedAt,
+    )
+  })
+}
+
+function readAgentTasks(database: DatabaseSync, agentId: string): AgentTask[] {
+  return database
+    .prepare(
+      `
+        SELECT
+          task_id AS id,
+          title,
+          status,
+          source,
+          tasks.updated_at AS updatedAt,
+          position
+        FROM agent_tasks tasks
+        INNER JOIN threads t ON t.id = tasks.thread_id
+        WHERE t.active = 1 AND t.agent_id = ?
+        ORDER BY tasks.position ASC, tasks.task_id ASC
+      `,
+    )
+    .all(agentId)
+    .map((row) => {
+      const parsed = agentTaskDbRowSchema.parse(row)
+      return agentTaskSchema.parse({
+        id: parsed.id,
+        title: parsed.title,
+        status: parsed.status,
+        source: parsed.source,
+        updatedAt: parsed.updatedAt,
+      })
+    })
 }
 
 function upsertAgentContextUsage(

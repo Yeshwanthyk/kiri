@@ -79,6 +79,18 @@ export const TurnDiffUpdatedParamsSchema = Schema.Struct({
   diff: Schema.optional(Schema.String),
 })
 
+const CodexPlanStepSchema = Schema.Struct({
+  step: Schema.String,
+  status: Schema.optional(Schema.String),
+})
+
+export const TurnPlanUpdatedParamsSchema = Schema.Struct({
+  threadId: Schema.String,
+  turnId: Schema.optional(Schema.String),
+  explanation: Schema.optional(Schema.NullOr(Schema.String)),
+  plan: Schema.Array(CodexPlanStepSchema),
+})
+
 export const TurnCompletedParamsSchema = Schema.Struct({
   threadId: Schema.String,
   turn: CodexTurnSchema,
@@ -100,6 +112,7 @@ export type ThreadTokenUsageUpdatedParams =
   typeof ThreadTokenUsageUpdatedParamsSchema.Type
 export type ThreadCompactedParams = typeof ThreadCompactedParamsSchema.Type
 export type TurnDiffUpdatedParams = typeof TurnDiffUpdatedParamsSchema.Type
+export type TurnPlanUpdatedParams = typeof TurnPlanUpdatedParamsSchema.Type
 export type TurnCompletedParams = typeof TurnCompletedParamsSchema.Type
 export type TurnStartedParams = typeof TurnStartedParamsSchema.Type
 export type ItemCompletedParams = typeof ItemCompletedParamsSchema.Type

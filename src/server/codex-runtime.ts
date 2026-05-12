@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import { Effect } from 'effect'
-import type { ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
+import type { AgentTask, ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import {
   CodexAppServerAdapter,
   defaultCodexWebsocketUrl,
@@ -10,6 +10,7 @@ import {
   ThreadCompactedParamsSchema,
   ThreadTokenUsageUpdatedParamsSchema,
   TurnDiffUpdatedParamsSchema,
+  TurnPlanUpdatedParamsSchema,
   TurnStartedParamsSchema,
   type CodexServerMessage,
   type CodexThread,
@@ -713,6 +714,31 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
       })
       return
     }
+    if (message.method === 'turn/plan/updated') {
+      const decoded = decodeServerParams(message, TurnPlanUpdatedParamsSchema)
+      if (!decoded) return
+      const updatedAt = new Date().toISOString()
+      yield* projectRuntimeEvent({
+        type: 'tasksUpdated',
+        agentId,
+        source: 'codex',
+        updatedAt,
+        tasks: decoded.plan
+          .map((step, index) => {
+            const title = step.step.trim()
+            if (!title) return null
+            return {
+              id: String(index + 1),
+              title,
+              status: normalizeTaskStatus(step.status) ?? 'pending',
+              source: 'codex' as const,
+              updatedAt,
+            }
+          })
+          .filter((task): task is NonNullable<typeof task> => task !== null),
+      })
+      return
+    }
     if (message.method === 'turn/started') {
       const decoded = decodeServerParams(message, TurnStartedParamsSchema)
       if (!decoded) return
@@ -1048,6 +1074,14 @@ function stringValue(value: unknown) {
 
 function numberValue(value: unknown) {
   return typeof value === 'number' ? value : undefined
+}
+
+function normalizeTaskStatus(value: unknown): AgentTask['status'] | undefined {
+  if (value === 'in_progress') return 'inProgress'
+  if (value === 'pending' || value === 'inProgress' || value === 'completed' || value === 'failed') {
+    return value
+  }
+  return undefined
 }
 
 function timestampFromMs(value: unknown) {

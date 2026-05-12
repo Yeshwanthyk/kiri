@@ -28,6 +28,7 @@ function agent(runtime: AgentCell['runtime']): AgentCell {
     timelineEvents: [],
     timeline: [],
     diffs: [],
+    tasks: [],
   }
 }
 

@@ -99,6 +99,19 @@ export const pendingQuestionSchema = z.object({
 })
 export type PendingQuestion = z.infer<typeof pendingQuestionSchema>
 
+export const agentTaskStatuses = ['pending', 'inProgress', 'completed', 'failed'] as const
+export const agentTaskStatusSchema = z.enum(agentTaskStatuses)
+export type AgentTaskStatus = z.infer<typeof agentTaskStatusSchema>
+
+export const agentTaskSchema = z.object({
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  status: agentTaskStatusSchema,
+  source: runtimeKindSchema,
+  updatedAt: z.string(),
+})
+export type AgentTask = z.infer<typeof agentTaskSchema>
+
 export const agentCellSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -120,6 +133,7 @@ export const agentCellSchema = z.object({
   timelineEvents: z.array(timelineEventSchema).default([]),
   timeline: z.array(boardTimelineItemSchema).default([]),
   diffs: z.array(diffArtifactSchema),
+  tasks: z.array(agentTaskSchema).default([]),
 })
 export type AgentCell = z.infer<typeof agentCellSchema>
 
