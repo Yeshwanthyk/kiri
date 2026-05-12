@@ -10,6 +10,7 @@ export type KeymapAction =
   | 'focusChat'
   | 'openDiffs'
   | 'openTerminal'
+  | 'openScratchpad'
 
 export type KeymapSettings = Record<KeymapAction, string>
 
@@ -28,6 +29,7 @@ export const defaultKeymap: KeymapSettings = {
   focusChat: 'c',
   openDiffs: 'd',
   openTerminal: 't',
+  openScratchpad: 's',
 }
 
 export const keyOptions: readonly string[] = [
@@ -40,6 +42,7 @@ export const keyOptions: readonly string[] = [
   'c',
   'd',
   't',
+  's',
   'arrowup',
   'arrowdown',
   'arrowleft',
@@ -76,6 +79,7 @@ export const keymapGroups: {
       { action: 'focusChat', label: 'Focus chat', hint: 'Jump cursor to composer' },
       { action: 'openDiffs', label: 'Open diffs', hint: 'Switch sidebar to diffs' },
       { action: 'openTerminal', label: 'Open terminal', hint: 'Switch sidebar to terminal' },
+      { action: 'openScratchpad', label: 'Open scratchpad', hint: 'Switch sidebar to scratchpad' },
     ],
   },
 ]

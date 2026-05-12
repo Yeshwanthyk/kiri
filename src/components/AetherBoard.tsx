@@ -31,6 +31,7 @@ import {
   Maximize2,
   MessageSquareText,
   Minimize2,
+  NotebookPen,
   Plus,
   PencilLine,
   FileText,
@@ -54,6 +55,7 @@ import type {
   ProjectRow,
   ReviewTarget,
   RuntimeKind,
+  ScratchpadBlock,
   SendMessageImage,
   ThinkingLevel,
   WorkspaceSnapshot,
@@ -71,9 +73,11 @@ import {
 } from '~/theme/aether-themes'
 import {
   addProjectMutation,
+  addScratchpadBlockMutation,
   answerQuestionMutation,
   chooseProjectDirectoryMutation,
   deleteProjectMutation,
+  deleteScratchpadBlockMutation,
   deleteSessionMutation,
   agentDetailQueryOptions,
   fetchWorkspaceSnapshot,
@@ -89,6 +93,7 @@ import {
   startSessionMutation,
   steerMessageMutation,
   terminalConfigQuery,
+  triggerScratchpadBlockMutation,
   unhideProjectMutation,
 } from '~/server/workspace'
 import {
@@ -141,7 +146,7 @@ import {
   type SlashCommand,
 } from './aether-board/slash-commands'
 
-type SidebarTab = 'chat' | 'diffs' | 'terminal'
+type SidebarTab = 'chat' | 'diffs' | 'terminal' | 'scratchpad'
 type DiffStyle = 'unified' | 'split'
 
 type RefreshAgentDetail = () => Promise<void>
@@ -196,9 +201,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(defaultChatTypography)
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
   const addProject = useServerFn(addProjectMutation)
+  const addScratchpadBlock = useServerFn(addScratchpadBlockMutation)
   const answerQuestion = useServerFn(answerQuestionMutation)
   const chooseProjectDirectory = useServerFn(chooseProjectDirectoryMutation)
   const deleteProject = useServerFn(deleteProjectMutation)
+  const deleteScratchpadBlock = useServerFn(deleteScratchpadBlockMutation)
   const deleteSession = useServerFn(deleteSessionMutation)
   const forkSession = useServerFn(forkSessionMutation)
   const hideProject = useServerFn(hideProjectMutation)
@@ -212,6 +219,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const interruptMessage = useServerFn(interruptMessageMutation)
   const renameSession = useServerFn(renameSessionMutation)
   const startSession = useServerFn(startSessionMutation)
+  const triggerScratchpadBlock = useServerFn(triggerScratchpadBlockMutation)
   const unhideProject = useServerFn(unhideProjectMutation)
 
   const selectedProject =
@@ -309,6 +317,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
       if (action === 'openTerminal') {
         setTab('terminal')
+        return
+      }
+
+      if (action === 'openScratchpad') {
+        setTab('scratchpad')
         return
       }
 
@@ -563,6 +576,38 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setSessionLauncherOpen(false)
   }
 
+  async function handleCaptureBlock(body: string, projectId: string | null) {
+    const next = await addScratchpadBlock({ data: { body, projectId } })
+    setWorkspace(next)
+  }
+
+  async function handleDeleteBlock(id: string) {
+    const next = await deleteScratchpadBlock({ data: { id } })
+    setWorkspace(next)
+  }
+
+  async function handleTriggerBlock(
+    block: ScratchpadBlock,
+    overrides?: { projectId?: string; runtime?: RuntimeKind; model?: string; thinkingLevel?: ThinkingLevel; title?: string },
+  ) {
+    const projectId = overrides?.projectId ?? block.projectId ?? selectedProject?.id
+    if (!projectId) throw new Error('Pick a project before triggering a block')
+    const result = await triggerScratchpadBlock({
+      data: {
+        id: block.id,
+        projectId,
+        runtime: overrides?.runtime,
+        model: overrides?.model,
+        title: overrides?.title,
+        thinkingLevel: overrides?.thinkingLevel ?? 'medium',
+      },
+    })
+    setWorkspace(result.snapshot)
+    setSelection({ projectId, agentId: result.agentId })
+    setChatFocusRequest(0)
+    setTab('chat')
+  }
+
   async function handleResumeSession(projectId: string, agentId: string, archived: boolean) {
     if (!archived) {
       selectAgent(projectId, agentId)
@@ -638,6 +683,20 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         run: () => {
           setCommandPaletteOpen(false)
           setTab('terminal')
+        },
+      },
+      {
+        id: 'scratchpad',
+        title: 'Open scratchpad',
+        detail:
+          workspace.scratchpadBlocks.length > 0
+            ? `${workspace.scratchpadBlocks.length} block${workspace.scratchpadBlocks.length === 1 ? '' : 's'}`
+            : 'No blocks yet',
+        icon: NotebookPen,
+        disabled: false,
+        run: () => {
+          setCommandPaletteOpen(false)
+          setTab('scratchpad')
         },
       },
       {
@@ -719,7 +778,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         })),
       ]),
     ],
-    [selectedAgent, selectedProject, workspace.hiddenProjects, workspace.projects],
+    [selectedAgent, selectedProject, workspace.hiddenProjects, workspace.projects, workspace.scratchpadBlocks],
   )
 
   React.useEffect(() => {
@@ -992,6 +1051,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onForkSession={handleForkSession}
         onReviewSession={handleReviewSession}
         onAnswerQuestion={handleAnswerQuestion}
+        scratchpadBlocks={workspace.scratchpadBlocks}
+        projects={workspace.projects}
+        onCaptureBlock={handleCaptureBlock}
+        onDeleteBlock={handleDeleteBlock}
+        onTriggerBlock={handleTriggerBlock}
       />
     </main>
   )
@@ -2211,6 +2275,16 @@ function MobileTopBar({
           <TerminalSquare size={15} />
           Terminal
         </button>
+        <button
+          type="button"
+          className={tab === 'scratchpad' ? 'active' : ''}
+          onClick={() => onTabChange('scratchpad')}
+          role="tab"
+          aria-selected={tab === 'scratchpad'}
+        >
+          <NotebookPen size={15} />
+          Scratch
+        </button>
       </div>
     </header>
   )
@@ -2381,6 +2455,11 @@ function SelectedAgentPane({
   onForkSession,
   onReviewSession,
   onAnswerQuestion,
+  scratchpadBlocks,
+  projects,
+  onCaptureBlock,
+  onDeleteBlock,
+  onTriggerBlock,
 }: {
   selectedProject: ProjectRow
   selectedAgent: AgentCell | undefined
@@ -2408,6 +2487,11 @@ function SelectedAgentPane({
     requestId: string,
     answers: Record<string, string | string[]>,
   ) => Promise<void>
+  scratchpadBlocks: ScratchpadBlock[]
+  projects: ProjectRow[]
+  onCaptureBlock: (body: string, projectId: string | null) => Promise<void>
+  onDeleteBlock: (id: string) => Promise<void>
+  onTriggerBlock: (block: ScratchpadBlock) => Promise<void>
 }) {
   const revision = selectedAgent
     ? `${selectedAgent.updatedAt}:${selectedAgent.messageCount}:${selectedAgent.diffCount}:${selectedAgent.status}`
@@ -2422,6 +2506,53 @@ function SelectedAgentPane({
     await detailQuery.refetch()
   }, [detailQuery, selectedAgent])
 
+  const tabBar = (
+    <div className="sidebar-tabs" role="tablist">
+      <button
+        type="button"
+        className={tab === 'chat' ? 'active' : ''}
+        onClick={() => onTabChange('chat')}
+        disabled={!agent}
+        data-testid="tab-chat"
+      >
+        <MessageSquareText size={15} />
+        Chat
+      </button>
+      <button
+        type="button"
+        className={tab === 'diffs' ? 'active' : ''}
+        onClick={() => onTabChange('diffs')}
+        disabled={!agent}
+        data-testid="tab-diffs"
+      >
+        <GitPullRequest size={15} />
+        Diffs
+      </button>
+      <button
+        type="button"
+        className={tab === 'terminal' ? 'active' : ''}
+        onClick={() => onTabChange('terminal')}
+        disabled={!agent}
+        data-testid="tab-terminal"
+      >
+        <TerminalSquare size={15} />
+        Terminal
+      </button>
+      <button
+        type="button"
+        className={tab === 'scratchpad' ? 'active' : ''}
+        onClick={() => onTabChange('scratchpad')}
+        data-testid="tab-scratchpad"
+      >
+        <NotebookPen size={15} />
+        Scratchpad
+        {scratchpadBlocks.length > 0 ? (
+          <span className="sidebar-tab-count">{scratchpadBlocks.length}</span>
+        ) : null}
+      </button>
+    </div>
+  )
+
   return (
     <aside
       className="sidebar-pane"
@@ -2429,87 +2560,288 @@ function SelectedAgentPane({
       data-testid="sidebar-pane"
     >
       {agent ? (
-        <>
-          <SidebarHeader
-            project={selectedProject}
-            agent={agent}
-            onDeleteSession={onDeleteSession}
-            onRenameSession={onRenameSession}
-          />
-          <div className="sidebar-tabs" role="tablist">
-            <button
-              type="button"
-              className={tab === 'chat' ? 'active' : ''}
-              onClick={() => onTabChange('chat')}
-              data-testid="tab-chat"
-            >
-              <MessageSquareText size={15} />
-              Chat
-            </button>
-            <button
-              type="button"
-              className={tab === 'diffs' ? 'active' : ''}
-              onClick={() => onTabChange('diffs')}
-              data-testid="tab-diffs"
-            >
-              <GitPullRequest size={15} />
-              Diffs
-            </button>
-            <button
-              type="button"
-              className={tab === 'terminal' ? 'active' : ''}
-              onClick={() => onTabChange('terminal')}
-              data-testid="tab-terminal"
-            >
-              <TerminalSquare size={15} />
-              Terminal
-            </button>
-          </div>
+        <SidebarHeader
+          project={selectedProject}
+          agent={agent}
+          onDeleteSession={onDeleteSession}
+          onRenameSession={onRenameSession}
+        />
+      ) : tab === 'scratchpad' ? (
+        <ScratchpadHeader blockCount={scratchpadBlocks.length} />
+      ) : null}
 
-          {tab === 'chat' ? (
-            <ChatPanel
-              key={agent.id}
-              agent={agent}
-              cwd={selectedProject.cwd}
-              themeMode={themeMode}
-              focusRequest={chatFocusRequest}
-              onSend={(agentId, text, images) =>
-                onSend(agentId, text, images, refreshDetail)
-              }
-              onSteer={onSteer}
-              onInterrupt={onInterrupt}
-              onThinkingCommand={onThinkingCommand}
-              onResetSession={onResetSession}
-              onForkSession={onForkSession}
-              onReviewSession={onReviewSession}
-              onAnswerQuestion={onAnswerQuestion}
-              onDetailRefresh={refreshDetail}
-            />
-          ) : null}
-          {tab === 'diffs' ? (
-            <DiffPanel
-              key={agent.id}
-              agent={agent}
-              themeMode={themeMode}
-            />
-          ) : null}
-          {tab === 'terminal' ? (
-            <TerminalPanel
-              key={agent.id}
-              agent={agent}
-              project={selectedProject}
-              themeMode={themeMode}
-            />
-          ) : null}
-        </>
-      ) : (
+      {tabBar}
+
+      {tab === 'scratchpad' ? (
+        <ScratchpadPanel
+          blocks={scratchpadBlocks}
+          projects={projects}
+          selectedProjectId={selectedProject.id}
+          onCapture={onCaptureBlock}
+          onDelete={onDeleteBlock}
+          onTrigger={onTriggerBlock}
+        />
+      ) : agent && tab === 'chat' ? (
+        <ChatPanel
+          key={agent.id}
+          agent={agent}
+          cwd={selectedProject.cwd}
+          themeMode={themeMode}
+          focusRequest={chatFocusRequest}
+          onSend={(agentId, text, images) =>
+            onSend(agentId, text, images, refreshDetail)
+          }
+          onSteer={onSteer}
+          onInterrupt={onInterrupt}
+          onThinkingCommand={onThinkingCommand}
+          onResetSession={onResetSession}
+          onForkSession={onForkSession}
+          onReviewSession={onReviewSession}
+          onAnswerQuestion={onAnswerQuestion}
+          onDetailRefresh={refreshDetail}
+        />
+      ) : agent && tab === 'diffs' ? (
+        <DiffPanel
+          key={agent.id}
+          agent={agent}
+          themeMode={themeMode}
+        />
+      ) : agent && tab === 'terminal' ? (
+        <TerminalPanel
+          key={agent.id}
+          agent={agent}
+          project={selectedProject}
+          themeMode={themeMode}
+        />
+      ) : !agent ? (
         <EmptySessionPanel
           project={selectedProject}
           onStart={onStartSession}
         />
-      )}
+      ) : null}
     </aside>
   )
+}
+
+function ScratchpadHeader({ blockCount }: { blockCount: number }) {
+  return (
+    <header className="sidebar-header scratchpad-header">
+      <div className="scratchpad-header-mark" aria-hidden="true">
+        <NotebookPen size={16} />
+      </div>
+      <div className="scratchpad-header-text">
+        <p className="settings-kicker">Scratchpad</p>
+        <strong>Ideas across projects</strong>
+      </div>
+      <span className="scratchpad-header-count">
+        {blockCount === 0 ? 'empty' : `${blockCount} block${blockCount === 1 ? '' : 's'}`}
+      </span>
+    </header>
+  )
+}
+
+function ScratchpadPanel({
+  blocks,
+  projects,
+  selectedProjectId,
+  onCapture,
+  onDelete,
+  onTrigger,
+}: {
+  blocks: ScratchpadBlock[]
+  projects: ProjectRow[]
+  selectedProjectId: string
+  onCapture: (body: string, projectId: string | null) => Promise<void>
+  onDelete: (id: string) => Promise<void>
+  onTrigger: (block: ScratchpadBlock) => Promise<void>
+}) {
+  const [draft, setDraft] = React.useState('')
+  const [captureProjectId, setCaptureProjectId] = React.useState<string>(selectedProjectId)
+  const [pending, setPending] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [pendingId, setPendingId] = React.useState<string | null>(null)
+  const captureRef = React.useRef<HTMLTextAreaElement>(null)
+
+  React.useEffect(() => {
+    if (selectedProjectId) setCaptureProjectId(selectedProjectId)
+  }, [selectedProjectId])
+
+  React.useEffect(() => {
+    captureRef.current?.focus()
+  }, [])
+
+  async function submitCapture(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const body = draft.trim()
+    if (!body) return
+    setPending(true)
+    setError(null)
+    try {
+      await onCapture(body, captureProjectId || null)
+      setDraft('')
+      captureRef.current?.focus()
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  function onDraftKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      const form = event.currentTarget.form
+      if (form) form.requestSubmit()
+    }
+  }
+
+  async function handleTrigger(block: ScratchpadBlock) {
+    setPendingId(block.id)
+    setError(null)
+    try {
+      await onTrigger(block)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setPendingId(null)
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setPendingId(id)
+    try {
+      await onDelete(id)
+    } finally {
+      setPendingId(null)
+    }
+  }
+
+  const grouped = React.useMemo(() => groupBlocksByDay(blocks), [blocks])
+
+  return (
+    <div className="scratchpad-panel" data-testid="scratchpad-panel">
+      <form className="scratchpad-capture" onSubmit={submitCapture}>
+        <textarea
+          ref={captureRef}
+          value={draft}
+          onChange={(event) => setDraft(event.currentTarget.value)}
+          onKeyDown={onDraftKeyDown}
+          placeholder="Capture an idea. ⏎ to save, ⇧⏎ for a new line."
+          rows={2}
+          disabled={pending}
+          data-testid="scratchpad-input"
+        />
+        <div className="scratchpad-capture-row">
+          <label className="scratchpad-capture-project">
+            <span>tag</span>
+            <select
+              value={captureProjectId}
+              disabled={pending}
+              onChange={(event) => setCaptureProjectId(event.currentTarget.value)}
+            >
+              <option value="">unassigned</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" disabled={pending || draft.trim().length === 0}>
+            <Plus size={13} />
+            Capture
+          </button>
+        </div>
+        {error ? <p className="scratchpad-error" role="status">{error}</p> : null}
+      </form>
+
+      <div className="scratchpad-list" role="list">
+        {blocks.length === 0 ? (
+          <div className="scratchpad-empty">
+            <p className="settings-kicker">Empty</p>
+            <p>Capture an idea above. Trigger it into any project, any runtime.</p>
+          </div>
+        ) : (
+          grouped.map((group) => (
+            <section key={group.key} className="scratchpad-group">
+              <p className="scratchpad-day">{group.label}</p>
+              {group.blocks.map((block) => (
+                <article
+                  key={block.id}
+                  className={`scratchpad-block ${block.triggeredAt ? 'triggered' : ''}`}
+                  role="listitem"
+                  data-testid="scratchpad-block"
+                >
+                  <header className="scratchpad-block-head">
+                    <span className="scratchpad-block-kicker">
+                      {block.projectName ?? 'unassigned'}
+                    </span>
+                    <span className="scratchpad-block-time">{formatBlockTime(block.createdAt)}</span>
+                  </header>
+                  <p className="scratchpad-block-body">{block.body}</p>
+                  <footer className="scratchpad-block-actions">
+                    {block.triggeredAt ? (
+                      <span className="scratchpad-block-state">
+                        <Check size={12} aria-hidden="true" /> sent
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="scratchpad-block-trigger"
+                      onClick={() => void handleTrigger(block)}
+                      disabled={pendingId === block.id}
+                    >
+                      <Send size={12} aria-hidden="true" />
+                      {block.triggeredAt ? 'Re-trigger' : 'Trigger'}
+                    </button>
+                    <button
+                      type="button"
+                      className="scratchpad-block-delete"
+                      onClick={() => void handleDelete(block.id)}
+                      disabled={pendingId === block.id}
+                      aria-label="Delete block"
+                    >
+                      <Trash2 size={12} aria-hidden="true" />
+                    </button>
+                  </footer>
+                </article>
+              ))}
+            </section>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+function groupBlocksByDay(blocks: ScratchpadBlock[]) {
+  const groups = new Map<string, { key: string; label: string; blocks: ScratchpadBlock[] }>()
+  for (const block of blocks) {
+    const label = formatBlockDay(block.createdAt)
+    const entry = groups.get(label)
+    if (entry) {
+      entry.blocks.push(block)
+    } else {
+      groups.set(label, { key: label, label, blocks: [block] })
+    }
+  }
+  return Array.from(groups.values())
+}
+
+function formatBlockDay(iso: string) {
+  const date = new Date(iso)
+  const now = new Date()
+  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const diffDays = Math.round((startOf(now) - startOf(date)) / 86_400_000)
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  if (diffDays < 7) return date.toLocaleDateString(undefined, { weekday: 'long' })
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function formatBlockTime(iso: string) {
+  const date = new Date(iso)
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
 function EmptySessionPanel({
