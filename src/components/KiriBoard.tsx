@@ -1109,6 +1109,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onAnswerQuestion={handleAnswerQuestion}
         scratchpadBlocks={workspace.scratchpadBlocks}
         projects={workspace.projects}
+        settings={workspace.settings}
         onCaptureBlock={handleCaptureBlock}
         onDeleteBlock={handleDeleteBlock}
         onTriggerBlock={handleTriggerBlock}
@@ -2758,6 +2759,7 @@ function SelectedAgentPane({
   onAnswerQuestion,
   scratchpadBlocks,
   projects,
+  settings,
   onCaptureBlock,
   onDeleteBlock,
   onTriggerBlock,
@@ -2790,9 +2792,19 @@ function SelectedAgentPane({
   ) => Promise<void>
   scratchpadBlocks: ScratchpadBlock[]
   projects: ProjectRow[]
+  settings: WorkspaceSnapshot['settings']
   onCaptureBlock: (body: string, projectId: string | null) => Promise<void>
   onDeleteBlock: (id: string) => Promise<void>
-  onTriggerBlock: (block: ScratchpadBlock) => Promise<void>
+  onTriggerBlock: (
+    block: ScratchpadBlock,
+    overrides?: {
+      projectId?: string
+      runtime?: RuntimeKind
+      model?: string
+      thinkingLevel?: ThinkingLevel
+      title?: string
+    },
+  ) => Promise<void>
 }) {
   const revision = selectedAgent
     ? `${selectedAgent.updatedAt}:${selectedAgent.messageCount}:${selectedAgent.diffCount}:${selectedAgent.status}`
@@ -2877,6 +2889,7 @@ function SelectedAgentPane({
         <ScratchpadPanel
           blocks={scratchpadBlocks}
           projects={projects}
+          settings={settings}
           selectedProjectId={selectedProject.id}
           onCapture={onCaptureBlock}
           onDelete={onDeleteBlock}

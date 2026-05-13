@@ -1,7 +1,11 @@
 import { Check, NotebookPen, Plus, Send, Trash2 } from 'lucide-react'
 import * as React from 'react'
-import type { ProjectRow, ScratchpadBlock } from '~/lib/contracts'
-import { errorMessage, formatBlockDay, formatBlockTime } from './format'
+import type { ProjectRow, RuntimeKind, ScratchpadBlock, ThinkingLevel, WorkspaceSnapshot } from '~/lib/contracts'
+import { errorMessage, formatBlockDay, formatBlockTime, formatTokenCount } from './format'
+import { supportsThinking } from './slash-commands'
+
+const scratchpadRuntimeOrder = ['codex', 'pi', 'claude'] as const satisfies readonly RuntimeKind[]
+const scratchpadThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
 
 type ScratchpadState = {
   draft: string
@@ -71,6 +75,7 @@ export function ScratchpadHeader({ blockCount }: { blockCount: number }) {
 export function ScratchpadPanel({
   blocks,
   projects,
+  settings,
   selectedProjectId,
   onCapture,
   onDelete,
@@ -78,17 +83,37 @@ export function ScratchpadPanel({
 }: {
   blocks: ScratchpadBlock[]
   projects: ProjectRow[]
+  settings: WorkspaceSnapshot['settings']
   selectedProjectId: string
   onCapture: (body: string, projectId: string | null) => Promise<void>
   onDelete: (id: string) => Promise<void>
-  onTrigger: (block: ScratchpadBlock) => Promise<void>
+  onTrigger: (
+    block: ScratchpadBlock,
+    overrides?: { runtime?: RuntimeKind; model?: string; thinkingLevel?: ThinkingLevel },
+  ) => Promise<void>
 }) {
   const [state, dispatch] = React.useReducer(scratchpadReducer, initialScratchpadState)
+  const [triggerRuntime, setTriggerRuntime] = React.useState<RuntimeKind>('codex')
+  const [triggerModel, setTriggerModel] = React.useState(settings.runtimes.codex.defaultModel)
+  const [triggerThinkingLevel, setTriggerThinkingLevel] = React.useState<ThinkingLevel>('medium')
   const captureRef = React.useRef<HTMLTextAreaElement>(null)
+  const triggerModels = settings.runtimes[triggerRuntime].models
+  const triggerSupportsThinking = supportsThinking(triggerRuntime)
 
   React.useEffect(() => {
     captureRef.current?.focus()
   }, [])
+
+  React.useEffect(() => {
+    if (!triggerModels.includes(triggerModel)) {
+      setTriggerModel(settings.runtimes[triggerRuntime].defaultModel)
+    }
+  }, [settings, triggerModel, triggerModels, triggerRuntime])
+
+  function updateTriggerRuntime(runtime: RuntimeKind) {
+    setTriggerRuntime(runtime)
+    setTriggerModel(settings.runtimes[runtime].defaultModel)
+  }
 
   async function submitCapture(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -115,7 +140,11 @@ export function ScratchpadPanel({
   async function handleTrigger(block: ScratchpadBlock) {
     dispatch({ type: 'blockActionStarted', id: block.id, clearError: true })
     try {
-      await onTrigger(block)
+      await onTrigger(block, {
+        runtime: triggerRuntime,
+        model: triggerModel,
+        thinkingLevel: triggerThinkingLevel,
+      })
     } catch (cause) {
       dispatch({ type: 'failed', error: errorMessage(cause) })
       return
@@ -203,6 +232,77 @@ export function ScratchpadPanel({
         </div>
         {state.error ? <p className="scratchpad-error" role="status">{state.error}</p> : null}
       </form>
+
+      <section className="scratchpad-trigger-config" aria-label="Scratchpad trigger profile">
+        <div className="scratchpad-trigger-head">
+          <span>trigger as</span>
+          <strong>{triggerRuntime} · {triggerModel} · {triggerThinkingLevel}</strong>
+        </div>
+        <div className="scratchpad-trigger-row" role="radiogroup" aria-label="Trigger runtime">
+          {scratchpadRuntimeOrder.map((runtime) => {
+            const active = triggerRuntime === runtime
+            return (
+              <button
+                key={runtime}
+                type="button"
+                className="scratchpad-trigger-chip"
+                data-active={active ? 'true' : undefined}
+                onClick={() => updateTriggerRuntime(runtime)}
+                disabled={state.pendingId !== null}
+                role="radio"
+                aria-checked={active}
+              >
+                {runtime}
+              </button>
+            )
+          })}
+        </div>
+        <div className="scratchpad-trigger-row" role="radiogroup" aria-label="Trigger model">
+          {triggerModels.map((model) => {
+            const active = triggerModel === model
+            const windowTokens = settings.runtimes[triggerRuntime].contextWindows?.[model]
+            return (
+              <button
+                key={model}
+                type="button"
+                className="scratchpad-trigger-chip scratchpad-trigger-model"
+                data-active={active ? 'true' : undefined}
+                onClick={() => setTriggerModel(model)}
+                disabled={state.pendingId !== null}
+                role="radio"
+                aria-checked={active}
+              >
+                <span>{model}</span>
+                {windowTokens ? <code>{formatTokenCount(windowTokens)}</code> : null}
+              </button>
+            )
+          })}
+        </div>
+        <div
+          className="scratchpad-trigger-row"
+          data-disabled={triggerSupportsThinking ? undefined : 'true'}
+          role="radiogroup"
+          aria-label="Trigger thinking level"
+        >
+          {scratchpadThinkingLevels.map((level) => {
+            const active = triggerThinkingLevel === level
+            return (
+              <button
+                key={level}
+                type="button"
+                className="scratchpad-trigger-chip"
+                data-active={active ? 'true' : undefined}
+                onClick={() => setTriggerThinkingLevel(level)}
+                disabled={state.pendingId !== null || !triggerSupportsThinking}
+                role="radio"
+                aria-checked={active}
+              >
+                {level}
+              </button>
+            )
+          })}
+        </div>
+      </section>
 
       <div className="scratchpad-list" role="list">
         {blocks.length === 0 ? (

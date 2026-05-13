@@ -4683,6 +4683,117 @@ h1 {
   font-size: 12px;
 }
 
+.scratchpad-trigger-config {
+  display: grid;
+  gap: 9px;
+  flex: 0 0 auto;
+  padding: 12px 18px 14px;
+  border-bottom: 1px solid var(--line-subtle);
+  background: var(--panel);
+}
+
+.scratchpad-trigger-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.scratchpad-trigger-head span {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.scratchpad-trigger-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scratchpad-trigger-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.scratchpad-trigger-row::-webkit-scrollbar {
+  display: none;
+}
+
+.scratchpad-trigger-row[data-disabled='true'] {
+  opacity: 0.62;
+}
+
+.scratchpad-trigger-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  min-height: 28px;
+  max-width: 220px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  transition:
+    transform 160ms cubic-bezier(0.2, 0, 0, 1),
+    border-color 160ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 160ms cubic-bezier(0.2, 0, 0, 1),
+    color 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.scratchpad-trigger-model {
+  justify-content: space-between;
+  min-width: min(220px, 92%);
+}
+
+.scratchpad-trigger-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scratchpad-trigger-chip code {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.scratchpad-trigger-chip:hover,
+.scratchpad-trigger-chip:focus-visible,
+.scratchpad-trigger-chip[data-active='true'] {
+  border-color: var(--accent-muted);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.scratchpad-trigger-chip:active {
+  transform: scale(0.97);
+}
+
+.scratchpad-trigger-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .scratchpad-list {
   display: flex;
   flex: 1 1 auto;
