@@ -59,9 +59,9 @@ describe('chat typography storage', () => {
   })
 
   it('normalizes partial and invalid settings', () => {
-    expect(normalizeChatTypography({ fontSize: 'large', monoFont: 'system' })).toEqual({
+    expect(normalizeChatTypography({ fontSize: 'large', monoFont: 'operator' })).toEqual({
       fontSize: 'large',
-      monoFont: 'system',
+      monoFont: 'operator',
     })
     expect(normalizeChatTypography({ fontSize: 'giant', monoFont: 12 })).toEqual(
       defaultChatTypography,
@@ -70,7 +70,7 @@ describe('chat typography storage', () => {
 
   it('reads and saves chat typography', () => {
     const storage = memoryStorage()
-    const settings = { fontSize: 'xlarge' as const, monoFont: 'plex' as const }
+    const settings = { fontSize: 'xlarge' as const, monoFont: 'berkeley' as const }
 
     saveChatTypography(settings, storage)
 

@@ -45,6 +45,7 @@ export function SettingsScreen({
   onChatTypographyChange: (settings: ChatTypographySettings) => void
   onClose: () => void
 }) {
+  const keymapActionCount = keymapGroups.reduce((count, group) => count + group.rows.length, 1)
   return (
     <main className="settings-shell" data-testid="settings-page">
       <header className="settings-topbar">
@@ -61,25 +62,75 @@ export function SettingsScreen({
         <span className="settings-crumb">kiri / settings</span>
       </header>
 
-      <div className="settings-rail" role="region" aria-label="Settings">
-        <section className="settings-lane" data-lane="theme" aria-label="Theme">
-          <ThemeSettingsPanel selection={themeSelection} onChange={onThemeChange} />
-        </section>
+      <div className="settings-layout" role="region" aria-label="Settings">
+        <aside className="settings-index" aria-label="Settings sections">
+          <div className="settings-index-head">
+            <p className="settings-kicker">Settings</p>
+            <h1>Control surface</h1>
+            <p>Theme first, chat next, keyboard grouped by how your hands move.</p>
+          </div>
+          <nav className="settings-index-list">
+            <a className="settings-index-item" data-primary="true" href="#settings-palette">
+              <span>
+                <strong>Palette</strong>
+                <small>Theme and mode</small>
+              </span>
+              <span>{kiriThemeNames.length}</span>
+            </a>
+            <a className="settings-index-item" href="#settings-chat">
+              <span>
+                <strong>Chat</strong>
+                <small>Size and code font</small>
+              </span>
+              <span>{Object.keys(monoFonts).length}</span>
+            </a>
+            <a className="settings-index-item" href="#settings-keyboard">
+              <span>
+                <strong>Keyboard</strong>
+                <small>Board, session, focus</small>
+              </span>
+              <span>{keymapActionCount}</span>
+            </a>
+          </nav>
+        </aside>
 
-        <section className="settings-lane" data-lane="keymap" aria-label="Keymap">
-          <KeymapSettingsPanel
-            keymap={keymap}
-            onChange={onKeymapChange}
-            onReset={onKeymapReset}
-          />
-        </section>
+        <div className="settings-main">
+          <section
+            id="settings-palette"
+            className="settings-panel settings-panel--wide"
+            data-panel="theme"
+            aria-label="Theme"
+          >
+            <ThemeSettingsPanel selection={themeSelection} onChange={onThemeChange} />
+          </section>
 
-        <section className="settings-lane" data-lane="chat" aria-label="Chat reading size">
-          <ChatTypographySettingsPanel
-            settings={chatTypography}
-            onChange={onChatTypographyChange}
-          />
-        </section>
+          <div className="settings-panel-row">
+            <section
+              id="settings-chat"
+              className="settings-panel"
+              data-panel="chat"
+              aria-label="Chat reading size"
+            >
+              <ChatTypographySettingsPanel
+                settings={chatTypography}
+                onChange={onChatTypographyChange}
+              />
+            </section>
+
+            <section
+              id="settings-keyboard"
+              className="settings-panel"
+              data-panel="keymap"
+              aria-label="Keymap"
+            >
+              <KeymapSettingsPanel
+                keymap={keymap}
+                onChange={onKeymapChange}
+                onReset={onKeymapReset}
+              />
+            </section>
+          </div>
+        </div>
       </div>
     </main>
   )
@@ -1029,7 +1080,7 @@ function ChatTypographySettingsPanel({
         <div className="settings-lane-title">
           <p className="settings-kicker">Typography</p>
           <h2>Reading size &amp; code font</h2>
-          <p>Affects chat messages, the composer, and diff rendering.</p>
+          <p>Affects chat messages, the composer, and inline code.</p>
         </div>
         <button
           type="button"
@@ -1076,7 +1127,7 @@ function ChatTypographySettingsPanel({
       </div>
 
       <div className="settings-subsection">
-        <p className="settings-subsection-label">Code &amp; diff font</p>
+        <p className="settings-subsection-label">Chat code font</p>
         <div className="mono-font-options" role="radiogroup" aria-label="Code font">
           {(Object.keys(monoFonts) as MonoFont[]).map((key) => {
             const option = monoFonts[key]

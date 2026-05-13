@@ -13,7 +13,17 @@ import {
 
 export type ChatFontSize = 'compact' | 'comfortable' | 'large' | 'xlarge'
 
-export type MonoFont = 'jetbrains' | 'fira' | 'plex' | 'system'
+export type MonoFont =
+  | 'jetbrains'
+  | 'fira'
+  | 'plex'
+  | 'proto'
+  | 'berkeley'
+  | 'blex'
+  | 'commit'
+  | 'dank'
+  | 'operator'
+  | 'system'
 
 export type ChatTypographySettings = {
   fontSize: ChatFontSize
@@ -41,6 +51,30 @@ export const monoFonts: Record<MonoFont, { label: string; stack: string }> = {
   plex: {
     label: 'IBM Plex Mono',
     stack: '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+  },
+  proto: {
+    label: '0xProto Nerd Font',
+    stack: '"0xProto Nerd Font Mono", "0xProto Nerd Font", ui-monospace, SFMono-Regular, Menlo, monospace',
+  },
+  berkeley: {
+    label: 'BerkeleyMono Nerd Font',
+    stack: '"BerkeleyMono Nerd Font", ui-monospace, SFMono-Regular, Menlo, monospace',
+  },
+  blex: {
+    label: 'BlexMono Nerd Font',
+    stack: '"BlexMono Nerd Font Mono", "BlexMono Nerd Font", ui-monospace, SFMono-Regular, Menlo, monospace',
+  },
+  commit: {
+    label: 'CommitMono Nerd Font',
+    stack: '"CommitMono Nerd Font Mono", "CommitMono Nerd Font", ui-monospace, SFMono-Regular, Menlo, monospace',
+  },
+  dank: {
+    label: 'DankMono Nerd Font',
+    stack: '"DankMono Nerd Font Mono", "DankMono Nerd Font", ui-monospace, SFMono-Regular, Menlo, monospace',
+  },
+  operator: {
+    label: 'Operator Mono Lig',
+    stack: '"OperatorMonoLig Nerd Font Mono", "Operator Mono Lig Book", "Operator Mono Lig Light", ui-monospace, SFMono-Regular, Menlo, monospace',
   },
   system: {
     label: 'System Mono',
@@ -224,5 +258,5 @@ export function applyChatTypography(element: HTMLElement, settings: ChatTypograp
   const tokens = chatFontSizes[settings.fontSize]
   element.style.setProperty('--chat-font-size', tokens.size)
   element.style.setProperty('--chat-line-height', tokens.lineHeight)
-  element.style.setProperty('--font-mono', monoFonts[settings.monoFont].stack)
+  element.style.setProperty('--chat-mono-font', monoFonts[settings.monoFont].stack)
 }
