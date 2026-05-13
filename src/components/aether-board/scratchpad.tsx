@@ -3,6 +3,54 @@ import * as React from 'react'
 import type { ProjectRow, ScratchpadBlock } from '~/lib/contracts'
 import { errorMessage, formatBlockDay, formatBlockTime } from './format'
 
+type ScratchpadState = {
+  draft: string
+  manualProjectId: string | null
+  pending: boolean
+  error: string | null
+  pendingId: string | null
+}
+
+type ScratchpadAction =
+  | { type: 'draftChanged'; draft: string }
+  | { type: 'projectChanged'; projectId: string }
+  | { type: 'captureStarted' }
+  | { type: 'captureSucceeded' }
+  | { type: 'failed'; error: string }
+  | { type: 'pendingFinished' }
+  | { type: 'blockActionStarted'; id: string; clearError?: boolean }
+
+const initialScratchpadState: ScratchpadState = {
+  draft: '',
+  manualProjectId: null,
+  pending: false,
+  error: null,
+  pendingId: null,
+}
+
+function scratchpadReducer(state: ScratchpadState, action: ScratchpadAction): ScratchpadState {
+  switch (action.type) {
+    case 'draftChanged':
+      return { ...state, draft: action.draft }
+    case 'projectChanged':
+      return { ...state, manualProjectId: action.projectId }
+    case 'captureStarted':
+      return { ...state, pending: true, error: null }
+    case 'captureSucceeded':
+      return { ...state, draft: '', pending: false }
+    case 'failed':
+      return { ...state, pending: false, error: action.error }
+    case 'pendingFinished':
+      return { ...state, pending: false, pendingId: null }
+    case 'blockActionStarted':
+      return {
+        ...state,
+        pendingId: action.id,
+        error: action.clearError ? null : state.error,
+      }
+  }
+}
+
 export function ScratchpadHeader({ blockCount }: { blockCount: number }) {
   return (
     <header className="sidebar-header scratchpad-header">
@@ -35,16 +83,8 @@ export function ScratchpadPanel({
   onDelete: (id: string) => Promise<void>
   onTrigger: (block: ScratchpadBlock) => Promise<void>
 }) {
-  const [draft, setDraft] = React.useState('')
-  const [captureProjectId, setCaptureProjectId] = React.useState<string>(selectedProjectId)
-  const [pending, setPending] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
-  const [pendingId, setPendingId] = React.useState<string | null>(null)
+  const [state, dispatch] = React.useReducer(scratchpadReducer, initialScratchpadState)
   const captureRef = React.useRef<HTMLTextAreaElement>(null)
-
-  React.useEffect(() => {
-    if (selectedProjectId) setCaptureProjectId(selectedProjectId)
-  }, [selectedProjectId])
 
   React.useEffect(() => {
     captureRef.current?.focus()
@@ -52,18 +92,15 @@ export function ScratchpadPanel({
 
   async function submitCapture(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const body = draft.trim()
+    const body = state.draft.trim()
     if (!body) return
-    setPending(true)
-    setError(null)
+    dispatch({ type: 'captureStarted' })
     try {
       await onCapture(body, captureProjectId || null)
-      setDraft('')
+      dispatch({ type: 'captureSucceeded' })
       captureRef.current?.focus()
     } catch (cause) {
-      setError(errorMessage(cause))
-    } finally {
-      setPending(false)
+      dispatch({ type: 'failed', error: errorMessage(cause) })
     }
   }
 
@@ -76,39 +113,40 @@ export function ScratchpadPanel({
   }
 
   async function handleTrigger(block: ScratchpadBlock) {
-    setPendingId(block.id)
-    setError(null)
+    dispatch({ type: 'blockActionStarted', id: block.id, clearError: true })
     try {
       await onTrigger(block)
     } catch (cause) {
-      setError(errorMessage(cause))
+      dispatch({ type: 'failed', error: errorMessage(cause) })
+      return
     } finally {
-      setPendingId(null)
+      dispatch({ type: 'pendingFinished' })
     }
   }
 
   async function handleDelete(id: string) {
-    setPendingId(id)
+    dispatch({ type: 'blockActionStarted', id })
     try {
       await onDelete(id)
     } finally {
-      setPendingId(null)
+      dispatch({ type: 'pendingFinished' })
     }
   }
 
   const grouped = React.useMemo(() => groupBlocksByDay(blocks), [blocks])
+  const captureProjectId = state.manualProjectId ?? selectedProjectId
 
   return (
     <div className="scratchpad-panel" data-testid="scratchpad-panel">
       <form className="scratchpad-capture" onSubmit={submitCapture}>
         <textarea
           ref={captureRef}
-          value={draft}
-          onChange={(event) => setDraft(event.currentTarget.value)}
+          value={state.draft}
+          onChange={(event) => dispatch({ type: 'draftChanged', draft: event.currentTarget.value })}
           onKeyDown={onDraftKeyDown}
           placeholder="Capture an idea. ⏎ to save, ⇧⏎ for a new line."
           rows={2}
-          disabled={pending}
+          disabled={state.pending}
           data-testid="scratchpad-input"
         />
         <div className="scratchpad-capture-row">
@@ -116,8 +154,11 @@ export function ScratchpadPanel({
             <span>tag</span>
             <select
               value={captureProjectId}
-              disabled={pending}
-              onChange={(event) => setCaptureProjectId(event.currentTarget.value)}
+              disabled={state.pending}
+              onChange={(event) => dispatch({
+                type: 'projectChanged',
+                projectId: event.currentTarget.value,
+              })}
             >
               <option value="">unassigned</option>
               {projects.map((project) => (
@@ -127,12 +168,12 @@ export function ScratchpadPanel({
               ))}
             </select>
           </label>
-          <button type="submit" disabled={pending || draft.trim().length === 0}>
+          <button type="submit" disabled={state.pending || state.draft.trim().length === 0}>
             <Plus size={13} />
             Capture
           </button>
         </div>
-        {error ? <p className="scratchpad-error" role="status">{error}</p> : null}
+        {state.error ? <p className="scratchpad-error" role="status">{state.error}</p> : null}
       </form>
 
       <div className="scratchpad-list" role="list">
@@ -169,7 +210,7 @@ export function ScratchpadPanel({
                       type="button"
                       className="scratchpad-block-trigger"
                       onClick={() => void handleTrigger(block)}
-                      disabled={pendingId === block.id}
+                      disabled={state.pendingId === block.id}
                     >
                       <Send size={12} aria-hidden="true" />
                       {block.triggeredAt ? 'Re-trigger' : 'Trigger'}
@@ -178,7 +219,7 @@ export function ScratchpadPanel({
                       type="button"
                       className="scratchpad-block-delete"
                       onClick={() => void handleDelete(block.id)}
-                      disabled={pendingId === block.id}
+                      disabled={state.pendingId === block.id}
                       aria-label="Delete block"
                     >
                       <Trash2 size={12} aria-hidden="true" />
@@ -207,4 +248,3 @@ export function groupBlocksByDay(blocks: ScratchpadBlock[]) {
   }
   return Array.from(groups.values())
 }
-

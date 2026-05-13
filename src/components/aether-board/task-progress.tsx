@@ -7,11 +7,16 @@ export function TaskProgressStrip({
 }: {
   tasks: AgentTask[]
 }) {
-  const [expanded, setExpanded] = React.useState(false)
   const taskVersion = tasks.map((task) => `${task.source}:${task.id}:${task.title}`).join('|')
-  React.useEffect(() => {
-    setExpanded(false)
-  }, [taskVersion])
+  return <TaskProgressStripContent key={taskVersion} tasks={tasks} />
+}
+
+function TaskProgressStripContent({
+  tasks,
+}: {
+  tasks: AgentTask[]
+}) {
+  const [expanded, setExpanded] = React.useState(false)
 
   if (tasks.length === 0) return null
 
@@ -65,4 +70,3 @@ function TaskStatusIcon({
   if (status === 'failed') return <AlertTriangle size={13} className="task-item-icon" aria-hidden="true" />
   return <span className={`task-item-dot ${status}`} aria-hidden="true" />
 }
-
