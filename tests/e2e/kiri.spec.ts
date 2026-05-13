@@ -150,14 +150,16 @@ test('start and remove session with keymaps', async ({ page }, testInfo) => {
   await expect(page.getByTestId('session-launcher')).toBeVisible()
 
   const sessionModel = page.getByTestId('session-model')
-  await expect(sessionModel).toContainText('openai-codex/gpt-5.5')
-  await expect(sessionModel).toContainText('vibeproxy-anthropic/claude-opus-4-7')
+  await expectRuntimeSelected(page, 'codex')
+  await expect(sessionModel).toContainText('gpt-5.5')
 
-  await sessionModel.selectOption('vibeproxy-anthropic/claude-opus-4-7')
+  await clickRuntime(page, 'claude')
+  await expectRuntimeSelected(page, 'claude')
+  await expect(sessionModel).toContainText('claude-opus-4-7')
   await page.getByTestId('session-title').fill(title)
   await page
     .getByTestId('session-launcher')
-    .getByRole('button', { name: 'Start session' })
+    .getByRole('button', { name: /^Start .* session$/ })
     .click()
 
   await expect(page.getByTestId('selected-agent')).toHaveText(title)
@@ -229,6 +231,23 @@ test('shift delete removes the selected session, not the first session', async (
   await expect(page.getByTestId('board-pane')).not.toContainText(secondTitle)
 })
 
+test('session launcher keeps runtime presets isolated from normal starts', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+
+  await page.keyboard.press('Control+K')
+  await page.getByTestId('command-search').fill('Start Claude in kiri')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('session-launcher')).toBeVisible()
+  await expectRuntimeSelected(page, 'claude')
+  await expect(page.getByTestId('session-model')).toContainText('claude-opus-4-7')
+
+  await page.getByTestId('session-launcher').getByRole('button', { name: 'Close session launcher' }).click()
+  await pressShiftKey(page, 'KeyN')
+  await expect(page.getByTestId('session-launcher')).toBeVisible()
+  await expectRuntimeSelected(page, 'codex')
+})
+
 test('command menu starts, switches, and ends sessions', async ({ page }, testInfo) => {
   const firstTitle = `Command First ${testInfo.project.name}`
   const secondTitle = `Command Second ${testInfo.project.name}`
@@ -249,7 +268,7 @@ test('command menu starts, switches, and ends sessions', async ({ page }, testIn
   await page.getByTestId('session-title').fill(firstTitle)
   await page
     .getByTestId('session-launcher')
-    .getByRole('button', { name: 'Start session' })
+    .getByRole('button', { name: /^Start .* session$/ })
     .click()
 
   await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
@@ -668,18 +687,53 @@ async function createSession(
 ) {
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
   await pressShiftKey(page, 'KeyN')
-  if (runtime !== 'pi') {
-    await page.getByTestId('session-runtime').selectOption(runtime)
-  }
+  await clickRuntime(page, runtime)
   if (thinkingLevel) {
-    await page.getByTestId('session-thinking-level').selectOption(thinkingLevel)
+    await clickThinkingLevel(page, thinkingLevel)
   }
   await page.getByTestId('session-title').fill(title)
   await page
     .getByTestId('session-launcher')
-    .getByRole('button', { name: 'Start session' })
+    .getByRole('button', { name: /^Start .* session$/ })
     .click()
   await expect(page.getByTestId('selected-agent')).toHaveText(title)
+}
+
+const runtimeLabels = {
+  codex: 'Codex',
+  pi: 'Pi',
+  claude: 'Claude',
+} as const
+
+async function clickRuntime(
+  page: import('@playwright/test').Page,
+  runtime: 'pi' | 'codex' | 'claude',
+) {
+  await page
+    .getByTestId('session-runtime')
+    .getByRole('button', { name: new RegExp(`^${runtimeLabels[runtime]}\\b`) })
+    .click()
+}
+
+async function expectRuntimeSelected(
+  page: import('@playwright/test').Page,
+  runtime: 'pi' | 'codex' | 'claude',
+) {
+  await expect(
+    page
+      .getByTestId('session-runtime')
+      .getByRole('button', { name: new RegExp(`^${runtimeLabels[runtime]}\\b`) }),
+  ).toHaveAttribute('aria-pressed', 'true')
+}
+
+async function clickThinkingLevel(
+  page: import('@playwright/test').Page,
+  thinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh',
+) {
+  await page
+    .getByTestId('session-thinking-level')
+    .getByRole('button', { name: thinkingLevel })
+    .click()
 }
 
 function seedSessionWithDetail(input: {
