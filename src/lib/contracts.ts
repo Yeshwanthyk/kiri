@@ -228,6 +228,11 @@ export const hideProjectInputSchema = z.object({
 })
 type HideProjectInput = z.infer<typeof hideProjectInputSchema>
 
+export const reorderProjectsInputSchema = z.object({
+  ids: z.array(z.string().trim().min(1)).min(1),
+})
+export type ReorderProjectsInput = z.infer<typeof reorderProjectsInputSchema>
+
 export const unhideProjectInputSchema = z.object({
   id: z.string().trim().min(1),
 })

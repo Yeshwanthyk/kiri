@@ -14,6 +14,7 @@ import {
   hideProjectInputSchema,
   interruptMessageInputSchema,
   resetSessionInputSchema,
+  reorderProjectsInputSchema,
   reviewSessionInputSchema,
   restoreSessionInputSchema,
   sendMessageInputSchema,
@@ -33,6 +34,7 @@ import {
   getScratchpadBlock,
   markScratchpadBlockTriggered,
   renameSession,
+  reorderProjects,
   restoreSession,
   getAgentDetail,
   getAgentLaunchConfig,
@@ -73,6 +75,10 @@ export const deleteProjectMutation = createServerFn({ method: 'POST' })
 export const hideProjectMutation = createServerFn({ method: 'POST' })
   .inputValidator(hideProjectInputSchema)
   .handler(async ({ data }) => hideProject(data.id))
+
+export const reorderProjectsMutation = createServerFn({ method: 'POST' })
+  .inputValidator(reorderProjectsInputSchema)
+  .handler(async ({ data }) => reorderProjects(data))
 
 export const unhideProjectMutation = createServerFn({ method: 'POST' })
   .inputValidator(unhideProjectInputSchema)

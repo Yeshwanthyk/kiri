@@ -286,9 +286,15 @@ test('projects panel adds, hides, and unhides projects', async ({ page }, testIn
   await page.getByRole('button', { name: 'Add' }).click()
 
   await expect(page.getByTestId('project-settings-list')).toContainText(name)
+  await page.getByRole('button', { name: `Move ${name} up` }).click()
+  await page.getByRole('button', { name: `Move ${name} up` }).click()
+  await expect(page.locator('[data-testid="project-settings-list"] .project-settings-row').first()).toContainText(name)
   await page.getByRole('button', { name: 'Close projects' }).click()
   await expect(page.getByTestId('board-pane')).toContainText(name)
+  await page.reload()
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
   await page.getByRole('button', { name: 'Projects' }).click()
+  await expect(page.locator('[data-testid="project-settings-list"] .project-settings-row').first()).toContainText(name)
 
   await page.getByRole('button', { name: `Hide ${name}` }).click()
   await expect(page.getByTestId('project-settings-list')).not.toContainText(name)
@@ -303,7 +309,9 @@ test('projects panel adds, hides, and unhides projects', async ({ page }, testIn
 
   await page.keyboard.press('Control+K')
   await page.getByTestId('command-search').fill(`remove ${name}`)
-  await page.keyboard.press('Enter')
+  const removeCommand = page.getByRole('button', { name: `Remove ${name}` })
+  await expect(removeCommand).toBeVisible()
+  await removeCommand.click()
   await expect(page.getByTestId('confirm-dialog')).toContainText('project directory and files stay on disk')
   await page.getByTestId('confirm-dialog-cancel').click()
   await expect(page.getByTestId('board-pane')).toContainText(name)

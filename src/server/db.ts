@@ -21,6 +21,7 @@ import type {
   ScratchpadBlock,
   StartSessionInput,
   MessageRole,
+  ReorderProjectsInput,
   ThinkingLevel,
   TimelineEventTone,
   BoardMessage,
@@ -1011,6 +1012,54 @@ function deleteProjectRow(id: string) {
 export function hideProject(id: string) {
   hideProjectRow(id)
   return getWorkspaceSnapshot()
+}
+
+export function reorderProjects(input: ReorderProjectsInput) {
+  reorderVisibleProjectRows(input.ids)
+  return getWorkspaceSnapshot()
+}
+
+function reorderVisibleProjectRows(ids: readonly string[]) {
+  const database = getDb()
+  const projectIds = ids.map((id) => id.trim())
+  const uniqueIds = new Set(projectIds)
+  if (uniqueIds.size !== projectIds.length) {
+    throw new Error('Project order contains duplicates')
+  }
+
+  const visibleRows = database
+    .prepare('SELECT id FROM projects WHERE hidden_at IS NULL ORDER BY position ASC, id ASC')
+    .all()
+    .map((row) => idDbRowSchema.parse(row))
+  const visibleIds = new Set(visibleRows.map((row) => row.id))
+  const hasEveryVisibleProject =
+    visibleIds.size === projectIds.length && projectIds.every((id) => visibleIds.has(id))
+  if (!hasEveryVisibleProject) {
+    throw new Error('Project order is stale; reopen projects and try again')
+  }
+
+  const hiddenRows = database
+    .prepare('SELECT id FROM projects WHERE hidden_at IS NOT NULL ORDER BY position ASC, id ASC')
+    .all()
+    .map((row) => idDbRowSchema.parse(row))
+  const update = database.prepare('UPDATE projects SET position = ? WHERE id = ?')
+
+  database.exec('BEGIN')
+  try {
+    let position = 0
+    for (const id of projectIds) {
+      update.run(position, id)
+      position += 1
+    }
+    for (const row of hiddenRows) {
+      update.run(position, row.id)
+      position += 1
+    }
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
 }
 
 export function hideProjectSummary(id: string) {
