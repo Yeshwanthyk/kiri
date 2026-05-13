@@ -14,20 +14,33 @@ export function TerminalPanel({
   agent,
   project,
   themeMode,
+  visible,
 }: {
   agent: AgentCell
   project: ProjectRow
   themeMode: ThemeMode
+  visible: boolean
 }) {
   const getTerminalConfig = useServerFn(terminalConfigQuery)
   const getTerminalConfigRef = React.useRef(getTerminalConfig)
   const hostRef = React.useRef<HTMLDivElement | null>(null)
+  const fitAddonRef = React.useRef<GhosttyFitAddonInstance | null>(null)
+  const themeModeRef = React.useRef(themeMode)
   const [status, setStatus] = React.useState('Connecting')
   const [transcript, setTranscript] = React.useState('')
 
   React.useEffect(() => {
     getTerminalConfigRef.current = getTerminalConfig
   }, [getTerminalConfig])
+
+  React.useEffect(() => {
+    themeModeRef.current = themeMode
+  }, [themeMode])
+
+  React.useEffect(() => {
+    if (!visible) return
+    fitAddonRef.current?.fit()
+  }, [visible])
 
   React.useEffect(() => {
     let disposed = false
@@ -57,9 +70,10 @@ export function TerminalPanel({
           fontSize: 13,
           fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
           cursorBlink: true,
-          theme: terminalTheme(themeMode),
+          theme: terminalTheme(themeModeRef.current),
         })
         fitAddon = new FitAddon()
+        fitAddonRef.current = fitAddon
         term.loadAddon(fitAddon)
         term.open(host)
         term.attachCustomKeyEventHandler((event) => {
@@ -136,12 +150,13 @@ export function TerminalPanel({
         disposable.dispose()
       }
       fitAddon?.dispose()
+      fitAddonRef.current = null
       term?.dispose()
     }
-  }, [agent.id, project.cwd, themeMode])
+  }, [agent.id, project.cwd])
 
   return (
-    <section className="terminal-panel" data-testid="terminal-panel">
+    <section className="terminal-panel" data-testid="terminal-panel" hidden={!visible}>
       <div className="terminal-header">
         <div>
           <strong>{project.name}</strong>

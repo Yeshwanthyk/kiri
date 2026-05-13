@@ -92,10 +92,16 @@ export function SelectedAgentPane({
     placeholderData: keepPreviousData,
   })
   const agent = mergeAgentDetail(selectedAgent, detailQuery.data)
+  const [terminalAgentId, setTerminalAgentId] = React.useState<string | null>(null)
+  const shouldMountTerminal = Boolean(agent && (tab === 'terminal' || terminalAgentId === agent.id))
   const refreshDetail = React.useCallback(async () => {
     if (!selectedAgent) return
     await detailQuery.refetch()
   }, [detailQuery, selectedAgent])
+
+  React.useEffect(() => {
+    if (agent && tab === 'terminal') setTerminalAgentId(agent.id)
+  }, [agent, tab])
 
   const tabBar = (
     <div className="sidebar-tabs" role="tablist">
@@ -198,18 +204,21 @@ export function SelectedAgentPane({
           agent={agent}
           themeMode={themeMode}
         />
-      ) : agent && tab === 'terminal' ? (
-        <TerminalPanel
-          key={agent.id}
-          agent={agent}
-          project={selectedProject}
-          themeMode={themeMode}
-        />
-      ) : !agent ? (
+      ) : agent && tab === 'terminal' ? null : !agent ? (
         <EmptySessionPanel
           project={selectedProject}
           startSessionKey={startSessionKey}
           onStart={onStartSession}
+        />
+      ) : null}
+
+      {agent && shouldMountTerminal ? (
+        <TerminalPanel
+          key={`terminal-${agent.id}`}
+          agent={agent}
+          project={selectedProject}
+          themeMode={themeMode}
+          visible={tab === 'terminal'}
         />
       ) : null}
     </aside>

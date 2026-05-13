@@ -573,7 +573,7 @@ test('sidebar switches between chat, diffs, and terminal', async ({ page, isMobi
   await page.getByRole('button', { name: 'Diffs' }).click()
   await expect(page.getByTestId('diff-panel')).toContainText('No diffs')
 
-  await page.getByRole('button', { name: 'Terminal' }).click()
+  await page.getByTestId('tab-terminal').click()
   await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
   await page
     .getByTestId('terminal-panel')
@@ -596,6 +596,43 @@ test('sidebar switches between chat, diffs, and terminal', async ({ page, isMobi
   await page.keyboard.up('Shift')
   await expect(page.getByTestId('chat-panel')).toBeVisible()
   await expect(page.getByTestId('chat-input')).toBeFocused()
+})
+
+test('terminal preserves running shell across sidebar tab switches', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop sidebar tabs only')
+  const title = `Terminal Persistence ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+
+  await page.getByTestId('tab-terminal').click()
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  const terminalInput = page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+  await terminalInput.click()
+  await page.keyboard.type(
+    'export KIRI_E2E_MARKER=tab-preserved; cd src; sleep 30 & export KIRI_E2E_PID=$!; echo ready:$KIRI_E2E_MARKER:$PWD:$KIRI_E2E_PID',
+  )
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(
+    `ready:tab-preserved:${projectRoot}/src`,
+  )
+
+  await page.getByTestId('tab-chat').click()
+  await expect(page.getByTestId('chat-panel')).toBeVisible()
+  await page.getByTestId('tab-terminal').click()
+  await expect(page.getByTestId('terminal-panel')).toBeVisible()
+  await terminalInput.click()
+  await page.keyboard.type(
+    'kill -0 "$KIRI_E2E_PID" && echo preserved:$KIRI_E2E_MARKER:$PWD; kill "$KIRI_E2E_PID"',
+  )
+  await page.keyboard.press('Enter')
+
+  await expect(page.getByTestId('terminal-transcript')).toContainText(
+    `preserved:tab-preserved:${projectRoot}/src`,
+  )
 })
 
 test('selected agent detail loads chat, diffs, and local drafts', async ({ page, isMobile }) => {

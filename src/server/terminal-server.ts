@@ -24,12 +24,25 @@ type TerminalClientMessage =
       rows: number
     }
 
+type TerminalSession = {
+  agentId: string
+  cwd: string
+  proc: pty.IPty
+  sockets: Set<WebSocket>
+  buffer: string
+  idleTimer: ReturnType<typeof setTimeout> | null
+  exited: boolean
+}
+
 let terminalServer: TerminalServerInfo | null = null
 let httpServer: Server | null = null
 let terminalServerPromise: Promise<TerminalServerInfo> | null = null
+const terminalSessions = new Map<string, TerminalSession>()
 
 const terminalPath = '/terminal'
 const terminalToken = randomBytes(32).toString('base64url')
+const maxReplayBytes = 80_000
+const idleKillMs = 5 * 60 * 1000
 
 export function ensureTerminalServer(): Promise<TerminalServerInfo> {
   if (terminalServer) return Promise.resolve(terminalServer)
@@ -57,55 +70,30 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
       return
     }
 
-    let proc: pty.IPty | null = null
+    let session: TerminalSession
     try {
       const config = getAgentLaunchConfig(agentId)
-      const shell = defaultShell()
       const cols = positiveInt(query.cols, 100)
       const rows = positiveInt(query.rows, 30)
-      proc = pty.spawn(shell.command, shell.args, {
-        name: 'xterm-256color',
-        cols,
-        rows,
-        cwd: config.cwd,
-        env: {
-          ...process.env,
-          TERM: 'xterm-256color',
-          COLORTERM: 'truecolor',
-          KIRI_AGENT_ID: config.id,
-          KIRI_PROJECT_CWD: config.cwd,
-        },
-      })
-
-      proc.onData((data) => {
-        if (socket.readyState === WebSocket.OPEN) socket.send(data)
-      })
-      proc.onExit(({ exitCode, signal }) => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(`\r\n[kiri terminal exited: ${exitCode}${signal ? ` ${signal}` : ''}]\r\n`)
-          socket.close()
-        }
-      })
-      socket.send(`\r\n[kiri terminal: ${config.cwd}]\r\n`)
+      session = getOrCreateTerminalSession(config.id, config.cwd, cols, rows)
+      attachTerminalSocket(session, socket)
     } catch (error) {
       closeWithReason(socket, error instanceof Error ? error.message : String(error))
       return
     }
 
     socket.on('message', (raw) => {
-      if (!proc) return
       const message = parseClientMessage(raw)
       if (!message) return
       if (message.type === 'input') {
-        proc.write(message.data)
+        session.proc.write(message.data)
         return
       }
-      proc.resize(message.cols, message.rows)
+      session.proc.resize(message.cols, message.rows)
     })
 
     socket.on('close', () => {
-      proc?.kill()
-      proc = null
+      detachTerminalSocket(session, socket)
     })
   })
 
@@ -116,10 +104,110 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
 }
 
 function closeTerminalServerForTests() {
+  for (const session of Array.from(terminalSessions.values())) {
+    killTerminalSession(session)
+  }
+  terminalSessions.clear()
   httpServer?.close()
   httpServer = null
   terminalServer = null
   terminalServerPromise = null
+}
+
+function getOrCreateTerminalSession(agentId: string, cwd: string, cols: number, rows: number) {
+  const existing = terminalSessions.get(agentId)
+  if (existing && existing.cwd === cwd) {
+    existing.proc.resize(cols, rows)
+    return existing
+  }
+  if (existing) {
+    killTerminalSession(existing)
+  }
+
+  const shell = defaultShell()
+  const proc = pty.spawn(shell.command, shell.args, {
+    name: 'xterm-256color',
+    cols,
+    rows,
+    cwd,
+    env: {
+      ...process.env,
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      KIRI_AGENT_ID: agentId,
+      KIRI_PROJECT_CWD: cwd,
+    },
+  })
+  const session: TerminalSession = {
+    agentId,
+    cwd,
+    proc,
+    sockets: new Set(),
+    buffer: `\r\n[kiri terminal: ${cwd}]\r\n`,
+    idleTimer: null,
+    exited: false,
+  }
+  terminalSessions.set(agentId, session)
+
+  proc.onData((data) => {
+    appendTerminalBuffer(session, data)
+    broadcastTerminalData(session, data)
+  })
+  proc.onExit(({ exitCode, signal }) => {
+    session.exited = true
+    if (session.idleTimer) {
+      clearTimeout(session.idleTimer)
+      session.idleTimer = null
+    }
+    const message = `\r\n[kiri terminal exited: ${exitCode}${signal ? ` ${signal}` : ''}]\r\n`
+    appendTerminalBuffer(session, message)
+    broadcastTerminalData(session, message)
+    for (const socket of session.sockets) {
+      socket.close()
+    }
+    terminalSessions.delete(agentId)
+  })
+
+  return session
+}
+
+function attachTerminalSocket(session: TerminalSession, socket: WebSocket) {
+  if (session.idleTimer) {
+    clearTimeout(session.idleTimer)
+    session.idleTimer = null
+  }
+  session.sockets.add(socket)
+  if (session.buffer) socket.send(session.buffer)
+}
+
+function detachTerminalSocket(session: TerminalSession, socket: WebSocket) {
+  session.sockets.delete(socket)
+  if (session.exited) return
+  if (session.sockets.size > 0 || session.idleTimer) return
+  session.idleTimer = setTimeout(() => {
+    if (session.sockets.size === 0) killTerminalSession(session)
+  }, idleKillMs)
+}
+
+function killTerminalSession(session: TerminalSession) {
+  if (session.exited) return
+  session.exited = true
+  if (session.idleTimer) {
+    clearTimeout(session.idleTimer)
+    session.idleTimer = null
+  }
+  terminalSessions.delete(session.agentId)
+  session.proc.kill()
+}
+
+function appendTerminalBuffer(session: TerminalSession, data: string) {
+  session.buffer = `${session.buffer}${data}`.slice(-maxReplayBytes)
+}
+
+function broadcastTerminalData(session: TerminalSession, data: string) {
+  for (const socket of session.sockets) {
+    if (socket.readyState === WebSocket.OPEN) socket.send(data)
+  }
 }
 
 function listen(server: Server, port: number, host: string) {
