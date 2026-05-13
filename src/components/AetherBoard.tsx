@@ -1939,15 +1939,16 @@ function ProjectLane({
             data-testid="agent-cell"
           >
             <div className="agent-cell-top">
-              <span className={`status-dot ${agent.status}`} />
-              <span>{agent.title}</span>
-              <RuntimeBadge runtime={agent.runtime} />
+              <span className="agent-cell-title">{agent.title}</span>
+              <AgentCellState status={agent.status} updatedAt={agent.updatedAt} />
             </div>
             <p>{agent.preview}</p>
             <div className="agent-cell-meta">
-              <span>{agent.model}</span>
+              {agent.diffCount > 0 ? (
+                <span className="diff-token">+{agent.diffCount}</span>
+              ) : null}
               <span>{agent.messageCount} msg</span>
-              <span>{agent.diffCount} diff</span>
+              <span className="agent-cell-runtime">{agent.runtime}</span>
             </div>
           </button>
         ))}
@@ -3580,6 +3581,41 @@ function diffFileFolder(path: string) {
 
 function RuntimeBadge({ runtime }: { runtime: string }) {
   return <span className="runtime-badge">{runtime}</span>
+}
+
+function AgentCellState({
+  status,
+  updatedAt,
+}: {
+  status: AgentCell['status']
+  updatedAt: string
+}) {
+  if (status === 'idle') {
+    const ago = formatAgo(updatedAt)
+    if (!ago) return null
+    return <span className="agent-cell-state">{ago}</span>
+  }
+  const showLabel = status === 'blocked' || status === 'failed'
+  return (
+    <span className="agent-cell-state" data-status={status}>
+      <span className={`status-dot ${status}`} aria-hidden="true" />
+      {showLabel ? <span>{status}</span> : null}
+    </span>
+  )
+}
+
+function formatAgo(iso: string): string {
+  const then = new Date(iso).getTime()
+  if (!Number.isFinite(then)) return ''
+  const diff = Math.max(0, Date.now() - then)
+  const s = Math.floor(diff / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h`
+  const d = Math.floor(h / 24)
+  return `${d}d`
 }
 
 function moveProject(
