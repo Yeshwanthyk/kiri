@@ -264,6 +264,7 @@ function installApplicationMenu(win) {
         { role: 'cut' },
         { role: 'copy' },
         { role: 'paste' },
+        { role: 'selectAll' },
       ],
     },
   ]
