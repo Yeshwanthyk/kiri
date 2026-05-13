@@ -196,7 +196,7 @@ export class CodexAppServerAdapter {
       throw new Error('Codex app-server websocket is not connected')
     }
 
-    const id = `aether-codex-${++this.requestId}`
+    const id = `kiri-codex-${++this.requestId}`
     const payload = JSON.stringify({ id, method, params })
     const result = await runCodexEffect(Effect.async<unknown, CodexAppServerError>((resume) => {
       const timeout = setTimeout(() => {
@@ -252,7 +252,7 @@ export class CodexAppServerAdapter {
   async initialize() {
     const result = await this.request('initialize', {
       clientInfo: {
-        name: 'Aether',
+        name: 'kiri',
         version: '0.0.0',
       },
       capabilities: {
@@ -478,7 +478,7 @@ export class CodexAppServerAdapter {
     const port = portFromWebsocketUrl(this.options.websocketUrl)
     if (!port) throw new Error(`Cannot spawn Codex app-server for ${this.options.websocketUrl}`)
 
-    const child = spawn(resolveRuntimeExecutable('codex', process.env.AETHER_CODEX_BIN), [
+    const child = spawn(resolveRuntimeExecutable('codex', process.env.KIRI_CODEX_BIN), [
       'app-server',
       '--listen',
       this.options.websocketUrl,
@@ -586,7 +586,7 @@ export class CodexAppServerAdapter {
 }
 
 export function defaultCodexWebsocketUrl() {
-  return process.env.AETHER_CODEX_APP_SERVER_URL ?? `ws://127.0.0.1:${defaultCodexPort}`
+  return process.env.KIRI_CODEX_APP_SERVER_URL ?? `ws://127.0.0.1:${defaultCodexPort}`
 }
 
 function parseResponse(value: unknown): JsonRpcResponse | null {

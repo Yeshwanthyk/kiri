@@ -3,8 +3,8 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
-const appName = 'Aether.app'
-const appProcessName = 'Aether'
+const appName = 'kiri.app'
+const appProcessName = 'kiri'
 const arch = process.env.npm_config_arch ?? process.arch
 const source = resolve(`dist/mac-${arch}`, appName)
 const applicationsDir = join(homedir(), 'Applications')

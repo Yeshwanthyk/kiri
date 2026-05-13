@@ -2,10 +2,10 @@
 
 ## Visual Theme
 
-Editor-palette neutrality with one accent. Aether mirrors the aesthetic of code
+Editor-palette neutrality with one accent. kiri mirrors the aesthetic of code
 editors and tiling compositors: muted neutrals tinted toward a hue, a single
 saturated accent for state, generous radii (10–20px), soft theme-tinted
-shadows. Seven named themes ship; users pick one and Aether obeys it across
+shadows. Seven named themes ship; users pick one and kiri obeys it across
 the entire surface.
 
 The reference points are Zed, Helix, Raycast, and niri. The non-references are
@@ -60,10 +60,10 @@ Derived
 
 ### Themes
 
-`aether` (default), `vesper`, `github`, `tokyonight`, `catppuccin`, `gruvbox`,
+`kiri` (default), `vesper`, `github`, `tokyonight`, `catppuccin`, `gruvbox`,
 `rosepine`. Each ships light and dark. Theme selection lives in workspace
 settings and is applied as CSS custom properties on a root element via
-`applyAetherTheme()` in `src/theme/aether-themes.ts`.
+`applyKiriTheme()` in `src/theme/kiri-themes.ts`.
 
 ## Typography
 
@@ -147,6 +147,6 @@ These are the things the settings revamp should fix:
    try a theme before committing.
 5. **Chat typography panel** has one control, padded to occupy a full
    section. The information density is wrong.
-6. **Settings hero** repeats the AETHER wordmark for a settings page; the
+6. **Settings hero** repeats the KIRI wordmark for a settings page; the
    "Back to board" button is the actual primary affordance and isn't styled
    to read as one.

@@ -85,7 +85,7 @@ export class PiRpcProcessAdapter {
       }
 
       this.stderr = ''
-      const child = spawn(resolveRuntimeExecutable('pi', process.env.AETHER_PI_BIN), args, {
+      const child = spawn(resolveRuntimeExecutable('pi', process.env.KIRI_PI_BIN), args, {
         cwd: this.options.cwd,
         env: runtimeProcessEnv(),
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -292,7 +292,7 @@ export class PiRpcProcessAdapter {
         }))
       }
 
-      const id = `aether-${++this.requestId}`
+      const id = `kiri-${++this.requestId}`
       const command = encodeJson({ id, type, ...body }) + '\n'
 
       return piRpcPromise(type, () => new Promise<unknown>((resolve, reject) => {

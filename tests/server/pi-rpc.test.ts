@@ -5,7 +5,7 @@ import { PiRpcProcessAdapter, PiRpcProcessError } from '../../src/server/pi-rpc'
 function adapter() {
   return new PiRpcProcessAdapter({
     cwd: process.cwd(),
-    sessionDir: '.aether/pi-rpc-test',
+    sessionDir: '.kiri/pi-rpc-test',
   })
 }
 

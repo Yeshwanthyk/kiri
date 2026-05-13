@@ -16,7 +16,7 @@ import {
   type CodexThread,
   type CodexTurn,
 } from './codex-app-server'
-import { attachmentDirPath, getAetherConfig } from './aether-config'
+import { attachmentDirPath, getKiriConfig } from './kiri-config'
 import {
   appendUserMessage,
   clearAgentRuntimeState,
@@ -454,8 +454,8 @@ function getOrCreateCodexAdapter(websocketUrl: string | undefined) {
   if (!adapter) {
     adapter = new CodexAppServerAdapter({
       websocketUrl: url,
-      spawnIfMissing: !process.env.AETHER_CODEX_APP_SERVER_URL,
-      codexHome: process.env.AETHER_CODEX_HOME,
+      spawnIfMissing: !process.env.KIRI_CODEX_APP_SERVER_URL,
+      codexHome: process.env.KIRI_CODEX_HOME,
     })
     adapters.set(url, adapter)
   }
@@ -496,7 +496,7 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
       if (response) {
         adapter.respond(message.id, response)
       } else {
-        adapter.reject(message.id, `Aether cannot handle ${message.method} yet`)
+        adapter.reject(message.id, `kiri cannot handle ${message.method} yet`)
       }
       return
     }
@@ -860,7 +860,7 @@ function savePromptImage(agentId: string, image: SendMessageImage, index: number
     throw new Error(`Image "${image.name}" is larger than 5MB`)
   }
 
-  const dir = attachmentDirPath(getAetherConfig(), agentId)
+  const dir = attachmentDirPath(getKiriConfig(), agentId)
   mkdirSync(dir, { recursive: true })
   const path = join(
     dir,
@@ -954,7 +954,7 @@ function automaticServerRequestResponse(method: string) {
   }
   if (method === 'item/tool/call') {
     return {
-      contentItems: [{ type: 'inputText', text: 'Aether cannot run client dynamic tools yet.' }],
+      contentItems: [{ type: 'inputText', text: 'kiri cannot run client dynamic tools yet.' }],
       success: false,
     }
   }

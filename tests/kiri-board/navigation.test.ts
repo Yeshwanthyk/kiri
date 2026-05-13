@@ -8,7 +8,7 @@ import {
   moveProject,
   updateKeymap,
   type Selection,
-} from '~/components/aether-board/navigation'
+} from '~/components/kiri-board/navigation'
 
 function project(id: string, agentIds: string[]): ProjectRow {
   return {

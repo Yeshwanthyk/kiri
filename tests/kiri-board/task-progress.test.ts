@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { summarizeTasks } from '../../src/components/aether-board/task-progress'
+import { summarizeTasks } from '../../src/components/kiri-board/task-progress'
 import type { AgentTask } from '../../src/lib/contracts'
 
 function task(id: string, status: AgentTask['status']): AgentTask {

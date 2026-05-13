@@ -9,7 +9,7 @@ import {
   type RuntimeKind,
   type ThinkingLevel,
 } from '~/lib/contracts'
-import { AetherControl } from '~/server/aether-control'
+import { KiriControl } from '~/server/kiri-control'
 
 const version = '0.1.0'
 
@@ -60,7 +60,7 @@ const modelsListCommand = Command.make(
   { runtime: runtimeOption, json },
   ({ runtime, json }) =>
     Effect.gen(function* () {
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const rows = yield* control.listModels(optionValue(runtime))
       yield* print(rows, json, formatModels)
     }),
@@ -76,7 +76,7 @@ const projectsListCommand = Command.make(
   { all, json },
   ({ all, json }) =>
     Effect.gen(function* () {
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const rows = yield* control.listProjects(all)
       yield* print(rows, json, formatProjects)
     }),
@@ -87,7 +87,7 @@ const projectsAddCommand = Command.make(
   { name: nameOption, cwd: cwdOption, id: optionalIdOption, json },
   ({ name, cwd, id, json }) =>
     Effect.gen(function* () {
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const project = yield* control.addProject({
         name,
         cwd,
@@ -102,7 +102,7 @@ const projectsHideCommand = Command.make(
   { id: idOption, json },
   ({ id, json }) =>
     Effect.gen(function* () {
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const project = yield* control.hideProject(id)
       yield* print(project, json, (value) => `Hidden project ${value.id}: ${value.name}`)
     }),
@@ -113,7 +113,7 @@ const projectsUnhideCommand = Command.make(
   { id: idOption, json },
   ({ id, json }) =>
     Effect.gen(function* () {
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const project = yield* control.unhideProject(id)
       yield* print(project, json, (value) => `Unhid project ${value.id}: ${value.name}`)
     }),
@@ -125,7 +125,7 @@ const projectsDeleteCommand = Command.make(
   ({ id, yes, json }) =>
     Effect.gen(function* () {
       if (!yes) throw new Error(`Refusing to delete ${id} without --yes`)
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const project = yield* control.deleteProject(id)
       yield* print(project, json, (value) => `Deleted project ${value.id}: ${value.name}`)
     }),
@@ -147,7 +147,7 @@ const sessionsListCommand = Command.make(
   { project: projectIdOption, all, json },
   ({ project, all, json }) =>
     Effect.gen(function* () {
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const rows = yield* control.listSessions({
         projectId: optionValue(project),
         includeArchived: all,
@@ -168,7 +168,7 @@ const sessionsCreateCommand = Command.make(
   },
   ({ project, runtime, model, title, thinking, json }) =>
     Effect.gen(function* () {
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const session = yield* control.startSession({
         projectId: project,
         runtime: optionValue(runtime),
@@ -187,7 +187,7 @@ const sessionsRenameCommand = Command.make(
     Effect.gen(function* () {
       const nextTitle = optionValue(title)
       if (!nextTitle) throw new Error('Missing required --title')
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const session = yield* control.renameSession({ agentId: agent, title: nextTitle })
       yield* print(session, json, (value) => `Renamed session ${value.id}: ${value.title}`)
     }),
@@ -199,7 +199,7 @@ const sessionsDeleteCommand = Command.make(
   ({ agent, yes, json }) =>
     Effect.gen(function* () {
       if (!yes) throw new Error(`Refusing to delete ${agent} without --yes`)
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const session = yield* control.deleteSession(agent)
       yield* print(session, json, (value) => `Archived session ${value.id}: ${value.title}`)
     }),
@@ -210,7 +210,7 @@ const sessionsRestoreCommand = Command.make(
   { agent: agentOption, json },
   ({ agent, json }) =>
     Effect.gen(function* () {
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const session = yield* control.restoreSession({ agentId: agent })
       yield* print(session, json, (value) => `Restored session ${value.id}: ${value.title}`)
     }),
@@ -221,7 +221,7 @@ const sessionsResumeCommand = Command.make(
   { agent: agentOption, json },
   ({ agent, json }) =>
     Effect.gen(function* () {
-      const control = yield* AetherControl
+      const control = yield* KiriControl
       const session = yield* control.restoreSession({ agentId: agent })
       yield* print(session, json, (value) => `Resumed session ${value.id}: ${value.title}`)
     }),
@@ -239,17 +239,17 @@ const sessionsCommand = Command.make('sessions', {}).pipe(
   ]),
 )
 
-export const aetherctlCommand = Command.make('aetherctl', {}).pipe(
-  Command.withDescription('Control Aether from scripts and AI agents'),
+export const kirictlCommand = Command.make('kirictl', {}).pipe(
+  Command.withDescription('Control Kiri from scripts and AI agents'),
   Command.withSubcommands([modelsCommand, projectsCommand, sessionsCommand]),
 )
 
-const cli = Command.run(aetherctlCommand, {
-  name: 'aetherctl',
+const cli = Command.run(kirictlCommand, {
+  name: 'kirictl',
   version,
 })
 
-const MainLayer = Layer.merge(AetherControl.layer, NodeContext.layer)
+const MainLayer = Layer.merge(KiriControl.layer, NodeContext.layer)
 
 cli(process.argv).pipe(
   Effect.provide(MainLayer),

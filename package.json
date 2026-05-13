@@ -1,8 +1,8 @@
 {
-  "name": "aether",
-  "productName": "Aether",
+  "name": "kiri",
+  "productName": "kiri",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "src/desktop/main.mjs",
   "sideEffects": false,
   "type": "module",
@@ -14,40 +14,40 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "desktop:dev": "AETHER_DESKTOP_DEV_URL=http://127.0.0.1:3090 electron src/desktop/main.mjs",
+    "desktop:dev": "KIRI_DESKTOP_DEV_URL=http://127.0.0.1:3090 electron src/desktop/main.mjs",
     "desktop:start": "pnpm build && electron src/desktop/main.mjs",
-    "desktop:backend": "node scripts/aether-desktop-backend.mjs",
+    "desktop:backend": "node scripts/kiri-desktop-backend.mjs",
     "dist:desktop": "pnpm build && electron-builder --mac dir && node scripts/normalize-desktop-app.mjs && node scripts/create-desktop-dmg.mjs",
     "install:desktop": "pnpm dist:desktop && node scripts/install-desktop-app.mjs",
     "prepare": "effect-language-service patch",
-    "aether": "tsx src/cli/aetherctl.ts",
-    "aethercli": "tsx src/cli/aetherctl.ts",
-    "aether:ctl": "tsx src/cli/aetherctl.ts",
-    "aether:agent-harness": "tsx tests/harness/aether-agent-cli-harness.ts",
-    "aether:history-harness": "tsx tests/harness/aether-agent-detail-history-harness.ts",
-    "aether:models": "node scripts/sync-models-dev.mjs",
-    "aether:projects": "tsx src/cli/aetherctl.ts projects",
+    "kiri": "tsx src/cli/kirictl.ts",
+    "kiricli": "tsx src/cli/kirictl.ts",
+    "kiri:ctl": "tsx src/cli/kirictl.ts",
+    "kiri:agent-harness": "tsx tests/harness/kiri-agent-cli-harness.ts",
+    "kiri:history-harness": "tsx tests/harness/kiri-agent-detail-history-harness.ts",
+    "kiri:models": "node scripts/sync-models-dev.mjs",
+    "kiri:projects": "tsx src/cli/kirictl.ts projects",
     "preview": "vite preview",
     "start": "pnpx srvx --prod -s ../client dist/server/server.js"
   },
   "knip": {
     "entry": [
       "src/desktop/preload.cjs",
-      "scripts/aether-projects.mjs",
+      "scripts/kiri-projects.mjs",
       "tests/harness/task-progress-db-harness.ts"
     ]
   },
   "reactDoctor": {
     "entryFiles": [
       "src/desktop/preload.cjs",
-      "scripts/aether-projects.mjs",
+      "scripts/kiri-projects.mjs",
       "tests/harness/task-progress-db-harness.ts"
     ],
     "ignore": {
       "overrides": [
         {
           "files": [
-            "src/components/AetherBoard.tsx"
+            "src/components/KiriBoard.tsx"
           ],
           "rules": [
             "react/no-danger",
@@ -99,13 +99,13 @@
     "zod": "^4.4.3"
   },
   "build": {
-    "appId": "dev.aether.desktop",
-    "productName": "Aether",
+    "appId": "dev.kiri.desktop",
+    "productName": "kiri",
     "files": [
       "dist/client/**",
       "dist/server/**",
       "src/desktop/**",
-      "scripts/aether-desktop-backend.mjs",
+      "scripts/kiri-desktop-backend.mjs",
       "scripts/create-desktop-dmg.mjs",
       "scripts/normalize-desktop-app.mjs",
       "settings.json",
@@ -116,7 +116,7 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
-      "executableName": "Aether",
+      "executableName": "kiri",
       "target": [
         "dmg"
       ]

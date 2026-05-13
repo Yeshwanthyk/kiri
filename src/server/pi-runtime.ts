@@ -19,7 +19,7 @@ import {
   resetSession,
   setAgentStatus,
 } from './db'
-import { attachmentDirPath, getAetherConfig } from './aether-config'
+import { attachmentDirPath, getKiriConfig } from './kiri-config'
 import { collectGitDiffArtifacts } from './git-diff'
 import {
   captureRuntimeDiffs,
@@ -261,7 +261,7 @@ async function waitForLivePiAdapterAttempt(agentId: string, attemptsRemaining: n
   const adapter = adapters.get(agentId)
   if (adapter) return adapter
   if (attemptsRemaining <= 0) {
-    throw new Error('This session is not currently running in this Aether server process')
+    throw new Error('This session is not currently running in this kiri server process')
   }
   await sleep(100)
   return waitForLivePiAdapterAttempt(agentId, attemptsRemaining - 1)
@@ -375,7 +375,7 @@ function savePromptImage(agentId: string, image: SendMessageImage, index: number
     throw new Error(`Image "${image.name}" is larger than 5MB`)
   }
 
-  const dir = attachmentDirPath(getAetherConfig(), agentId)
+  const dir = attachmentDirPath(getKiriConfig(), agentId)
   mkdirSync(dir, { recursive: true })
   const extension = imageExtension(image)
   const path = join(

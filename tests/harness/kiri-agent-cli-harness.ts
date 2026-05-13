@@ -6,13 +6,13 @@ import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const tempRoot = mkdtempSync(join(tmpdir(), 'aether-agent-harness-'))
+const tempRoot = mkdtempSync(join(tmpdir(), 'kiri-agent-harness-'))
 const env = {
   ...process.env,
-  AETHER_ROOT_DIR: repoRoot,
-  AETHER_DB_PATH: join(tempRoot, 'aether.sqlite'),
-  AETHER_STATE_DIR: join(tempRoot, 'state'),
-  AETHER_SETTINGS_PATH: resolve(repoRoot, 'settings.json'),
+  KIRI_ROOT_DIR: tempRoot,
+  KIRI_DB_PATH: join(tempRoot, 'kiri.sqlite'),
+  KIRI_STATE_DIR: join(tempRoot, 'state'),
+  KIRI_SETTINGS_PATH: resolve(repoRoot, 'settings.json'),
 }
 
 const modelRowsSchema = z.array(z.object({
@@ -50,10 +50,10 @@ try {
   assertSkillTeachesAgents()
 
   const models = modelRowsSchema.parse(runCtl(['models', 'list', '--runtime', 'pi', '--json']))
-  const aetherModels = modelRowsSchema.parse(runAether(['models', 'list', '--runtime', 'pi', '--json']))
-  const aetherCliModels = modelRowsSchema.parse(runAetherCli(['models', 'list', '--runtime', 'pi', '--json']))
-  if (models.length !== aetherModels.length || models.length !== aetherCliModels.length) {
-    throw new Error('Aether CLI aliases do not return the same model set')
+  const kiriModels = modelRowsSchema.parse(runKiri(['models', 'list', '--runtime', 'pi', '--json']))
+  const kiriCliModels = modelRowsSchema.parse(runKiriCli(['models', 'list', '--runtime', 'pi', '--json']))
+  if (models.length !== kiriModels.length || models.length !== kiriCliModels.length) {
+    throw new Error('Kiri CLI aliases do not return the same model set')
   }
   const defaultPiModel = models.find((model) => model.runtime === 'pi' && model.isDefault)
   if (!defaultPiModel) throw new Error('No default pi model found')
@@ -108,7 +108,7 @@ try {
 
   const compatProjects = projectRowsSchema.parse(runProjectsCompat(['list', '--all', '--json']))
   if (!compatProjects.some((project) => project.id === primary.id)) {
-    throw new Error('pnpm aether:projects compatibility command did not see CLI-created project')
+    throw new Error('pnpm kiri:projects compatibility command did not see CLI-created project')
   }
 
   const session = sessionSchema.parse(runCtl([
@@ -186,8 +186,8 @@ try {
     checked: [
       'skill',
       'models',
-      'aether alias',
-      'aethercli alias',
+      'kiri alias',
+      'kiricli alias',
       'projects:add',
       'projects:hide',
       'projects:unhide',
@@ -196,7 +196,7 @@ try {
       'sessions:rename',
       'sessions:delete',
       'sessions:resume',
-      'aether:projects compatibility',
+      'kiri:projects compatibility',
     ],
     projectId: primary.id,
     sessionId: session.id,
@@ -207,20 +207,20 @@ try {
 }
 
 function assertSkillTeachesAgents() {
-  const body = readFileSync(resolve(repoRoot, '.agents/skills/aether-control/SKILL.md'), 'utf8')
+  const body = readFileSync(resolve(repoRoot, '.agents/skills/kiri-control/SKILL.md'), 'utf8')
   const required = [
-    'pnpm aether models list --json',
-    'pnpm aethercli',
-    'pnpm aether:ctl models list --json',
-    'pnpm aether:ctl projects add',
-    'pnpm aether:ctl sessions create',
-    'pnpm aether:ctl sessions rename',
-    'pnpm aether:ctl sessions delete',
-    'pnpm aether:ctl sessions resume',
+    'pnpm kiri models list --json',
+    'pnpm kiricli',
+    'pnpm kiri:ctl models list --json',
+    'pnpm kiri:ctl projects add',
+    'pnpm kiri:ctl sessions create',
+    'pnpm kiri:ctl sessions rename',
+    'pnpm kiri:ctl sessions delete',
+    'pnpm kiri:ctl sessions resume',
   ]
   for (const phrase of required) {
     if (body.search(escapedPhrasePattern(phrase)) === -1) {
-      throw new Error(`Aether control skill is missing agent instruction: ${phrase}`)
+      throw new Error(`Kiri control skill is missing agent instruction: ${phrase}`)
     }
   }
 }
@@ -230,19 +230,19 @@ function escapedPhrasePattern(phrase: string) {
 }
 
 function runCtl(args: string[]) {
-  return runJson(['aether:ctl', ...args])
+  return runJson(['kiri:ctl', ...args])
 }
 
-function runAether(args: string[]) {
-  return runJson(['aether', ...args])
+function runKiri(args: string[]) {
+  return runJson(['kiri', ...args])
 }
 
-function runAetherCli(args: string[]) {
-  return runJson(['aethercli', ...args])
+function runKiriCli(args: string[]) {
+  return runJson(['kiricli', ...args])
 }
 
 function runProjectsCompat(args: string[]) {
-  return runJson(['aether:projects', ...args])
+  return runJson(['kiri:projects', ...args])
 }
 
 function runJson(args: string[]) {

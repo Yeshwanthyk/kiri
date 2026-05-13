@@ -1,15 +1,15 @@
 import { serve } from 'srvx/node'
 import type { ServerRequest } from 'srvx'
-import type { AetherConfig } from './aether-config'
-import { getAetherConfig } from './aether-config'
+import type { KiriConfig } from './kiri-config'
+import { getKiriConfig } from './kiri-config'
 import { getDb } from './db'
 import { getSettings } from './settings'
 
-export const aetherEnvironmentPath = '/.well-known/aether/environment'
+export const kiriEnvironmentPath = '/.well-known/kiri/environment'
 
-export type AetherBackendInfo = {
-  readonly name: 'aether'
-  readonly mode: AetherConfig['hostMode']
+export type KiriBackendInfo = {
+  readonly name: 'kiri'
+  readonly mode: KiriConfig['hostMode']
   readonly rootDir: string
   readonly stateDir: string
   readonly dbPath: string
@@ -18,20 +18,20 @@ export type AetherBackendInfo = {
 export type FetchHandler = (request: ServerRequest) => Response | Promise<Response>
 export type ReadinessCheck = () => void | Promise<void>
 
-export type StartAetherBackendInput = {
+export type StartKiriBackendInput = {
   readonly fetch: FetchHandler
   readonly host?: string
   readonly port?: number
-  readonly config?: AetherConfig
+  readonly config?: KiriConfig
   readonly readiness?: ReadinessCheck
 }
 
-export type AetherBackendServer = ReturnType<typeof serve>
+export type KiriBackendServer = ReturnType<typeof serve>
 
-export async function startAetherBackend(input: StartAetherBackendInput): Promise<AetherBackendServer> {
-  const config = input.config ?? getAetherConfig()
+export async function startKiriBackend(input: StartKiriBackendInput): Promise<KiriBackendServer> {
+  const config = input.config ?? getKiriConfig()
   const server = serve({
-    fetch: createAetherFetchHandler(input.fetch, {
+    fetch: createKiriFetchHandler(input.fetch, {
       config,
       readiness: input.readiness,
     }),
@@ -43,18 +43,18 @@ export async function startAetherBackend(input: StartAetherBackendInput): Promis
   return server
 }
 
-export function createAetherFetchHandler(
+export function createKiriFetchHandler(
   appFetch: FetchHandler,
   options: {
-    readonly config?: AetherConfig
+    readonly config?: KiriConfig
     readonly readiness?: ReadinessCheck
   } = {},
 ): FetchHandler {
-  const config = options.config ?? getAetherConfig()
+  const config = options.config ?? getKiriConfig()
   const readiness = options.readiness ?? checkBackendReadiness
   return async (request) => {
     const url = new URL(request.url)
-    if (url.pathname === aetherEnvironmentPath) {
+    if (url.pathname === kiriEnvironmentPath) {
       try {
         await readiness()
         return Response.json(environmentInfo(config), {
@@ -65,7 +65,7 @@ export function createAetherFetchHandler(
       } catch (cause) {
         return Response.json(
           {
-            name: 'aether',
+            name: 'kiri',
             ready: false,
             error: cause instanceof Error ? cause.message : String(cause),
           },
@@ -87,9 +87,9 @@ function checkBackendReadiness() {
   getDb()
 }
 
-export function environmentInfo(config: AetherConfig): AetherBackendInfo {
+export function environmentInfo(config: KiriConfig): KiriBackendInfo {
   return {
-    name: 'aether',
+    name: 'kiri',
     mode: config.hostMode,
     rootDir: config.rootDir,
     stateDir: config.stateDir,

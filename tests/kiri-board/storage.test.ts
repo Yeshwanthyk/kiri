@@ -11,9 +11,9 @@ import {
   saveKeymap,
   updateChatDraft,
   type StorageLike,
-} from '~/components/aether-board/storage'
-import { defaultKeymap } from '~/components/aether-board/navigation'
-import { defaultThemeSelection } from '~/theme/aether-themes'
+} from '~/components/kiri-board/storage'
+import { defaultKeymap } from '~/components/kiri-board/navigation'
+import { defaultThemeSelection } from '~/theme/kiri-themes'
 
 function memoryStorage(initial: Record<string, string> = {}): StorageLike {
   const values = new Map(Object.entries(initial))
@@ -41,10 +41,10 @@ describe('keymap storage', () => {
 
   it('falls back to defaults for duplicate or unsupported bindings', () => {
     const duplicate = memoryStorage({
-      'aether:keymap:v1': JSON.stringify({ ...defaultKeymap, projectPrev: 'j' }),
+      'kiri:keymap:v1': JSON.stringify({ ...defaultKeymap, projectPrev: 'j' }),
     })
     const unsupported = memoryStorage({
-      'aether:keymap:v1': JSON.stringify({ ...defaultKeymap, projectPrev: '?' }),
+      'kiri:keymap:v1': JSON.stringify({ ...defaultKeymap, projectPrev: '?' }),
     })
 
     expect(readStoredKeymap(duplicate)).toEqual(defaultKeymap)
@@ -101,7 +101,7 @@ describe('chat draft storage', () => {
 
   it('ignores non-string draft entries', () => {
     const storage = memoryStorage({
-      'aether:chat-drafts:v1': JSON.stringify({ good: 'draft', bad: 7 }),
+      'kiri:chat-drafts:v1': JSON.stringify({ good: 'draft', bad: 7 }),
     })
 
     expect(readStoredChatDrafts(storage)).toEqual({ good: 'draft' })

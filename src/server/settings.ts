@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs'
-import type { AetherSettings, RuntimeKind } from '~/lib/contracts'
-import { aetherSettingsSchema } from '~/lib/contracts'
-import { getAetherConfig } from './aether-config'
+import type { KiriSettings, RuntimeKind } from '~/lib/contracts'
+import { kiriSettingsSchema } from '~/lib/contracts'
+import { getKiriConfig } from './kiri-config'
 
-export function getSettings(): AetherSettings {
-  const settingsPath = getAetherConfig().settingsPath
-  const parsed = aetherSettingsSchema.parse(
+export function getSettings(): KiriSettings {
+  const settingsPath = getKiriConfig().settingsPath
+  const parsed = kiriSettingsSchema.parse(
     JSON.parse(readFileSync(settingsPath, 'utf8')),
   )
 

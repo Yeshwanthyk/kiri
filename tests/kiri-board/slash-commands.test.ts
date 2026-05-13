@@ -4,7 +4,7 @@ import {
   parseSlashCommand,
   runSlashCommand,
   supportsThinking,
-} from '~/components/aether-board/slash-commands'
+} from '~/components/kiri-board/slash-commands'
 
 function agent(runtime: AgentCell['runtime']): AgentCell {
   return {

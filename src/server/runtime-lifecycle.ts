@@ -154,7 +154,7 @@ const liveProjector: RuntimeLifecycleProjection = {
   }),
 }
 
-export class RuntimeProjector extends Context.Tag('@aether/RuntimeProjector')<
+export class RuntimeProjector extends Context.Tag('@kiri/RuntimeProjector')<
   RuntimeProjector,
   RuntimeLifecycleProjection
 >() {

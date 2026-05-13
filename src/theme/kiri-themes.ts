@@ -1,5 +1,5 @@
-export const aetherThemeNames = [
-  'aether',
+export const kiriThemeNames = [
+  'kiri',
   'vesper',
   'github',
   'tokyonight',
@@ -8,11 +8,11 @@ export const aetherThemeNames = [
   'rosepine',
 ] as const
 
-export type AetherThemeName = (typeof aetherThemeNames)[number]
+export type KiriThemeName = (typeof kiriThemeNames)[number]
 export type ThemeMode = 'dark' | 'light'
 
 export type ThemeSelection = {
-  name: AetherThemeName
+  name: KiriThemeName
   mode: ThemeMode
 }
 
@@ -31,18 +31,18 @@ type ThemeTokens = {
   success: string
 }
 
-type AetherTheme = Record<ThemeMode, ThemeTokens>
+type KiriTheme = Record<ThemeMode, ThemeTokens>
 
-export const defaultThemeSelection: ThemeSelection = { name: 'aether', mode: 'light' }
+export const defaultThemeSelection: ThemeSelection = { name: 'kiri', mode: 'light' }
 
-function isAetherThemeName(value: string): value is AetherThemeName {
-  return (aetherThemeNames as readonly string[]).includes(value)
+function isKiriThemeName(value: string): value is KiriThemeName {
+  return (kiriThemeNames as readonly string[]).includes(value)
 }
 
 export function normalizeThemeSelection(value: unknown): ThemeSelection {
   if (!value || typeof value !== 'object') return defaultThemeSelection
   const record = value as Record<string, unknown>
-  const name = typeof record.name === 'string' && isAetherThemeName(record.name)
+  const name = typeof record.name === 'string' && isKiriThemeName(record.name)
     ? record.name
     : defaultThemeSelection.name
   const mode = record.mode === 'dark' || record.mode === 'light'
@@ -51,8 +51,8 @@ export function normalizeThemeSelection(value: unknown): ThemeSelection {
   return { name, mode }
 }
 
-function resolveAetherTheme(selection: ThemeSelection): Record<`--${string}`, string> {
-  const theme = aetherThemes[selection.name][selection.mode]
+function resolveKiriTheme(selection: ThemeSelection): Record<`--${string}`, string> {
+  const theme = kiriThemes[selection.name][selection.mode]
   const vars: Record<`--${string}`, string> = {
     '--paper': theme.paper,
     '--panel': theme.panel,
@@ -88,14 +88,14 @@ function resolveAetherTheme(selection: ThemeSelection): Record<`--${string}`, st
   return vars
 }
 
-export type AetherThemeTokens = ThemeTokens
+export type KiriThemeTokens = ThemeTokens
 
-export function getAetherThemeTokens(selection: ThemeSelection): AetherThemeTokens {
-  return aetherThemes[selection.name][selection.mode]
+export function getKiriThemeTokens(selection: ThemeSelection): KiriThemeTokens {
+  return kiriThemes[selection.name][selection.mode]
 }
 
-export function applyAetherTheme(element: HTMLElement, selection: ThemeSelection): void {
-  const vars = resolveAetherTheme(selection)
+export function applyKiriTheme(element: HTMLElement, selection: ThemeSelection): void {
+  const vars = resolveKiriTheme(selection)
   element.dataset.theme = selection.name
   element.dataset.themeMode = selection.mode
   element.style.colorScheme = selection.mode
@@ -108,8 +108,8 @@ function mix(color: string, percent: number, target: string): string {
   return `color-mix(in oklab, ${color} ${percent}%, ${target})`
 }
 
-const aetherThemes: Record<AetherThemeName, AetherTheme> = {
-  aether: {
+const kiriThemes: Record<KiriThemeName, KiriTheme> = {
+  kiri: {
     light: {
       paper: 'oklch(0.965 0.008 84)',
       panel: 'oklch(0.988 0.006 84)',

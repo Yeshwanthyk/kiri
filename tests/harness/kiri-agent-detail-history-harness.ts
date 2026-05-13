@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const tempRoot = mkdtempSync(join(tmpdir(), 'aether-detail-history-'))
+const tempRoot = mkdtempSync(join(tmpdir(), 'kiri-detail-history-'))
 const agentId = 'history-agent'
 const threadId = 'history-thread'
 const totalRows = 620
@@ -24,14 +24,14 @@ const harnessOutputSchema = z.object({
 })
 
 try {
-  process.env.AETHER_ROOT_DIR = repoRoot
-  process.env.AETHER_DB_PATH = join(tempRoot, 'aether.sqlite')
-  process.env.AETHER_STATE_DIR = join(tempRoot, 'state')
-  process.env.AETHER_SETTINGS_PATH = resolve(repoRoot, 'settings.json')
+  process.env.KIRI_ROOT_DIR = tempRoot
+  process.env.KIRI_DB_PATH = join(tempRoot, 'kiri.sqlite')
+  process.env.KIRI_STATE_DIR = join(tempRoot, 'state')
+  process.env.KIRI_SETTINGS_PATH = resolve(repoRoot, 'settings.json')
 
   const [{ getAgentDetail, getDb }, { deriveAgentTimelineRows }] = await Promise.all([
     import('../../src/server/db'),
-    import('../../src/components/aether-board/timeline'),
+    import('../../src/components/kiri-board/timeline'),
   ])
 
   const database = getDb()

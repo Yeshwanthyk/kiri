@@ -6,25 +6,25 @@ import { join, resolve } from 'node:path'
 
 const appOutDir = resolve(process.argv[2] ?? findMacAppOutDir())
 const electronApp = join(appOutDir, 'Electron.app')
-const aetherApp = join(appOutDir, 'Aether.app')
-const appPath = existsSync(aetherApp) ? aetherApp : electronApp
+const kiriApp = join(appOutDir, 'kiri.app')
+const appPath = existsSync(kiriApp) ? kiriApp : electronApp
 
 if (!existsSync(appPath)) {
   throw new Error(`Packaged app not found in ${appOutDir}`)
 }
 
 const plistPath = join(appPath, 'Contents', 'Info.plist')
-setPlistValue(plistPath, 'CFBundleName', 'Aether')
-setPlistValue(plistPath, 'CFBundleDisplayName', 'Aether')
-setPlistValue(plistPath, 'CFBundleExecutable', 'Aether')
+setPlistValue(plistPath, 'CFBundleName', 'kiri')
+setPlistValue(plistPath, 'CFBundleDisplayName', 'kiri')
+setPlistValue(plistPath, 'CFBundleExecutable', 'kiri')
 
 if (appPath === electronApp) {
   const oldExecutable = join(electronApp, 'Contents', 'MacOS', 'Electron')
-  const newExecutable = join(electronApp, 'Contents', 'MacOS', 'Aether')
+  const newExecutable = join(electronApp, 'Contents', 'MacOS', 'kiri')
   if (existsSync(oldExecutable) && !existsSync(newExecutable)) {
     renameSync(oldExecutable, newExecutable)
   }
-  renameSync(electronApp, aetherApp)
+  renameSync(electronApp, kiriApp)
 }
 
 function setPlistValue(plistPath, key, value) {

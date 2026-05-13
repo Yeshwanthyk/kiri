@@ -7,8 +7,8 @@ import packageJson from '../package.json' with { type: 'json' }
 
 const arch = process.env.npm_config_arch ?? process.arch
 const appOutDir = resolve(process.argv[2] ?? `dist/mac-${arch}`)
-const appPath = resolve(appOutDir, 'Aether.app')
-const dmgPath = resolve(process.argv[3] ?? `dist/Aether-${packageJson.version}-${arch}.dmg`)
+const appPath = resolve(appOutDir, 'kiri.app')
+const dmgPath = resolve(process.argv[3] ?? `dist/kiri-${packageJson.version}-${arch}.dmg`)
 
 if (!existsSync(appPath)) {
   throw new Error(`Packaged app not found: ${appPath}`)
@@ -23,7 +23,7 @@ execFileSync(
     '-srcfolder',
     appPath,
     '-volname',
-    'Aether',
+    'kiri',
     '-format',
     'UDZO',
     '-imagekey',

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { groupBlocksByDay } from '../../src/components/aether-board/scratchpad'
+import { groupBlocksByDay } from '../../src/components/kiri-board/scratchpad'
 import type { ScratchpadBlock } from '../../src/lib/contracts'
 
 function block(id: string, createdAt: string): ScratchpadBlock {

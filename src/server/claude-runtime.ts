@@ -791,7 +791,7 @@ function answersForClaude(answers: AnswerQuestionInput['answers']) {
 }
 
 function createClaudeQuery(params: { prompt: AsyncIterable<SDKUserMessage>; options: ClaudeOptions }) {
-  if (process.env.AETHER_FAKE_CLAUDE === '1') return fakeClaudeQuery(params)
+  if (process.env.KIRI_FAKE_CLAUDE === '1') return fakeClaudeQuery(params)
   return claudeQuery(params)
 }
 
@@ -1099,23 +1099,23 @@ function normalizeTaskStatus(value: string | undefined): AgentTask['status'] | u
 
 function claudeEnvironment(state: ClaudeRuntimeState): NodeJS.ProcessEnv {
   const env = runtimeProcessEnv()
-  if (process.env.AETHER_CLAUDE_USE_EXTERNAL_API_KEY !== '1') {
+  if (process.env.KIRI_CLAUDE_USE_EXTERNAL_API_KEY !== '1') {
     delete env.ANTHROPIC_API_KEY
     delete env.ANTHROPIC_AUTH_TOKEN
     delete env.ANTHROPIC_OAUTH_TOKEN
   }
-  const homePath = process.env.AETHER_CLAUDE_HOME ?? state.homePath
+  const homePath = process.env.KIRI_CLAUDE_HOME ?? state.homePath
   if (homePath) env.HOME = homePath
   return env
 }
 
 function resolveClaudeExecutable(state: ClaudeRuntimeState) {
-  const configuredPath = process.env.AETHER_CLAUDE_BIN ?? state.binaryPath
+  const configuredPath = process.env.KIRI_CLAUDE_BIN ?? state.binaryPath
   return resolveRuntimeExecutable('claude', configuredPath)
 }
 
 function extraArgsOption(): Pick<ClaudeOptions, 'extraArgs'> {
-  const extraArgs = parseCliArgs(process.env.AETHER_CLAUDE_ARGS)
+  const extraArgs = parseCliArgs(process.env.KIRI_CLAUDE_ARGS)
   return Object.keys(extraArgs).length > 0 ? { extraArgs } : {}
 }
 

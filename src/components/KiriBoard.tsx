@@ -61,17 +61,17 @@ import type {
   ThinkingLevel,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
-import { getAetherHostBridge, pickProjectDirectory } from '~/lib/host-capabilities'
+import { getKiriHostBridge, pickProjectDirectory } from '~/lib/host-capabilities'
 import { thinkingLevelSchema } from '~/lib/contracts'
 import {
-  applyAetherTheme,
+  applyKiriTheme,
   defaultThemeSelection,
-  getAetherThemeTokens,
-  aetherThemeNames,
-  type AetherThemeName,
+  getKiriThemeTokens,
+  kiriThemeNames,
+  type KiriThemeName,
   type ThemeMode,
   type ThemeSelection,
-} from '~/theme/aether-themes'
+} from '~/theme/kiri-themes'
 import {
   addProjectMutation,
   addScratchpadBlockMutation,
@@ -109,7 +109,7 @@ import {
   type AgentTimelineRow,
   type TimelineWorkEntry,
   workCallLabel,
-} from './aether-board/timeline'
+} from './kiri-board/timeline'
 import {
   errorMessage,
   formatAgo,
@@ -120,10 +120,10 @@ import {
   formatTokenCount,
   projectNameFromPath,
   projectSummary,
-} from './aether-board/format'
-import { imageKey, pendingPromptText, readImageFile } from './aether-board/images'
-import { ScratchpadHeader, ScratchpadPanel } from './aether-board/scratchpad'
-import { TaskProgressStrip } from './aether-board/task-progress'
+} from './kiri-board/format'
+import { imageKey, pendingPromptText, readImageFile } from './kiri-board/images'
+import { ScratchpadHeader, ScratchpadPanel } from './kiri-board/scratchpad'
+import { TaskProgressStrip } from './kiri-board/task-progress'
 import {
   actionForKey,
   defaultKeymap,
@@ -136,7 +136,7 @@ import {
   type KeymapAction,
   type KeymapSettings,
   type Selection,
-} from './aether-board/navigation'
+} from './kiri-board/navigation'
 import {
   applyChatTypography,
   chatFontSizes,
@@ -153,13 +153,13 @@ import {
   type ChatFontSize,
   type ChatTypographySettings,
   type MonoFont,
-} from './aether-board/storage'
+} from './kiri-board/storage'
 import {
   parseSlashCommand,
   runSlashCommand,
   supportsThinking,
   type SlashCommand,
-} from './aether-board/slash-commands'
+} from './kiri-board/slash-commands'
 
 type SidebarTab = 'chat' | 'diffs' | 'terminal' | 'scratchpad'
 type DiffStyle = 'unified' | 'split'
@@ -199,7 +199,7 @@ type CommandPaletteAction = {
 
 const sessionThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
 
-export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
+export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [workspace, setWorkspace] = React.useState(snapshot)
   const [selection, setSelection] = React.useState<Selection>(snapshot.selected)
   const [tab, setTab] = React.useState<SidebarTab>('chat')
@@ -266,7 +266,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }, [])
 
   React.useEffect(() => {
-    applyAetherTheme(document.documentElement, themeSelection)
+    applyKiriTheme(document.documentElement, themeSelection)
   }, [themeSelection])
 
   React.useEffect(() => {
@@ -784,7 +784,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   )
 
   React.useEffect(() => {
-    const unsubscribe = getAetherHostBridge()?.onMenuAction?.((actionId) => {
+    const unsubscribe = getKiriHostBridge()?.onMenuAction?.((actionId) => {
       const action = commandActions.find((item) => item.id === actionId)
       if (!action || action.disabled) return
       action.run()
@@ -841,7 +841,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
             <FolderOpen size={22} />
           </div>
           <div>
-            <p className="empty-project-kicker">Aether</p>
+            <p className="empty-project-kicker">kiri</p>
             <h1>No projects yet</h1>
             <p>Add a local repo to start sessions on this machine.</p>
           </div>
@@ -870,7 +870,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   return (
-    <main className="aether-shell">
+    <main className="kiri-shell">
       <MobileTopBar
         project={selectedProject}
         agent={selectedAgent}
@@ -967,7 +967,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           title="Remove project?"
           body={
             <>
-              <strong>{pendingProjectDelete.name}</strong> will be removed from Aether. The project directory and files stay on disk.
+              <strong>{pendingProjectDelete.name}</strong> will be removed from kiri. The project directory and files stay on disk.
             </>
           }
           confirmLabel="Remove project"
@@ -1096,7 +1096,7 @@ function SettingsScreen({
           <ArrowLeft size={14} aria-hidden="true" />
           board
         </button>
-        <span className="settings-crumb">aether / settings</span>
+        <span className="settings-crumb">kiri / settings</span>
       </header>
 
       <div className="settings-rail" role="region" aria-label="Settings">
@@ -1723,7 +1723,7 @@ function ProjectManagerDialog({
         title="Remove project?"
         body={
           <>
-            <strong>{pendingRemoveProject.name}</strong> will be removed from Aether. The project directory and files stay on disk.
+            <strong>{pendingRemoveProject.name}</strong> will be removed from kiri. The project directory and files stay on disk.
           </>
         }
         confirmLabel="Remove project"
@@ -1783,7 +1783,7 @@ function ThemeSettingsPanel({
       </div>
 
       <div className="theme-grid" role="radiogroup" aria-label="Theme name">
-        {aetherThemeNames.map((name) => (
+        {kiriThemeNames.map((name) => (
           <ThemeCard
             key={name}
             name={name}
@@ -1803,12 +1803,12 @@ function ThemeCard({
   selected,
   onSelect,
 }: {
-  name: AetherThemeName
+  name: KiriThemeName
   mode: ThemeMode
   selected: boolean
   onSelect: () => void
 }) {
-  const tokens = getAetherThemeTokens({ name, mode })
+  const tokens = getKiriThemeTokens({ name, mode })
   const cardStyle = {
     '--tc-paper': tokens.paper,
     '--tc-panel': tokens.panel,
@@ -2228,7 +2228,7 @@ function MobileTopBar({
           onClick={onOpenAgentSwitcher}
           aria-label="Open all sessions"
         >
-          <span>Aether</span>
+          <span>kiri</span>
           <strong>{project.name}</strong>
           <ChevronDown size={13} aria-hidden="true" />
         </button>
@@ -4299,7 +4299,7 @@ function TerminalPanel({
           if (!term || !socket) return
           setStatus('Connected')
           socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-          const banner = `Aether terminal · ${project.cwd}\r\n\r\n`
+          const banner = `kiri terminal · ${project.cwd}\r\n\r\n`
           term.write(banner)
           appendTerminalTranscript(setTranscript, banner)
         }
@@ -4312,7 +4312,7 @@ function TerminalPanel({
         socket.onclose = () => {
           if (!disposed) {
             setStatus('Closed')
-            appendTerminalTranscript(setTranscript, '\r\n[Aether terminal socket closed]\r\n')
+            appendTerminalTranscript(setTranscript, '\r\n[kiri terminal socket closed]\r\n')
           }
         }
         socket.onerror = () => {

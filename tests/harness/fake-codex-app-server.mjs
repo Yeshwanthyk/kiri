@@ -243,7 +243,7 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
       const fileItem = {
         type: 'fileChange',
         id: `fake-file-${nextTurn}`,
-        path: 'src/aether-file-operation-e2e.tmp',
+        path: 'src/kiri-file-operation-e2e.tmp',
       }
       const turn = {
         id: turnId,

@@ -103,7 +103,7 @@ function shouldSkipDiffPath(path: string) {
   return false
 }
 
-const SKIPPED_DIFF_PREFIXES = new Set(['.pi/', '.aether/', 'node_modules/', 'dist/'])
+const SKIPPED_DIFF_PREFIXES = new Set(['.pi/', '.kiri/', 'node_modules/', 'dist/'])
 
 function splitGitPatch(patch: string) {
   const trimmed = patch.trim()

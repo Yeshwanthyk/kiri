@@ -6,9 +6,9 @@ import { startFakeCodexAppServer } from '../harness/fake-codex-app-server.mjs'
 
 test.describe.configure({ mode: 'serial' })
 
-const testDbPath = resolve(process.env.AETHER_DB_PATH ?? '.aether/aether.e2e.sqlite')
+const testDbPath = resolve(process.env.KIRI_DB_PATH ?? '.kiri/kiri.e2e.sqlite')
 const projectRoot = process.cwd()
-const fileOperationFixturePath = resolve(projectRoot, 'src/aether-file-operation-e2e.tmp')
+const fileOperationFixturePath = resolve(projectRoot, 'src/kiri-file-operation-e2e.tmp')
 const detailFixturePath = resolve(projectRoot, 'src/detail.ts')
 let fakeCodexServer: Awaited<ReturnType<typeof startFakeCodexAppServer>>
 
@@ -25,7 +25,7 @@ test.beforeEach(async ({ page }, testInfo) => {
   rmSync(fileOperationFixturePath, { force: true })
   rmSync(detailFixturePath, { force: true })
   mkdirSync(dirname(testDbPath), { recursive: true })
-  rmSync(resolve(projectRoot, '.aether', 'pi-sessions', 'e2e-aether'), {
+  rmSync(resolve(projectRoot, '.kiri', 'pi-sessions', 'e2e-kiri'), {
     force: true,
     recursive: true,
   })
@@ -34,7 +34,7 @@ test.beforeEach(async ({ page }, testInfo) => {
   if (testInfo.title !== 'empty workspace starts with an add-project path') {
     database.exec(`
     INSERT INTO projects (id, name, cwd, position)
-    VALUES ('e2e-aether', 'Aether Orchestrator', '${projectRoot.replaceAll("'", "''")}', 0);
+    VALUES ('e2e-kiri', 'kiri Orchestrator', '${projectRoot.replaceAll("'", "''")}', 0);
     INSERT INTO projects (id, name, cwd, position)
     VALUES ('test-reference', 'Test Reference', '/Users/yesh/Documents/personal/reference/test', 1);
   `)
@@ -108,7 +108,7 @@ test('keyboard navigation moves projects without default sessions', async ({ pag
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
 
   const firstProject = await page.getByTestId('selected-project').textContent()
-  await expect(page.getByTestId('selected-project')).toContainText(/aether/i)
+  await expect(page.getByTestId('selected-project')).toContainText(/kiri/i)
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
   if (!isMobile) {
     await expect(page.getByTestId('empty-project-sessions').first()).toBeVisible()
@@ -119,7 +119,7 @@ test('keyboard navigation moves projects without default sessions', async ({ pag
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
 
   await pressShiftKey(page, 'KeyK')
-  await expect(page.getByTestId('selected-project')).toContainText(/aether/i)
+  await expect(page.getByTestId('selected-project')).toContainText(/kiri/i)
 })
 
 test('keymap settings remap navigation', async ({ page }) => {
@@ -134,7 +134,7 @@ test('keymap settings remap navigation', async ({ page }) => {
   await page.getByRole('button', { name: 'Back to board' }).click()
 
   await pressShiftKey(page, 'KeyJ')
-  await expect(page.getByTestId('selected-project')).toContainText(/aether/i)
+  await expect(page.getByTestId('selected-project')).toContainText(/kiri/i)
 
   await pressShiftKey(page, 'ArrowDown')
   await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
@@ -286,14 +286,14 @@ test('projects panel adds, hides, and unhides projects', async ({ page }, testIn
   await page.getByRole('button', { name: 'Add' }).click()
 
   await expect(page.getByTestId('project-settings-list')).toContainText(name)
-  await page.getByRole('button', { name: 'Done' }).click()
+  await page.getByRole('button', { name: 'Close projects' }).click()
   await expect(page.getByTestId('board-pane')).toContainText(name)
   await page.getByRole('button', { name: 'Projects' }).click()
 
   await page.getByRole('button', { name: `Hide ${name}` }).click()
   await expect(page.getByTestId('project-settings-list')).not.toContainText(name)
   await expect(page.getByTestId('hidden-project-list')).toContainText(name)
-  await page.getByRole('button', { name: 'Done' }).click()
+  await page.getByRole('button', { name: 'Close projects' }).click()
   await expect(page.getByTestId('board-pane')).not.toContainText(name)
 
   await page.keyboard.press('Control+K')
@@ -313,7 +313,7 @@ test('projects panel adds, hides, and unhides projects', async ({ page }, testIn
   await expect(page.getByTestId('confirm-dialog')).toContainText('project directory and files stay on disk')
   await page.getByTestId('confirm-dialog-confirm').click()
   await expect(page.getByTestId('project-settings-list')).not.toContainText(name)
-  await page.getByRole('button', { name: 'Done' }).click()
+  await page.getByRole('button', { name: 'Close projects' }).click()
   await expect(page.getByTestId('board-pane')).not.toContainText(name)
 })
 
@@ -358,11 +358,18 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
   const fileOperationText = `please perform file operation ${testInfo.project.name}`
   await page.getByTestId('chat-input').fill(fileOperationText)
   await page.getByRole('button', { name: 'Send prompt' }).click()
+  await expect(page.getByLabel('Runtime activity').last()).toBeVisible({
+    timeout: 30_000,
+  })
+  await showLatestActivity(page)
   await expect(page.getByTestId('chat-panel')).toContainText('Editing', {
     timeout: 30_000,
   })
+  await expect.poll(() => diffPathsForSessionTitle(title), {
+    timeout: 30_000,
+  }).toContain('src/kiri-file-operation-e2e.tmp')
+  await showLatestActivity(page)
   await expect(page.getByTestId('chat-panel')).toContainText('Edited')
-  expect(diffPathsForSessionTitle(title)).toContain('src/aether-file-operation-e2e.tmp')
 
   const requests = fakeCodexServer.requests as CodexHarnessRequest[]
   expect(requests.some((request) => request.method === 'initialize')).toBe(true)
@@ -391,6 +398,7 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
     `fake codex received: ${compactWithoutUsageText}`,
     { timeout: 30_000 },
   )
+  await showLatestActivity(page)
   await expect(page.getByTestId('chat-panel')).toContainText('Context compacted')
   await expect(page.locator('.context-chip')).toHaveCount(0)
 
@@ -412,6 +420,7 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
   await expect(page.getByTestId('chat-panel')).toContainText(`fake codex received: ${compactText}`, {
     timeout: 30_000,
   })
+  await showLatestActivity(page)
   await expect(page.getByTestId('chat-panel')).toContainText('Context compacted')
   await expect(page.locator('.context-chip')).toHaveAttribute(
     'title',
@@ -452,6 +461,10 @@ test('claude runtime runs through claude-agent-sdk harness', async ({ page }, te
   await expect(page.getByTestId('chat-panel')).toContainText(`fake claude received: ${text}`, {
     timeout: 30_000,
   })
+  await expect(page.getByLabel('Runtime activity').last()).toBeVisible({
+    timeout: 30_000,
+  })
+  await showLatestActivity(page)
   await expect(page.getByTestId('chat-panel')).toContainText('Read-package.json', {
     timeout: 30_000,
   })
@@ -586,7 +599,7 @@ test('selected agent detail loads chat, diffs, and local drafts', async ({ page,
   await expect(page.getByTestId('chat-input')).toHaveValue('')
   await page.getByRole('button', { name: 'Detail Session' }).click()
   await expect(page.getByTestId('chat-input')).toHaveValue('local unsent draft')
-  await expect(page.evaluate(() => sessionStorage.getItem('aether:chat-drafts:v1')))
+  await expect(page.evaluate(() => sessionStorage.getItem('kiri:chat-drafts:v1')))
     .resolves.toContain(detailAgentId)
 })
 
@@ -695,7 +708,7 @@ function seedSessionWithDetail(input: {
       session_dir, session_file, position
     )
     VALUES (
-      '${input.agentId}', 'e2e-aether', '${input.slot}', '${escapedTitle}',
+      '${input.agentId}', 'e2e-kiri', '${input.slot}', '${escapedTitle}',
       'pi', 'openai-codex/gpt-5.5', 'idle',
       '${projectRoot.replaceAll("'", "''")}', NULL, ${input.position ?? 0}
     );
@@ -762,4 +775,11 @@ async function pressShiftKey(page: import('@playwright/test').Page, key: string)
   await page.keyboard.down('Shift')
   await page.keyboard.press(key)
   await page.keyboard.up('Shift')
+}
+
+async function showLatestActivity(page: import('@playwright/test').Page) {
+  const collapsedActivityRows = page.getByRole('button', { name: 'Show' })
+  if (await collapsedActivityRows.count()) {
+    await collapsedActivityRows.last().click()
+  }
 }

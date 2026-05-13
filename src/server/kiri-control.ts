@@ -51,17 +51,17 @@ type SessionSummary = {
   readonly archivedAt: string | null
 }
 
-class AetherControlError extends Schema.TaggedError<AetherControlError>()(
-  'AetherControlError',
+class KiriControlError extends Schema.TaggedError<KiriControlError>()(
+  'KiriControlError',
   {
     message: Schema.String,
     cause: Schema.Defect,
   },
 ) {}
 
-type ControlEffect<A> = Effect.Effect<A, AetherControlError>
+type ControlEffect<A> = Effect.Effect<A, KiriControlError>
 
-export type AetherControlApi = {
+export type KiriControlApi = {
   readonly snapshot: () => ControlEffect<WorkspaceSnapshot>
   readonly listModels: (runtime?: RuntimeKind) => ControlEffect<readonly ModelChoice[]>
   readonly listProjects: (includeHidden?: boolean) => ControlEffect<readonly ProjectSummary[]>
@@ -82,19 +82,19 @@ export type AetherControlApi = {
   readonly restoreSession: (input: RestoreSessionInput) => ControlEffect<SessionSummary>
 }
 
-export class AetherControl extends Context.Tag('@aether/AetherControl')<
-  AetherControl,
-  AetherControlApi
+export class KiriControl extends Context.Tag('@kiri/KiriControl')<
+  KiriControl,
+  KiriControlApi
 >() {
-  static readonly layer = Layer.sync(AetherControl, makeAetherControl)
+  static readonly layer = Layer.sync(KiriControl, makeKiriControl)
 }
 
-function makeAetherControl(): AetherControlApi {
-  const snapshot = Effect.fn('AetherControl.snapshot')(function* () {
+function makeKiriControl(): KiriControlApi {
+  const snapshot = Effect.fn('KiriControl.snapshot')(function* () {
     return yield* fromSync(getWorkspaceSnapshot)
   })
 
-  const listModels = Effect.fn('AetherControl.listModels')(function* (runtime?: RuntimeKind) {
+  const listModels = Effect.fn('KiriControl.listModels')(function* (runtime?: RuntimeKind) {
     return yield* fromSync(() => {
       const settings = getSettings()
       const runtimes = runtime ? [runtime] : (Object.keys(settings.runtimes) as RuntimeKind[])
@@ -110,47 +110,47 @@ function makeAetherControl(): AetherControlApi {
     })
   })
 
-  const listProjects = Effect.fn('AetherControl.listProjects')(function* (includeHidden = false) {
+  const listProjects = Effect.fn('KiriControl.listProjects')(function* (includeHidden = false) {
     return yield* fromSync(() => listProjectSummaries(includeHidden))
   })
 
-  const addProjectEffect = Effect.fn('AetherControl.addProject')(function* (input: AddProjectInput) {
+  const addProjectEffect = Effect.fn('KiriControl.addProject')(function* (input: AddProjectInput) {
     return yield* fromSync(() => addProjectSummary(input))
   })
 
-  const hideProjectEffect = Effect.fn('AetherControl.hideProject')(function* (id: string) {
+  const hideProjectEffect = Effect.fn('KiriControl.hideProject')(function* (id: string) {
     return yield* fromSync(() => hideProjectSummary(id))
   })
 
-  const unhideProjectEffect = Effect.fn('AetherControl.unhideProject')(function* (id: string) {
+  const unhideProjectEffect = Effect.fn('KiriControl.unhideProject')(function* (id: string) {
     return yield* fromSync(() => unhideProjectSummary(id))
   })
 
-  const deleteProjectEffect = Effect.fn('AetherControl.deleteProject')(function* (id: string) {
+  const deleteProjectEffect = Effect.fn('KiriControl.deleteProject')(function* (id: string) {
     return yield* fromSync(() => deleteProjectSummary(id))
   })
 
-  const listSessions = Effect.fn('AetherControl.listSessions')(
+  const listSessions = Effect.fn('KiriControl.listSessions')(
     function* (input: { readonly projectId?: string; readonly includeArchived?: boolean } = {}) {
       return yield* fromSync(() => listSessionSummaries(input))
     },
   )
 
-  const startSessionEffect = Effect.fn('AetherControl.startSession')(function* (input: StartSessionInput) {
+  const startSessionEffect = Effect.fn('KiriControl.startSession')(function* (input: StartSessionInput) {
     return yield* fromSync(() => startSessionSummary(input))
   })
 
-  const renameSessionEffect = Effect.fn('AetherControl.renameSession')(
+  const renameSessionEffect = Effect.fn('KiriControl.renameSession')(
     function* (input: { readonly agentId: string; readonly title: string }) {
       return yield* fromSync(() => renameSessionSummary(input))
     },
   )
 
-  const deleteSessionEffect = Effect.fn('AetherControl.deleteSession')(function* (agentId: string) {
+  const deleteSessionEffect = Effect.fn('KiriControl.deleteSession')(function* (agentId: string) {
     return yield* fromSync(() => deleteSessionSummary({ agentId }))
   })
 
-  const restoreSessionEffect = Effect.fn('AetherControl.restoreSession')(function* (input: RestoreSessionInput) {
+  const restoreSessionEffect = Effect.fn('KiriControl.restoreSession')(function* (input: RestoreSessionInput) {
     return yield* fromSync(() => restoreSessionSummary(input))
   })
 
@@ -178,7 +178,7 @@ function fromSync<A>(evaluate: () => A) {
 }
 
 function normalizeError(error: unknown) {
-  return new AetherControlError({
+  return new KiriControlError({
     message: error instanceof Error ? error.message : String(error),
     cause: error,
   })

@@ -7,9 +7,9 @@ import {
   formatTokenCount,
   projectNameFromPath,
   projectSummary,
-} from '../../src/components/aether-board/format'
+} from '../../src/components/kiri-board/format'
 
-describe('aether-board formatting helpers', () => {
+describe('kiri-board formatting helpers', () => {
   it('formats compact keyboard labels', () => {
     expect(formatKeyShort('arrowdown')).toBe('Down')
     expect(formatKeyShort('k')).toBe('K')
@@ -32,8 +32,8 @@ describe('aether-board formatting helpers', () => {
 
   it('formats project labels from registry values', () => {
     expect(projectNameFromPath('/Users/yesh/Documents/personal/pican/')).toBe('pican')
-    expect(projectSummary({ name: 'Aether', agents: [] })).toBe('Aether · 0 sessions')
-    expect(projectSummary({ name: 'Aether', agents: [{}] })).toBe('Aether · 1 session')
+    expect(projectSummary({ name: 'Kiri', agents: [] })).toBe('Kiri · 0 sessions')
+    expect(projectSummary({ name: 'Kiri', agents: [{}] })).toBe('Kiri · 1 session')
   })
 
   it('keeps unknown errors terse for UI surfaces', () => {

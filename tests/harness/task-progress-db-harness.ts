@@ -2,14 +2,14 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-const root = mkdtempSync(join(tmpdir(), 'aether-task-progress-'))
+const root = mkdtempSync(join(tmpdir(), 'kiri-task-progress-'))
 
-process.env.AETHER_ROOT_DIR = process.cwd()
-process.env.AETHER_DB_PATH = join(root, 'aether.sqlite')
-process.env.AETHER_STATE_DIR = join(root, 'state')
-process.env.AETHER_SETTINGS_PATH = resolve(process.cwd(), 'settings.json')
-process.env.AETHER_PI_SESSIONS_DIR = join(root, 'pi-sessions')
-process.env.AETHER_RUNTIME_SESSIONS_DIR = join(root, 'runtime-sessions')
+process.env.KIRI_ROOT_DIR = root
+process.env.KIRI_DB_PATH = join(root, 'kiri.sqlite')
+process.env.KIRI_STATE_DIR = join(root, 'state')
+process.env.KIRI_SETTINGS_PATH = resolve(process.cwd(), 'settings.json')
+process.env.KIRI_PI_SESSIONS_DIR = join(root, 'pi-sessions')
+process.env.KIRI_RUNTIME_SESSIONS_DIR = join(root, 'runtime-sessions')
 
 try {
   const {

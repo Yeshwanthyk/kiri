@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentCell } from '~/lib/contracts'
-import { mergeAgentDetail } from '~/components/AetherBoard'
+import { mergeAgentDetail } from '~/components/KiriBoard'
 
 const now = '2026-05-11T12:00:00.000Z'
 

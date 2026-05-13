@@ -29,10 +29,10 @@ describe('git diff capture', () => {
 })
 
 function initRepo() {
-  const dir = mkdtempSync(join(tmpdir(), 'aether-git-diff-'))
+  const dir = mkdtempSync(join(tmpdir(), 'kiri-git-diff-'))
   runGit(dir, ['init'])
   runGit(dir, ['config', 'user.email', 'test@example.com'])
-  runGit(dir, ['config', 'user.name', 'Aether Test'])
+  runGit(dir, ['config', 'user.name', 'Kiri Test'])
   writeFileSync(join(dir, 'tracked.ts'), 'export const value = 1\n')
   runGit(dir, ['add', 'tracked.ts'])
   runGit(dir, ['commit', '-m', 'initial'])

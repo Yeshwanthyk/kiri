@@ -39,8 +39,8 @@ export function ensureTerminalServer(): Promise<TerminalServerInfo> {
 }
 
 async function startTerminalServer(): Promise<TerminalServerInfo> {
-  const host = process.env.AETHER_TERMINAL_HOST ?? '127.0.0.1'
-  const requestedPort = numberFromEnv(process.env.AETHER_TERMINAL_PORT, 0)
+  const host = process.env.KIRI_TERMINAL_HOST ?? '127.0.0.1'
+  const requestedPort = numberFromEnv(process.env.KIRI_TERMINAL_PORT, 0)
   const server = createServer()
   const wss = new WebSocketServer({ server, path: terminalPath })
 
@@ -72,8 +72,8 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
           ...process.env,
           TERM: 'xterm-256color',
           COLORTERM: 'truecolor',
-          AETHER_AGENT_ID: config.id,
-          AETHER_PROJECT_CWD: config.cwd,
+          KIRI_AGENT_ID: config.id,
+          KIRI_PROJECT_CWD: config.cwd,
         },
       })
 
@@ -82,11 +82,11 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
       })
       proc.onExit(({ exitCode, signal }) => {
         if (socket.readyState === WebSocket.OPEN) {
-          socket.send(`\r\n[Aether terminal exited: ${exitCode}${signal ? ` ${signal}` : ''}]\r\n`)
+          socket.send(`\r\n[kiri terminal exited: ${exitCode}${signal ? ` ${signal}` : ''}]\r\n`)
           socket.close()
         }
       })
-      socket.send(`\r\n[Aether terminal: ${config.cwd}]\r\n`)
+      socket.send(`\r\n[kiri terminal: ${config.cwd}]\r\n`)
     } catch (error) {
       closeWithReason(socket, error instanceof Error ? error.message : String(error))
       return
@@ -140,7 +140,7 @@ function listen(server: Server, port: number, host: string) {
 }
 
 function closeWithReason(socket: WebSocket, reason: string) {
-  if (socket.readyState === WebSocket.OPEN) socket.send(`\r\n[Aether terminal error: ${reason}]\r\n`)
+  if (socket.readyState === WebSocket.OPEN) socket.send(`\r\n[kiri terminal error: ${reason}]\r\n`)
   socket.close()
 }
 

@@ -1,13 +1,14 @@
-# Rename Pican to Aether
+# Rename Aether to kiri
 
 ## Decisions
 
-- Product/app name: `Aether`.
-- Package and scripts move from `pican` to `aether`.
-- Storage namespace moves from `.pican/` to `.aether/`.
-- Environment variables move from `PICAN_*` to `AETHER_*`.
-- No backward compatibility or data migration is required. Existing `.pican/` data can remain unused.
-- Default SQLite data starts fresh under `.aether/aether.sqlite`.
+- Product/app name: `kiri`.
+- Package and scripts move from `aether` to `kiri`.
+- Storage namespace moves from `.aether/` to `.kiri/`.
+- Environment variables move from `AETHER_*` to `KIRI_*`.
+- No command/env compatibility aliases are kept.
+- Default SQLite data lives under `~/.kiri/userdata/kiri.sqlite`.
+- First run transfers existing Aether state from `~/.aether/userdata/aether.sqlite` or repo-local `.aether/aether.sqlite` when the kiri database is still empty.
 
 ## Checklist
 
@@ -16,9 +17,9 @@
 - [x] Rename docs and agent notes.
 - [x] Rename visible app branding and page metadata.
 - [x] Rename theme/module/component/internal symbols where they carry the product name.
-- [x] Rename storage paths from `.pican/` to `.aether/`.
-- [x] Rename database filenames from `pican.sqlite` to `aether.sqlite`.
-- [x] Rename environment variables from `PICAN_*` to `AETHER_*`.
-- [x] Update default seeded project to `aether` / `Aether Orchestrator`.
+- [x] Rename storage paths from `.aether/` to `.kiri/`.
+- [x] Rename database filenames from `aether.sqlite` to `kiri.sqlite`.
+- [x] Rename environment variables from `AETHER_*` to `KIRI_*`.
+- [x] Update default seeded project to `kiri` / `kiri Orchestrator`.
 - [x] Update tests, fixtures, and e2e paths.
 - [x] Verify build and relevant tests.

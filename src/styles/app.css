@@ -70,7 +70,7 @@ button {
   color: inherit;
 }
 
-.aether-shell {
+.kiri-shell {
   display: grid;
   grid-template-columns: minmax(360px, 1fr) minmax(0, 2fr);
   min-height: 100vh;
@@ -2007,7 +2007,7 @@ h1 {
   height: 5px;
   border-radius: 50%;
   background: var(--accent);
-  animation: aether-rail-pulse 1.8s cubic-bezier(0.2, 0, 0, 1) infinite;
+  animation: kiri-rail-pulse 1.8s cubic-bezier(0.2, 0, 0, 1) infinite;
 }
 
 .lane-rail-wrap {
@@ -2160,10 +2160,10 @@ h1 {
 }
 
 .agent-cell.selected .status-dot.running {
-  animation: aether-rail-pulse 1.8s cubic-bezier(0.2, 0, 0, 1) infinite;
+  animation: kiri-rail-pulse 1.8s cubic-bezier(0.2, 0, 0, 1) infinite;
 }
 
-@keyframes aether-rail-pulse {
+@keyframes kiri-rail-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.55; transform: scale(0.7); }
 }
@@ -4513,7 +4513,7 @@ h1 {
 }
 
 @media (max-width: 980px) {
-  .aether-shell {
+  .kiri-shell {
     display: flex;
     height: 100dvh;
     min-height: 100dvh;

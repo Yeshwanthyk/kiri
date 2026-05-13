@@ -1,4 +1,4 @@
-# aether
+# kiri
 
 Keyboard-first kanban orchestrator for Pi agent sessions.
 
@@ -27,16 +27,16 @@ pnpm build
 ## Projects
 
 ```sh
-pnpm aether:projects list [--all]
-pnpm aether:projects add --name "Aether Orchestrator" --cwd /path/to/repo --id aether
-pnpm aether:projects hide --id aether
-pnpm aether:projects unhide --id aether
-pnpm aether:projects delete --id aether --yes
+pnpm kiri:projects list [--all]
+pnpm kiri:projects add --name "kiri Orchestrator" --cwd /path/to/repo --id kiri
+pnpm kiri:projects hide --id kiri
+pnpm kiri:projects unhide --id kiri
+pnpm kiri:projects delete --id kiri --yes
 ```
 
 Adding a project creates a project row with no sessions. Hiding removes a
 project from the board while preserving its sessions and metadata. Deleting a
-project removes aether metadata for that project; it does not delete the project
+project removes kiri metadata for that project; it does not delete the project
 working directory.
 
 ## Settings
@@ -49,7 +49,8 @@ session model through `--model ...`.
 ## Shape
 
 - TanStack Start app shell.
-- SQLite read model under `.aether/aether.sqlite`.
+- SQLite read model under `~/.kiri/userdata/kiri.sqlite` by default.
+- First run transfers an existing Aether database from `~/.aether/userdata/aether.sqlite` or repo-local `.aether/aether.sqlite` when the kiri database is still empty.
 - Pi is the first runtime via `pi --mode rpc`.
 - Pi JSONL is parsed as a transcript/read-model source, not the live command channel.
 - Pierre diffs render review artifacts.

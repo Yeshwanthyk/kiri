@@ -168,14 +168,14 @@ const runtimeSettingsSchema = z.object({
 })
 type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>
 
-export const aetherSettingsSchema = z.object({
+export const kiriSettingsSchema = z.object({
   runtimes: z.object({
     pi: runtimeSettingsSchema,
     codex: runtimeSettingsSchema,
     claude: runtimeSettingsSchema,
   }),
 })
-export type AetherSettings = z.infer<typeof aetherSettingsSchema>
+export type KiriSettings = z.infer<typeof kiriSettingsSchema>
 
 const projectRowSchema = z.object({
   id: z.string(),
@@ -199,7 +199,7 @@ const scratchpadBlockSchema = z.object({
 export type ScratchpadBlock = z.infer<typeof scratchpadBlockSchema>
 
 export const workspaceSnapshotSchema = z.object({
-  settings: aetherSettingsSchema,
+  settings: kiriSettingsSchema,
   projects: z.array(projectRowSchema),
   hiddenProjects: z.array(projectRowSchema),
   archivedSessions: z.array(archivedSessionSummarySchema).default([]),

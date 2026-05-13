@@ -1,28 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import {
-  aetherEnvironmentPath,
-  createAetherFetchHandler,
+  kiriEnvironmentPath,
+  createKiriFetchHandler,
   environmentInfo,
-  startAetherBackend,
+  startKiriBackend,
 } from '~/server/backend-server'
-import { resolveAetherConfig } from '~/server/aether-config'
+import { resolveKiriConfig } from '~/server/kiri-config'
 
-const config = resolveAetherConfig({
-  cwd: '/repo/aether',
+const config = resolveKiriConfig({
+  cwd: '/repo/kiri',
   env: {
-    AETHER_HOST_MODE: 'desktop',
-    AETHER_STATE_DIR: '/Users/yesh/Library/Application Support/Aether',
+    KIRI_HOST_MODE: 'desktop',
+    KIRI_STATE_DIR: '/Users/yesh/Library/Application Support/Kiri',
   },
 })
 
 describe('backend server wrapper', () => {
   it('exposes deterministic environment metadata for desktop readiness', async () => {
-    const fetch = createAetherFetchHandler(
+    const fetch = createKiriFetchHandler(
       () => new Response('app'),
       { config, readiness: () => undefined },
     )
 
-    const response = await fetch(new Request(`http://127.0.0.1:0${aetherEnvironmentPath}`))
+    const response = await fetch(new Request(`http://127.0.0.1:0${kiriEnvironmentPath}`))
 
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('no-store')
@@ -30,7 +30,7 @@ describe('backend server wrapper', () => {
   })
 
   it('delegates non-readiness requests to the app fetch handler', async () => {
-    const fetch = createAetherFetchHandler(
+    const fetch = createKiriFetchHandler(
       (request) => new Response(`app:${new URL(request.url).pathname}`),
       { config, readiness: () => undefined },
     )
@@ -41,7 +41,7 @@ describe('backend server wrapper', () => {
   })
 
   it('reports unavailable when readiness fails', async () => {
-    const fetch = createAetherFetchHandler(
+    const fetch = createKiriFetchHandler(
       () => new Response('app'),
       {
         config,
@@ -51,18 +51,18 @@ describe('backend server wrapper', () => {
       },
     )
 
-    const response = await fetch(new Request(`http://127.0.0.1:0${aetherEnvironmentPath}`))
+    const response = await fetch(new Request(`http://127.0.0.1:0${kiriEnvironmentPath}`))
 
     expect(response.status).toBe(503)
     await expect(response.json()).resolves.toMatchObject({
-      name: 'aether',
+      name: 'kiri',
       ready: false,
       error: 'settings missing',
     })
   })
 
   it('starts an srvx backend and closes it cleanly', async () => {
-    const server = await startAetherBackend({
+    const server = await startKiriBackend({
       config,
       readiness: () => undefined,
       fetch: (request) =>
@@ -71,7 +71,7 @@ describe('backend server wrapper', () => {
     try {
       expect(server.url).toBeTruthy()
 
-      const environment = await fetch(new URL(aetherEnvironmentPath, server.url))
+      const environment = await fetch(new URL(kiriEnvironmentPath, server.url))
       expect(environment.status).toBe(200)
       await expect(environment.json()).resolves.toEqual(environmentInfo(config))
 

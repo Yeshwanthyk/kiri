@@ -3,7 +3,7 @@ import {
   defaultThemeSelection,
   normalizeThemeSelection,
   type ThemeSelection,
-} from '~/theme/aether-themes'
+} from '~/theme/kiri-themes'
 import {
   defaultKeymap,
   keyOptions,
@@ -52,10 +52,10 @@ export const defaultChatTypography: ChatTypographySettings = {
   monoFont: 'jetbrains',
 }
 
-const keymapStorageKey = 'aether:keymap:v1'
-const themeStorageKey = 'aether:theme:v1'
-const chatTypographyStorageKey = 'aether:chat-typography:v1'
-const chatDraftStorageKey = 'aether:chat-drafts:v1'
+const keymapStorageKey = 'kiri:keymap:v1'
+const themeStorageKey = 'kiri:theme:v1'
+const chatTypographyStorageKey = 'kiri:chat-typography:v1'
+const chatDraftStorageKey = 'kiri:chat-drafts:v1'
 
 export function readStoredKeymap(storage?: StorageLike): KeymapSettings {
   try {

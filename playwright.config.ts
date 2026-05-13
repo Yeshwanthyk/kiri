@@ -1,10 +1,13 @@
 import { defineConfig, devices } from '@playwright/test'
 import { join } from 'node:path'
 
-const e2eStateDir = join(process.cwd(), '.aether')
-const e2eDbPath = join(e2eStateDir, 'aether.e2e.sqlite')
-process.env.AETHER_STATE_DIR = e2eStateDir
-process.env.AETHER_DB_PATH = e2eDbPath
+const e2eStateDir = join(process.cwd(), '.kiri')
+const e2eDbPath = join(e2eStateDir, 'kiri.e2e.sqlite')
+const e2eSettingsPath = join(process.cwd(), 'settings.json')
+process.env.KIRI_STATE_DIR = e2eStateDir
+process.env.KIRI_DB_PATH = e2eDbPath
+process.env.KIRI_ROOT_DIR = e2eStateDir
+process.env.KIRI_SETTINGS_PATH = e2eSettingsPath
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -21,10 +24,12 @@ export default defineConfig({
     command: 'pnpm dev --port 3109 --strictPort',
     env: {
       ...process.env,
-      AETHER_STATE_DIR: e2eStateDir,
-      AETHER_DB_PATH: e2eDbPath,
-      AETHER_CODEX_APP_SERVER_URL: 'ws://127.0.0.1:39111',
-      AETHER_FAKE_CLAUDE: '1',
+      KIRI_ROOT_DIR: e2eStateDir,
+      KIRI_STATE_DIR: e2eStateDir,
+      KIRI_DB_PATH: e2eDbPath,
+      KIRI_SETTINGS_PATH: e2eSettingsPath,
+      KIRI_CODEX_APP_SERVER_URL: 'ws://127.0.0.1:39111',
+      KIRI_FAKE_CLAUDE: '1',
     },
     url: 'http://localhost:3109/@vite/client',
     reuseExistingServer: false,

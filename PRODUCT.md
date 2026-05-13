@@ -8,14 +8,14 @@ product
 
 Senior engineers running multiple AI coding agents in parallel across local
 repos. They live in a terminal and editor flow (Pi, Codex, Claude),
-prefer keyboard over mouse, and use Aether as a control plane to start, watch,
+prefer keyboard over mouse, and use kiri as a control plane to start, watch,
 and discard sessions without leaving the keyboard. Many of them run tiling
 window managers and treat their tools as one continuous workspace.
 
 ## Product Purpose
 
 A keyboard-first kanban orchestrator for agent sessions. Each project is a row,
-each session a card. Aether launches sessions against a chosen runtime/model,
+each session a card. kiri launches sessions against a chosen runtime/model,
 parses JSONL transcripts into a SQLite read model, and exposes diffs through
 Pierre. Success: a power user starts, switches between, reviews, and kills
 agent sessions faster than they could in raw terminals, with the whole
@@ -36,7 +36,7 @@ inhabited like Zed or Helix, not promoted like a SaaS dashboard.
 - **Notion/Coda doc surfaces**: airy empty whitespace, emoji-driven hierarchy,
   page-as-blog tone.
 - **Linear's form-driven kanban**: status pills, assignee avatars, label
-  matrices, hover-menu density. Aether borrows Linear's craft and respect for
+  matrices, hover-menu density. kiri borrows Linear's craft and respect for
   density, not its product surface.
 
 ## Design Principles
@@ -49,11 +49,11 @@ inhabited like Zed or Helix, not promoted like a SaaS dashboard.
    stacks. The board scrolls; settings scroll; nothing is buried.
 3. **Read at a glance, act in one keystroke.** The interface is a status
    display first. Controls reveal contextually, never preemptively.
-4. **Themed, not branded.** Seven themes ship (aether, vesper, github,
+4. **Themed, not branded.** Seven themes ship (kiri, vesper, github,
    tokyonight, catppuccin, gruvbox, rosepine) because users bring their editor
    palette with them. The product respects that choice. No fixed brand color
    overrides the active theme.
-5. **Local-first honesty.** SQLite under `.aether/`, `settings.json` on disk.
+5. **Local-first honesty.** SQLite under `.kiri/`, `settings.json` on disk.
    The UI should feel like inspecting the file system, not a cloud product.
    When state lives on disk, the UI says so.
 

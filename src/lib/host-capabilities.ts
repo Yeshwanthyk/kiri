@@ -1,12 +1,12 @@
 type HostMode = 'web' | 'desktop'
 
-type AetherHostInfo = {
+type KiriHostInfo = {
   readonly mode: HostMode
   readonly platform: string
 }
 
-export type AetherHostBridge = {
-  readonly getHostInfo?: () => Promise<AetherHostInfo>
+export type KiriHostBridge = {
+  readonly getHostInfo?: () => Promise<KiriHostInfo>
   readonly pickFolder?: () => Promise<string | null>
   readonly openExternal?: (url: string) => Promise<void>
   readonly revealPath?: (path: string) => Promise<void>
@@ -15,18 +15,18 @@ export type AetherHostBridge = {
 
 declare global {
   interface Window {
-    readonly aetherHost?: AetherHostBridge
+    readonly kiriHost?: KiriHostBridge
   }
 }
 
-export function getAetherHostBridge() {
+export function getKiriHostBridge() {
   if (typeof window === 'undefined') return undefined
-  return window.aetherHost
+  return window.kiriHost
 }
 
 export async function pickProjectDirectory(
   fallback: () => Promise<string>,
-  bridge: AetherHostBridge | undefined = getAetherHostBridge(),
+  bridge: KiriHostBridge | undefined = getKiriHostBridge(),
 ) {
   if (bridge?.pickFolder) {
     const picked = await bridge.pickFolder()

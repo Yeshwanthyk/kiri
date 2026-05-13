@@ -6,15 +6,15 @@ import { DatabaseSync } from 'node:sqlite'
 import { serve } from 'srvx/node'
 import { serveStatic } from 'srvx/static'
 
-const rootDir = resolve(process.env.AETHER_ROOT_DIR ?? process.cwd())
-const aetherHome = resolve(process.env.AETHER_HOME ?? join(homedir(), '.aether'))
-const stateDir = resolve(process.env.AETHER_STATE_DIR ?? join(aetherHome, 'userdata'))
-const settingsPath = resolve(process.env.AETHER_SETTINGS_PATH ?? join(rootDir, 'settings.json'))
-const dbPath = resolve(process.env.AETHER_DB_PATH ?? join(stateDir, 'aether.sqlite'))
-const host = process.env.AETHER_BACKEND_HOST ?? '127.0.0.1'
-const port = Number(process.env.AETHER_BACKEND_PORT ?? 0)
-const browserHost = process.env.AETHER_BACKEND_BROWSER_HOST ?? (host === '0.0.0.0' ? '127.0.0.1' : host)
-const environmentPath = '/.well-known/aether/environment'
+const rootDir = resolve(process.env.KIRI_ROOT_DIR ?? process.cwd())
+const kiriHome = resolve(process.env.KIRI_HOME ?? join(homedir(), '.kiri'))
+const stateDir = resolve(process.env.KIRI_STATE_DIR ?? join(kiriHome, 'userdata'))
+const settingsPath = resolve(process.env.KIRI_SETTINGS_PATH ?? join(rootDir, 'settings.json'))
+const dbPath = resolve(process.env.KIRI_DB_PATH ?? join(stateDir, 'kiri.sqlite'))
+const host = process.env.KIRI_BACKEND_HOST ?? '127.0.0.1'
+const port = Number(process.env.KIRI_BACKEND_PORT ?? 0)
+const browserHost = process.env.KIRI_BACKEND_BROWSER_HOST ?? (host === '0.0.0.0' ? '127.0.0.1' : host)
+const environmentPath = '/.well-known/kiri/environment'
 
 const serverEntryPath = join(rootDir, 'dist', 'server', 'server.js')
 const staticDir = join(rootDir, 'dist', 'client')
@@ -44,7 +44,7 @@ const server = serve({
       } catch (error) {
         return Response.json(
           {
-            name: 'aether',
+            name: 'kiri',
             ready: false,
             error: error instanceof Error ? error.message : String(error),
           },
@@ -93,7 +93,7 @@ function validateSettings(settings) {
 
 function environmentInfo() {
   return {
-    name: 'aether',
+    name: 'kiri',
     mode: 'desktop',
     rootDir,
     stateDir,

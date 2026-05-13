@@ -11,7 +11,7 @@ let mainWindow = null
 let backendProcess = null
 let backendUrlPromise = null
 
-app.setName('Aether')
+app.setName('kiri')
 
 app.whenReady().then(async () => {
   installIpcHandlers()
@@ -19,7 +19,7 @@ app.whenReady().then(async () => {
   mainWindow = createWindow(appUrl)
   installApplicationMenu(mainWindow)
   await mainWindow.loadURL(appUrl)
-  if (process.env.AETHER_DESKTOP_SMOKE === '1') {
+  if (process.env.KIRI_DESKTOP_SMOKE === '1') {
     console.log(JSON.stringify({ type: 'desktop-ready', url: appUrl }))
     app.quit()
     return
@@ -27,7 +27,7 @@ app.whenReady().then(async () => {
   mainWindow.show()
 }).catch((error) => {
   console.error(error)
-  dialog.showErrorBox('Aether failed to start', error instanceof Error ? error.message : String(error))
+  dialog.showErrorBox('kiri failed to start', error instanceof Error ? error.message : String(error))
   app.quit()
 })
 
@@ -80,7 +80,7 @@ function createWindow(appUrl) {
 }
 
 async function resolveAppUrl() {
-  if (process.env.AETHER_DESKTOP_DEV_URL) return process.env.AETHER_DESKTOP_DEV_URL
+  if (process.env.KIRI_DESKTOP_DEV_URL) return process.env.KIRI_DESKTOP_DEV_URL
   if (backendUrlPromise) return backendUrlPromise
   backendUrlPromise = resolvePackagedBackendUrl()
   return backendUrlPromise
@@ -99,12 +99,12 @@ async function existingBackendUrl() {
 
 async function probeExistingBackendUrl(url) {
   try {
-    const response = await fetch(new URL('/.well-known/aether/environment', url), {
+    const response = await fetch(new URL('/.well-known/kiri/environment', url), {
       signal: AbortSignal.timeout(250),
     })
     if (!response.ok) return null
     const environment = await response.json()
-    return environment?.name === 'aether' && environment?.mode === 'desktop' ? url : null
+    return environment?.name === 'kiri' && environment?.mode === 'desktop' ? url : null
   } catch {
     return null
   }
@@ -121,26 +121,26 @@ async function startBackend() {
     copyFileSync(sourceSettings, settingsPath)
   }
 
-  const backendScript = join(appPath, 'scripts', 'aether-desktop-backend.mjs')
+  const backendScript = join(appPath, 'scripts', 'kiri-desktop-backend.mjs')
   backendProcess = spawn(process.execPath, [backendScript], {
     cwd: backendCwd,
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
-      AETHER_HOST_MODE: 'desktop',
-      AETHER_ROOT_DIR: appPath,
-      AETHER_HOME: join(app.getPath('home'), '.aether'),
-      AETHER_SETTINGS_PATH: settingsPath,
-      AETHER_DEFAULT_PROJECT_CWD: app.getPath('home'),
-      AETHER_BACKEND_HOST: '0.0.0.0',
-      AETHER_BACKEND_PORT: '0',
-      AETHER_BACKEND_BROWSER_HOST: '127.0.0.1',
+      KIRI_HOST_MODE: 'desktop',
+      KIRI_ROOT_DIR: appPath,
+      KIRI_HOME: join(app.getPath('home'), '.kiri'),
+      KIRI_SETTINGS_PATH: settingsPath,
+      KIRI_DEFAULT_PROJECT_CWD: app.getPath('home'),
+      KIRI_BACKEND_HOST: '0.0.0.0',
+      KIRI_BACKEND_PORT: '0',
+      KIRI_BACKEND_BROWSER_HOST: '127.0.0.1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
   backendProcess.stderr.on('data', (chunk) => {
-    console.error(`[aether-backend] ${chunk.toString().trimEnd()}`)
+    console.error(`[kiri-backend] ${chunk.toString().trimEnd()}`)
   })
 
   return waitForBackendUrl(backendProcess)
@@ -148,10 +148,10 @@ async function startBackend() {
 
 function resolveApplicationRoot() {
   const packagedRoot = app.getAppPath()
-  if (existsSync(join(packagedRoot, 'scripts', 'aether-desktop-backend.mjs'))) {
+  if (existsSync(join(packagedRoot, 'scripts', 'kiri-desktop-backend.mjs'))) {
     return packagedRoot
   }
-  if (existsSync(join(process.cwd(), 'scripts', 'aether-desktop-backend.mjs'))) {
+  if (existsSync(join(process.cwd(), 'scripts', 'kiri-desktop-backend.mjs'))) {
     return process.cwd()
   }
   return packagedRoot
@@ -163,13 +163,13 @@ function waitForBackendUrl(child) {
     let stderr = ''
     const timeout = setTimeout(() => {
       if (!child.killed) child.kill()
-      reject(new Error('Aether backend did not become ready'))
+      reject(new Error('kiri backend did not become ready'))
     }, 30_000)
 
     child.once('exit', (code) => {
       clearTimeout(timeout)
       const detail = stderr.trim()
-      reject(new Error(`Aether backend exited before ready: ${code ?? 'unknown'}${detail ? `\n\n${detail}` : ''}`))
+      reject(new Error(`kiri backend exited before ready: ${code ?? 'unknown'}${detail ? `\n\n${detail}` : ''}`))
     })
 
     child.stderr.on('data', (chunk) => {
@@ -189,7 +189,7 @@ function waitForBackendUrl(child) {
             resolve(message.url)
           }
         } catch {
-          console.log(`[aether-backend] ${line}`)
+          console.log(`[kiri-backend] ${line}`)
         }
       }
     })
@@ -197,23 +197,23 @@ function waitForBackendUrl(child) {
 }
 
 function installIpcHandlers() {
-  ipcMain.handle('aether:get-host-info', () => ({
+  ipcMain.handle('kiri:get-host-info', () => ({
     mode: 'desktop',
     platform: process.platform,
   }))
-  ipcMain.handle('aether:pick-folder', async () => {
+  ipcMain.handle('kiri:pick-folder', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory'],
       title: 'Choose a project directory',
     })
     return result.canceled ? null : result.filePaths[0] ?? null
   })
-  ipcMain.handle('aether:open-external', async (_event, url) => {
+  ipcMain.handle('kiri:open-external', async (_event, url) => {
     const target = safeExternalUrl(String(url))
     if (!target) throw new Error('Unsupported external URL')
     await shell.openExternal(target)
   })
-  ipcMain.handle('aether:reveal-path', async (_event, path) => {
+  ipcMain.handle('kiri:reveal-path', async (_event, path) => {
     const target = String(path)
     if (!isAbsolute(target)) throw new Error('Path must be absolute')
     shell.showItemInFolder(target)
@@ -233,7 +233,7 @@ function safeExternalUrl(value) {
 }
 
 function installApplicationMenu(win) {
-  const send = (actionId) => win.webContents.send('aether:menu-action', actionId)
+  const send = (actionId) => win.webContents.send('kiri:menu-action', actionId)
   const template = [
     ...(process.platform === 'darwin'
       ? [{ label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }] }]

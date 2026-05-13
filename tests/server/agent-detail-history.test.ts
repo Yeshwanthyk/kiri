@@ -16,7 +16,7 @@ describe('agent detail history harness', () => {
   it('loads full chat history with dense runtime events', () => {
     const output = execFileSync(
       'pnpm',
-      ['--silent', 'aether:history-harness'],
+      ['--silent', 'kiri:history-harness'],
       {
         cwd: process.cwd(),
         encoding: 'utf8',

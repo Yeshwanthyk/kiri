@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { imageKey, pendingPromptText, readImageFile } from '../../src/components/aether-board/images'
+import { imageKey, pendingPromptText, readImageFile } from '../../src/components/kiri-board/images'
 import type { SendMessageImage } from '../../src/lib/contracts'
 
-describe('aether-board image helpers', () => {
+describe('kiri-board image helpers', () => {
   it('appends attachment names to the prompt text sent to providers', () => {
     const images: SendMessageImage[] = [
       { name: 'first.png', mimeType: 'image/png', data: 'aaa' },

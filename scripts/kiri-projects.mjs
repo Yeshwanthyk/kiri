@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 
-import { cpSync, existsSync, mkdirSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const aetherHome = resolve(process.env.AETHER_HOME ?? join(homedir(), '.aether'))
-const stateDir = resolve(process.env.AETHER_STATE_DIR ?? join(aetherHome, 'userdata'))
-const dbPath = process.env.AETHER_DB_PATH
-  ? resolve(process.env.AETHER_DB_PATH)
-  : join(stateDir, 'aether.sqlite')
-const rootDir = resolve(process.env.AETHER_ROOT_DIR ?? process.cwd())
+const kiriHome = resolve(process.env.KIRI_HOME ?? join(homedir(), '.kiri'))
+const stateDir = resolve(process.env.KIRI_STATE_DIR ?? join(kiriHome, 'userdata'))
+const dbPath = process.env.KIRI_DB_PATH
+  ? resolve(process.env.KIRI_DB_PATH)
+  : join(stateDir, 'kiri.sqlite')
+const rootDir = resolve(process.env.KIRI_ROOT_DIR ?? process.cwd())
 main()
 
 function main() {
@@ -47,12 +47,15 @@ function main() {
 }
 
 function openDb() {
-  migrateLegacyRepoState()
+  const legacyMigration = migrateLegacyRepoState()
   mkdirSync(dirname(dbPath), { recursive: true })
   const database = new DatabaseSync(dbPath)
   database.exec('PRAGMA journal_mode = WAL')
   database.exec('PRAGMA foreign_keys = ON')
   migrate(database)
+  if (legacyMigration) {
+    rewriteLegacyAgentStatePaths(database, legacyMigration.legacyStateDir, stateDir)
+  }
   return database
 }
 
@@ -146,15 +149,75 @@ function migrate(database) {
 }
 
 function migrateLegacyRepoState() {
-  const legacyStateDir = resolve(rootDir, '.aether')
-  if (resolve(legacyStateDir) === resolve(stateDir)) return
-  if (!existsSync(join(legacyStateDir, 'aether.sqlite'))) return
-  if (existsSync(dbPath) && !isEmptyAetherDatabase(dbPath)) return
-  mkdirSync(dirname(stateDir), { recursive: true })
+  if (isLegacyAetherTarget(stateDir, dbPath)) return
+  if (kiriDatabaseState(dbPath) === 'nonempty') return
+
+  const legacyCandidates = [
+    resolve(rootDir, '.aether'),
+    resolve(rootDir, '.kiri'),
+  ]
+  if (resolve(stateDir) === resolve(kiriHome, 'userdata')) {
+    legacyCandidates.splice(1, 0, resolve(homedir(), '.aether', 'userdata'))
+  }
+  const legacyStateDir = legacyCandidates.find((candidate) => (
+    existsSync(join(candidate, 'aether.sqlite')) || existsSync(join(candidate, 'kiri.sqlite'))
+  ))
+
+  if (!legacyStateDir || resolve(legacyStateDir) === resolve(stateDir)) return
+  if (kiriDatabaseState(dbPath) === 'nonempty') return
+  mkdirSync(stateDir, { recursive: true })
   cpSync(legacyStateDir, stateDir, { recursive: true, errorOnExist: false })
+  copyLegacyDatabaseFile(legacyStateDir)
+  return { legacyStateDir }
 }
 
-function isEmptyAetherDatabase(path) {
+function isLegacyAetherTarget(stateDir, dbPath) {
+  const stateParts = resolve(stateDir).split(/[\\/]+/)
+  const dbName = dbPath.split(/[\\/]+/).pop()
+  return stateParts.includes('.aether') || dbName === 'aether.sqlite'
+}
+
+function kiriDatabaseState(path) {
+  if (!existsSync(path)) return 'missing'
+  if (!hasSqliteHeader(path)) return 'unreadable'
+  try {
+    return isEmptyKiriDatabase(path) ? 'empty' : 'nonempty'
+  } catch {
+    return 'unreadable'
+  }
+}
+
+function hasSqliteHeader(path) {
+  const header = readFileSync(path, { encoding: 'utf8', flag: 'r' }).slice(0, 16)
+  return header === '' || header === 'SQLite format 3\0'
+}
+
+function copyLegacyDatabaseFile(legacyStateDir) {
+  const sourceName = existsSync(join(legacyStateDir, 'aether.sqlite')) ? 'aether.sqlite' : 'kiri.sqlite'
+  mkdirSync(dirname(dbPath), { recursive: true })
+  backupExistingDatabaseFiles(dbPath)
+  for (const suffix of ['', '-wal', '-shm']) {
+    const source = join(legacyStateDir, `${sourceName}${suffix}`)
+    const target = `${dbPath}${suffix}`
+    if (existsSync(source)) {
+      copyFileSync(source, target)
+    } else {
+      rmSync(target, { force: true })
+    }
+  }
+}
+
+function backupExistingDatabaseFiles(path) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  for (const suffix of ['', '-wal', '-shm']) {
+    const target = `${path}${suffix}`
+    if (existsSync(target)) {
+      renameSync(target, `${target}.malformed-${stamp}`)
+    }
+  }
+}
+
+function isEmptyKiriDatabase(path) {
   const database = new DatabaseSync(path)
   try {
     const hasProjectsTable = database
@@ -168,6 +231,30 @@ function isEmptyAetherDatabase(path) {
   } finally {
     database.close()
   }
+}
+
+function rewriteLegacyAgentStatePaths(database, legacyStateDir, targetStateDir) {
+  const rows = database
+    .prepare('SELECT id, session_dir AS sessionDir, session_file AS sessionFile FROM agent_slots')
+    .all()
+  const update = database.prepare('UPDATE agent_slots SET session_dir = ?, session_file = ? WHERE id = ?')
+
+  for (const row of rows) {
+    const sessionDir = rewritePathWithin(row.sessionDir, legacyStateDir, targetStateDir)
+    const sessionFile = row.sessionFile ? rewritePathWithin(row.sessionFile, legacyStateDir, targetStateDir) : null
+    if (sessionDir !== row.sessionDir || sessionFile !== row.sessionFile) {
+      update.run(sessionDir, sessionFile, row.id)
+    }
+  }
+}
+
+function rewritePathWithin(path, fromRoot, toRoot) {
+  const absolutePath = resolve(path)
+  const absoluteFrom = resolve(fromRoot)
+  if (absolutePath === absoluteFrom) return resolve(toRoot)
+  const prefix = `${absoluteFrom}/`
+  if (!absolutePath.startsWith(prefix)) return path
+  return join(resolve(toRoot), absolutePath.slice(prefix.length))
 }
 
 function listProjects(database, options) {
@@ -371,11 +458,11 @@ function usage(error) {
   if (error) console.error(error)
   console.error(`
 Usage:
-  pnpm aether:projects list [--all]
-  pnpm aether:projects add --name "Project Name" --cwd /path/to/project [--id project-id]
-  pnpm aether:projects hide --id project-id
-  pnpm aether:projects unhide --id project-id
-  pnpm aether:projects delete --id project-id --yes
+  pnpm kiri:projects list [--all]
+  pnpm kiri:projects add --name "Project Name" --cwd /path/to/project [--id project-id]
+  pnpm kiri:projects hide --id project-id
+  pnpm kiri:projects unhide --id project-id
+  pnpm kiri:projects delete --id project-id --yes
 `)
   process.exit(error ? 1 : 0)
 }
