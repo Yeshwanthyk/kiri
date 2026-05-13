@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build && tsc --noEmit",
+    "build:cli": "node scripts/build-cli.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/server/codex-app-server.ts tests/server/**/*.ts --max-warnings=0",
     "test": "vitest run",
@@ -17,7 +18,7 @@
     "desktop:dev": "KIRI_DESKTOP_DEV_URL=http://127.0.0.1:3090 electron src/desktop/main.mjs",
     "desktop:start": "pnpm build && electron src/desktop/main.mjs",
     "desktop:backend": "node scripts/kiri-desktop-backend.mjs",
-    "dist:desktop": "pnpm build && electron-builder --mac dir && node scripts/normalize-desktop-app.mjs && node scripts/create-desktop-dmg.mjs",
+    "dist:desktop": "pnpm build && pnpm build:cli && electron-builder --mac dir && node scripts/normalize-desktop-app.mjs && node scripts/create-desktop-dmg.mjs",
     "install:desktop": "pnpm dist:desktop && node scripts/install-desktop-app.mjs",
     "prepare": "effect-language-service patch",
     "kiri": "tsx src/cli/kirictl.ts",
@@ -74,6 +75,7 @@
     "@fontsource/fira-code": "^5.2.7",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/jetbrains-mono": "^5.2.8",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@pierre/diffs": "1.1.21",
     "@pierre/trees": "^1.0.0-beta.3",
     "@tanstack/react-query": "^5.90.0",
@@ -87,10 +89,10 @@
     "ghostty-web": "^0.4.0",
     "lucide-react": "^1.14.0",
     "node-pty": "1.2.0-beta.12",
+    "pure-rand": "6.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
-    "pure-rand": "6.1.0",
     "redaxios": "^0.5.1",
     "remark-gfm": "^4.0.1",
     "srvx": "0.11.15",
@@ -104,6 +106,7 @@
     "files": [
       "dist/client/**",
       "dist/server/**",
+      "dist/cli/**",
       "src/desktop/**",
       "scripts/kiri-desktop-backend.mjs",
       "scripts/create-desktop-dmg.mjs",
@@ -113,6 +116,12 @@
     ],
     "asarUnpack": [
       "node_modules/node-pty/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin/kiri-mcp",
+        "to": "bin/kiri-mcp"
+      }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -135,6 +144,7 @@
     "@vitejs/plugin-react": "^6.0.1",
     "electron": "41.5.0",
     "electron-builder": "26.0.12",
+    "esbuild": "0.27.7",
     "eslint": "^10.3.0",
     "tailwindcss": "^4.2.2",
     "tsx": "4.20.6",

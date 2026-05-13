@@ -45,6 +45,16 @@ const sessionSchema = z.object({
   archivedAt: z.string().nullable(),
 })
 const sessionRowsSchema = z.array(sessionSchema)
+const scratchpadSchema = z.object({
+  id: z.string(),
+  projectId: z.string().nullable(),
+  projectName: z.string().nullable(),
+  body: z.string(),
+  createdAt: z.string(),
+  triggeredAt: z.string().nullable(),
+  triggeredAgentId: z.string().nullable(),
+})
+const scratchpadRowsSchema = z.array(scratchpadSchema)
 
 try {
   assertSkillTeachesAgents()
@@ -171,6 +181,39 @@ try {
   ]))
   if (restored.archivedAt !== null) throw new Error('Session resume did not restore')
 
+  const block = scratchpadSchema.parse(runCtl([
+    'scratchpad',
+    'add',
+    '--project',
+    primary.id,
+    '--body',
+    'Agent harness scratchpad block',
+    '--json',
+  ]))
+  if (block.projectId !== primary.id || block.body !== 'Agent harness scratchpad block') {
+    throw new Error('Scratchpad add did not persist the expected block')
+  }
+
+  const blocks = scratchpadRowsSchema.parse(runCtl([
+    'scratchpad',
+    'list',
+    '--project',
+    primary.id,
+    '--json',
+  ]))
+  if (!blocks.some((candidate) => candidate.id === block.id)) {
+    throw new Error('Scratchpad list did not include created block')
+  }
+
+  const deletedBlock = scratchpadSchema.parse(runCtl([
+    'scratchpad',
+    'delete',
+    '--id',
+    block.id,
+    '--json',
+  ]))
+  if (deletedBlock.id !== block.id) throw new Error('Scratchpad delete returned the wrong block')
+
   const deleted = projectSchema.parse(runCtl([
     'projects',
     'delete',
@@ -196,6 +239,9 @@ try {
       'sessions:rename',
       'sessions:delete',
       'sessions:resume',
+      'scratchpad:add',
+      'scratchpad:list',
+      'scratchpad:delete',
       'kiri:projects compatibility',
     ],
     projectId: primary.id,
@@ -217,6 +263,10 @@ function assertSkillTeachesAgents() {
     'pnpm kiri:ctl sessions rename',
     'pnpm kiri:ctl sessions delete',
     'pnpm kiri:ctl sessions resume',
+    'pnpm kiri:ctl scratchpad add',
+    'pnpm kiri:ctl scratchpad list',
+    'pnpm kiri:ctl scratchpad delete',
+    'pnpm kiricli mcp',
   ]
   for (const phrase of required) {
     if (body.search(escapedPhrasePattern(phrase)) === -1) {

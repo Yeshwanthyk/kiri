@@ -1063,7 +1063,10 @@ function unhideProjectRow(id: string) {
   return projectId
 }
 
-function listScratchpadBlocks(): ScratchpadBlock[] {
+export function listScratchpadBlocks(input: {
+  readonly projectId?: string
+} = {}): ScratchpadBlock[] {
+  const projectId = input.projectId?.trim() || null
   return getDb()
     .prepare(
       `
@@ -1077,14 +1080,27 @@ function listScratchpadBlocks(): ScratchpadBlock[] {
           s.triggered_agent_id AS triggeredAgentId
         FROM scratchpad_blocks s
         LEFT JOIN projects p ON p.id = s.project_id
+        WHERE (? IS NULL OR s.project_id = ?)
         ORDER BY s.created_at DESC
       `,
     )
-    .all()
+    .all(projectId, projectId)
     .map((row) => scratchpadBlockDbRowSchema.parse(row))
 }
 
 export function addScratchpadBlock(input: AddScratchpadBlockInput) {
+  insertScratchpadBlock(input)
+  return getWorkspaceSnapshot()
+}
+
+export function addScratchpadBlockSummary(input: AddScratchpadBlockInput) {
+  const id = insertScratchpadBlock(input)
+  const block = getScratchpadBlock(id)
+  if (!block) throw new Error(`Scratchpad block not found: ${id}`)
+  return block
+}
+
+function insertScratchpadBlock(input: AddScratchpadBlockInput) {
   const body = input.body.trim()
   if (!body) throw new Error('Block body is required')
   const projectId = input.projectId?.trim() || null
@@ -1105,14 +1121,25 @@ export function addScratchpadBlock(input: AddScratchpadBlockInput) {
       `,
     )
     .run(id, projectId, body, createdAt)
-  return getWorkspaceSnapshot()
+  return id
 }
 
 export function deleteScratchpadBlock(id: string) {
+  deleteScratchpadBlockRow(id)
+  return getWorkspaceSnapshot()
+}
+
+export function deleteScratchpadBlockSummary(id: string) {
+  const block = getScratchpadBlock(id)
+  if (!block) throw new Error(`Scratchpad block not found: ${id}`)
+  deleteScratchpadBlockRow(id)
+  return block
+}
+
+function deleteScratchpadBlockRow(id: string) {
   const blockId = id.trim()
   if (!blockId) throw new Error('Block id is required')
   getDb().prepare('DELETE FROM scratchpad_blocks WHERE id = ?').run(blockId)
-  return getWorkspaceSnapshot()
 }
 
 export function markScratchpadBlockTriggered(blockId: string, agentId: string) {

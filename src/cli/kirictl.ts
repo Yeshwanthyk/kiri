@@ -10,6 +10,7 @@ import {
   type ThinkingLevel,
 } from '~/lib/contracts'
 import { KiriControl } from '~/server/kiri-control'
+import { runKiriMcpServer } from '~/server/kiri-mcp'
 
 const version = '0.1.0'
 
@@ -37,6 +38,9 @@ const modelOption = Options.text('model').pipe(
 const titleOption = Options.text('title').pipe(
   Options.withDescription('Session title'),
   Options.optional,
+)
+const bodyOption = Options.text('body').pipe(
+  Options.withDescription('Scratchpad block body'),
 )
 const thinkingOption = Options.choice('thinking', thinkingLevels).pipe(
   Options.withDescription('Thinking level'),
@@ -239,9 +243,95 @@ const sessionsCommand = Command.make('sessions', {}).pipe(
   ]),
 )
 
+const scratchpadListCommand = Command.make(
+  'list',
+  { project: projectIdOption, json },
+  ({ project, json }) =>
+    Effect.gen(function* () {
+      const control = yield* KiriControl
+      const rows = yield* control.listScratchpad({ projectId: optionValue(project) })
+      yield* print(rows, json, formatScratchpad)
+    }),
+).pipe(Command.withDescription('List scratchpad blocks'))
+
+const scratchpadAddCommand = Command.make(
+  'add',
+  { project: projectIdOption, body: bodyOption, json },
+  ({ project, body, json }) =>
+    Effect.gen(function* () {
+      const control = yield* KiriControl
+      const block = yield* control.addScratchpad({
+        projectId: optionValue(project) ?? null,
+        body,
+      })
+      yield* print(block, json, (value) => `Added scratchpad block ${value.id}`)
+    }),
+).pipe(Command.withDescription('Add a scratchpad block'))
+
+const scratchpadDeleteCommand = Command.make(
+  'delete',
+  { id: idOption, json },
+  ({ id, json }) =>
+    Effect.gen(function* () {
+      const control = yield* KiriControl
+      const block = yield* control.deleteScratchpad(id)
+      yield* print(block, json, (value) => `Deleted scratchpad block ${value.id}`)
+    }),
+).pipe(Command.withDescription('Delete a scratchpad block'))
+
+const scratchpadTriggerCommand = Command.make(
+  'trigger',
+  {
+    id: idOption,
+    project: requiredProjectIdOption,
+    runtime: runtimeOption,
+    model: modelOption,
+    title: titleOption,
+    thinking: thinkingOption,
+    json,
+  },
+  ({ id, project, runtime, model, title, thinking, json }) =>
+    Effect.gen(function* () {
+      const control = yield* KiriControl
+      const result = yield* control.triggerScratchpad({
+        id,
+        projectId: project,
+        runtime: optionValue(runtime),
+        model: optionValue(model),
+        title: optionValue(title),
+        thinkingLevel: optionValue(thinking) ?? 'medium',
+      })
+      yield* print(result, json, (value) =>
+        `Triggered scratchpad block ${value.block.id} in session ${value.session.id}: ${value.session.title}`)
+    }),
+).pipe(Command.withDescription('Trigger a scratchpad block as a new session'))
+
+const scratchpadCommand = Command.make('scratchpad', {}).pipe(
+  Command.withDescription('Manage scratchpad blocks'),
+  Command.withSubcommands([
+    scratchpadListCommand,
+    scratchpadAddCommand,
+    scratchpadDeleteCommand,
+    scratchpadTriggerCommand,
+  ]),
+)
+
+const mcpCommand = Command.make('mcp', {}, () =>
+  Effect.gen(function* () {
+    const control = yield* KiriControl
+    yield* Effect.promise(() => runKiriMcpServer(control))
+  }),
+).pipe(Command.withDescription('Run the Kiri MCP server over stdio'))
+
 export const kirictlCommand = Command.make('kirictl', {}).pipe(
   Command.withDescription('Control Kiri from scripts and AI agents'),
-  Command.withSubcommands([modelsCommand, projectsCommand, sessionsCommand]),
+  Command.withSubcommands([
+    modelsCommand,
+    projectsCommand,
+    sessionsCommand,
+    scratchpadCommand,
+    mcpCommand,
+  ]),
 )
 
 const cli = Command.run(kirictlCommand, {
@@ -314,6 +404,25 @@ function formatSessions(rows: readonly {
     .map((row) => {
       const state = row.archivedAt ? 'archived' : row.status
       return `${row.id}\t${row.projectId}\t${row.title}\t${row.runtime}\t${row.model}\t${state}`
+    })
+    .join('\n')
+}
+
+function formatScratchpad(rows: readonly {
+  id: string
+  projectId: string | null
+  projectName: string | null
+  body: string
+  createdAt: string
+  triggeredAt: string | null
+  triggeredAgentId: string | null
+}[]) {
+  if (rows.length === 0) return 'No scratchpad blocks.'
+  return rows
+    .map((row) => {
+      const project = row.projectId ?? 'global'
+      const state = row.triggeredAt ? `triggered:${row.triggeredAgentId ?? 'unknown'}` : 'pending'
+      return `${row.id}\t${project}\t${state}\t${row.body}`
     })
     .join('\n')
 }

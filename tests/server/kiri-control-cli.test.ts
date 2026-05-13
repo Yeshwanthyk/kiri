@@ -33,6 +33,16 @@ const sessionSummarySchema = z.object({
   updatedAt: z.string(),
   archivedAt: z.string().nullable(),
 })
+const scratchpadBlockSchema = z.object({
+  id: z.string(),
+  projectId: z.string().nullable(),
+  projectName: z.string().nullable(),
+  body: z.string(),
+  createdAt: z.string(),
+  triggeredAt: z.string().nullable(),
+  triggeredAgentId: z.string().nullable(),
+})
+const scratchpadRowsSchema = z.array(scratchpadBlockSchema)
 
 describe('kirictl', () => {
   afterEach(() => {
@@ -129,6 +139,39 @@ describe('kirictl', () => {
       '--json',
     ]))
     expect(restored.archivedAt).toBeNull()
+
+    const block = scratchpadBlockSchema.parse(runJson(env, [
+      'scratchpad',
+      'add',
+      '--project',
+      project.id,
+      '--body',
+      'CLI scratchpad block',
+      '--json',
+    ]))
+    expect(block).toMatchObject({
+      projectId: project.id,
+      body: 'CLI scratchpad block',
+      triggeredAt: null,
+    })
+
+    const blocks = scratchpadRowsSchema.parse(runJson(env, [
+      'scratchpad',
+      'list',
+      '--project',
+      project.id,
+      '--json',
+    ]))
+    expect(blocks.map((item) => item.id)).toContain(block.id)
+
+    const deletedBlock = scratchpadBlockSchema.parse(runJson(env, [
+      'scratchpad',
+      'delete',
+      '--id',
+      block.id,
+      '--json',
+    ]))
+    expect(deletedBlock.id).toBe(block.id)
   }, 20_000)
 
 })

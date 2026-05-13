@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+RESOURCES_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+APP_DIR=$(CDPATH= cd -- "$RESOURCES_DIR/.." && pwd)
+ELECTRON="$APP_DIR/MacOS/kiri"
+CLI="$RESOURCES_DIR/app.asar/dist/cli/kirictl.mjs"
+
+if [ ! -x "$ELECTRON" ]; then
+  echo "kiri executable not found: $ELECTRON" >&2
+  exit 1
+fi
+
+ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$CLI" mcp "$@"

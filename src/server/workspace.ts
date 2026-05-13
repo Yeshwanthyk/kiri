@@ -186,7 +186,16 @@ export const triggerScratchpadBlockMutation = createServerFn({ method: 'POST' })
       title: data.title,
       thinkingLevel: data.thinkingLevel,
     })
-    await promptAgent({ agentId, text: block.body, images: [] })
+    try {
+      await promptAgent({ agentId, text: block.body, images: [] })
+    } catch (error) {
+      try {
+        deleteSession({ agentId })
+      } catch {
+        // Preserve the prompt failure; cleanup is best-effort.
+      }
+      throw error
+    }
     markScratchpadBlockTriggered(data.id, agentId)
     return { agentId, snapshot: getWorkspaceSnapshot() }
   })
