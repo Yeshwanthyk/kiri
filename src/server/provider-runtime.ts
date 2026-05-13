@@ -79,9 +79,4 @@ export const runtimeAdapters: Record<RuntimeKind, ProviderRuntimeAdapter> = {
     reset: resetClaudeSession,
     answerQuestion: answerClaudeQuestion,
   },
-  opencode: {
-    prompt: async () => {
-      throw new Error('opencode agents can be configured, but cannot run chat today')
-    },
-  },
 }

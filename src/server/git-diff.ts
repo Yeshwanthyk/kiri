@@ -1,6 +1,10 @@
 import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
 
+const GIT_COMMAND_TIMEOUT_MS = 3000
+const UNTRACKED_DIFF_BUDGET_MS = 3000
+const UNTRACKED_DIFF_COMMAND_TIMEOUT_MS = 500
+
 export type RuntimeDiffArtifact = {
   title: string
   path: string
@@ -9,6 +13,23 @@ export type RuntimeDiffArtifact = {
 
 export function collectGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] {
   if (!isGitWorkTree(cwd)) return []
+  const untrackedPatches: string[] = []
+  const untrackedDeadline = Date.now() + UNTRACKED_DIFF_BUDGET_MS
+  for (const path of untrackedFiles(cwd)) {
+    const remainingMs = untrackedDeadline - Date.now()
+    if (remainingMs <= 0) break
+    untrackedPatches.push(
+      ...splitGitPatch(runGitAllowExit(cwd, [
+        'diff',
+        '--no-ext-diff',
+        '--no-index',
+        '--binary',
+        '--',
+        '/dev/null',
+        path,
+      ], Math.min(UNTRACKED_DIFF_COMMAND_TIMEOUT_MS, remainingMs))),
+    )
+  }
   const patches = [
     ...splitGitPatch(runGitAllowExit(cwd, [
       'diff',
@@ -19,17 +40,7 @@ export function collectGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] {
       'HEAD',
       '--',
     ])),
-    ...untrackedFiles(cwd).flatMap((path) =>
-      splitGitPatch(runGitAllowExit(cwd, [
-        'diff',
-        '--no-ext-diff',
-        '--no-index',
-        '--binary',
-        '--',
-        '/dev/null',
-        path,
-      ])),
-    ),
+    ...untrackedPatches,
   ]
   return patches
     .map((patch) => {
@@ -117,18 +128,19 @@ function cleanDiffPath(path: string) {
     .trim()
 }
 
-function runGit(cwd: string, args: string[]) {
+function runGit(cwd: string, args: string[], timeout = GIT_COMMAND_TIMEOUT_MS) {
   return execFileSync('git', args, {
     cwd,
     encoding: 'utf8',
     maxBuffer: 20 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'ignore'],
+    timeout,
   })
 }
 
-function runGitAllowExit(cwd: string, args: string[]) {
+function runGitAllowExit(cwd: string, args: string[], timeout?: number) {
   try {
-    return runGit(cwd, args)
+    return runGit(cwd, args, timeout)
   } catch (error) {
     const output = (error as { stdout?: Buffer | string }).stdout
     if (Buffer.isBuffer(output)) return output.toString('utf8')

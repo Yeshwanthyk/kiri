@@ -36,6 +36,7 @@ function agent(overrides: Partial<AgentCell>): AgentCell {
     timelineEvents: [],
     timeline: [],
     diffs: [],
+    tasks: [],
     ...overrides,
   }
 }
@@ -109,6 +110,294 @@ describe('deriveAgentTimelineRows', () => {
     })
   })
 
+  it('keeps runtime tool calls grouped after the turn completes', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        runtime: 'claude',
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'check it'),
+          },
+          {
+            type: 'event',
+            id: 'event:e1',
+            timestamp: now,
+            event: {
+              id: 'e1',
+              kind: 'claude_tool_completed',
+              tone: 'tool',
+              label: 'Read completed',
+              detail: 'Read: src/app.ts',
+              timestamp: now,
+            },
+          },
+          {
+            type: 'event',
+            id: 'event:e2',
+            timestamp: now,
+            event: {
+              id: 'e2',
+              kind: 'claude_tool_completed',
+              tone: 'tool',
+              label: 'Bash completed',
+              detail: 'Bash: pnpm test',
+              timestamp: now,
+            },
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'done'),
+          },
+        ],
+      }),
+      '/repo',
+    )
+
+    expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [
+        { kind: 'claude_tool_completed', label: 'Read completed', detail: 'Read: src/app.ts' },
+        { kind: 'claude_tool_completed', label: 'Bash completed', detail: 'Bash: pnpm test' },
+      ],
+    })
+    expect(rows[2]).toMatchObject({ kind: 'message', message: { text: 'done' } })
+  })
+
+  it('surfaces edited-file diffs inside grouped runtime work', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        runtime: 'pi',
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'edit it'),
+          },
+          {
+            type: 'event',
+            id: 'event:e1',
+            timestamp: now,
+            event: {
+              id: 'e1',
+              kind: 'fileOperationCompleted',
+              tone: 'tool',
+              label: 'Edit',
+              detail: 'edit',
+              path: '/repo/src/app.ts',
+              timestamp: now,
+            },
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'done'),
+          },
+        ],
+        diffs: [diff('src/app.ts')],
+      }),
+      '/repo',
+    )
+
+    expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [{ label: 'Edited', path: 'src/app.ts', diff: { id: 'diff:src/app.ts' } }],
+    })
+  })
+
+  it('adds persisted diffs to the latest work row when no tool event names the file', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'change it'),
+          },
+          {
+            type: 'event',
+            id: 'event:e1',
+            timestamp: now,
+            event: {
+              id: 'e1',
+              kind: 'tool_execution_start',
+              tone: 'tool',
+              label: 'Bash',
+              detail: "Bash: git status --short",
+              timestamp: now,
+            },
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'done'),
+          },
+        ],
+        diffs: [diff('src/app.ts')],
+      }),
+      '/repo',
+    )
+
+    expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [
+        { kind: 'tool_execution_start', label: 'Ran command' },
+        { kind: 'diff.artifact', label: 'Edited', path: 'src/app.ts', diff: { id: 'diff:src/app.ts' } },
+      ],
+    })
+  })
+
+  it('renders raw git diff command output as an inline diff', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'show diff'),
+          },
+          {
+            type: 'message',
+            id: 'message:t1',
+            timestamp: now,
+            message: message(
+              't1',
+              'tool',
+              [
+                'git diff',
+                'diff --git a/src/app.ts b/src/app.ts',
+                'index 111..222 100644',
+                '--- a/src/app.ts',
+                '+++ b/src/app.ts',
+                '@@ -1 +1 @@',
+                '-old',
+                '+new',
+              ].join('\n'),
+            ),
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'done'),
+          },
+        ],
+      }),
+      '/repo',
+    )
+
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [
+        {
+          kind: 'tool.message',
+          label: 'git diff',
+        },
+        {
+          kind: 'tool.message.diff',
+          label: 'Diff',
+          path: 'src/app.ts',
+          diff: {
+            id: 't1:patch:0',
+            path: 'src/app.ts',
+          },
+        },
+      ],
+    })
+  })
+
+  it('folds interim assistant updates into runtime work', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'make it'),
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'I am checking the repo.'),
+          },
+          {
+            type: 'message',
+            id: 'message:t1',
+            timestamp: now,
+            message: message('t1', 'tool', 'pnpm test\nok'),
+          },
+          {
+            type: 'message',
+            id: 'message:a2',
+            timestamp: now,
+            message: message('a2', 'assistant', 'done'),
+          },
+        ],
+      }),
+      '/repo',
+    )
+
+    expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [
+        { kind: 'assistant.status', label: 'Update', detail: 'I am checking the repo.' },
+        { kind: 'tool.message', label: 'pnpm test' },
+      ],
+    })
+    expect(rows[2]).toMatchObject({ kind: 'message', message: { text: 'done' } })
+  })
+
+  it('folds interim assistant updates for pi sessions without hiding the final reply', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        runtime: 'pi',
+        timeline: [
+          {
+            type: 'message',
+            id: 'message:u1',
+            timestamp: now,
+            message: message('u1', 'user', 'make it'),
+          },
+          {
+            type: 'message',
+            id: 'message:a1',
+            timestamp: now,
+            message: message('a1', 'assistant', 'I am checking the repo.'),
+          },
+          {
+            type: 'message',
+            id: 'message:a2',
+            timestamp: now,
+            message: message('a2', 'assistant', 'done'),
+          },
+        ],
+      }),
+      '/repo',
+    )
+
+    expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
+    expect(rows[1]).toMatchObject({
+      kind: 'work',
+      entries: [{ kind: 'assistant.status', label: 'Update', detail: 'I am checking the repo.' }],
+    })
+    expect(rows[2]).toMatchObject({ kind: 'message', message: { text: 'done' } })
+  })
+
   it('adds a working row for running agents', () => {
     const rows = deriveAgentTimelineRows(
       agent({ status: 'running', messages: [message('u1', 'user', 'go')] }),
@@ -160,7 +449,7 @@ describe('timeline helpers', () => {
 
     expect(entries).toHaveLength(2)
     expect(entries[0]?.count).toBe(2)
-    expect(summarizeWorkEntries(entries)).toBe('edited 1 file, ran 1 command')
+    expect(summarizeWorkEntries(entries)).toBe('edited 1 file, ran 2 commands')
   })
 
   it('counts patch line changes without headers', () => {

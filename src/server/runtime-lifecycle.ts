@@ -1,4 +1,4 @@
-import type { AgentStatus, ThinkingLevel, TimelineEventTone } from '~/lib/contracts'
+import type { AgentStatus, AgentTask, RuntimeKind, ThinkingLevel, TimelineEventTone } from '~/lib/contracts'
 import { Cause, Context, Data, Effect, Exit, Layer, Option } from 'effect'
 import {
   appendUserMessage,
@@ -6,6 +6,7 @@ import {
   recordRuntimeContextUsage,
   recordRuntimeMessage,
   recordRuntimeTimelineEvent,
+  replaceAgentTasks,
   replaceAgentDiffArtifacts,
   setAgentRuntimeState,
   setAgentStatus,
@@ -47,6 +48,13 @@ export type RuntimeProjectionEvent =
     type: 'diffsUpdated'
     agentId: string
     diffs: RuntimeDiffArtifact[]
+  }
+  | {
+    type: 'tasksUpdated'
+    agentId: string
+    source: RuntimeKind
+    tasks: AgentTask[]
+    updatedAt?: string
   }
   | {
     type: 'runtimeState'
@@ -124,6 +132,15 @@ const liveProjector: RuntimeLifecycleProjection = {
       replaceAgentDiffArtifacts({
         agentId: event.agentId,
         diffs: event.diffs,
+      })
+      return
+    }
+    if (event.type === 'tasksUpdated') {
+      replaceAgentTasks({
+        agentId: event.agentId,
+        source: event.source,
+        tasks: event.tasks,
+        updatedAt: event.updatedAt,
       })
       return
     }

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { rmSync, mkdirSync } from 'node:fs'
+import { rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { startFakeCodexAppServer } from '../harness/fake-codex-app-server.mjs'
@@ -9,6 +9,7 @@ test.describe.configure({ mode: 'serial' })
 const testDbPath = resolve(process.env.AETHER_DB_PATH ?? '.aether/aether.e2e.sqlite')
 const projectRoot = process.cwd()
 const fileOperationFixturePath = resolve(projectRoot, 'src/aether-file-operation-e2e.tmp')
+const detailFixturePath = resolve(projectRoot, 'src/detail.ts')
 let fakeCodexServer: Awaited<ReturnType<typeof startFakeCodexAppServer>>
 
 test.beforeAll(async () => {
@@ -16,35 +17,90 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  await fakeCodexServer.close()
+  await fakeCodexServer?.close()
 })
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page }, testInfo) => {
   if (fakeCodexServer) fakeCodexServer.requests.length = 0
   rmSync(fileOperationFixturePath, { force: true })
+  rmSync(detailFixturePath, { force: true })
   mkdirSync(dirname(testDbPath), { recursive: true })
   rmSync(resolve(projectRoot, '.aether', 'pi-sessions', 'e2e-aether'), {
     force: true,
     recursive: true,
   })
   const database = new DatabaseSync(testDbPath)
-  database.exec(`
-    PRAGMA foreign_keys = ON;
-    DELETE FROM agent_slots;
-    DELETE FROM projects;
+  resetE2eDatabase(database)
+  if (testInfo.title !== 'empty workspace starts with an add-project path') {
+    database.exec(`
     INSERT INTO projects (id, name, cwd, position)
     VALUES ('e2e-aether', 'Aether Orchestrator', '${projectRoot.replaceAll("'", "''")}', 0);
     INSERT INTO projects (id, name, cwd, position)
     VALUES ('test-reference', 'Test Reference', '/Users/yesh/Documents/personal/reference/test', 1);
   `)
+  }
   database.close()
 
   await page.goto('/')
-  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  if (testInfo.title === 'empty workspace starts with an add-project path') {
+    await expect(page.getByTestId('empty-project-state')).toHaveAttribute('data-hydrated', 'true')
+  } else {
+    await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  }
 })
+
+function resetE2eDatabase(database: DatabaseSync) {
+  database.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      cwd TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      hidden_at TEXT
+    );
+  `)
+
+  const tables = [
+    'agent_context_usage',
+    'diff_artifacts',
+    'timeline_events',
+    'messages',
+    'threads',
+    'deleted_sessions',
+    'agent_slots',
+    'projects',
+  ]
+  for (const table of tables) {
+    if (tableExists(database, table)) {
+      database.exec(`DELETE FROM ${table}`)
+    }
+  }
+}
+
+function tableExists(database: DatabaseSync, table: string) {
+  return Boolean(
+    database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(table),
+  )
+}
 
 test.afterEach(() => {
   rmSync(fileOperationFixturePath, { force: true })
+  rmSync(detailFixturePath, { force: true })
+})
+
+test('empty workspace starts with an add-project path', async ({ page }) => {
+  await expect(page.getByTestId('empty-project-state')).toHaveAttribute('data-hydrated', 'true')
+  await page.getByTestId('empty-add-project').click()
+  await page.getByTestId('project-name-input').fill('Current Repo')
+  await page.getByTestId('project-cwd-input').fill(projectRoot)
+  await page.getByTestId('project-id-input').fill('current-repo')
+  await page.getByLabel('Project manager').getByRole('button', { name: 'Add project' }).click()
+
+  await expect(page.getByTestId('selected-project').first()).toHaveText('Current Repo')
+  await expect(page.getByTestId('selected-agent').first()).toHaveText('No session')
 })
 
 test('keyboard navigation moves projects without default sessions', async ({ page, isMobile }) => {
@@ -152,6 +208,27 @@ test('removed sessions are archived and can be restored from resume', async ({ p
   await expect(page.getByTestId('board-pane')).toContainText(title)
 })
 
+test('shift delete removes the selected session, not the first session', async ({ page }, testInfo) => {
+  const firstTitle = `Delete First ${testInfo.project.name}`
+  const secondTitle = `Delete Second ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, firstTitle)
+  await createSession(page, secondTitle)
+
+  await page.getByTestId('agent-cell').filter({ hasText: firstTitle }).dispatchEvent('click')
+  await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
+  await page.getByTestId('agent-cell').filter({ hasText: secondTitle }).dispatchEvent('click')
+  await expect(page.getByTestId('selected-agent')).toHaveText(secondTitle)
+
+  await pressShiftKey(page, 'KeyX')
+  await expect(page.getByTestId('confirm-dialog')).toContainText(secondTitle)
+  await page.getByTestId('confirm-dialog-confirm').click()
+
+  await expect(page.getByTestId('board-pane')).toContainText(firstTitle)
+  await expect(page.getByTestId('board-pane')).not.toContainText(secondTitle)
+})
+
 test('command menu starts, switches, and ends sessions', async ({ page }, testInfo) => {
   const firstTitle = `Command First ${testInfo.project.name}`
   const secondTitle = `Command Second ${testInfo.project.name}`
@@ -223,6 +300,21 @@ test('projects panel adds, hides, and unhides projects', async ({ page }, testIn
   await page.getByTestId('command-search').fill(`unhide ${name}`)
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('board-pane')).toContainText(name)
+
+  await page.keyboard.press('Control+K')
+  await page.getByTestId('command-search').fill(`remove ${name}`)
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('confirm-dialog')).toContainText('project directory and files stay on disk')
+  await page.getByTestId('confirm-dialog-cancel').click()
+  await expect(page.getByTestId('board-pane')).toContainText(name)
+
+  await page.getByRole('button', { name: 'Projects' }).click()
+  await page.getByRole('button', { name: `Remove ${name}` }).click()
+  await expect(page.getByTestId('confirm-dialog')).toContainText('project directory and files stay on disk')
+  await page.getByTestId('confirm-dialog-confirm').click()
+  await expect(page.getByTestId('project-settings-list')).not.toContainText(name)
+  await page.getByRole('button', { name: 'Done' }).click()
+  await expect(page.getByTestId('board-pane')).not.toContainText(name)
 })
 
 test('chat composer accepts and records input', async ({ page }, testInfo) => {
@@ -242,6 +334,7 @@ test('chat composer accepts and records input', async ({ page }, testInfo) => {
 })
 
 test('codex runtime runs through app-server harness', async ({ page }, testInfo) => {
+  test.setTimeout(60_000)
   const title = `Codex Session ${testInfo.project.name}`
   const text = `hello codex ${testInfo.project.name}`
 
@@ -265,10 +358,10 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
   const fileOperationText = `please perform file operation ${testInfo.project.name}`
   await page.getByTestId('chat-input').fill(fileOperationText)
   await page.getByRole('button', { name: 'Send prompt' }).click()
-  await expect(page.getByTestId('chat-panel')).toContainText('fileChange started', {
+  await expect(page.getByTestId('chat-panel')).toContainText('Editing', {
     timeout: 30_000,
   })
-  await expect(page.getByTestId('chat-panel')).toContainText('fileChange completed')
+  await expect(page.getByTestId('chat-panel')).toContainText('Edited')
   expect(diffPathsForSessionTitle(title)).toContain('src/aether-file-operation-e2e.tmp')
 
   const requests = fakeCodexServer.requests as CodexHarnessRequest[]
@@ -359,7 +452,7 @@ test('claude runtime runs through claude-agent-sdk harness', async ({ page }, te
   await expect(page.getByTestId('chat-panel')).toContainText(`fake claude received: ${text}`, {
     timeout: 30_000,
   })
-  await expect(page.getByTestId('chat-panel')).toContainText('Read - package.json', {
+  await expect(page.getByTestId('chat-panel')).toContainText('Read-package.json', {
     timeout: 30_000,
   })
   await expect(page.getByTestId('chat-panel')).toContainText('fake file contents', {
@@ -583,6 +676,7 @@ function seedSessionWithDetail(input: {
   const escapedMessage = input.messageText.replaceAll("'", "''")
   const timestamp = new Date().toISOString()
   const threadId = `${input.agentId}-thread`
+  writeFileSync(detailFixturePath, 'export const detail = true\n')
   const patch = [
     'diff --git a/src/detail.ts b/src/detail.ts',
     'index 0000000..1111111 100644',

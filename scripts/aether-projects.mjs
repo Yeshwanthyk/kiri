@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const root = process.cwd()
+const aetherHome = resolve(process.env.AETHER_HOME ?? join(homedir(), '.aether'))
+const stateDir = resolve(process.env.AETHER_STATE_DIR ?? join(aetherHome, 'userdata'))
 const dbPath = process.env.AETHER_DB_PATH
   ? resolve(process.env.AETHER_DB_PATH)
-  : join(root, '.aether', 'aether.sqlite')
+  : join(stateDir, 'aether.sqlite')
+const rootDir = resolve(process.env.AETHER_ROOT_DIR ?? process.cwd())
 main()
 
 function main() {
@@ -44,6 +47,7 @@ function main() {
 }
 
 function openDb() {
+  migrateLegacyRepoState()
   mkdirSync(dirname(dbPath), { recursive: true })
   const database = new DatabaseSync(dbPath)
   database.exec('PRAGMA journal_mode = WAL')
@@ -67,11 +71,13 @@ function migrate(database) {
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       slot TEXT NOT NULL,
       title TEXT NOT NULL,
-      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude', 'opencode')),
+      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude')),
       model TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
       session_dir TEXT NOT NULL,
       session_file TEXT,
+      runtime_state_json TEXT,
+      archived_at TEXT,
       position INTEGER NOT NULL
     );
 
@@ -125,8 +131,43 @@ function migrate(database) {
       patch TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS agent_context_usage (
+      agent_id TEXT PRIMARY KEY REFERENCES agent_slots(id) ON DELETE CASCADE,
+      used_tokens INTEGER NOT NULL,
+      window_tokens INTEGER,
+      updated_at TEXT NOT NULL,
+      session_file TEXT
+    );
   `)
   addProjectHiddenAtColumn(database)
+  addRuntimeStateColumn(database)
+  addAgentArchivedAtColumn(database)
+}
+
+function migrateLegacyRepoState() {
+  const legacyStateDir = resolve(rootDir, '.aether')
+  if (resolve(legacyStateDir) === resolve(stateDir)) return
+  if (!existsSync(join(legacyStateDir, 'aether.sqlite'))) return
+  if (existsSync(dbPath) && !isEmptyAetherDatabase(dbPath)) return
+  mkdirSync(dirname(stateDir), { recursive: true })
+  cpSync(legacyStateDir, stateDir, { recursive: true, errorOnExist: false })
+}
+
+function isEmptyAetherDatabase(path) {
+  const database = new DatabaseSync(path)
+  try {
+    const hasProjectsTable = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projects'")
+      .get()
+    if (!hasProjectsTable) return true
+    const row = database
+      .prepare('SELECT COUNT(*) AS count FROM projects')
+      .get()
+    return row.count === 0
+  } finally {
+    database.close()
+  }
 }
 
 function listProjects(database, options) {
@@ -156,7 +197,7 @@ function listProjects(database, options) {
 }
 
 function addProject(database, options) {
-  const cwd = options.cwd ? resolve(options.cwd) : root
+  const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
   const name = required(options.name, '--name')
   const id = options.id ?? slugify(name)
 
@@ -253,6 +294,18 @@ function addProjectHiddenAtColumn(database) {
   const columns = database.prepare('PRAGMA table_info(projects)').all()
   if (columns.some((column) => column.name === 'hidden_at')) return
   database.exec('ALTER TABLE projects ADD COLUMN hidden_at TEXT')
+}
+
+function addRuntimeStateColumn(database) {
+  const columns = database.prepare('PRAGMA table_info(agent_slots)').all()
+  if (columns.some((column) => column.name === 'runtime_state_json')) return
+  database.exec('ALTER TABLE agent_slots ADD COLUMN runtime_state_json TEXT')
+}
+
+function addAgentArchivedAtColumn(database) {
+  const columns = database.prepare('PRAGMA table_info(agent_slots)').all()
+  if (columns.some((column) => column.name === 'archived_at')) return
+  database.exec('ALTER TABLE agent_slots ADD COLUMN archived_at TEXT')
 }
 
 function nextProjectPosition(database) {

@@ -1,17 +1,19 @@
-import { execFileSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import type {
   AddProjectInput,
+  AddScratchpadBlockInput,
+  AgentTask,
   AgentStatus,
   AgentDetail,
   ContextUsage,
   DiffArtifact,
   DeleteSessionInput,
   RestoreSessionInput,
+  ScratchpadBlock,
   StartSessionInput,
   MessageRole,
   ThinkingLevel,
@@ -20,6 +22,7 @@ import type {
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import {
+  agentTaskSchema,
   agentStatusSchema,
   agentDetailSchema,
   messageRoleSchema,
@@ -32,10 +35,7 @@ import {
 import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
-
-const dbPath = process.env.AETHER_DB_PATH
-  ? resolve(process.env.AETHER_DB_PATH)
-  : join(process.cwd(), '.aether', 'aether.sqlite')
+import { getAetherConfig, runtimeSessionDirPath } from './aether-config'
 
 let db: DatabaseSync | undefined
 
@@ -75,6 +75,28 @@ const archivedSessionDbRowSchema = agentDbRowSchema.extend({
   archivedAt: z.string(),
 })
 
+const projectSummaryDbRowSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  cwd: z.string(),
+  hiddenAt: z.string().nullable(),
+  sessionCount: z.number().int().nonnegative(),
+})
+
+const sessionSummaryDbRowSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  projectName: z.string(),
+  title: z.string(),
+  runtime: runtimeKindSchema,
+  model: z.string(),
+  status: agentStatusSchema,
+  preview: z.string().nullable(),
+  messageCount: z.number().int().nonnegative().nullable(),
+  updatedAt: z.string().nullable(),
+  archivedAt: z.string().nullable(),
+})
+
 const messageDbRowSchema = z.object({
   id: z.string(),
   agentId: z.string(),
@@ -94,6 +116,15 @@ const timelineEventDbRowSchema = z.object({
   payloadJson: z.string(),
 })
 
+const agentTaskDbRowSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: agentTaskSchema.shape.status,
+  source: runtimeKindSchema,
+  updatedAt: z.string(),
+  position: z.number().int().nonnegative(),
+})
+
 const diffDbRowSchema = z.object({
   id: z.string(),
   agentId: z.string(),
@@ -109,6 +140,16 @@ const contextUsageDbRowSchema = z.object({
   windowTokens: z.number().int().positive().nullable(),
   updatedAt: z.string(),
   sessionFile: z.string().nullable(),
+})
+
+const scratchpadBlockDbRowSchema = z.object({
+  id: z.string(),
+  projectId: z.string().nullable(),
+  projectName: z.string().nullable(),
+  body: z.string(),
+  createdAt: z.string(),
+  triggeredAt: z.string().nullable(),
+  triggeredAgentId: z.string().nullable(),
 })
 
 const agentLaunchConfigSchema = z.object({
@@ -142,14 +183,43 @@ const deletedSessionDbRowSchema = z.object({
 
 export function getDb() {
   if (db) return db
+  const config = getAetherConfig()
+  migrateLegacyRepoState(config)
+  const dbPath = config.dbPath
   mkdirSync(dirname(dbPath), { recursive: true })
   db = new DatabaseSync(dbPath)
+  db.exec('PRAGMA busy_timeout = 5000')
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
   migrate(db)
   normalizeSeededModels(db)
-  seed(db)
+  removeLegacySeedProject(db)
   return db
+}
+
+function migrateLegacyRepoState(config: ReturnType<typeof getAetherConfig>) {
+  const legacyStateDir = resolve(config.rootDir, '.aether')
+  if (resolve(legacyStateDir) === resolve(config.stateDir)) return
+  if (!existsSync(join(legacyStateDir, 'aether.sqlite'))) return
+  if (existsSync(config.dbPath) && !isEmptyAetherDatabase(config.dbPath)) return
+  mkdirSync(dirname(config.stateDir), { recursive: true })
+  cpSync(legacyStateDir, config.stateDir, { recursive: true, errorOnExist: false })
+}
+
+function isEmptyAetherDatabase(dbPath: string) {
+  const database = new DatabaseSync(dbPath)
+  try {
+    const hasProjectsTable = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projects'")
+      .get()
+    if (!hasProjectsTable) return true
+    const count = database
+      .prepare('SELECT COUNT(*) AS count FROM projects')
+      .get() as { count: number }
+    return count.count === 0
+  } finally {
+    database.close()
+  }
 }
 
 export function getWorkspaceSnapshot(): WorkspaceSnapshot {
@@ -239,7 +309,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
         sessionFile: agent.sessionFile,
         preview: agent.preview ?? 'No messages yet',
         messageCount: agent.messageCount ?? 0,
-        diffCount: readDirtyDiffs(database, agent.id, agent.cwd).length,
+        diffCount: agent.diffCount,
         contextUsage: readContextUsage(
           agent,
           settings,
@@ -252,6 +322,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
         timelineEvents: [],
         timeline: [],
         diffs: [],
+        tasks: [],
       }
     }),
   }))
@@ -286,12 +357,14 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   const hiddenProjects = snapshotProjectRows.filter((project) => project.hiddenAt)
   const selectedProject = snapshotProjects[0]
   const selectedAgent = selectedProject?.agents[0]
+  const scratchpadBlocks = listScratchpadBlocks()
 
   const snapshot = {
     settings,
     projects: snapshotProjects,
     hiddenProjects,
     archivedSessions,
+    scratchpadBlocks,
     selected: {
       projectId: selectedProject?.id ?? '',
       agentId: selectedAgent?.id ?? '',
@@ -305,7 +378,6 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
   const database = getDb()
   hydratePersistedPiSessions(database)
   const agentId = input.agentId.trim()
-  const limit = normalizeDetailLimit(input.limit)
   const settings = getSettings()
   const agent = database
     .prepare(
@@ -354,53 +426,46 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
       `,
     )
     .get(agentId)
-  const messages = database
+  const messageRows = database
     .prepare(
       `
-        SELECT id, agentId, role, text, timestamp
-        FROM (
-          SELECT m.id, t.agent_id AS agentId, m.role, m.text, m.timestamp
-          FROM messages m
-          INNER JOIN threads t ON t.id = m.thread_id
-          WHERE t.active = 1 AND t.agent_id = ?
-          ORDER BY m.timestamp DESC, m.id DESC
-          LIMIT ?
-        )
-        ORDER BY timestamp ASC, id ASC
+        SELECT m.id, t.agent_id AS agentId, m.role, m.text, m.timestamp
+        FROM messages m
+        INNER JOIN threads t ON t.id = m.thread_id
+        WHERE t.active = 1 AND t.agent_id = ?
+        ORDER BY m.timestamp ASC, m.id ASC
       `,
     )
-    .all(agentId, limit)
+    .all(agentId)
     .map((row) => messageDbRowSchema.parse(row))
-  const timelineEvents = database
+  const eventRows = database
     .prepare(
       `
-        SELECT id, agentId, kind, tone, label, detail, timestamp, payloadJson
-        FROM (
-          SELECT
-            e.id,
-            t.agent_id AS agentId,
-            e.kind,
-            e.tone,
-            e.label,
-            e.detail,
-            e.timestamp,
-            e.payload_json AS payloadJson
-          FROM timeline_events e
-          INNER JOIN threads t ON t.id = e.thread_id
-          WHERE t.active = 1 AND t.agent_id = ?
-          ORDER BY e.timestamp DESC, e.id DESC
-          LIMIT ?
-        )
-        ORDER BY timestamp ASC, id ASC
+        SELECT
+          e.id,
+          t.agent_id AS agentId,
+          e.kind,
+          e.tone,
+          e.label,
+          e.detail,
+          e.timestamp,
+          e.payload_json AS payloadJson
+        FROM timeline_events e
+        INNER JOIN threads t ON t.id = e.thread_id
+        WHERE t.active = 1 AND t.agent_id = ?
+        ORDER BY e.timestamp ASC, e.id ASC
       `,
     )
-    .all(agentId, limit)
+    .all(agentId)
+  const messages = messageRows
+  const timelineEvents = eventRows
     .map((row) => timelineEventFromDbRow(timelineEventDbRowSchema.parse(row)))
-  const diffs = readDirtyDiffs(database, agentId, parsedAgent.cwd)
+  const diffs = readDiffs(database, agentId)
+  const tasks = readAgentTasks(database, agentId)
   const timeline = mergeTimeline(
     messages.map(({ agentId: _agentId, ...message }) => message),
     timelineEvents.map(({ agentId: _agentId, ...event }) => event),
-  ).slice(-limit)
+  )
 
   return agentDetailSchema.parse({
     id: parsedAgent.id,
@@ -427,10 +492,165 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
     timelineEvents: timeline.flatMap((item) => item.type === 'event' ? [item.event] : []),
     timeline,
     diffs: diffs.map(({ agentId: _agentId, ...diff }) => diff),
+    tasks,
   })
 }
 
+export function listProjectSummaries(includeHidden = false) {
+  return getDb()
+    .prepare(
+      `
+        SELECT
+          p.id,
+          p.name,
+          p.cwd,
+          p.hidden_at AS hiddenAt,
+          (
+            SELECT COUNT(*)
+            FROM agent_slots a
+            WHERE a.project_id = p.id
+              AND a.archived_at IS NULL
+          ) AS sessionCount
+        FROM projects p
+        ${includeHidden ? '' : 'WHERE p.hidden_at IS NULL'}
+        ORDER BY p.position ASC, p.id ASC
+      `,
+    )
+    .all()
+    .map(projectSummaryFromDbRow)
+}
+
+export function requireProjectSummary(id: string, includeHidden = false) {
+  const project = getDb()
+    .prepare(
+      `
+        SELECT
+          p.id,
+          p.name,
+          p.cwd,
+          p.hidden_at AS hiddenAt,
+          (
+            SELECT COUNT(*)
+            FROM agent_slots a
+            WHERE a.project_id = p.id
+              AND a.archived_at IS NULL
+          ) AS sessionCount
+        FROM projects p
+        WHERE p.id = ?
+          AND (? = 1 OR p.hidden_at IS NULL)
+      `,
+    )
+    .get(id, includeHidden ? 1 : 0)
+  if (!project) throw new Error(`Project not found: ${id}`)
+  return projectSummaryFromDbRow(project)
+}
+
+export function listSessionSummaries(input: {
+  readonly projectId?: string
+  readonly includeArchived?: boolean
+} = {}) {
+  const rows = getDb()
+    .prepare(
+      `
+        SELECT
+          a.id,
+          a.project_id AS projectId,
+          p.name AS projectName,
+          a.title,
+          a.runtime,
+          a.model,
+          a.status,
+          t.preview,
+          t.message_count AS messageCount,
+          t.updated_at AS updatedAt,
+          a.archived_at AS archivedAt
+        FROM agent_slots a
+        INNER JOIN projects p ON p.id = a.project_id
+        LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
+        WHERE a.slot LIKE 'session-%'
+          AND (? IS NULL OR a.project_id = ?)
+          AND (? = 1 OR a.archived_at IS NULL)
+        ORDER BY COALESCE(t.updated_at, '') DESC, a.position ASC, a.id ASC
+      `,
+    )
+    .all(
+      input.projectId ?? null,
+      input.projectId ?? null,
+      input.includeArchived ? 1 : 0,
+    )
+
+  return rows.map(sessionSummaryFromDbRow)
+}
+
+export function requireSessionSummary(agentId: string, includeArchived = false) {
+  const id = agentId.trim()
+  const session = getDb()
+    .prepare(
+      `
+        SELECT
+          a.id,
+          a.project_id AS projectId,
+          p.name AS projectName,
+          a.title,
+          a.runtime,
+          a.model,
+          a.status,
+          t.preview,
+          t.message_count AS messageCount,
+          t.updated_at AS updatedAt,
+          a.archived_at AS archivedAt
+        FROM agent_slots a
+        INNER JOIN projects p ON p.id = a.project_id
+        LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
+        WHERE a.id = ?
+          AND a.slot LIKE 'session-%'
+          AND (? = 1 OR a.archived_at IS NULL)
+      `,
+    )
+    .get(id, includeArchived ? 1 : 0)
+  if (!session) throw new Error(`Session not found: ${id}`)
+  return sessionSummaryFromDbRow(session)
+}
+
+function projectSummaryFromDbRow(row: unknown) {
+  const parsed = projectSummaryDbRowSchema.parse(row)
+  return {
+    id: parsed.id,
+    name: parsed.name,
+    cwd: parsed.cwd,
+    hidden: parsed.hiddenAt !== null,
+    sessionCount: parsed.sessionCount,
+  }
+}
+
+function sessionSummaryFromDbRow(row: unknown) {
+  const parsed = sessionSummaryDbRowSchema.parse(row)
+  return {
+    id: parsed.id,
+    projectId: parsed.projectId,
+    projectName: parsed.projectName,
+    title: parsed.title,
+    runtime: parsed.runtime,
+    model: parsed.model,
+    status: parsed.status,
+    preview: parsed.preview ?? 'No messages yet',
+    messageCount: parsed.messageCount ?? 0,
+    updatedAt: parsed.updatedAt ?? new Date(0).toISOString(),
+    archivedAt: parsed.archivedAt,
+  }
+}
+
 export function addProject(input: AddProjectInput) {
+  insertProject(input)
+  return getWorkspaceSnapshot()
+}
+
+export function addProjectSummary(input: AddProjectInput) {
+  const id = insertProject(input)
+  return requireProjectSummary(id, true)
+}
+
+function insertProject(input: AddProjectInput) {
   const database = getDb()
   const id = input.id?.trim() || slugify(input.name)
   const name = input.name.trim()
@@ -461,10 +681,20 @@ export function addProject(input: AddProjectInput) {
     throw error
   }
 
-  return getWorkspaceSnapshot()
+  return id
 }
 
 export function startSession(input: StartSessionInput) {
+  const id = insertSession(input)
+  return getWorkspaceSnapshot()
+}
+
+export function startSessionSummary(input: StartSessionInput) {
+  const id = insertSession(input)
+  return requireSessionSummary(id, true)
+}
+
+function insertSession(input: StartSessionInput) {
   const database = getDb()
   const projectId = input.projectId.trim()
   const project = database
@@ -529,10 +759,20 @@ export function startSession(input: StartSessionInput) {
     throw error
   }
 
-  return getWorkspaceSnapshot()
+  return id
 }
 
 export function deleteSession(input: DeleteSessionInput) {
+  archiveSession(input)
+  return getWorkspaceSnapshot()
+}
+
+export function deleteSessionSummary(input: DeleteSessionInput) {
+  const id = archiveSession(input)
+  return requireSessionSummary(id, true)
+}
+
+function archiveSession(input: DeleteSessionInput) {
   const database = getDb()
   const agentId = input.agentId.trim()
   const row = database
@@ -565,10 +805,20 @@ export function deleteSession(input: DeleteSessionInput) {
     throw error
   }
 
-  return getWorkspaceSnapshot()
+  return agentId
 }
 
 export function restoreSession(input: RestoreSessionInput) {
+  restoreSessionRow(input)
+  return getWorkspaceSnapshot()
+}
+
+export function restoreSessionSummary(input: RestoreSessionInput) {
+  const id = restoreSessionRow(input)
+  return requireSessionSummary(id, true)
+}
+
+function restoreSessionRow(input: RestoreSessionInput) {
   const database = getDb()
   const agentId = input.agentId.trim()
   const row = database
@@ -582,10 +832,20 @@ export function restoreSession(input: RestoreSessionInput) {
   database
     .prepare('UPDATE agent_slots SET archived_at = NULL WHERE id = ?')
     .run(agentId)
-  return getWorkspaceSnapshot()
+  return agentId
 }
 
 export function renameSession(input: { agentId: string; title: string }) {
+  renameSessionRow(input)
+  return getWorkspaceSnapshot()
+}
+
+export function renameSessionSummary(input: { agentId: string; title: string }) {
+  const id = renameSessionRow(input)
+  return requireSessionSummary(id, true)
+}
+
+function renameSessionRow(input: { agentId: string; title: string }) {
   const database = getDb()
   const agentId = input.agentId.trim()
   const title = input.title.trim()
@@ -598,7 +858,7 @@ export function renameSession(input: { agentId: string; title: string }) {
     throw new Error('Only started sessions can be renamed')
   }
   database.prepare('UPDATE agent_slots SET title = ? WHERE id = ?').run(title, agentId)
-  return getWorkspaceSnapshot()
+  return agentId
 }
 
 export function resetSession(agentId: string) {
@@ -614,6 +874,7 @@ export function resetSession(agentId: string) {
   try {
     database.prepare('DELETE FROM messages WHERE thread_id = ?').run(thread.id)
     database.prepare('DELETE FROM timeline_events WHERE thread_id = ?').run(thread.id)
+    database.prepare('DELETE FROM agent_tasks WHERE thread_id = ?').run(thread.id)
     database.prepare('DELETE FROM diff_artifacts WHERE agent_id = ?').run(id)
     database.prepare('DELETE FROM agent_context_usage WHERE agent_id = ?').run(id)
     database
@@ -668,7 +929,7 @@ export function createForkedSession(input: {
   const suffix = Math.random().toString(36).slice(2, 8)
   const slot = `session-${Date.now().toString(36)}-${suffix}`
   const id = `${source.projectId}-${slot}`
-  const sessionDir = join(process.cwd(), '.aether', 'pi-sessions', source.projectId, slot)
+  const sessionDir = runtimeSessionDirPath(getAetherConfig(), 'pi', source.projectId, slot)
   mkdirSync(sessionDir, { recursive: true })
   const sessionFile = join(sessionDir, basename(input.sessionFile))
   if (resolve(sessionFile) !== resolve(input.sessionFile)) {
@@ -725,6 +986,17 @@ export function createForkedSession(input: {
 }
 
 export function deleteProject(id: string) {
+  deleteProjectRow(id)
+  return getWorkspaceSnapshot()
+}
+
+export function deleteProjectSummary(id: string) {
+  const project = requireProjectSummary(id, true)
+  deleteProjectRow(id)
+  return project
+}
+
+function deleteProjectRow(id: string) {
   const database = getDb()
   const projectId = id.trim()
   if (!projectId) throw new Error('Project id is required')
@@ -755,11 +1027,19 @@ export function deleteProject(id: string) {
     database.exec('ROLLBACK')
     throw error
   }
-
-  return getWorkspaceSnapshot()
 }
 
 export function hideProject(id: string) {
+  hideProjectRow(id)
+  return getWorkspaceSnapshot()
+}
+
+export function hideProjectSummary(id: string) {
+  const projectId = hideProjectRow(id)
+  return requireProjectSummary(projectId, true)
+}
+
+function hideProjectRow(id: string) {
   const database = getDb()
   const projectId = id.trim()
   if (!projectId) throw new Error('Project id is required')
@@ -777,11 +1057,20 @@ export function hideProject(id: string) {
   database
     .prepare('UPDATE projects SET hidden_at = ? WHERE id = ?')
     .run(new Date().toISOString(), projectId)
-
-  return getWorkspaceSnapshot()
+  return projectId
 }
 
 export function unhideProject(id: string) {
+  unhideProjectRow(id)
+  return getWorkspaceSnapshot()
+}
+
+export function unhideProjectSummary(id: string) {
+  const projectId = unhideProjectRow(id)
+  return requireProjectSummary(projectId, true)
+}
+
+function unhideProjectRow(id: string) {
   const database = getDb()
   const projectId = id.trim()
   if (!projectId) throw new Error('Project id is required')
@@ -792,7 +1081,99 @@ export function unhideProject(id: string) {
   if (!existing) throw new Error(`Project not found: ${projectId}`)
 
   database.prepare('UPDATE projects SET hidden_at = NULL WHERE id = ?').run(projectId)
+  return projectId
+}
+
+export function listScratchpadBlocks(): ScratchpadBlock[] {
+  return getDb()
+    .prepare(
+      `
+        SELECT
+          s.id,
+          s.project_id AS projectId,
+          p.name AS projectName,
+          s.body,
+          s.created_at AS createdAt,
+          s.triggered_at AS triggeredAt,
+          s.triggered_agent_id AS triggeredAgentId
+        FROM scratchpad_blocks s
+        LEFT JOIN projects p ON p.id = s.project_id
+        ORDER BY s.created_at DESC
+      `,
+    )
+    .all()
+    .map((row) => scratchpadBlockDbRowSchema.parse(row))
+}
+
+export function addScratchpadBlock(input: AddScratchpadBlockInput) {
+  const body = input.body.trim()
+  if (!body) throw new Error('Block body is required')
+  const projectId = input.projectId?.trim() || null
+  const database = getDb()
+  if (projectId) {
+    const project = database
+      .prepare('SELECT id FROM projects WHERE id = ?')
+      .get(projectId)
+    if (!project) throw new Error(`Project not found: ${projectId}`)
+  }
+  const id = `block-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  const createdAt = new Date().toISOString()
+  database
+    .prepare(
+      `
+        INSERT INTO scratchpad_blocks (id, project_id, body, created_at)
+        VALUES (?, ?, ?, ?)
+      `,
+    )
+    .run(id, projectId, body, createdAt)
   return getWorkspaceSnapshot()
+}
+
+export function deleteScratchpadBlock(id: string) {
+  const blockId = id.trim()
+  if (!blockId) throw new Error('Block id is required')
+  getDb().prepare('DELETE FROM scratchpad_blocks WHERE id = ?').run(blockId)
+  return getWorkspaceSnapshot()
+}
+
+export function markScratchpadBlockTriggered(blockId: string, agentId: string) {
+  const id = blockId.trim()
+  if (!id) throw new Error('Block id is required')
+  getDb()
+    .prepare(
+      `
+        UPDATE scratchpad_blocks
+        SET triggered_at = ?, triggered_agent_id = ?
+        WHERE id = ?
+      `,
+    )
+    .run(new Date().toISOString(), agentId, id)
+}
+
+export function getScratchpadBlock(id: string) {
+  const row = getDb()
+    .prepare(
+      `
+        SELECT
+          s.id,
+          s.project_id AS projectId,
+          p.name AS projectName,
+          s.body,
+          s.created_at AS createdAt,
+          s.triggered_at AS triggeredAt,
+          s.triggered_agent_id AS triggeredAgentId
+        FROM scratchpad_blocks s
+        LEFT JOIN projects p ON p.id = s.project_id
+        WHERE s.id = ?
+      `,
+    )
+    .get(id.trim())
+  if (!row) return undefined
+  return scratchpadBlockDbRowSchema.parse(row)
+}
+
+export function startSessionAndGetId(input: StartSessionInput) {
+  return insertSession(input)
 }
 
 export function getAgentLaunchConfig(agentId: string) {
@@ -959,6 +1340,33 @@ export function recordRuntimeTimelineEvent(input: {
     )
 }
 
+export function replaceAgentTasks(input: {
+  agentId: string
+  source: AgentTask['source']
+  tasks: AgentTask[]
+  updatedAt?: string
+}) {
+  const database = getDb()
+  const threadId = ensureThreadForAgent(database, input.agentId, undefined)
+  const updatedAt = input.updatedAt ?? new Date().toISOString()
+  database.exec('BEGIN')
+  try {
+    replaceAgentTasksForThread(database, {
+      threadId,
+      source: input.source,
+      tasks: input.tasks,
+      updatedAt,
+    })
+    database
+      .prepare('UPDATE threads SET updated_at = ? WHERE id = ?')
+      .run(updatedAt, threadId)
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+}
+
 export function recordRuntimeContextUsage(input: {
   agentId: string
   usedTokens: number | undefined
@@ -1006,6 +1414,12 @@ export function recordPiMessages(input: {
           )
           .run(thread.id, input.promptText.trim(), `user-${input.agentId}-%`)
         hydrateProjectionMessages(database, input.agentId, projection)
+        replaceAgentTasksForThread(database, {
+          threadId: thread.id,
+          source: 'pi',
+          tasks: projection.tasks,
+          updatedAt: projection.updatedAt ?? new Date().toISOString(),
+        })
         upsertAgentContextUsage(database, {
           agentId: input.agentId,
           usedTokens: projection.contextUsedTokens,
@@ -1185,16 +1599,13 @@ export function replaceAgentDiffArtifacts(input: {
   const row = database
     .prepare(
       `
-        SELECT p.cwd
+        SELECT a.id
         FROM agent_slots a
-        INNER JOIN projects p ON p.id = a.project_id
         WHERE a.id = ?
       `,
     )
-    .get(input.agentId) as { cwd: string } | undefined
-  const diffs = row
-    ? input.diffs.filter((diff) => diffPathIsDirty(row.cwd, diff.path))
-    : []
+    .get(input.agentId)
+  if (!row) return
   const updatedAt = new Date().toISOString()
   database.exec('BEGIN')
   try {
@@ -1203,7 +1614,7 @@ export function replaceAgentDiffArtifacts(input: {
       INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `)
-    for (const diff of diffs) {
+    for (const diff of input.diffs) {
       const hash = createHash('sha256')
         .update(`${input.agentId}\n${diff.path}\n${diff.patch}`)
         .digest('hex')
@@ -1224,7 +1635,7 @@ export function replaceAgentDiffArtifacts(input: {
   }
 }
 
-function readDirtyDiffs(database: DatabaseSync, agentId: string, cwd: string) {
+function readDiffs(database: DatabaseSync, agentId: string) {
   return database
     .prepare(
       `
@@ -1236,7 +1647,6 @@ function readDirtyDiffs(database: DatabaseSync, agentId: string, cwd: string) {
     )
     .all(agentId)
     .map((row) => diffDbRowSchema.parse(row))
-    .filter((diff) => diffPathIsDirty(cwd, diff.path))
 }
 
 function migrate(database: DatabaseSync) {
@@ -1254,7 +1664,7 @@ function migrate(database: DatabaseSync) {
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       slot TEXT NOT NULL,
       title TEXT NOT NULL,
-      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude', 'opencode')),
+      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude')),
       model TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
       session_dir TEXT NOT NULL,
@@ -1299,6 +1709,20 @@ function migrate(database: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS timeline_events_thread_timestamp
       ON timeline_events(thread_id, timestamp, id);
 
+    CREATE TABLE IF NOT EXISTS agent_tasks (
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      source TEXT NOT NULL CHECK (source IN ('pi', 'codex', 'claude')),
+      task_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'inProgress', 'completed', 'failed')),
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (thread_id, source, task_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS agent_tasks_thread_position
+      ON agent_tasks(thread_id, position, task_id);
+
     CREATE TABLE IF NOT EXISTS deleted_sessions (
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       slot TEXT NOT NULL,
@@ -1322,6 +1746,18 @@ function migrate(database: DatabaseSync) {
       updated_at TEXT NOT NULL,
       session_file TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS scratchpad_blocks (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      triggered_at TEXT,
+      triggered_agent_id TEXT REFERENCES agent_slots(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS scratchpad_blocks_created_at
+      ON scratchpad_blocks(created_at);
   `)
   widenRuntimeCheck(database)
   addContextUsageWindowTokensColumn(database)
@@ -1384,7 +1820,7 @@ function widenRuntimeCheck(database: DatabaseSync) {
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       slot TEXT NOT NULL,
       title TEXT NOT NULL,
-      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude', 'opencode')),
+      runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude')),
       model TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
       session_dir TEXT NOT NULL,
@@ -1407,20 +1843,7 @@ function widenRuntimeCheck(database: DatabaseSync) {
 }
 
 function runtimeSessionDir(runtime: string, projectId: string, slot: string) {
-  if (runtime === 'pi') return join(process.cwd(), '.aether', 'pi-sessions', projectId, slot)
-  return join(process.cwd(), '.aether', 'runtime-sessions', runtime, projectId, slot)
-}
-
-function diffPathIsDirty(cwd: string, path: string) {
-  try {
-    return execFileSync('git', ['status', '--porcelain=v1', '--', path], {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim().length > 0
-  } catch {
-    return false
-  }
+  return runtimeSessionDirPath(getAetherConfig(), runtime, projectId, slot)
 }
 
 function repairAgentSlotReferences(database: DatabaseSync) {
@@ -1485,7 +1908,7 @@ function hydratePersistedPiSessions(database: DatabaseSync) {
   const piSettings = getRuntimeSettings('pi')
 
   for (const project of projects) {
-    const projectSessionRoot = join(process.cwd(), '.aether', 'pi-sessions', project.id)
+    const projectSessionRoot = join(getAetherConfig().piSessionsDir, project.id)
     if (!existsSync(projectSessionRoot)) continue
     const deletedSlots = new Set(
       database
@@ -1537,9 +1960,17 @@ function hydratePersistedPiSessions(database: DatabaseSync) {
           .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
           .run(sessionFile, id)
       }
-      ensureThreadForAgent(database, id, projection)
-      if (projection?.messages.length) {
+      const threadId = ensureThreadForAgent(database, id, projection)
+      if (projection) {
         hydrateProjectionMessages(database, id, projection)
+        replaceAgentTasksForThread(database, {
+          threadId,
+          source: 'pi',
+          tasks: projection.tasks,
+          updatedAt: projection.updatedAt ?? new Date().toISOString(),
+        })
+      }
+      if (projection?.messages.length) {
         upsertAgentContextUsage(database, {
           agentId: id,
           usedTokens: projection.contextUsedTokens,
@@ -1660,6 +2091,68 @@ function hydrateProjectionMessages(
     projection.preview || projection.messages.at(-1)?.text || null,
     projection.updatedAt ?? projection.messages.at(-1)?.timestamp,
   )
+}
+
+function replaceAgentTasksForThread(
+  database: DatabaseSync,
+  input: {
+    threadId: string
+    source: AgentTask['source']
+    tasks: AgentTask[]
+    updatedAt: string
+  },
+) {
+  const parsedTasks = input.tasks.map((task) => agentTaskSchema.parse(task))
+  database
+    .prepare('DELETE FROM agent_tasks WHERE thread_id = ? AND source = ?')
+    .run(input.threadId, input.source)
+  const insertTask = database.prepare(`
+    INSERT OR REPLACE INTO agent_tasks (
+      thread_id, source, task_id, position, title, status, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+  parsedTasks.forEach((task, index) => {
+    insertTask.run(
+      input.threadId,
+      input.source,
+      task.id,
+      index,
+      task.title,
+      task.status,
+      task.updatedAt || input.updatedAt,
+    )
+  })
+}
+
+function readAgentTasks(database: DatabaseSync, agentId: string): AgentTask[] {
+  return database
+    .prepare(
+      `
+        SELECT
+          task_id AS id,
+          title,
+          status,
+          source,
+          tasks.updated_at AS updatedAt,
+          position
+        FROM agent_tasks tasks
+        INNER JOIN threads t ON t.id = tasks.thread_id
+        WHERE t.active = 1 AND t.agent_id = ?
+        ORDER BY tasks.position ASC, tasks.task_id ASC
+      `,
+    )
+    .all(agentId)
+    .map((row) => {
+      const parsed = agentTaskDbRowSchema.parse(row)
+      return agentTaskSchema.parse({
+        id: parsed.id,
+        title: parsed.title,
+        status: parsed.status,
+        source: parsed.source,
+        updatedAt: parsed.updatedAt,
+      })
+    })
 }
 
 function upsertAgentContextUsage(
@@ -2017,28 +2510,25 @@ function compareTimelineItems(
 
 function normalizeDetailLimit(value: number | undefined) {
   return Number.isInteger(value)
-    ? Math.max(1, Math.min(value ?? 100, 500))
-    : 100
+    ? Math.max(1, Math.min(value ?? 500, 500))
+    : 500
 }
 
-function seed(database: DatabaseSync) {
-  const count = database
-    .prepare('SELECT COUNT(*) AS count FROM projects')
-    .get() as { count: number }
-  if (count.count > 0) return
-
-  const root = process.cwd()
-
-  const insertProject = database.prepare(`
-    INSERT INTO projects (id, name, cwd, position)
-    VALUES (?, ?, ?, ?)
+function removeLegacySeedProject(database: DatabaseSync) {
+  database.exec(`
+    DELETE FROM projects
+    WHERE id = 'aether'
+      AND name = 'Aether Orchestrator'
+      AND (
+        SELECT COUNT(*)
+        FROM projects
+      ) = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM agent_slots
+        WHERE project_id = 'aether'
+      )
   `)
-
-  const projects = [['aether', 'Aether Orchestrator', root, 0]] as const
-
-  for (const project of projects) {
-    insertProject.run(...project)
-  }
 }
 
 function slugify(value: string) {
@@ -2089,9 +2579,6 @@ function piMessageToText(message: PiRpcMessage) {
       if ('text' in part && typeof part.text === 'string') return part.text
       if ('thinking' in part && typeof part.thinking === 'string') {
         return part.thinking
-      }
-      if ('name' in part && typeof part.name === 'string') {
-        return `tool call: ${part.name}`
       }
       return ''
     })

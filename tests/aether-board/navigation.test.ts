@@ -38,6 +38,7 @@ function project(id: string, agentIds: string[]): ProjectRow {
       timelineEvents: [],
       timeline: [],
       diffs: [],
+      tasks: [],
     })),
   }
 }

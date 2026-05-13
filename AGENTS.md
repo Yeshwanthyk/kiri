@@ -45,6 +45,33 @@ belongs to session start.
 Started sessions are agent slots whose `slot` starts with `session-`. Projects
 do not have default planner/builder/reviewer slots.
 
+## Desktop Build / Replace Flow
+
+Use the installer script when validating or handing off the packaged Mac app:
+
+```sh
+pnpm install:desktop
+```
+
+This command:
+
+- Runs the production web/server build.
+- Packages the macOS app bundle for the current arch.
+- Creates `dist/Aether-<version>-<arch>.dmg`.
+- Stops any running installed Aether app.
+- Removes `~/Applications/Aether.app`.
+- Copies the fresh bundle into `~/Applications/Aether.app` with `ditto` so macOS framework symlinks and resources stay intact.
+- Opens the installed app bundle.
+
+Do not manually copy the app with `cp -R`; it can rewrite framework symlinks and break Electron runtime resources. After installer changes, verify with:
+
+```sh
+pnpm install:desktop
+```
+
+Then confirm the app opens from `~/Applications/Aether.app` and the packaged backend stays running.
+
 ## Skill Routing
 
+If asked to control Aether models, projects, or sessions from shell/automation, use `.agents/skills/aether-control/SKILL.md`.
 If asked how to add/delete projects, use `.agents/skills/aether-projects/SKILL.md`.

@@ -12,10 +12,11 @@ pnpm dev
 For Tailscale access, bind Vite to all interfaces:
 
 ```sh
-pnpm exec vite dev --host 0.0.0.0 --port 3090
+pnpm dev
 ```
 
-`--host 127.0.0.1` is localhost-only and will not be reachable over Tailscale.
+The dev and desktop servers use port `3090` and listen on all interfaces, so a
+phone on Tailscale can open `http://<mac-tailnet-name-or-ip>:3090`.
 
 ## Verify
 

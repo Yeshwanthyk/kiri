@@ -3,6 +3,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { Cause, Data, Effect, Exit, Option, Schema } from 'effect'
 import { z } from 'zod'
 import type { AgentRuntimeState, ThinkingLevel } from '~/lib/contracts'
+import { resolveRuntimeExecutable, runtimeProcessEnv } from './runtime-binaries'
 
 type PendingRequest = {
   resolve: (value: unknown) => void
@@ -84,8 +85,9 @@ export class PiRpcProcessAdapter {
       }
 
       this.stderr = ''
-      const child = spawn('pi', args, {
+      const child = spawn(resolveRuntimeExecutable('pi', process.env.AETHER_PI_BIN), args, {
         cwd: this.options.cwd,
+        env: runtimeProcessEnv(),
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       this.child = child

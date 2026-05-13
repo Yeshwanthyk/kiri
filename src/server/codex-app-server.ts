@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { Cause, Data, Effect, Exit, Option, Schema } from 'effect'
 import type { RuntimeKind } from '~/lib/contracts'
+import { resolveRuntimeExecutable, runtimeProcessEnv } from './runtime-binaries'
 
 const JsonRpcIdSchema = Schema.Union(Schema.String, Schema.Number)
 type JsonRpcId = typeof JsonRpcIdSchema.Type
@@ -78,6 +79,18 @@ export const TurnDiffUpdatedParamsSchema = Schema.Struct({
   diff: Schema.optional(Schema.String),
 })
 
+const CodexPlanStepSchema = Schema.Struct({
+  step: Schema.String,
+  status: Schema.optional(Schema.String),
+})
+
+export const TurnPlanUpdatedParamsSchema = Schema.Struct({
+  threadId: Schema.String,
+  turnId: Schema.optional(Schema.String),
+  explanation: Schema.optional(Schema.NullOr(Schema.String)),
+  plan: Schema.Array(CodexPlanStepSchema),
+})
+
 export const TurnCompletedParamsSchema = Schema.Struct({
   threadId: Schema.String,
   turn: CodexTurnSchema,
@@ -99,6 +112,7 @@ export type ThreadTokenUsageUpdatedParams =
   typeof ThreadTokenUsageUpdatedParamsSchema.Type
 export type ThreadCompactedParams = typeof ThreadCompactedParamsSchema.Type
 export type TurnDiffUpdatedParams = typeof TurnDiffUpdatedParamsSchema.Type
+export type TurnPlanUpdatedParams = typeof TurnPlanUpdatedParamsSchema.Type
 export type TurnCompletedParams = typeof TurnCompletedParamsSchema.Type
 export type TurnStartedParams = typeof TurnStartedParamsSchema.Type
 export type ItemCompletedParams = typeof ItemCompletedParamsSchema.Type
@@ -473,14 +487,12 @@ export class CodexAppServerAdapter {
     const port = portFromWebsocketUrl(this.options.websocketUrl)
     if (!port) throw new Error(`Cannot spawn Codex app-server for ${this.options.websocketUrl}`)
 
-    const child = spawn('codex', [
+    const child = spawn(resolveRuntimeExecutable('codex', process.env.AETHER_CODEX_BIN), [
       'app-server',
       '--listen',
       this.options.websocketUrl,
     ], {
-      env: this.options.codexHome
-        ? { ...process.env, CODEX_HOME: this.options.codexHome }
-        : process.env,
+      env: runtimeProcessEnv(this.options.codexHome ? { CODEX_HOME: this.options.codexHome } : undefined),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.child = child

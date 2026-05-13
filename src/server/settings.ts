@@ -1,11 +1,10 @@
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import type { AetherSettings, RuntimeKind } from '~/lib/contracts'
 import { aetherSettingsSchema } from '~/lib/contracts'
-
-const settingsPath = join(process.cwd(), 'settings.json')
+import { getAetherConfig } from './aether-config'
 
 export function getSettings(): AetherSettings {
+  const settingsPath = getAetherConfig().settingsPath
   const parsed = aetherSettingsSchema.parse(
     JSON.parse(readFileSync(settingsPath, 'utf8')),
   )

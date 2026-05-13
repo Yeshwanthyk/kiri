@@ -10,6 +10,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useServerFn } from '@tanstack/react-start'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { highlightCode, highlightCodeSync } from '../lib/code-highlighter'
 import {
   Activity,
   AlertTriangle,
@@ -31,6 +32,7 @@ import {
   Maximize2,
   MessageSquareText,
   Minimize2,
+  NotebookPen,
   Plus,
   PencilLine,
   FileText,
@@ -54,10 +56,12 @@ import type {
   ProjectRow,
   ReviewTarget,
   RuntimeKind,
+  ScratchpadBlock,
   SendMessageImage,
   ThinkingLevel,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
+import { getAetherHostBridge, pickProjectDirectory } from '~/lib/host-capabilities'
 import { thinkingLevelSchema } from '~/lib/contracts'
 import {
   applyAetherTheme,
@@ -70,9 +74,11 @@ import {
 } from '~/theme/aether-themes'
 import {
   addProjectMutation,
+  addScratchpadBlockMutation,
   answerQuestionMutation,
   chooseProjectDirectoryMutation,
   deleteProjectMutation,
+  deleteScratchpadBlockMutation,
   deleteSessionMutation,
   agentDetailQueryOptions,
   fetchWorkspaceSnapshot,
@@ -88,17 +94,17 @@ import {
   startSessionMutation,
   steerMessageMutation,
   terminalConfigQuery,
+  triggerScratchpadBlockMutation,
   unhideProjectMutation,
 } from '~/server/workspace'
 import {
   classifyToolName,
-  compactWorkEntries,
   deriveAgentTimelineRows,
   diffLineStats,
   displayPath,
+  isAssistantStatusEntry,
   isCommandEntry,
   normalizeDiffPath,
-  summarizeWorkEntries,
   timelineRowsContentVersion,
   type AgentTimelineRow,
   type TimelineWorkEntry,
@@ -141,12 +147,12 @@ import {
   type SlashCommand,
 } from './aether-board/slash-commands'
 
-type SidebarTab = 'chat' | 'diffs' | 'terminal'
+type SidebarTab = 'chat' | 'diffs' | 'terminal' | 'scratchpad'
 type DiffStyle = 'unified' | 'split'
 
 type RefreshAgentDetail = () => Promise<void>
 
-function mergeAgentDetail(
+export function mergeAgentDetail(
   summary: AgentCell | undefined,
   detail: AgentCell | undefined,
 ) {
@@ -158,6 +164,7 @@ function mergeAgentDetail(
     timelineEvents: detail.timelineEvents,
     timeline: detail.timeline,
     diffs: detail.diffs,
+    tasks: detail.tasks,
     contextUsage: detail.contextUsage,
     pendingQuestion: detail.pendingQuestion,
   }
@@ -189,14 +196,18 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
   const [pendingDelete, setPendingDelete] = React.useState<{ agentId: string; title: string } | null>(null)
   const [deleteInFlight, setDeleteInFlight] = React.useState(false)
+  const [pendingProjectDelete, setPendingProjectDelete] = React.useState<ProjectRow | null>(null)
+  const [projectDeleteInFlight, setProjectDeleteInFlight] = React.useState(false)
   const [keymap, setKeymap] = React.useState<KeymapSettings>(defaultKeymap)
   const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(defaultThemeSelection)
   const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(defaultChatTypography)
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
   const addProject = useServerFn(addProjectMutation)
+  const addScratchpadBlock = useServerFn(addScratchpadBlockMutation)
   const answerQuestion = useServerFn(answerQuestionMutation)
   const chooseProjectDirectory = useServerFn(chooseProjectDirectoryMutation)
   const deleteProject = useServerFn(deleteProjectMutation)
+  const deleteScratchpadBlock = useServerFn(deleteScratchpadBlockMutation)
   const deleteSession = useServerFn(deleteSessionMutation)
   const forkSession = useServerFn(forkSessionMutation)
   const hideProject = useServerFn(hideProjectMutation)
@@ -210,6 +221,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const interruptMessage = useServerFn(interruptMessageMutation)
   const renameSession = useServerFn(renameSessionMutation)
   const startSession = useServerFn(startSessionMutation)
+  const triggerScratchpadBlock = useServerFn(triggerScratchpadBlockMutation)
   const unhideProject = useServerFn(unhideProjectMutation)
 
   const selectedProject =
@@ -295,7 +307,19 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         return
       }
 
+      if (action === 'openScratchpad') {
+        setTab('scratchpad')
+        return
+      }
+
       if (action === 'startSession') {
+        if (!selectedProject) {
+          setSettingsOpen(false)
+          setAgentSwitcherOpen(false)
+          setCommandPaletteOpen(false)
+          setProjectManagerOpen(true)
+          return
+        }
         setSettingsOpen(false)
         setAgentSwitcherOpen(false)
         setCommandPaletteOpen(false)
@@ -334,7 +358,16 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [agentSwitcherOpen, commandPaletteOpen, projectManagerOpen, keymap, workspace.projects])
+  }, [
+    agentSwitcherOpen,
+    commandPaletteOpen,
+    projectManagerOpen,
+    keymap,
+    selectedProject,
+    selection.agentId,
+    selection.projectId,
+    workspace.projects,
+  ])
 
   async function handleAddProject(input: { id?: string; name: string; cwd: string }) {
     const next = await addProject({ data: input })
@@ -346,6 +379,17 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   async function handleDeleteProject(projectId: string) {
     const next = await deleteProject({ data: { id: projectId } })
     setWorkspace(next)
+    if (selection.projectId === projectId) setSelection(next.selected)
+  }
+
+  async function confirmDeleteProject(projectId: string) {
+    setProjectDeleteInFlight(true)
+    try {
+      await handleDeleteProject(projectId)
+      setPendingProjectDelete(null)
+    } finally {
+      setProjectDeleteInFlight(false)
+    }
   }
 
   async function handleHideProject(projectId: string) {
@@ -362,7 +406,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   async function handleChooseProjectDirectory() {
-    return chooseProjectDirectory()
+    return pickProjectDirectory(() => chooseProjectDirectory())
   }
 
   async function handleRenameSession(agentId: string, title: string) {
@@ -519,6 +563,38 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setSessionLauncherOpen(false)
   }
 
+  async function handleCaptureBlock(body: string, projectId: string | null) {
+    const next = await addScratchpadBlock({ data: { body, projectId } })
+    setWorkspace(next)
+  }
+
+  async function handleDeleteBlock(id: string) {
+    const next = await deleteScratchpadBlock({ data: { id } })
+    setWorkspace(next)
+  }
+
+  async function handleTriggerBlock(
+    block: ScratchpadBlock,
+    overrides?: { projectId?: string; runtime?: RuntimeKind; model?: string; thinkingLevel?: ThinkingLevel; title?: string },
+  ) {
+    const projectId = overrides?.projectId ?? block.projectId ?? selectedProject?.id
+    if (!projectId) throw new Error('Pick a project before triggering a block')
+    const result = await triggerScratchpadBlock({
+      data: {
+        id: block.id,
+        projectId,
+        runtime: overrides?.runtime,
+        model: overrides?.model,
+        title: overrides?.title,
+        thinkingLevel: overrides?.thinkingLevel ?? 'medium',
+      },
+    })
+    setWorkspace(result.snapshot)
+    setSelection({ projectId, agentId: result.agentId })
+    setChatFocusRequest(0)
+    setTab('chat')
+  }
+
   async function handleResumeSession(projectId: string, agentId: string, archived: boolean) {
     if (!archived) {
       selectAgent(projectId, agentId)
@@ -556,7 +632,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         title: 'Start session',
         detail: selectedProject?.name ?? 'Current project',
         icon: Plus,
-        disabled: false,
+        disabled: !selectedProject,
         run: () => openSessionLauncher(),
       },
       {
@@ -597,6 +673,20 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         },
       },
       {
+        id: 'scratchpad',
+        title: 'Open scratchpad',
+        detail:
+          workspace.scratchpadBlocks.length > 0
+            ? `${workspace.scratchpadBlocks.length} block${workspace.scratchpadBlocks.length === 1 ? '' : 's'}`
+            : 'No blocks yet',
+        icon: NotebookPen,
+        disabled: false,
+        run: () => {
+          setCommandPaletteOpen(false)
+          setTab('scratchpad')
+        },
+      },
+      {
         id: 'add-project',
         title: 'Add project',
         detail: 'Choose or paste a directory',
@@ -615,7 +705,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         title: `Hide ${selectedProject?.name ?? 'current project'}`,
         detail: 'Keep sessions, remove from board',
         icon: EyeOff,
-        disabled: workspace.projects.length <= 1,
+        disabled: !selectedProject || workspace.projects.length <= 1,
         run: () => {
           if (!selectedProject) return
           setCommandPaletteOpen(false)
@@ -639,10 +729,10 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         title: `Remove ${project.name}`,
         detail: 'Project',
         icon: Trash2,
-        disabled: workspace.projects.length <= 1,
+        disabled: !selectedProject || workspace.projects.length <= 1,
         run: () => {
           setCommandPaletteOpen(false)
-          void handleDeleteProject(project.id)
+          setPendingProjectDelete(project)
         },
       })),
       ...workspace.projects.flatMap((project) => [
@@ -675,12 +765,17 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         })),
       ]),
     ],
-    [selectedAgent, selectedProject, workspace.hiddenProjects, workspace.projects],
+    [selectedAgent, selectedProject, workspace.hiddenProjects, workspace.projects, workspace.scratchpadBlocks],
   )
 
-  if (!selectedProject) {
-    return <div className="empty-shell">No projects configured.</div>
-  }
+  React.useEffect(() => {
+    const unsubscribe = getAetherHostBridge()?.onMenuAction?.((actionId) => {
+      const action = commandActions.find((item) => item.id === actionId)
+      if (!action || action.disabled) return
+      action.run()
+    })
+    return unsubscribe
+  }, [commandActions])
 
   if (settingsOpen) {
     return (
@@ -696,6 +791,66 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onChatTypographyChange={(next) => setChatTypography(saveChatTypography(next))}
         onClose={() => setSettingsOpen(false)}
       />
+    )
+  }
+
+  if (!selectedProject) {
+    return (
+      <main
+        className="empty-project-shell"
+        data-hydrated={hydrated ? 'true' : 'false'}
+        data-testid="empty-project-state"
+      >
+        {commandPaletteOpen ? (
+          <CommandPalette
+            actions={commandActions}
+            onClose={() => setCommandPaletteOpen(false)}
+          />
+        ) : null}
+
+        {projectManagerOpen ? (
+          <ProjectManagerDialog
+            projects={workspace.projects}
+            hiddenProjects={workspace.hiddenProjects}
+            onAdd={handleAddProject}
+            onChooseDirectory={handleChooseProjectDirectory}
+            onDelete={handleDeleteProject}
+            onHide={handleHideProject}
+            onUnhide={handleUnhideProject}
+            onClose={() => setProjectManagerOpen(false)}
+          />
+        ) : null}
+
+        <section className="empty-project-state" aria-label="No projects configured">
+          <div className="empty-project-mark" aria-hidden="true">
+            <FolderOpen size={22} />
+          </div>
+          <div>
+            <p className="empty-project-kicker">Aether</p>
+            <h1>No projects yet</h1>
+            <p>Add a local repo to start sessions on this machine.</p>
+          </div>
+          <div className="empty-project-actions">
+            <button
+              type="button"
+              className="project-add-button"
+              onClick={() => setProjectManagerOpen(true)}
+              data-testid="empty-add-project"
+            >
+              <Plus size={14} />
+              Add project
+            </button>
+            <button
+              type="button"
+              className="empty-project-secondary"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings2 size={14} />
+              Settings
+            </button>
+          </div>
+        </section>
+      </main>
     )
   }
 
@@ -766,6 +921,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           hiddenProjects={workspace.hiddenProjects}
           onAdd={handleAddProject}
           onChooseDirectory={handleChooseProjectDirectory}
+          onDelete={handleDeleteProject}
           onHide={handleHideProject}
           onUnhide={handleUnhideProject}
           onClose={() => setProjectManagerOpen(false)}
@@ -787,6 +943,26 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           onCancel={() => {
             if (deleteInFlight) return
             setPendingDelete(null)
+          }}
+        />
+      ) : null}
+
+      {pendingProjectDelete ? (
+        <ConfirmDialog
+          title="Remove project?"
+          body={
+            <>
+              <strong>{pendingProjectDelete.name}</strong> will be removed from Aether. The project directory and files stay on disk.
+            </>
+          }
+          confirmLabel="Remove project"
+          cancelLabel="Keep"
+          destructive
+          busy={projectDeleteInFlight}
+          onConfirm={() => void confirmDeleteProject(pendingProjectDelete.id)}
+          onCancel={() => {
+            if (projectDeleteInFlight) return
+            setPendingProjectDelete(null)
           }}
         />
       ) : null}
@@ -835,6 +1011,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               project={project}
               selectedAgentId={selection.agentId}
               selectedProjectId={selection.projectId}
+              startSessionKey={keymap.startSession}
               onSelect={(agentId) => {
                 setChatFocusRequest(0)
                 setSelection({ projectId: project.id, agentId })
@@ -862,6 +1039,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onForkSession={handleForkSession}
         onReviewSession={handleReviewSession}
         onAnswerQuestion={handleAnswerQuestion}
+        scratchpadBlocks={workspace.scratchpadBlocks}
+        projects={workspace.projects}
+        onCaptureBlock={handleCaptureBlock}
+        onDeleteBlock={handleDeleteBlock}
+        onTriggerBlock={handleTriggerBlock}
       />
     </main>
   )
@@ -1278,6 +1460,7 @@ function ProjectManagerDialog({
   hiddenProjects,
   onAdd,
   onChooseDirectory,
+  onDelete,
   onHide,
   onUnhide,
   onClose,
@@ -1286,6 +1469,7 @@ function ProjectManagerDialog({
   hiddenProjects: ProjectRow[]
   onAdd: (input: { id?: string; name: string; cwd: string }) => Promise<void>
   onChooseDirectory: () => Promise<string>
+  onDelete: (projectId: string) => Promise<void>
   onHide: (projectId: string) => Promise<void>
   onUnhide: (projectId: string) => Promise<void>
   onClose: () => void
@@ -1295,7 +1479,10 @@ function ProjectManagerDialog({
   const [cwd, setCwd] = React.useState('')
   const [showHidden, setShowHidden] = React.useState(hiddenProjects.length > 0)
   const [pending, setPending] = React.useState(false)
+  const [pendingRemoveProject, setPendingRemoveProject] = React.useState<ProjectRow | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  const canDeleteVisibleProject = projects.length > 1
+  const canDeleteHiddenProject = projects.length + hiddenProjects.length > 1
 
   React.useEffect(() => {
     if (hiddenProjects.length > 0) setShowHidden(true)
@@ -1355,7 +1542,21 @@ function ProjectManagerDialog({
     }
   }
 
+  async function removeProject(projectId: string) {
+    setPending(true)
+    setError(null)
+    try {
+      await onDelete(projectId)
+      setPendingRemoveProject(null)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
   return (
+    <>
     <div className="project-manager-overlay" role="dialog" aria-modal="true">
       <section className="project-settings project-manager" aria-label="Project manager">
         <div className="project-manager-head">
@@ -1423,14 +1624,25 @@ function ProjectManagerDialog({
                 <strong>{project.name}</strong>
                 <span>{projectSummary(project)}</span>
               </div>
-              <button
-                type="button"
-                disabled={pending || projects.length <= 1}
-                onClick={() => hide(project.id)}
-                aria-label={`Hide ${project.name}`}
-              >
-                <EyeOff size={14} />
-              </button>
+              <div className="project-row-actions">
+                <button
+                  type="button"
+                  disabled={pending || projects.length <= 1}
+                  onClick={() => hide(project.id)}
+                  aria-label={`Hide ${project.name}`}
+                >
+                  <EyeOff size={14} />
+                </button>
+	                <button
+	                  type="button"
+	                  disabled={pending || !canDeleteVisibleProject}
+	                  onClick={() => setPendingRemoveProject(project)}
+	                  aria-label={`Remove ${project.name}`}
+	                  className="project-remove-button"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -1456,19 +1668,50 @@ function ProjectManagerDialog({
                 <strong>{project.name}</strong>
                 <span>{projectSummary(project)}</span>
               </div>
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => unhide(project.id)}
-                aria-label={`Unhide ${project.name}`}
-              >
-                <Eye size={14} />
-              </button>
+              <div className="project-row-actions">
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => unhide(project.id)}
+                  aria-label={`Unhide ${project.name}`}
+                >
+                  <Eye size={14} />
+                </button>
+	                <button
+	                  type="button"
+	                  disabled={pending || !canDeleteHiddenProject}
+	                  onClick={() => setPendingRemoveProject(project)}
+	                  aria-label={`Remove ${project.name}`}
+                  className="project-remove-button"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
           ))}
         </div> : null}
       </section>
     </div>
+    {pendingRemoveProject ? (
+      <ConfirmDialog
+        title="Remove project?"
+        body={
+          <>
+            <strong>{pendingRemoveProject.name}</strong> will be removed from Aether. The project directory and files stay on disk.
+          </>
+        }
+        confirmLabel="Remove project"
+        cancelLabel="Keep"
+        destructive
+        busy={pending}
+        onConfirm={() => void removeProject(pendingRemoveProject.id)}
+        onCancel={() => {
+          if (pending) return
+          setPendingRemoveProject(null)
+        }}
+      />
+    ) : null}
+    </>
   )
 }
 
@@ -1953,22 +2196,15 @@ function MobileTopBar({
   return (
     <header className="mobile-topbar" aria-label="Mobile navigation">
       <div className="mobile-project-line">
-        <span>{project.name}</span>
-        <button type="button" onClick={onOpenAgentSwitcher}>All sessions</button>
-      </div>
-      <div className="mobile-topbar-main">
         <button
           type="button"
-          className="mobile-agent-trigger"
+          className="mobile-project-trigger"
           onClick={onOpenAgentSwitcher}
-          aria-label="Switch agent"
+          aria-label="Open all sessions"
         >
-          <span className={`status-dot ${agent?.status ?? ''}`} aria-hidden="true" />
-          <span>
-            <strong>{agent?.title ?? 'No session'}</strong>
-            <small>{agent ? `${agent.runtime} · ${agent.status}` : 'Choose or start an agent'}</small>
-          </span>
-          <ChevronDown size={16} aria-hidden="true" />
+          <span>Aether</span>
+          <strong>{project.name}</strong>
+          <ChevronDown size={13} aria-hidden="true" />
         </button>
         <div className="mobile-actions">
           <button type="button" onClick={onOpenProjects} aria-label="Projects">
@@ -2026,6 +2262,16 @@ function MobileTopBar({
         >
           <TerminalSquare size={15} />
           Terminal
+        </button>
+        <button
+          type="button"
+          className={tab === 'scratchpad' ? 'active' : ''}
+          onClick={() => onTabChange('scratchpad')}
+          role="tab"
+          aria-selected={tab === 'scratchpad'}
+        >
+          <NotebookPen size={15} />
+          Scratch
         </button>
       </div>
     </header>
@@ -2121,62 +2367,173 @@ function ProjectLane({
   selectedProjectId,
   selectedAgentId,
   onSelect,
+  startSessionKey,
 }: {
   project: ProjectRow
   selectedProjectId: string
   selectedAgentId: string
   onSelect: (agentId: string) => void
+  startSessionKey: string
 }) {
   const isProjectSelected = project.id === selectedProjectId
+  const railRef = React.useRef<HTMLDivElement | null>(null)
+  const wrapRef = React.useRef<HTMLDivElement | null>(null)
+  const isEmpty = project.agents.length === 0
+
+  const runningCount = React.useMemo(
+    () =>
+      project.agents.filter(
+        (agent) => agent.status === 'running' || agent.status === 'queued',
+      ).length,
+    [project.agents],
+  )
+
+  const selectedIndex = React.useMemo(() => {
+    if (!isProjectSelected) return -1
+    return project.agents.findIndex((agent) => agent.id === selectedAgentId)
+  }, [isProjectSelected, project.agents, selectedAgentId])
+
+  // Smoothly bring the selected card into view when selection changes via keyboard.
+  React.useEffect(() => {
+    if (!isProjectSelected) return
+    const rail = railRef.current
+    if (!rail) return
+    const target = rail.querySelector<HTMLElement>(
+      `[data-agent-id="${selectedAgentId}"]`,
+    )
+    if (!target) return
+    const railRect = rail.getBoundingClientRect()
+    const cardRect = target.getBoundingClientRect()
+    const delta =
+      cardRect.left -
+      railRect.left -
+      (railRect.width - cardRect.width) / 2
+    if (Math.abs(delta) > 8) {
+      rail.scrollBy({ left: delta, behavior: 'smooth' })
+    }
+  }, [isProjectSelected, selectedAgentId])
+
+  // Fade the pips back out shortly after a scroll settles.
+  React.useEffect(() => {
+    const wrap = wrapRef.current
+    const rail = railRef.current
+    if (!wrap || !rail) return
+    let timer: number | undefined
+    const handler = () => {
+      wrap.dataset.scrolling = 'true'
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        delete wrap.dataset.scrolling
+      }, 600)
+    }
+    rail.addEventListener('scroll', handler, { passive: true })
+    return () => {
+      rail.removeEventListener('scroll', handler)
+      window.clearTimeout(timer)
+    }
+  }, [])
+
+  const showPips = project.agents.length > 1
+  const remainingAhead =
+    isProjectSelected && selectedIndex >= 0
+      ? project.agents.length - 1 - selectedIndex
+      : 0
+  const chipVisible = isProjectSelected && remainingAhead > 1
 
   return (
     <section
-      className={`project-lane ${isProjectSelected ? 'selected' : ''}`}
+      className={`project-lane ${isEmpty ? 'empty' : ''} ${isProjectSelected ? 'selected' : ''}`}
       aria-label={project.name}
     >
       <div className="project-label">
-        <span>{projectSummary(project)}</span>
-      </div>
-      <div className="agent-row">
-        {project.agents.length === 0 ? (
-          <div className="empty-session-card" data-testid="empty-project-sessions">
-            No sessions
-          </div>
+        <strong>{project.name}</strong>
+        <span>
+          · {project.agents.length}{' '}
+          {project.agents.length === 1 ? 'session' : 'sessions'}
+        </span>
+        {runningCount > 0 ? (
+          <span className="lane-running">{runningCount} running</span>
         ) : null}
-        {project.agents.map((agent) => (
-          <button
-            key={agent.id}
-            type="button"
-            className={`agent-cell ${
-              isProjectSelected && agent.id === selectedAgentId
-                ? 'selected'
-                : ''
-            }`}
-            onClick={() => onSelect(agent.id)}
-            data-agent-id={agent.id}
-            data-project-id={project.id}
-            data-selected={
-              isProjectSelected && agent.id === selectedAgentId ? 'true' : 'false'
-            }
-            data-testid="agent-cell"
-          >
-            <div className="agent-cell-top">
-              <span className="agent-cell-title">{agent.title}</span>
-              <AgentCellState status={agent.status} updatedAt={agent.updatedAt} />
-            </div>
-            <p>{agent.preview}</p>
-            <div className="agent-cell-meta">
-              {agent.diffCount > 0 ? (
-                <span className="diff-token">+{agent.diffCount}</span>
-              ) : null}
-              <span>{agent.messageCount} msg</span>
-              <span className="agent-cell-runtime">{agent.runtime}</span>
-            </div>
-          </button>
-        ))}
       </div>
+
+      {isEmpty ? (
+        <div className="agent-row" data-empty="true">
+          <span className="empty-session-card" data-testid="empty-project-sessions">
+            no sessions <kbd>{formatKeyShort(startSessionKey)}</kbd> to launch
+          </span>
+        </div>
+      ) : (
+        <div className="lane-rail-wrap" ref={wrapRef}>
+          <span
+            className={`lane-rail-chip ${chipVisible ? 'visible' : ''}`}
+            aria-hidden="true"
+          >
+            {remainingAhead} more <span className="arrow">→</span>
+          </span>
+          <div className="agent-row" ref={railRef}>
+            {project.agents.map((agent) => (
+              <button
+                key={agent.id}
+                type="button"
+                className={`agent-cell ${
+                  isProjectSelected && agent.id === selectedAgentId
+                    ? 'selected'
+                    : ''
+                }`}
+                onClick={() => onSelect(agent.id)}
+                data-agent-id={agent.id}
+                data-project-id={project.id}
+                data-selected={
+                  isProjectSelected && agent.id === selectedAgentId
+                    ? 'true'
+                    : 'false'
+                }
+                data-testid="agent-cell"
+              >
+                <div className="agent-cell-top">
+                  <span className="agent-cell-title">{agent.title}</span>
+                  <AgentCellState status={agent.status} updatedAt={agent.updatedAt} />
+                </div>
+                <p>{agent.preview}</p>
+                <div className="agent-cell-meta">
+                  {agent.diffCount > 0 ? (
+                    <span className="diff-token">+{agent.diffCount}</span>
+                  ) : null}
+                  <span>{agent.messageCount} msg</span>
+                  <span className="agent-cell-runtime">{agent.runtime}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+          {showPips ? (
+            <div
+              className="lane-pips"
+              role="presentation"
+              data-count={project.agents.length}
+            >
+              {project.agents.map((agent, i) => (
+                <span
+                  key={agent.id}
+                  className={`lane-pip ${
+                    isProjectSelected && i === selectedIndex ? 'active' : ''
+                  }`}
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
     </section>
   )
+}
+
+function formatKeyShort(key: string): string {
+  if (!key) return ''
+  if (key.startsWith('arrow')) {
+    const arrow = key.slice('arrow'.length)
+    return arrow.charAt(0).toUpperCase() + arrow.slice(1)
+  }
+  return key.toUpperCase()
 }
 
 function SelectedAgentPane({
@@ -2197,6 +2554,11 @@ function SelectedAgentPane({
   onForkSession,
   onReviewSession,
   onAnswerQuestion,
+  scratchpadBlocks,
+  projects,
+  onCaptureBlock,
+  onDeleteBlock,
+  onTriggerBlock,
 }: {
   selectedProject: ProjectRow
   selectedAgent: AgentCell | undefined
@@ -2224,12 +2586,17 @@ function SelectedAgentPane({
     requestId: string,
     answers: Record<string, string | string[]>,
   ) => Promise<void>
+  scratchpadBlocks: ScratchpadBlock[]
+  projects: ProjectRow[]
+  onCaptureBlock: (body: string, projectId: string | null) => Promise<void>
+  onDeleteBlock: (id: string) => Promise<void>
+  onTriggerBlock: (block: ScratchpadBlock) => Promise<void>
 }) {
   const revision = selectedAgent
     ? `${selectedAgent.updatedAt}:${selectedAgent.messageCount}:${selectedAgent.diffCount}:${selectedAgent.status}`
     : ''
   const detailQuery = useQuery({
-    ...agentDetailQueryOptions(selectedAgent?.id ?? '', 100, revision),
+    ...agentDetailQueryOptions(selectedAgent?.id ?? '', 500, revision),
     placeholderData: keepPreviousData,
   })
   const agent = mergeAgentDetail(selectedAgent, detailQuery.data)
@@ -2238,6 +2605,53 @@ function SelectedAgentPane({
     await detailQuery.refetch()
   }, [detailQuery, selectedAgent])
 
+  const tabBar = (
+    <div className="sidebar-tabs" role="tablist">
+      <button
+        type="button"
+        className={tab === 'chat' ? 'active' : ''}
+        onClick={() => onTabChange('chat')}
+        disabled={!agent}
+        data-testid="tab-chat"
+      >
+        <MessageSquareText size={15} />
+        Chat
+      </button>
+      <button
+        type="button"
+        className={tab === 'diffs' ? 'active' : ''}
+        onClick={() => onTabChange('diffs')}
+        disabled={!agent}
+        data-testid="tab-diffs"
+      >
+        <GitPullRequest size={15} />
+        Diffs
+      </button>
+      <button
+        type="button"
+        className={tab === 'terminal' ? 'active' : ''}
+        onClick={() => onTabChange('terminal')}
+        disabled={!agent}
+        data-testid="tab-terminal"
+      >
+        <TerminalSquare size={15} />
+        Terminal
+      </button>
+      <button
+        type="button"
+        className={tab === 'scratchpad' ? 'active' : ''}
+        onClick={() => onTabChange('scratchpad')}
+        data-testid="tab-scratchpad"
+      >
+        <NotebookPen size={15} />
+        Scratchpad
+        {scratchpadBlocks.length > 0 ? (
+          <span className="sidebar-tab-count">{scratchpadBlocks.length}</span>
+        ) : null}
+      </button>
+    </div>
+  )
+
   return (
     <aside
       className="sidebar-pane"
@@ -2245,87 +2659,288 @@ function SelectedAgentPane({
       data-testid="sidebar-pane"
     >
       {agent ? (
-        <>
-          <SidebarHeader
-            project={selectedProject}
-            agent={agent}
-            onDeleteSession={onDeleteSession}
-            onRenameSession={onRenameSession}
-          />
-          <div className="sidebar-tabs" role="tablist">
-            <button
-              type="button"
-              className={tab === 'chat' ? 'active' : ''}
-              onClick={() => onTabChange('chat')}
-              data-testid="tab-chat"
-            >
-              <MessageSquareText size={15} />
-              Chat
-            </button>
-            <button
-              type="button"
-              className={tab === 'diffs' ? 'active' : ''}
-              onClick={() => onTabChange('diffs')}
-              data-testid="tab-diffs"
-            >
-              <GitPullRequest size={15} />
-              Diffs
-            </button>
-            <button
-              type="button"
-              className={tab === 'terminal' ? 'active' : ''}
-              onClick={() => onTabChange('terminal')}
-              data-testid="tab-terminal"
-            >
-              <TerminalSquare size={15} />
-              Terminal
-            </button>
-          </div>
+        <SidebarHeader
+          project={selectedProject}
+          agent={agent}
+          onDeleteSession={onDeleteSession}
+          onRenameSession={onRenameSession}
+        />
+      ) : tab === 'scratchpad' ? (
+        <ScratchpadHeader blockCount={scratchpadBlocks.length} />
+      ) : null}
 
-          {tab === 'chat' ? (
-            <ChatPanel
-              key={agent.id}
-              agent={agent}
-              cwd={selectedProject.cwd}
-              themeMode={themeMode}
-              focusRequest={chatFocusRequest}
-              onSend={(agentId, text, images) =>
-                onSend(agentId, text, images, refreshDetail)
-              }
-              onSteer={onSteer}
-              onInterrupt={onInterrupt}
-              onThinkingCommand={onThinkingCommand}
-              onResetSession={onResetSession}
-              onForkSession={onForkSession}
-              onReviewSession={onReviewSession}
-              onAnswerQuestion={onAnswerQuestion}
-              onDetailRefresh={refreshDetail}
-            />
-          ) : null}
-          {tab === 'diffs' ? (
-            <DiffPanel
-              key={agent.id}
-              agent={agent}
-              themeMode={themeMode}
-            />
-          ) : null}
-          {tab === 'terminal' ? (
-            <TerminalPanel
-              key={agent.id}
-              agent={agent}
-              project={selectedProject}
-              themeMode={themeMode}
-            />
-          ) : null}
-        </>
-      ) : (
+      {tabBar}
+
+      {tab === 'scratchpad' ? (
+        <ScratchpadPanel
+          blocks={scratchpadBlocks}
+          projects={projects}
+          selectedProjectId={selectedProject.id}
+          onCapture={onCaptureBlock}
+          onDelete={onDeleteBlock}
+          onTrigger={onTriggerBlock}
+        />
+      ) : agent && tab === 'chat' ? (
+        <ChatPanel
+          key={agent.id}
+          agent={agent}
+          cwd={selectedProject.cwd}
+          themeMode={themeMode}
+          focusRequest={chatFocusRequest}
+          onSend={(agentId, text, images) =>
+            onSend(agentId, text, images, refreshDetail)
+          }
+          onSteer={onSteer}
+          onInterrupt={onInterrupt}
+          onThinkingCommand={onThinkingCommand}
+          onResetSession={onResetSession}
+          onForkSession={onForkSession}
+          onReviewSession={onReviewSession}
+          onAnswerQuestion={onAnswerQuestion}
+          onDetailRefresh={refreshDetail}
+        />
+      ) : agent && tab === 'diffs' ? (
+        <DiffPanel
+          key={agent.id}
+          agent={agent}
+          themeMode={themeMode}
+        />
+      ) : agent && tab === 'terminal' ? (
+        <TerminalPanel
+          key={agent.id}
+          agent={agent}
+          project={selectedProject}
+          themeMode={themeMode}
+        />
+      ) : !agent ? (
         <EmptySessionPanel
           project={selectedProject}
           onStart={onStartSession}
         />
-      )}
+      ) : null}
     </aside>
   )
+}
+
+function ScratchpadHeader({ blockCount }: { blockCount: number }) {
+  return (
+    <header className="sidebar-header scratchpad-header">
+      <div className="scratchpad-header-mark" aria-hidden="true">
+        <NotebookPen size={16} />
+      </div>
+      <div className="scratchpad-header-text">
+        <p className="settings-kicker">Scratchpad</p>
+        <strong>Ideas across projects</strong>
+      </div>
+      <span className="scratchpad-header-count">
+        {blockCount === 0 ? 'empty' : `${blockCount} block${blockCount === 1 ? '' : 's'}`}
+      </span>
+    </header>
+  )
+}
+
+function ScratchpadPanel({
+  blocks,
+  projects,
+  selectedProjectId,
+  onCapture,
+  onDelete,
+  onTrigger,
+}: {
+  blocks: ScratchpadBlock[]
+  projects: ProjectRow[]
+  selectedProjectId: string
+  onCapture: (body: string, projectId: string | null) => Promise<void>
+  onDelete: (id: string) => Promise<void>
+  onTrigger: (block: ScratchpadBlock) => Promise<void>
+}) {
+  const [draft, setDraft] = React.useState('')
+  const [captureProjectId, setCaptureProjectId] = React.useState<string>(selectedProjectId)
+  const [pending, setPending] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [pendingId, setPendingId] = React.useState<string | null>(null)
+  const captureRef = React.useRef<HTMLTextAreaElement>(null)
+
+  React.useEffect(() => {
+    if (selectedProjectId) setCaptureProjectId(selectedProjectId)
+  }, [selectedProjectId])
+
+  React.useEffect(() => {
+    captureRef.current?.focus()
+  }, [])
+
+  async function submitCapture(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const body = draft.trim()
+    if (!body) return
+    setPending(true)
+    setError(null)
+    try {
+      await onCapture(body, captureProjectId || null)
+      setDraft('')
+      captureRef.current?.focus()
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  function onDraftKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      const form = event.currentTarget.form
+      if (form) form.requestSubmit()
+    }
+  }
+
+  async function handleTrigger(block: ScratchpadBlock) {
+    setPendingId(block.id)
+    setError(null)
+    try {
+      await onTrigger(block)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setPendingId(null)
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setPendingId(id)
+    try {
+      await onDelete(id)
+    } finally {
+      setPendingId(null)
+    }
+  }
+
+  const grouped = React.useMemo(() => groupBlocksByDay(blocks), [blocks])
+
+  return (
+    <div className="scratchpad-panel" data-testid="scratchpad-panel">
+      <form className="scratchpad-capture" onSubmit={submitCapture}>
+        <textarea
+          ref={captureRef}
+          value={draft}
+          onChange={(event) => setDraft(event.currentTarget.value)}
+          onKeyDown={onDraftKeyDown}
+          placeholder="Capture an idea. ⏎ to save, ⇧⏎ for a new line."
+          rows={2}
+          disabled={pending}
+          data-testid="scratchpad-input"
+        />
+        <div className="scratchpad-capture-row">
+          <label className="scratchpad-capture-project">
+            <span>tag</span>
+            <select
+              value={captureProjectId}
+              disabled={pending}
+              onChange={(event) => setCaptureProjectId(event.currentTarget.value)}
+            >
+              <option value="">unassigned</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" disabled={pending || draft.trim().length === 0}>
+            <Plus size={13} />
+            Capture
+          </button>
+        </div>
+        {error ? <p className="scratchpad-error" role="status">{error}</p> : null}
+      </form>
+
+      <div className="scratchpad-list" role="list">
+        {blocks.length === 0 ? (
+          <div className="scratchpad-empty">
+            <p className="settings-kicker">Empty</p>
+            <p>Capture an idea above. Trigger it into any project, any runtime.</p>
+          </div>
+        ) : (
+          grouped.map((group) => (
+            <section key={group.key} className="scratchpad-group">
+              <p className="scratchpad-day">{group.label}</p>
+              {group.blocks.map((block) => (
+                <article
+                  key={block.id}
+                  className={`scratchpad-block ${block.triggeredAt ? 'triggered' : ''}`}
+                  role="listitem"
+                  data-testid="scratchpad-block"
+                >
+                  <header className="scratchpad-block-head">
+                    <span className="scratchpad-block-kicker">
+                      {block.projectName ?? 'unassigned'}
+                    </span>
+                    <span className="scratchpad-block-time">{formatBlockTime(block.createdAt)}</span>
+                  </header>
+                  <p className="scratchpad-block-body">{block.body}</p>
+                  <footer className="scratchpad-block-actions">
+                    {block.triggeredAt ? (
+                      <span className="scratchpad-block-state">
+                        <Check size={12} aria-hidden="true" /> sent
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="scratchpad-block-trigger"
+                      onClick={() => void handleTrigger(block)}
+                      disabled={pendingId === block.id}
+                    >
+                      <Send size={12} aria-hidden="true" />
+                      {block.triggeredAt ? 'Re-trigger' : 'Trigger'}
+                    </button>
+                    <button
+                      type="button"
+                      className="scratchpad-block-delete"
+                      onClick={() => void handleDelete(block.id)}
+                      disabled={pendingId === block.id}
+                      aria-label="Delete block"
+                    >
+                      <Trash2 size={12} aria-hidden="true" />
+                    </button>
+                  </footer>
+                </article>
+              ))}
+            </section>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+function groupBlocksByDay(blocks: ScratchpadBlock[]) {
+  const groups = new Map<string, { key: string; label: string; blocks: ScratchpadBlock[] }>()
+  for (const block of blocks) {
+    const label = formatBlockDay(block.createdAt)
+    const entry = groups.get(label)
+    if (entry) {
+      entry.blocks.push(block)
+    } else {
+      groups.set(label, { key: label, label, blocks: [block] })
+    }
+  }
+  return Array.from(groups.values())
+}
+
+function formatBlockDay(iso: string) {
+  const date = new Date(iso)
+  const now = new Date()
+  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const diffDays = Math.round((startOf(now) - startOf(date)) / 86_400_000)
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  if (diffDays < 7) return date.toLocaleDateString(undefined, { weekday: 'long' })
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function formatBlockTime(iso: string) {
+  const date = new Date(iso)
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
 function EmptySessionPanel({
@@ -2337,15 +2952,22 @@ function EmptySessionPanel({
 }) {
   return (
     <div className="empty-sidebar-session" data-testid="empty-session-panel">
-      <div className="runtime-icon">
-        <Bot size={18} />
+      <div className="empty-session-surface">
+        <div className="empty-session-head">
+          <div className="runtime-icon">
+            <Bot size={18} />
+          </div>
+          <p data-testid="selected-project">{project.name}</p>
+        </div>
+        <h2 data-testid="selected-agent">No session</h2>
+        <div className="empty-session-command">
+          <span>agent slot ready</span>
+          <button type="button" onClick={onStart}>
+            <Plus size={14} />
+            Start session
+          </button>
+        </div>
       </div>
-      <p data-testid="selected-project">{project.name}</p>
-      <h2 data-testid="selected-agent">No session</h2>
-      <button type="button" onClick={onStart}>
-        <Plus size={14} />
-        Start session
-      </button>
     </div>
   )
 }
@@ -2555,6 +3177,63 @@ function ContextUsageChip({
       <strong>{usedPercent}</strong>
     </button>
   )
+}
+
+function TaskProgressStrip({
+  tasks,
+}: {
+  tasks: AgentCell['tasks']
+}) {
+  const [expanded, setExpanded] = React.useState(false)
+  const taskVersion = tasks.map((task) => `${task.source}:${task.id}:${task.title}`).join('|')
+  React.useEffect(() => {
+    setExpanded(false)
+  }, [taskVersion])
+
+  if (tasks.length === 0) return null
+
+  const completed = tasks.filter((task) => task.status === 'completed').length
+  const failed = tasks.filter((task) => task.status === 'failed').length
+  const active = tasks.find((task) => task.status === 'inProgress') ??
+    tasks.find((task) => task.status === 'pending') ??
+    tasks[0]
+  const summary = `${completed}/${tasks.length} done${failed ? `, ${failed} failed` : ''}`
+
+  return (
+    <section className={`task-strip${expanded ? ' expanded' : ''}`} aria-label="Agent tasks">
+      <button
+        type="button"
+        className="task-strip-toggle"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+      >
+        <span className={`task-status-dot ${active?.status ?? 'pending'}`} aria-hidden="true" />
+        <span className="task-strip-active">{active?.title ?? 'Tasks'}</span>
+        <span className="task-strip-summary">{summary}</span>
+        <ChevronDown size={14} className="task-strip-chevron" aria-hidden="true" />
+      </button>
+      {expanded ? (
+        <ol className="task-list">
+          {tasks.map((task) => (
+            <li key={`${task.source}:${task.id}`} className={`task-item ${task.status}`}>
+              <TaskStatusIcon status={task.status} />
+              <span>{task.title}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </section>
+  )
+}
+
+function TaskStatusIcon({
+  status,
+}: {
+  status: AgentCell['tasks'][number]['status']
+}) {
+  if (status === 'completed') return <Check size={13} className="task-item-icon" aria-hidden="true" />
+  if (status === 'failed') return <AlertTriangle size={13} className="task-item-icon" aria-hidden="true" />
+  return <span className={`task-item-dot ${status}`} aria-hidden="true" />
 }
 
 function ChatPanel({
@@ -2886,6 +3565,7 @@ function ChatPanel({
   return (
     <div className="chat-panel" data-testid="chat-panel">
       <div className="message-list-wrap">
+        <TaskProgressStrip tasks={agent.tasks} />
         <MessageTimeline
           rows={rows}
           themeMode={themeMode}
@@ -3123,7 +3803,13 @@ const MessageTimeline = React.memo(function MessageTimeline({
     <div className="message-list" ref={listRef}>
       {rows.map((row) => {
         if (row.kind === 'work') {
-          return <WorkTimelineRow key={row.id} row={row} themeMode={themeMode} />
+          return (
+            <WorkTimelineRow
+              key={row.id}
+              row={row}
+              themeMode={themeMode}
+            />
+          )
         }
         if (row.kind === 'working') {
           return <WorkingTimelineRow key={row.id} row={row} />
@@ -3364,37 +4050,51 @@ const WorkTimelineRow = React.memo(function WorkTimelineRow({
   row: Extract<AgentTimelineRow, { kind: 'work' }>
   themeMode: ThemeMode
 }) {
-  const [expanded, setExpanded] = React.useState(false)
-  const [expandedDiffEntryId, setExpandedDiffEntryId] = React.useState<string | null>(null)
-  const entries = React.useMemo(() => compactWorkEntries(row.entries), [row.entries])
-  const visibleEntries = expanded ? entries : entries.slice(0, 6)
-  const hiddenCount = entries.length - visibleEntries.length
-  const summary = summarizeWorkEntries(entries)
+  const [hidden, setHidden] = React.useState(true)
+  const entries = row.entries
+  const counts = React.useMemo(() => activityCounts(entries), [entries])
+  const tickEntries = entries.slice(0, 24)
+
+  const summary = [
+    counts.updates ? `${counts.updates} updates` : null,
+    counts.edits ? `${counts.edits} edits` : null,
+    counts.commands ? `${counts.commands} commands` : null,
+    counts.other ? `${counts.other} other` : null,
+  ].filter(Boolean).join(', ')
 
   return (
     <section className="timeline-row work-row" aria-label="Runtime activity">
       <div className="work-row-header">
-        <span>{summary}</span>
-        {hiddenCount > 0 ? (
-          <button type="button" onClick={() => setExpanded((value) => !value)}>
-            <ChevronDown size={13} className={expanded ? 'expanded' : ''} />
-            {expanded ? 'Show less' : `Show ${hiddenCount} more`}
-          </button>
-        ) : null}
+        <div className="work-row-heading">
+          <span className="work-row-ticks" aria-hidden="true">
+            {tickEntries.map((entry) => (
+              <span key={entry.id} className={`work-row-tick tone-${workEntryTickTone(entry)}`} />
+            ))}
+          </span>
+          <span className="work-row-summary">Activity log</span>
+          <span className="work-row-badge">{entries.length}</span>
+          {summary ? <span className="work-row-breakdown">{summary}</span> : null}
+        </div>
+        <button
+          type="button"
+          className="work-row-hide"
+          onClick={() => setHidden((value) => !value)}
+          aria-expanded={!hidden}
+        >
+          {hidden ? 'Show' : 'Hide'}
+        </button>
       </div>
-      <div className="work-entry-list">
-        {visibleEntries.map((entry) => (
-          <WorkEntryRow
-            key={entry.id}
-            entry={entry}
-            themeMode={themeMode}
-            diffExpanded={expandedDiffEntryId === entry.id}
-            onToggleDiff={() =>
-              setExpandedDiffEntryId((current) => current === entry.id ? null : entry.id)
-            }
-          />
-        ))}
-      </div>
+      {!hidden && entries.length > 0 ? (
+        <div className="work-entry-list">
+          {entries.map((entry) => (
+            <WorkEntryRow
+              key={entry.id}
+              entry={entry}
+              themeMode={themeMode}
+            />
+          ))}
+        </div>
+      ) : null}
     </section>
   )
 })
@@ -3402,77 +4102,46 @@ const WorkTimelineRow = React.memo(function WorkTimelineRow({
 const WorkEntryRow = React.memo(function WorkEntryRow({
   entry,
   themeMode,
-  diffExpanded,
-  onToggleDiff,
 }: {
   entry: TimelineWorkEntry
   themeMode: ThemeMode
-  diffExpanded: boolean
-  onToggleDiff: () => void
 }) {
-  const [expanded, setExpanded] = React.useState(false)
   const preview = formatWorkPreview(entry)
   const previewText = preview?.text ?? null
   const stats = entry.diff ? diffLineStats(entry.diff.patch) : null
   const displayText = previewText ? `${entry.label} - ${previewText}` : entry.label
   const fullText = entry.detail?.trim() || displayText
-  const canExpand = !entry.path && (displayText.length > 72 || fullText.includes('\n'))
-  const canToggle = canExpand || Boolean(entry.diff)
+  const visibleText = truncateWorkEntryDetail(fullText)
   const icon = workEntryIcon(entry)
   const command = isCommandEntry(entry)
+  const status = isAssistantStatusEntry(entry)
 
   return (
-    <div className={`work-entry ${entry.tone} ${entry.diff ? 'has-diff' : ''} ${command ? 'is-command' : ''} ${icon ? '' : 'no-icon'} ${expanded ? 'expanded' : ''}`}>
+    <div className={`work-entry ${entry.tone} ${entry.diff ? 'has-diff' : ''} ${command ? 'is-command' : ''} ${status ? 'is-status' : ''} ${icon ? '' : 'no-icon'}`}>
       {icon}
       <div className="work-entry-content">
-        <div className="work-entry-title">
-          <button
-            type="button"
-            onClick={() => {
-              if (entry.diff) {
-                onToggleDiff()
-                return
-              }
-              if (canExpand) setExpanded((value) => !value)
-            }}
-            className={`work-entry-toggle ${canToggle ? 'expandable' : ''}`}
-            aria-expanded={entry.diff ? diffExpanded : expanded}
-            disabled={!canToggle}
-            title={entry.diff ? `Show diff for ${previewText ?? entry.diff.path}` : displayText}
-          >
-            <span suppressHydrationWarning>
-              {command && preview ? null : <strong>{entry.label}</strong>}
-              {command ? <span className="work-call-pill">{workCallLabel(entry)}</span> : null}
-              {preview ? (
-                <>
-                  {command ? null : <span className="work-entry-separator">{entry.diff ? '' : '-'}</span>}
-                  {preview.node}
-                </>
-              ) : null}
-              {entry.count && entry.count > 1 ? (
-                <span className="work-repeat-count">×{entry.count}</span>
-              ) : null}
-              {stats ? (
-                <span className="work-diff-stats">
-                  <span className="add">+{stats.added}</span>
-                  <span className="del">-{stats.deleted}</span>
-                </span>
-              ) : null}
-              {entry.diff ? (
-                <ChevronDown size={13} className={`work-entry-chevron ${diffExpanded ? 'expanded' : ''}`} />
-              ) : null}
-            </span>
-          </button>
+        <div className="work-entry-heading">
+          <span className="work-entry-label">
+            {command ? <span className="work-call-pill">{workCallLabel(entry)}</span> : <strong>{entry.label}</strong>}
+            {previewText && entry.path && preview ? <span className="work-entry-path">{preview.node}</span> : null}
+          </span>
+          <span className="work-entry-meta">
+            {stats ? (
+              <span className="work-diff-stats">
+                <span className="add">+{stats.added}</span>
+                <span className="del">-{stats.deleted}</span>
+              </span>
+            ) : null}
+            <time>{formatTime(entry.timestamp)}</time>
+          </span>
         </div>
-        {expanded && canExpand ? (
-          <pre className="work-entry-detail"><code>{fullText}</code></pre>
+        {visibleText ? (
+          <pre className="work-entry-detail"><code>{visibleText}</code></pre>
         ) : null}
         {entry.diff ? (
           <InlineDiffPreview
             diff={entry.diff}
             themeMode={themeMode}
-            expanded={diffExpanded}
-            onToggle={onToggleDiff}
           />
         ) : null}
       </div>
@@ -3480,54 +4149,98 @@ const WorkEntryRow = React.memo(function WorkEntryRow({
   )
 })
 
+const WORK_ENTRY_DETAIL_MAX_CHARS = 12_000
+const WORK_ENTRY_DETAIL_MAX_LINES = 240
+
+function truncateWorkEntryDetail(text: string) {
+  if (text.length <= WORK_ENTRY_DETAIL_MAX_CHARS && countLines(text) <= WORK_ENTRY_DETAIL_MAX_LINES) {
+    return text
+  }
+
+  const lines = text.split('\n')
+  const lineLimited = lines.length > WORK_ENTRY_DETAIL_MAX_LINES
+    ? lines.slice(0, WORK_ENTRY_DETAIL_MAX_LINES).join('\n')
+    : text
+  const charLimited = lineLimited.length > WORK_ENTRY_DETAIL_MAX_CHARS
+    ? lineLimited.slice(0, WORK_ENTRY_DETAIL_MAX_CHARS).trimEnd()
+    : lineLimited
+
+  return `${charLimited}\n[truncated]`
+}
+
+function countLines(text: string) {
+  let lines = 1
+  for (const char of text) {
+    if (char === '\n') lines += 1
+  }
+  return lines
+}
+
 function InlineDiffPreview({
   diff,
   themeMode,
-  expanded,
-  onToggle,
 }: {
   diff: DiffArtifact
   themeMode: ThemeMode
-  expanded: boolean
-  onToggle: () => void
 }) {
   const stats = React.useMemo(() => diffLineStats(diff.patch), [diff.patch])
   return (
-    <div className={`inline-diff-card${expanded ? ' expanded' : ''}`}>
-      <button
-        type="button"
-        className="inline-diff-summary"
-        onClick={onToggle}
-        aria-expanded={expanded}
-      >
+    <div className="inline-diff-card expanded">
+      <div className="inline-diff-summary">
         <GitPullRequest size={13} />
         <span className="inline-diff-path">{diff.path}</span>
         <span className="inline-diff-counts">
           <span className="add">+{stats.added}</span>
           <span className="del">-{stats.deleted}</span>
         </span>
-        <ChevronDown size={13} className={expanded ? 'expanded' : ''} />
-      </button>
-      {expanded ? (
-        <div className="inline-pierre-host">
-          <PatchDiff
-            key={`${diff.id}:inline:${themeMode}`}
-            patch={diff.patch}
-            disableWorkerPool
-            options={{
-              diffStyle: 'unified',
-              overflow: 'wrap',
-              themeType: themeMode,
-            }}
-          />
-        </div>
-      ) : null}
+      </div>
+      <div className="inline-pierre-host">
+        <PatchDiff
+          key={`${diff.id}:inline:${themeMode}`}
+          patch={diff.patch}
+          disableWorkerPool
+          options={{
+            diffStyle: 'unified',
+            overflow: 'wrap',
+            themeType: themeMode,
+          }}
+        />
+      </div>
     </div>
   )
 }
 
+function activityCounts(entries: TimelineWorkEntry[]) {
+  let updates = 0
+  let edits = 0
+  let commands = 0
+  let other = 0
+  for (const entry of entries) {
+    if (entry.diff) {
+      edits += 1
+    } else if (isAssistantStatusEntry(entry)) {
+      updates += 1
+    } else if (isCommandEntry(entry)) {
+      commands += 1
+    } else {
+      other += 1
+    }
+  }
+  return { updates, edits, commands, other }
+}
+
+function workEntryTickTone(entry: TimelineWorkEntry) {
+  if (entry.diff) return 'edit'
+  if (isCommandEntry(entry)) return 'bash'
+  if (isAssistantStatusEntry(entry)) return 'status'
+  return 'read'
+}
+
 function workEntryIcon(entry: TimelineWorkEntry) {
   const call = workCallLabel(entry)
+  if (isAssistantStatusEntry(entry)) {
+    return <MessageSquareText size={13} className="work-entry-icon status" />
+  }
   if (entry.diff) {
     return <PencilLine size={13} className="work-entry-icon diff" />
   }
@@ -3683,6 +4396,60 @@ function MessageMeta({
   )
 }
 
+function extractCodeText(node: React.ReactNode): string {
+  if (node === null || node === undefined || node === false) return ''
+  if (typeof node === 'string') return node
+  if (typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(extractCodeText).join('')
+  if (React.isValidElement(node)) {
+    return extractCodeText((node.props as { children?: React.ReactNode }).children)
+  }
+  return ''
+}
+
+const HighlightedPre = React.memo(function HighlightedPre({
+  code,
+  lang,
+  fallback,
+}: {
+  code: string
+  lang: string | undefined
+  fallback: React.ReactNode
+}) {
+  const [html, setHtml] = React.useState<string | null>(() => highlightCodeSync(code, lang))
+
+  React.useEffect(() => {
+    if (html !== null) return
+    let cancelled = false
+    const run = () => {
+      void highlightCode(code, lang).then((next) => {
+        if (!cancelled && next) setHtml(next)
+      })
+    }
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void) => number
+      cancelIdleCallback?: (id: number) => void
+    }
+    if (typeof w.requestIdleCallback === 'function') {
+      const id = w.requestIdleCallback(run)
+      return () => {
+        cancelled = true
+        w.cancelIdleCallback?.(id)
+      }
+    }
+    const timer = window.setTimeout(run, 0)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [code, lang, html])
+
+  if (html) {
+    return <div className="shiki-block" dangerouslySetInnerHTML={{ __html: html }} />
+  }
+  return <pre>{fallback}</pre>
+})
+
 const markdownComponents = {
   a({ children, ...props }) {
     return (
@@ -3690,6 +4457,16 @@ const markdownComponents = {
         {children}
       </a>
     )
+  },
+  pre({ children }) {
+    const child = React.Children.toArray(children).find(React.isValidElement)
+    if (!child) return <pre>{children}</pre>
+    const childProps = child.props as { className?: string; children?: React.ReactNode }
+    const match = /language-([\w-]+)/.exec(childProps.className ?? '')
+    const lang = match ? match[1] : undefined
+    const raw = extractCodeText(childProps.children)
+    const code = raw.endsWith('\n') ? raw.slice(0, -1) : raw
+    return <HighlightedPre code={code} lang={lang} fallback={children} />
   },
 } satisfies Components
 
@@ -3863,7 +4640,7 @@ function appendTerminalTranscript(
 }
 
 function terminalWebSocketUrl(
-  config: { host: string; port: number; path: string },
+  config: { host: string; port: number; path: string; token?: string },
   agentId: string,
   cols: number,
   rows: number,
@@ -3879,6 +4656,7 @@ function terminalWebSocketUrl(
   url.searchParams.set('agentId', agentId)
   url.searchParams.set('cols', String(cols))
   url.searchParams.set('rows', String(rows))
+  if (config.token) url.searchParams.set('token', config.token)
   return url.toString()
 }
 
@@ -4318,7 +5096,7 @@ function projectNameFromPath(path: string) {
 
 function projectSummary(project: ProjectRow) {
   const sessions = project.agents.length
-  return `${project.id} · ${sessions} ${sessions === 1 ? 'session' : 'sessions'}`
+  return `${project.name} · ${sessions} ${sessions === 1 ? 'session' : 'sessions'}`
 }
 
 async function readImageFile(file: File): Promise<SendMessageImage> {

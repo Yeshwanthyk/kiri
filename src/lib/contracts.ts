@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const runtimeKinds = ['pi', 'codex', 'claude', 'opencode'] as const
+export const runtimeKinds = ['pi', 'codex', 'claude'] as const
 export const runtimeKindSchema = z.enum(runtimeKinds)
 export type RuntimeKind = z.infer<typeof runtimeKindSchema>
 
@@ -99,6 +99,19 @@ export const pendingQuestionSchema = z.object({
 })
 export type PendingQuestion = z.infer<typeof pendingQuestionSchema>
 
+export const agentTaskStatuses = ['pending', 'inProgress', 'completed', 'failed'] as const
+export const agentTaskStatusSchema = z.enum(agentTaskStatuses)
+export type AgentTaskStatus = z.infer<typeof agentTaskStatusSchema>
+
+export const agentTaskSchema = z.object({
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  status: agentTaskStatusSchema,
+  source: runtimeKindSchema,
+  updatedAt: z.string(),
+})
+export type AgentTask = z.infer<typeof agentTaskSchema>
+
 export const agentCellSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -120,6 +133,7 @@ export const agentCellSchema = z.object({
   timelineEvents: z.array(timelineEventSchema).default([]),
   timeline: z.array(boardTimelineItemSchema).default([]),
   diffs: z.array(diffArtifactSchema),
+  tasks: z.array(agentTaskSchema).default([]),
 })
 export type AgentCell = z.infer<typeof agentCellSchema>
 
@@ -140,7 +154,7 @@ export type ArchivedSessionSummary = z.infer<typeof archivedSessionSummarySchema
 
 export const agentDetailInputSchema = z.object({
   agentId: z.string().trim().min(1),
-  limit: z.number().int().positive().max(500).default(100),
+  limit: z.number().int().positive().max(500).default(500),
 })
 export type AgentDetailInput = z.infer<typeof agentDetailInputSchema>
 
@@ -159,7 +173,6 @@ export const aetherSettingsSchema = z.object({
     pi: runtimeSettingsSchema,
     codex: runtimeSettingsSchema,
     claude: runtimeSettingsSchema,
-    opencode: runtimeSettingsSchema,
   }),
 })
 export type AetherSettings = z.infer<typeof aetherSettingsSchema>
@@ -174,11 +187,23 @@ export const projectRowSchema = z.object({
 })
 export type ProjectRow = z.infer<typeof projectRowSchema>
 
+export const scratchpadBlockSchema = z.object({
+  id: z.string(),
+  projectId: z.string().nullable(),
+  projectName: z.string().nullable(),
+  body: z.string(),
+  createdAt: z.string(),
+  triggeredAt: z.string().nullable(),
+  triggeredAgentId: z.string().nullable(),
+})
+export type ScratchpadBlock = z.infer<typeof scratchpadBlockSchema>
+
 export const workspaceSnapshotSchema = z.object({
   settings: aetherSettingsSchema,
   projects: z.array(projectRowSchema),
   hiddenProjects: z.array(projectRowSchema),
   archivedSessions: z.array(archivedSessionSummarySchema).default([]),
+  scratchpadBlocks: z.array(scratchpadBlockSchema).default([]),
   selected: z.object({
     projectId: z.string(),
     agentId: z.string(),
@@ -306,6 +331,27 @@ export const renameSessionInputSchema = z.object({
   title: z.string().trim().min(1).max(160),
 })
 export type RenameSessionInput = z.infer<typeof renameSessionInputSchema>
+
+export const addScratchpadBlockInputSchema = z.object({
+  body: z.string().trim().min(1).max(4000),
+  projectId: z.string().trim().min(1).nullable().default(null),
+})
+export type AddScratchpadBlockInput = z.infer<typeof addScratchpadBlockInputSchema>
+
+export const deleteScratchpadBlockInputSchema = z.object({
+  id: z.string().trim().min(1),
+})
+export type DeleteScratchpadBlockInput = z.infer<typeof deleteScratchpadBlockInputSchema>
+
+export const triggerScratchpadBlockInputSchema = z.object({
+  id: z.string().trim().min(1),
+  projectId: z.string().trim().min(1),
+  runtime: runtimeKindSchema.optional(),
+  model: z.string().trim().optional(),
+  title: z.string().trim().optional(),
+  thinkingLevel: thinkingLevelSchema.default('medium'),
+})
+export type TriggerScratchpadBlockInput = z.infer<typeof triggerScratchpadBlockInputSchema>
 
 export type AgentRuntimeState = {
   kind: RuntimeKind

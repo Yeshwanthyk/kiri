@@ -1,6 +1,9 @@
 {
   "name": "aether",
+  "productName": "Aether",
   "private": true,
+  "version": "0.1.0",
+  "main": "src/desktop/main.mjs",
   "sideEffects": false,
   "type": "module",
   "scripts": {
@@ -11,14 +14,27 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "desktop:dev": "AETHER_DESKTOP_DEV_URL=http://127.0.0.1:3090 electron src/desktop/main.mjs",
+    "desktop:start": "pnpm build && electron src/desktop/main.mjs",
+    "desktop:backend": "node scripts/aether-desktop-backend.mjs",
+    "dist:desktop": "pnpm build && electron-builder --mac dir && node scripts/normalize-desktop-app.mjs && node scripts/create-desktop-dmg.mjs",
+    "install:desktop": "pnpm dist:desktop && node scripts/install-desktop-app.mjs",
     "prepare": "effect-language-service patch",
+    "aether": "tsx src/cli/aetherctl.ts",
+    "aethercli": "tsx src/cli/aetherctl.ts",
+    "aether:ctl": "tsx src/cli/aetherctl.ts",
+    "aether:agent-harness": "tsx tests/harness/aether-agent-cli-harness.ts",
+    "aether:history-harness": "tsx tests/harness/aether-agent-detail-history-harness.ts",
     "aether:models": "node scripts/sync-models-dev.mjs",
-    "aether:projects": "node scripts/aether-projects.mjs",
+    "aether:projects": "tsx src/cli/aetherctl.ts projects",
     "preview": "vite preview",
     "start": "pnpx srvx --prod -s ../client dist/server/server.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.138",
+    "@effect/cli": "^0.75.1",
+    "@effect/platform": "^0.96.1",
+    "@effect/platform-node": "^0.106.0",
     "@fontsource-variable/geist": "^5.2.8",
     "@fontsource/fira-code": "^5.2.7",
     "@fontsource/ibm-plex-mono": "^5.2.7",
@@ -32,17 +48,44 @@
     "@tanstack/react-router-ssr-query": "^1.166.12",
     "@tanstack/react-start": "^1.167.65",
     "effect": "^3.21.2",
+    "fast-check": "3.23.2",
     "ghostty-web": "^0.4.0",
     "lucide-react": "^1.14.0",
     "node-pty": "1.2.0-beta.12",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
+    "pure-rand": "6.1.0",
     "redaxios": "^0.5.1",
     "remark-gfm": "^4.0.1",
+    "srvx": "0.11.15",
     "tailwind-merge": "^2.6.0",
     "ws": "^8.20.0",
     "zod": "^4.4.3"
+  },
+  "build": {
+    "appId": "dev.aether.desktop",
+    "productName": "Aether",
+    "files": [
+      "dist/client/**",
+      "dist/server/**",
+      "src/desktop/**",
+      "scripts/aether-desktop-backend.mjs",
+      "scripts/create-desktop-dmg.mjs",
+      "scripts/normalize-desktop-app.mjs",
+      "settings.json",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "executableName": "Aether",
+      "target": [
+        "dmg"
+      ]
+    }
   },
   "devDependencies": {
     "@effect/language-service": "^0.85.1",
@@ -55,8 +98,11 @@
     "@types/react-dom": "^19.0.3",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.1",
+    "electron": "41.5.0",
+    "electron-builder": "26.0.12",
     "eslint": "^10.3.0",
     "tailwindcss": "^4.2.2",
+    "tsx": "4.20.6",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.59.2",
     "vite": "^8.0.0",

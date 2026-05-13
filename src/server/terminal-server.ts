@@ -1,4 +1,5 @@
 import { createServer, type Server } from 'node:http'
+import { randomBytes } from 'node:crypto'
 import { platform } from 'node:os'
 import { parse } from 'node:url'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
@@ -9,6 +10,7 @@ type TerminalServerInfo = {
   host: string
   port: number
   path: string
+  token: string
 }
 
 type TerminalClientMessage =
@@ -27,6 +29,7 @@ let httpServer: Server | null = null
 let terminalServerPromise: Promise<TerminalServerInfo> | null = null
 
 const terminalPath = '/terminal'
+const terminalToken = randomBytes(32).toString('base64url')
 
 export function ensureTerminalServer(): Promise<TerminalServerInfo> {
   if (terminalServer) return Promise.resolve(terminalServer)
@@ -42,7 +45,13 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
   const wss = new WebSocketServer({ server, path: terminalPath })
 
   wss.on('connection', (socket, request) => {
-    const agentId = parse(request.url ?? '', true).query.agentId
+    const query = parse(request.url ?? '', true).query
+    if (query.token !== terminalToken) {
+      closeWithReason(socket, 'Invalid terminal token')
+      return
+    }
+
+    const agentId = query.agentId
     if (typeof agentId !== 'string' || agentId.trim() === '') {
       closeWithReason(socket, 'Missing agent id')
       return
@@ -52,8 +61,8 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
     try {
       const config = getAgentLaunchConfig(agentId)
       const shell = defaultShell()
-      const cols = positiveInt(parse(request.url ?? '', true).query.cols, 100)
-      const rows = positiveInt(parse(request.url ?? '', true).query.rows, 30)
+      const cols = positiveInt(query.cols, 100)
+      const rows = positiveInt(query.rows, 30)
       proc = pty.spawn(shell.command, shell.args, {
         name: 'xterm-256color',
         cols,
@@ -102,7 +111,7 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
 
   const port = await listen(server, requestedPort, host)
   httpServer = server
-  terminalServer = { host, port, path: terminalPath }
+  terminalServer = { host, port, path: terminalPath, token: terminalToken }
   return terminalServer
 }
 

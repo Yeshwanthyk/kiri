@@ -12,7 +12,7 @@ import {
   type ThinkingConfig,
 } from '@anthropic-ai/claude-agent-sdk'
 import { Effect } from 'effect'
-import type { AnswerQuestionInput, PendingQuestion, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
+import type { AgentTask, AnswerQuestionInput, PendingQuestion, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import {
   appendUserMessage,
   clearAgentRuntimeState,
@@ -29,6 +29,7 @@ import {
 } from './db'
 import { collectGitDiffArtifacts } from './git-diff'
 import { fileOperationFromTool } from './runtime-file-operations'
+import { resolveRuntimeExecutable, runtimeProcessEnv } from './runtime-binaries'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
@@ -399,6 +400,7 @@ function recordClaudeStreamEvent(
       detail,
       payload: { toolName, input, toolUseId: tool.itemId },
     })
+    recordClaudeTaskSnapshot(agentId, toolName, input)
     return
   }
 
@@ -433,6 +435,7 @@ function recordClaudeStreamEvent(
       detail,
       payload: { toolName: tool.toolName, input, toolUseId: tool.itemId },
     })
+    recordClaudeTaskSnapshot(agentId, tool.toolName, input)
   }
 }
 
@@ -512,6 +515,45 @@ function recordClaudeFileOperationCompleted(
   } catch {
     // Diff refresh is best-effort; the completed turn still records final artifacts.
   }
+}
+
+function recordClaudeTaskSnapshot(
+  agentId: string,
+  toolName: string,
+  input: Record<string, unknown>,
+) {
+  if (!toolName.toLowerCase().includes('todowrite')) return
+  const tasks = claudeTodoTasks(input)
+  if (!tasks) return
+  try {
+    runRuntimeLifecycleSync(projectRuntimeEvent({
+      type: 'tasksUpdated',
+      agentId,
+      source: 'claude',
+      tasks,
+      updatedAt: tasks.at(-1)?.updatedAt ?? new Date().toISOString(),
+    }))
+  } catch {
+    // Todo state is an affordance; transcript capture remains authoritative.
+  }
+}
+
+function claudeTodoTasks(input: Record<string, unknown>): AgentTask[] | null {
+  const todos = input.todos
+  if (!Array.isArray(todos)) return null
+  const updatedAt = new Date().toISOString()
+  return todos.flatMap((todo, index) => {
+    const record = objectValue(todo)
+    const title = stringValue(record.content)?.trim()
+    if (!title) return []
+    return [{
+      id: stringValue(record.id) ?? String(index + 1),
+      title,
+      status: normalizeTaskStatus(stringValue(record.status)) ?? 'pending',
+      source: 'claude' as const,
+      updatedAt,
+    }]
+  })
 }
 
 function recordClaudeResult(agentId: string, live: ClaudeLiveSession, message: SDKResultMessage) {
@@ -598,7 +640,7 @@ function claudeOptions(
   sessionId: string,
   pendingQuestions: Map<string, PendingQuestionResolver>,
 ): ClaudeOptions {
-  const binaryPath = process.env.AETHER_CLAUDE_BIN ?? state.binaryPath
+  const binaryPath = resolveClaudeExecutable(state)
   const options: ClaudeOptions = {
     cwd: config.cwd,
     model: config.model,
@@ -1045,10 +1087,16 @@ function numberValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-function claudeEnvironment(state: ClaudeRuntimeState): NodeJS.ProcessEnv {
-  const env = {
-    ...process.env,
+function normalizeTaskStatus(value: string | undefined): AgentTask['status'] | undefined {
+  if (value === 'in_progress') return 'inProgress'
+  if (value === 'pending' || value === 'inProgress' || value === 'completed' || value === 'failed') {
+    return value
   }
+  return undefined
+}
+
+function claudeEnvironment(state: ClaudeRuntimeState): NodeJS.ProcessEnv {
+  const env = runtimeProcessEnv()
   if (process.env.AETHER_CLAUDE_USE_EXTERNAL_API_KEY !== '1') {
     delete env.ANTHROPIC_API_KEY
     delete env.ANTHROPIC_AUTH_TOKEN
@@ -1057,6 +1105,11 @@ function claudeEnvironment(state: ClaudeRuntimeState): NodeJS.ProcessEnv {
   const homePath = process.env.AETHER_CLAUDE_HOME ?? state.homePath
   if (homePath) env.HOME = homePath
   return env
+}
+
+function resolveClaudeExecutable(state: ClaudeRuntimeState) {
+  const configuredPath = process.env.AETHER_CLAUDE_BIN ?? state.binaryPath
+  return resolveRuntimeExecutable('claude', configuredPath)
 }
 
 function extraArgsOption(): Pick<ClaudeOptions, 'extraArgs'> {
