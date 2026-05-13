@@ -7,7 +7,6 @@ import {
   moveAgent,
   moveProject,
   updateKeymap,
-  type Selection,
 } from '~/components/kiri-board/navigation'
 
 function project(id: string, agentIds: string[]): ProjectRow {
@@ -44,36 +43,30 @@ function project(id: string, agentIds: string[]): ProjectRow {
 }
 
 describe('board navigation', () => {
-  it('moves between projects while preserving the agent column when possible', () => {
+  it('moves between projects by id', () => {
     const projects = [
       project('alpha', ['a1', 'a2']),
       project('beta', ['b1', 'b2', 'b3']),
     ]
-    const current: Selection = { projectId: 'alpha', agentId: 'a2' }
 
-    expect(moveProject(projects, current, 1)).toEqual({
-      projectId: 'beta',
-      agentId: 'b2',
-    })
+    expect(moveProject(projects, 'alpha', 1)).toBe('beta')
+    expect(moveProject(projects, 'beta', -1)).toBe('alpha')
   })
 
   it('clamps project and agent movement at list edges', () => {
     const projects = [project('alpha', ['a1']), project('beta', ['b1'])]
 
-    expect(moveProject(projects, { projectId: 'alpha', agentId: 'a1' }, -1)).toEqual({
-      projectId: 'alpha',
-      agentId: 'a1',
-    })
-    expect(moveAgent(projects[0]!, { projectId: 'alpha', agentId: 'a1' }, -1)).toEqual({
-      projectId: 'alpha',
-      agentId: 'a1',
-    })
+    expect(moveProject(projects, 'alpha', -1)).toBe('alpha')
+    expect(moveAgent(projects[0]!, 'a1', -1)).toBe('a1')
   })
 
-  it('keeps current selection when project list is empty or missing', () => {
-    const current: Selection = { projectId: 'missing', agentId: 'agent' }
+  it('keeps current project when project list is empty', () => {
+    expect(moveProject([], 'missing', 1)).toBe('missing')
+  })
 
-    expect(moveProject([], current, 1)).toEqual(current)
+  it('returns null when moving agents in an empty project', () => {
+    const empty = project('empty', [])
+    expect(moveAgent(empty, '', 1)).toBeNull()
   })
 })
 

@@ -86,37 +86,24 @@ export const keymapGroups: {
 
 export function moveProject(
   projects: ProjectRow[],
-  current: Selection,
+  currentProjectId: string,
   delta: 1 | -1,
-): Selection {
-  const index = projects.findIndex((project) => project.id === current.projectId)
-  const nextIndex = clamp(index + delta, 0, projects.length - 1)
-  const project = projects[nextIndex]
-  const currentProject = projects[index]
-  if (!project) return current
-  const agent =
-    project.agents.find((item) => item.id === current.agentId) ??
-    project.agents[
-      clamp(
-        currentProject?.agents.findIndex((item) => item.id === current.agentId) ??
-          0,
-        0,
-        project.agents.length - 1,
-      )
-    ]
-  return {
-    projectId: project.id,
-    agentId: agent?.id ?? current.agentId,
-  }
+): string {
+  if (projects.length === 0) return currentProjectId
+  const index = projects.findIndex((project) => project.id === currentProjectId)
+  const nextIndex = clamp((index < 0 ? 0 : index) + delta, 0, projects.length - 1)
+  return projects[nextIndex]?.id ?? currentProjectId
 }
 
-export function moveAgent(project: ProjectRow, current: Selection, delta: 1 | -1): Selection {
-  const index = project.agents.findIndex((agent) => agent.id === current.agentId)
-  const nextIndex = clamp(index + delta, 0, project.agents.length - 1)
-  return {
-    projectId: project.id,
-    agentId: project.agents[nextIndex]?.id ?? current.agentId,
-  }
+export function moveAgent(
+  project: ProjectRow,
+  currentAgentId: string,
+  delta: 1 | -1,
+): string | null {
+  if (project.agents.length === 0) return null
+  const index = project.agents.findIndex((agent) => agent.id === currentAgentId)
+  const nextIndex = clamp((index < 0 ? 0 : index) + delta, 0, project.agents.length - 1)
+  return project.agents[nextIndex]?.id ?? null
 }
 
 export function actionForKey(keymap: KeymapSettings, key: string): KeymapAction | undefined {

@@ -1,4 +1,5 @@
 import type * as React from 'react'
+import type { WorkspaceSnapshot } from '~/lib/contracts'
 import {
   defaultThemeSelection,
   normalizeThemeSelection,
@@ -56,6 +57,7 @@ const keymapStorageKey = 'kiri:keymap:v1'
 const themeStorageKey = 'kiri:theme:v1'
 const chatTypographyStorageKey = 'kiri:chat-typography:v1'
 const chatDraftStorageKey = 'kiri:chat-drafts:v1'
+const agentByProjectStorageKey = 'kiri:agent-by-project:v1'
 
 export function readStoredKeymap(storage?: StorageLike): KeymapSettings {
   try {
@@ -179,6 +181,43 @@ export function normalizeChatTypography(value: Record<string, unknown>): ChatTyp
     ? value.monoFont as MonoFont
     : defaultChatTypography.monoFont
   return { fontSize, monoFont }
+}
+
+export function readStoredAgentByProject(
+  snapshot: WorkspaceSnapshot,
+  storage?: StorageLike,
+): Record<string, string> {
+  const cleaned: Record<string, string> = {}
+  try {
+    const store = storage ?? window.localStorage
+    const stored = store.getItem(agentByProjectStorageKey)
+    const parsed = stored ? (JSON.parse(stored) as Record<string, unknown>) : {}
+    for (const project of snapshot.projects) {
+      const remembered = parsed[project.id]
+      if (typeof remembered !== 'string') continue
+      if (project.agents.some((agent) => agent.id === remembered)) {
+        cleaned[project.id] = remembered
+      }
+    }
+  } catch {
+    // fall through to seeding below
+  }
+  if (!cleaned[snapshot.selected.projectId] && snapshot.selected.agentId) {
+    cleaned[snapshot.selected.projectId] = snapshot.selected.agentId
+  }
+  return cleaned
+}
+
+export function writeStoredAgentByProject(
+  map: Record<string, string>,
+  storage?: StorageLike,
+): void {
+  try {
+    const store = storage ?? window.localStorage
+    store.setItem(agentByProjectStorageKey, JSON.stringify(map))
+  } catch {
+    // ignore quota / private-mode failures, same as other writers
+  }
 }
 
 export function applyChatTypography(element: HTMLElement, settings: ChatTypographySettings): void {

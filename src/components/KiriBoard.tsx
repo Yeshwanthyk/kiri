@@ -74,12 +74,14 @@ import {
 import {
   applyChatTypography,
   defaultChatTypography,
+  readStoredAgentByProject,
   readStoredChatTypography,
   readStoredKeymap,
   readStoredThemeSelection,
   saveChatTypography,
   saveKeymap,
   saveThemeSelection,
+  writeStoredAgentByProject,
   type ChatTypographySettings,
 } from './kiri-board/storage'
 
@@ -106,7 +108,10 @@ import {
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [workspace, setWorkspace] = React.useState(snapshot)
-  const [selection, setSelection] = React.useState<Selection>(snapshot.selected)
+  const [activeProjectId, setActiveProjectId] = React.useState<string>(snapshot.selected.projectId)
+  const [agentByProject, setAgentByProject] = React.useState<Record<string, string>>(() =>
+    readStoredAgentByProject(snapshot),
+  )
   const [tab, setTab] = React.useState<SidebarTab>('chat')
   const [hydrated, setHydrated] = React.useState(false)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
@@ -150,23 +155,46 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const unhideProject = useServerFn(unhideProjectMutation)
 
   const selectedProject =
-    workspace.projects.find((project) => project.id === selection.projectId) ??
+    workspace.projects.find((project) => project.id === activeProjectId) ??
     workspace.projects[0]
+  const rememberedAgentId = selectedProject ? agentByProject[selectedProject.id] : undefined
   const selectedAgent =
-    selectedProject?.agents.find((agent) => agent.id === selection.agentId) ??
-    selectedProject?.agents[0]
+    (rememberedAgentId
+      ? selectedProject?.agents.find((agent) => agent.id === rememberedAgentId)
+      : undefined) ?? selectedProject?.agents[0]
+  const selection = React.useMemo<Selection>(
+    () => ({
+      projectId: selectedProject?.id ?? '',
+      agentId: selectedAgent?.id ?? '',
+    }),
+    [selectedAgent, selectedProject],
+  )
+
+  const selectAgent = (projectId: string, agentId: string) => {
+    setActiveProjectId(projectId)
+    setChatFocusRequest(0)
+    setAgentSwitcherOpen(false)
+    if (agentByProject[projectId] === agentId) return
+    const next = { ...agentByProject, [projectId]: agentId }
+    setAgentByProject(next)
+    writeStoredAgentByProject(next)
+  }
+
+  const selectProject = (projectId: string) => {
+    setActiveProjectId(projectId)
+    setChatFocusRequest(0)
+  }
+
+  const forgetProject = (projectId: string) => {
+    if (!(projectId in agentByProject)) return
+    const { [projectId]: _omitted, ...next } = agentByProject
+    setAgentByProject(next)
+    writeStoredAgentByProject(next)
+  }
 
   React.useEffect(() => {
     setWorkspace(snapshot)
   }, [snapshot])
-
-  React.useEffect(() => {
-    if (!selectedProject) return
-    const agentId = selectedAgent?.id ?? ''
-    if (selectedProject.id !== selection.projectId || agentId !== selection.agentId) {
-      setSelection({ projectId: selectedProject.id, agentId })
-    }
-  }, [selectedAgent, selectedProject, selection.agentId, selection.projectId])
 
   React.useEffect(() => {
     setHydrated(true)
@@ -261,21 +289,27 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       }
 
       if (action === 'projectPrev' || action === 'projectNext') {
-        setChatFocusRequest(0)
-        setSelection((current) =>
-          moveProject(workspace.projects, current, action === 'projectNext' ? 1 : -1),
+        const nextProjectId = moveProject(
+          workspace.projects,
+          selection.projectId,
+          action === 'projectNext' ? 1 : -1,
         )
+        if (nextProjectId !== selection.projectId) selectProject(nextProjectId)
         return
       }
 
-      setChatFocusRequest(0)
-      setSelection((current) => {
-        const project =
-          workspace.projects.find((row) => row.id === current.projectId) ??
-          workspace.projects[0]
-        if (!project) return current
-        return moveAgent(project, current, action === 'agentNext' ? 1 : -1)
-      })
+      const project =
+        workspace.projects.find((row) => row.id === selection.projectId) ??
+        workspace.projects[0]
+      if (!project) return
+      const nextAgentId = moveAgent(
+        project,
+        selection.agentId,
+        action === 'agentNext' ? 1 : -1,
+      )
+      if (nextAgentId && nextAgentId !== selection.agentId) {
+        selectAgent(project.id, nextAgentId)
+      }
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -295,13 +329,14 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     const next = await addProject({ data: input })
     setWorkspace(next)
     const project = next.projects.find((item) => item.cwd === input.cwd) ?? next.projects.at(-1)
-    if (project) setSelection({ projectId: project.id, agentId: project.agents[0]?.id ?? '' })
+    if (project) selectProject(project.id)
   }
 
   async function handleDeleteProject(projectId: string) {
     const next = await deleteProject({ data: { id: projectId } })
     setWorkspace(next)
-    if (selection.projectId === projectId) setSelection(next.selected)
+    forgetProject(projectId)
+    if (selection.projectId === projectId) setActiveProjectId(next.selected.projectId)
   }
 
   async function confirmDeleteProject(projectId: string) {
@@ -317,14 +352,15 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   async function handleHideProject(projectId: string) {
     const next = await hideProject({ data: { id: projectId } })
     setWorkspace(next)
-    if (selection.projectId === projectId) setSelection(next.selected)
+    forgetProject(projectId)
+    if (selection.projectId === projectId) setActiveProjectId(next.selected.projectId)
   }
 
   async function handleUnhideProject(projectId: string) {
     const next = await unhideProject({ data: { id: projectId } })
     setWorkspace(next)
     const project = next.projects.find((item) => item.id === projectId)
-    if (project) setSelection({ projectId: project.id, agentId: project.agents[0]?.id ?? '' })
+    if (project) selectProject(project.id)
   }
 
   async function handleReorderProjects(projectIds: string[]) {
@@ -362,11 +398,12 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       if (!project) return
       const fallbackAgent =
         project.agents[Math.max(0, Math.min(currentIndex - 1, project.agents.length - 1))]
-      setChatFocusRequest(0)
       if (fallbackAgent) {
-        setSelection({ projectId: project.id, agentId: fallbackAgent.id })
+        selectAgent(project.id, fallbackAgent.id)
       } else {
-        setSelection({ projectId: project.id, agentId: '' })
+        forgetProject(project.id)
+        setActiveProjectId(project.id)
+        setChatFocusRequest(0)
       }
     } finally {
       setDeleteInFlight(false)
@@ -449,8 +486,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       item.agents.some((agent) => agent.id === result.agentId),
     )
     if (project) {
-      setSelection({ projectId: project.id, agentId: result.agentId })
-      setChatFocusRequest(0)
+      selectAgent(project.id, result.agentId)
     }
   }
 
@@ -483,10 +519,8 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         ? project?.agents.find((item) => item.title === input.title)
         : undefined) ?? project?.agents[project.agents.length - 1]
     if (project && agent) {
-      setChatFocusRequest(0)
-      setSelection({ projectId: project.id, agentId: agent.id })
+      selectAgent(project.id, agent.id)
     }
-    setAgentSwitcherOpen(false)
     setSessionLauncherOpen(false)
     setSessionLauncherPreset(null)
   }
@@ -518,8 +552,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       },
     })
     setWorkspace(result.snapshot)
-    setSelection({ projectId, agentId: result.agentId })
-    setChatFocusRequest(0)
+    selectAgent(projectId, result.agentId)
     setTab('chat')
   }
 
@@ -531,21 +564,14 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
     const next = await restoreSession({ data: { agentId } })
     setWorkspace(next)
-    setChatFocusRequest(0)
-    setSelection({ projectId, agentId })
+    selectAgent(projectId, agentId)
     setSessionLauncherOpen(false)
-  }
-
-  function selectAgent(projectId: string, agentId: string) {
-    setChatFocusRequest(0)
-    setSelection({ projectId, agentId })
-    setAgentSwitcherOpen(false)
   }
 
   function openSessionLauncher(projectId = selectedProject?.id, runtime?: RuntimeKind) {
     const project = workspace.projects.find((item) => item.id === projectId)
     if (project) {
-      setSelection({ projectId: project.id, agentId: project.agents[0]?.id ?? '' })
+      setActiveProjectId(project.id)
       setSessionLauncherPreset({ projectId: project.id, runtime })
     } else {
       setSessionLauncherPreset(null)
@@ -687,10 +713,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           icon: Shuffle,
           disabled: false,
           run: () => {
-            const agentId = project.agents[0]?.id ?? ''
-            setChatFocusRequest(0)
-            setSelection({ projectId: project.id, agentId })
-            setAgentSwitcherOpen(false)
+            selectProject(project.id)
             setCommandPaletteOpen(false)
           },
         },
@@ -701,9 +724,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           icon: Bot,
           disabled: false,
           run: () => {
-            setChatFocusRequest(0)
-            setSelection({ projectId: project.id, agentId: agent.id })
-            setAgentSwitcherOpen(false)
+            selectAgent(project.id, agent.id)
             setCommandPaletteOpen(false)
           },
         })),
@@ -815,8 +836,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onTabChange={setTab}
         onOpenAgentSwitcher={() => setAgentSwitcherOpen(true)}
         onSelectAgent={(agentId) => {
-          setSelection({ projectId: selectedProject.id, agentId })
-          setAgentSwitcherOpen(false)
+          selectAgent(selectedProject.id, agentId)
           setCommandPaletteOpen(false)
         }}
         onStartSession={() => openSessionLauncher()}
@@ -968,8 +988,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               selectedProjectId={selection.projectId}
               startSessionKey={keymap.startSession}
               onSelect={(agentId) => {
-                setChatFocusRequest(0)
-                setSelection({ projectId: project.id, agentId })
+                selectAgent(project.id, agentId)
               }}
             />
           ))}
