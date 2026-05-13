@@ -12,6 +12,7 @@ type ScratchpadState = {
   manualProjectId: string | null
   pending: boolean
   error: string | null
+  notice: string | null
   pendingId: string | null
 }
 
@@ -21,6 +22,8 @@ type ScratchpadAction =
   | { type: 'captureStarted' }
   | { type: 'captureSucceeded' }
   | { type: 'failed'; error: string }
+  | { type: 'noticeShown'; notice: string }
+  | { type: 'noticeCleared' }
   | { type: 'pendingFinished' }
   | { type: 'blockActionStarted'; id: string; clearError?: boolean }
 
@@ -29,6 +32,7 @@ const initialScratchpadState: ScratchpadState = {
   manualProjectId: null,
   pending: false,
   error: null,
+  notice: null,
   pendingId: null,
 }
 
@@ -39,11 +43,15 @@ function scratchpadReducer(state: ScratchpadState, action: ScratchpadAction): Sc
     case 'projectChanged':
       return { ...state, manualProjectId: action.projectId }
     case 'captureStarted':
-      return { ...state, pending: true, error: null }
+      return { ...state, pending: true, error: null, notice: null }
     case 'captureSucceeded':
       return { ...state, draft: '', pending: false }
     case 'failed':
-      return { ...state, pending: false, error: action.error }
+      return { ...state, pending: false, error: action.error, notice: null }
+    case 'noticeShown':
+      return { ...state, notice: action.notice }
+    case 'noticeCleared':
+      return { ...state, notice: null }
     case 'pendingFinished':
       return { ...state, pending: false, pendingId: null }
     case 'blockActionStarted':
@@ -51,6 +59,7 @@ function scratchpadReducer(state: ScratchpadState, action: ScratchpadAction): Sc
         ...state,
         pendingId: action.id,
         error: action.clearError ? null : state.error,
+        notice: null,
       }
   }
 }
@@ -110,6 +119,14 @@ export function ScratchpadPanel({
     }
   }, [settings, triggerModel, triggerModels, triggerRuntime])
 
+  React.useEffect(() => {
+    if (!state.notice) return undefined
+    const timeout = window.setTimeout(() => {
+      dispatch({ type: 'noticeCleared' })
+    }, 4000)
+    return () => window.clearTimeout(timeout)
+  }, [state.notice])
+
   function updateTriggerRuntime(runtime: RuntimeKind) {
     setTriggerRuntime(runtime)
     setTriggerModel(settings.runtimes[runtime].defaultModel)
@@ -139,11 +156,22 @@ export function ScratchpadPanel({
 
   async function handleTrigger(block: ScratchpadBlock) {
     dispatch({ type: 'blockActionStarted', id: block.id, clearError: true })
+    const targetProject = projects.find((project) => project.id === block.projectId)?.name
+      ?? projects.find((project) => project.id === selectedProjectId)?.name
+      ?? 'project'
+    dispatch({
+      type: 'noticeShown',
+      notice: `Starting ${triggerRuntime} in ${targetProject}`,
+    })
     try {
       await onTrigger(block, {
         runtime: triggerRuntime,
         model: triggerModel,
         thinkingLevel: triggerThinkingLevel,
+      })
+      dispatch({
+        type: 'noticeShown',
+        notice: `Started ${triggerRuntime} in ${targetProject}`,
       })
     } catch (cause) {
       dispatch({ type: 'failed', error: errorMessage(cause) })
@@ -174,6 +202,12 @@ export function ScratchpadPanel({
 
   return (
     <div className="scratchpad-panel" data-testid="scratchpad-panel">
+      {state.notice ? (
+        <div className="scratchpad-toast" role="status" aria-live="polite">
+          <Check size={13} aria-hidden="true" />
+          {state.notice}
+        </div>
+      ) : null}
       <form className="scratchpad-capture" onSubmit={submitCapture}>
         <textarea
           ref={captureRef}
@@ -341,7 +375,7 @@ export function ScratchpadPanel({
                       disabled={state.pendingId === block.id}
                     >
                       <Send size={12} aria-hidden="true" />
-                      {block.triggeredAt ? 'Re-trigger' : 'Trigger'}
+                      {state.pendingId === block.id ? 'Starting' : block.triggeredAt ? 'Re-trigger' : 'Trigger'}
                     </button>
                     <button
                       type="button"
