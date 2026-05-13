@@ -118,15 +118,17 @@ export function InlineSessionLauncher({
   const [launchProjectId, setLaunchProjectId] = React.useState(initialProjectId ?? project.id)
   const [projectQuery, setProjectQuery] = React.useState('')
   const [projectPickerOpen, setProjectPickerOpen] = React.useState(false)
-  const [runtime, setRuntime] = React.useState<RuntimeKind>(initialRuntime ?? 'codex')
+  const initialLauncherRuntime = initialRuntime ?? 'codex'
+  const [runtime, setRuntime] = React.useState<RuntimeKind>(initialLauncherRuntime)
   const [model, setModel] = React.useState(
-    settings.runtimes[initialRuntime ?? 'codex'].defaultModel,
+    settings.runtimes[initialLauncherRuntime].defaultModel,
   )
   const [title, setTitle] = React.useState('')
   const [thinkingLevel, setThinkingLevel] = React.useState<ThinkingLevel>('medium')
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const titleRef = React.useRef<HTMLInputElement>(null)
+  const settingsRef = React.useRef(settings)
   const models = settings.runtimes[runtime].models
   const launchProject = projects.find((item) => item.id === launchProjectId) ?? project
   const runtimeSupportsThinking = supportsThinking(runtime)
@@ -174,14 +176,25 @@ export function InlineSessionLauncher({
   }, [mode])
 
   React.useEffect(() => {
+    settingsRef.current = settings
+  }, [settings])
+
+  React.useEffect(() => {
     setLaunchProjectId(initialProjectId ?? project.id)
   }, [initialProjectId, project.id])
 
   React.useEffect(() => {
     const nextRuntime = initialRuntime ?? 'codex'
     setRuntime(nextRuntime)
-    setModel(settings.runtimes[nextRuntime].defaultModel)
-  }, [initialRuntime, settings])
+    setModel(settingsRef.current.runtimes[nextRuntime].defaultModel)
+  }, [initialProjectId, initialRuntime])
+
+  React.useEffect(() => {
+    const runtimeSettings = settings.runtimes[runtime]
+    if (!runtimeSettings.models.includes(model)) {
+      setModel(runtimeSettings.defaultModel)
+    }
+  }, [model, runtime, settings])
 
   function updateRuntime(nextRuntime: RuntimeKind) {
     setRuntime(nextRuntime)

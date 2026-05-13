@@ -245,10 +245,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           setProjectManagerOpen(true)
           return
         }
-        setSettingsOpen(false)
-        setAgentSwitcherOpen(false)
-        setCommandPaletteOpen(false)
-        setSessionLauncherOpen(true)
+        openSessionLauncher()
         return
       }
 
