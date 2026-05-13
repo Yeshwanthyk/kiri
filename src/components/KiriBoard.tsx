@@ -198,6 +198,29 @@ type CommandPaletteAction = {
 }
 
 const sessionThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
+const sessionRuntimeOrder = ['codex', 'pi', 'claude'] as const satisfies readonly RuntimeKind[]
+
+const runtimeCopy = {
+  codex: {
+    label: 'Codex',
+    meta: 'local app',
+    detail: 'Attach or start a Codex session against this repo.',
+  },
+  pi: {
+    label: 'Pi',
+    meta: 'provider hub',
+    detail: 'Use Pi provider routing and runtime-aware commands.',
+  },
+  claude: {
+    label: 'Claude',
+    meta: 'code',
+    detail: 'Run a Claude Code session with the same project target.',
+  },
+} as const satisfies Record<RuntimeKind, { label: string; meta: string; detail: string }>
+
+function settingsRuntimeDetail(settings: WorkspaceSnapshot['settings'], runtime: RuntimeKind) {
+  return settings.runtimes[runtime].defaultModel
+}
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [workspace, setWorkspace] = React.useState(snapshot)
@@ -207,6 +230,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [projectManagerOpen, setProjectManagerOpen] = React.useState(false)
   const [sessionLauncherOpen, setSessionLauncherOpen] = React.useState(false)
+  const [sessionLauncherPreset, setSessionLauncherPreset] = React.useState<{
+    projectId: string
+    runtime?: RuntimeKind
+  } | null>(null)
   const [agentSwitcherOpen, setAgentSwitcherOpen] = React.useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
   const [pendingDelete, setPendingDelete] = React.useState<{ agentId: string; title: string } | null>(null)
@@ -576,6 +603,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
     setAgentSwitcherOpen(false)
     setSessionLauncherOpen(false)
+    setSessionLauncherPreset(null)
   }
 
   async function handleCaptureBlock(body: string, projectId: string | null) {
@@ -629,15 +657,23 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setAgentSwitcherOpen(false)
   }
 
-  function openSessionLauncher(projectId = selectedProject?.id) {
+  function openSessionLauncher(projectId = selectedProject?.id, runtime?: RuntimeKind) {
     const project = workspace.projects.find((item) => item.id === projectId)
     if (project) {
       setSelection({ projectId: project.id, agentId: project.agents[0]?.id ?? '' })
+      setSessionLauncherPreset({ projectId: project.id, runtime })
+    } else {
+      setSessionLauncherPreset(null)
     }
     setSettingsOpen(false)
     setCommandPaletteOpen(false)
     setAgentSwitcherOpen(false)
     setSessionLauncherOpen(true)
+  }
+
+  function closeSessionLauncher() {
+    setSessionLauncherOpen(false)
+    setSessionLauncherPreset(null)
   }
 
   const commandActions = React.useMemo(
@@ -751,6 +787,14 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         },
       })),
       ...workspace.projects.flatMap((project) => [
+        ...sessionRuntimeOrder.map((runtime) => ({
+          id: `start-${runtime}-${project.id}`,
+          title: `Start ${runtimeCopy[runtime].label} in ${project.name}`,
+          detail: settingsRuntimeDetail(workspace.settings, runtime),
+          icon: Plus,
+          disabled: false,
+          run: () => openSessionLauncher(project.id, runtime),
+        })),
         {
           id: `switch-project-${project.id}`,
           title: `Switch to ${project.name}`,
@@ -780,7 +824,14 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         })),
       ]),
     ],
-    [selectedAgent, selectedProject, workspace.hiddenProjects, workspace.projects, workspace.scratchpadBlocks],
+    [
+      selectedAgent,
+      selectedProject,
+      workspace.hiddenProjects,
+      workspace.projects,
+      workspace.scratchpadBlocks,
+      workspace.settings,
+    ],
   )
 
   React.useEffect(() => {
@@ -924,9 +975,11 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           archivedSessions={workspace.archivedSessions}
           selectedAgentId={selection.agentId}
           settings={workspace.settings}
+          initialProjectId={sessionLauncherPreset?.projectId}
+          initialRuntime={sessionLauncherPreset?.runtime}
           onStartSession={handleStartSession}
           onResumeSession={handleResumeSession}
-          onCancel={() => setSessionLauncherOpen(false)}
+          onCancel={closeSessionLauncher}
         />
       ) : null}
 
@@ -1043,7 +1096,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onTabChange={setTab}
         chatFocusRequest={chatFocusRequest}
         themeMode={themeSelection.mode}
-        onStartSession={() => setSessionLauncherOpen(true)}
+        onStartSession={() => openSessionLauncher()}
         onDeleteSession={handleDeleteSession}
         onRenameSession={handleRenameSession}
         onSend={handleSendMessage}
@@ -1129,6 +1182,8 @@ function InlineSessionLauncher({
   archivedSessions,
   selectedAgentId,
   settings,
+  initialProjectId,
+  initialRuntime,
   onStartSession,
   onResumeSession,
   onCancel,
@@ -1138,6 +1193,8 @@ function InlineSessionLauncher({
   archivedSessions: ArchivedSessionSummary[]
   selectedAgentId: string
   settings: WorkspaceSnapshot['settings']
+  initialProjectId?: string
+  initialRuntime?: RuntimeKind
   onStartSession: (input: {
     projectId: string
     runtime: RuntimeKind
@@ -1149,15 +1206,26 @@ function InlineSessionLauncher({
   onCancel: () => void
 }) {
   const [mode, setMode] = React.useState<'new' | 'resume'>('new')
-  const [runtime, setRuntime] = React.useState<RuntimeKind>('pi')
-  const [model, setModel] = React.useState(settings.runtimes.pi.defaultModel)
+  const [launchProjectId, setLaunchProjectId] = React.useState(initialProjectId ?? project.id)
+  const [projectQuery, setProjectQuery] = React.useState('')
+  const [projectPickerOpen, setProjectPickerOpen] = React.useState(false)
+  const [runtime, setRuntime] = React.useState<RuntimeKind>(initialRuntime ?? 'codex')
+  const [model, setModel] = React.useState(
+    settings.runtimes[initialRuntime ?? 'codex'].defaultModel,
+  )
   const [title, setTitle] = React.useState('')
   const [thinkingLevel, setThinkingLevel] = React.useState<ThinkingLevel>('medium')
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const titleRef = React.useRef<HTMLInputElement>(null)
-  const runtimes = Object.keys(settings.runtimes) as RuntimeKind[]
   const models = settings.runtimes[runtime].models
+  const launchProject = projects.find((item) => item.id === launchProjectId) ?? project
+  const runtimeSupportsThinking = supportsThinking(runtime)
+  const normalizedProjectQuery = projectQuery.trim().toLowerCase()
+  const visibleTargetProjects = projects.filter((item) => {
+    if (!normalizedProjectQuery) return true
+    return `${item.name} ${item.cwd}`.toLowerCase().includes(normalizedProjectQuery)
+  })
   const activeResumableSessions = projects.flatMap((item) =>
     item.agents.flatMap((agent) =>
       agent.isSession
@@ -1196,9 +1264,26 @@ function InlineSessionLauncher({
     if (mode === 'new') titleRef.current?.focus()
   }, [mode])
 
+  React.useEffect(() => {
+    setLaunchProjectId(initialProjectId ?? project.id)
+  }, [initialProjectId, project.id])
+
+  React.useEffect(() => {
+    const nextRuntime = initialRuntime ?? 'codex'
+    setRuntime(nextRuntime)
+    setModel(settings.runtimes[nextRuntime].defaultModel)
+  }, [initialRuntime, settings])
+
   function updateRuntime(nextRuntime: RuntimeKind) {
     setRuntime(nextRuntime)
     setModel(settings.runtimes[nextRuntime].defaultModel)
+  }
+
+  function selectLaunchProject(projectId: string) {
+    setLaunchProjectId(projectId)
+    setProjectPickerOpen(false)
+    setProjectQuery('')
+    titleRef.current?.focus()
   }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -1207,7 +1292,7 @@ function InlineSessionLauncher({
     setError(null)
     try {
       await onStartSession({
-        projectId: project.id,
+        projectId: launchProject.id,
         runtime,
         model,
         title: title || undefined,
@@ -1249,10 +1334,10 @@ function InlineSessionLauncher({
           </span>
           <div>
             <p className="settings-kicker">Session launcher</p>
-            <strong id="session-dialog-title">{project.name}</strong>
+            <strong id="session-dialog-title">{launchProject.name}</strong>
             <small>{mode === 'new' ? 'Pick a runtime, then launch into chat.' : 'Jump back into a local session.'}</small>
           </div>
-          <button type="button" onClick={onCancel} aria-label="Close session launcher">
+          <button className="session-close-button" type="button" onClick={onCancel} aria-label="Close session launcher">
             ×
           </button>
         </div>
@@ -1280,6 +1365,61 @@ function InlineSessionLauncher({
 
         {mode === 'new' ? (
           <>
+            <div className="session-target-row">
+              <span>Target</span>
+              <button
+                type="button"
+                className="session-target-button"
+                aria-expanded={projectPickerOpen}
+                onClick={() => setProjectPickerOpen((open) => !open)}
+                disabled={pending}
+              >
+                <FolderOpen size={14} aria-hidden="true" />
+                <strong>{launchProject.name}</strong>
+                <ChevronDown size={13} aria-hidden="true" />
+              </button>
+              {projectPickerOpen ? (
+                <div className="session-project-picker">
+                  <label className="session-project-search">
+                    <Search size={13} aria-hidden="true" />
+                    <input
+                      value={projectQuery}
+                      onChange={(event) => setProjectQuery(event.currentTarget.value)}
+                      placeholder="Search projects"
+                      aria-label="Search projects"
+                    />
+                  </label>
+                  <div className="session-project-list" role="listbox" aria-label="Project target">
+                    {visibleTargetProjects.length > 0 ? visibleTargetProjects.map((item, index) => {
+                      const active = item.id === launchProject.id
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="session-project-option"
+                          data-active={active ? 'true' : undefined}
+                          onClick={() => selectLaunchProject(item.id)}
+                          role="option"
+                          aria-selected={active}
+                        >
+                          <span className="session-project-initial" aria-hidden="true">
+                            {item.name.slice(0, 1).toLowerCase()}
+                          </span>
+                          <span>
+                            <strong>{item.name}</strong>
+                            <small>{item.cwd}</small>
+                          </span>
+                          <kbd>{index === 0 ? 'Enter' : index + 1}</kbd>
+                        </button>
+                      )
+                    }) : (
+                      <p className="session-project-empty">No project matches.</p>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
             <label className="session-command-field">
               <Command size={16} aria-hidden="true" />
               <input
@@ -1294,59 +1434,98 @@ function InlineSessionLauncher({
               <span>optional</span>
             </label>
 
-            <div className="session-dialog-grid">
-              <label className="session-runtime-field">
-                <span>Runtime</span>
-                <select
-                  value={runtime}
-                  disabled={pending}
-                  data-testid="session-runtime"
-                  onChange={(event) => updateRuntime(event.currentTarget.value as RuntimeKind)}
-                >
-                  {runtimes.map((item) => (
-                    <option key={item} value={item}>
+            <section className="session-picker-section" aria-label="Runtime">
+              <div className="session-picker-head">
+                <strong>Runtime</strong>
+                <span>Provider is an execution mode.</span>
+              </div>
+              <div className="session-runtime-grid" data-testid="session-runtime">
+                {sessionRuntimeOrder.map((item) => {
+                  const copy = runtimeCopy[item]
+                  const active = runtime === item
+                  return (
+                    <button
+                      key={item}
+                      type="button"
+                      className="session-runtime-card"
+                      data-active={active ? 'true' : undefined}
+                      onClick={() => updateRuntime(item)}
+                      disabled={pending}
+                      aria-pressed={active}
+                    >
+                      <span>
+                        <strong>{copy.label}</strong>
+                        <code>{copy.meta}</code>
+                      </span>
+                      <small>{copy.detail}</small>
+                      <code>{settings.runtimes[item].defaultModel}</code>
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+
+            <section className="session-picker-section" aria-label="Model">
+              <div className="session-picker-head">
+                <strong>Model</strong>
+                <span>Chips first. Search only when the set gets large.</span>
+              </div>
+              <div className="session-model-list" data-testid="session-model">
+                {models.map((item) => {
+                  const active = item === model
+                  const contextWindow = settings.runtimes[runtime].contextWindows?.[item]
+                  return (
+                    <button
+                      key={item}
+                      type="button"
+                      className="session-model-chip"
+                      data-active={active ? 'true' : undefined}
+                      onClick={() => setModel(item)}
+                      disabled={pending}
+                      aria-pressed={active}
+                    >
+                      <span>{item}</span>
+                      {contextWindow ? <code>{formatTokenCount(contextWindow)}</code> : null}
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+
+            <section
+              className="session-picker-section"
+              data-disabled={runtimeSupportsThinking ? undefined : 'true'}
+              aria-label="Thinking"
+            >
+              <div className="session-picker-head">
+                <strong>Thinking</strong>
+                <span>{runtimeSupportsThinking ? 'Default is medium.' : `${runtime} does not support thinking.`}</span>
+              </div>
+              <div className="session-thinking-list" data-testid="session-thinking-level">
+                {sessionThinkingLevels.map((item) => {
+                  const active = thinkingLevel === item
+                  return (
+                    <button
+                      key={item}
+                      type="button"
+                      className="session-thinking-chip"
+                      data-active={active ? 'true' : undefined}
+                      onClick={() => setThinkingLevel(item)}
+                      disabled={pending || !runtimeSupportsThinking}
+                      aria-pressed={active}
+                    >
                       {item}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="session-thinking-field">
-                <span>Thinking</span>
-                <select
-                  value={thinkingLevel}
-                  disabled={pending || !supportsThinking(runtime)}
-                  data-testid="session-thinking-level"
-                  onChange={(event) => setThinkingLevel(event.currentTarget.value as ThinkingLevel)}
-                >
-                  {sessionThinkingLevels.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="session-model-field">
-                <span>Model</span>
-                <select
-                  value={model}
-                  disabled={pending}
-                  data-testid="session-model"
-                  onChange={(event) => setModel(event.currentTarget.value)}
-                >
-                  {models.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
 
             <div className="session-dialog-actions">
               {error ? <span role="status">{error}</span> : null}
               <button type="submit" disabled={pending}>
                 <Plus size={14} />
-                Start session
+                Start {runtimeCopy[runtime].label} session
               </button>
             </div>
           </>
@@ -2090,9 +2269,10 @@ function CommandPalette({
   }, [])
 
   const normalizedQuery = query.trim().toLowerCase()
+  const queryTerms = normalizedQuery.split(/\s+/).filter(Boolean)
   const filteredActions = actions.filter((action) => {
     const haystack = `${action.title} ${action.detail}`.toLowerCase()
-    return haystack.includes(normalizedQuery)
+    return queryTerms.every((term) => haystack.includes(term))
   })
   const visibleActions = normalizedQuery ? filteredActions : filteredActions.slice(0, 7)
   const selectedAction = visibleActions[selectedIndex]

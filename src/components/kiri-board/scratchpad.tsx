@@ -135,6 +135,13 @@ export function ScratchpadPanel({
 
   const grouped = React.useMemo(() => groupBlocksByDay(blocks), [blocks])
   const captureProjectId = state.manualProjectId ?? selectedProjectId
+  const targetProjects = React.useMemo(() => {
+    const selected = projects.find((project) => project.id === selectedProjectId)
+    return [
+      ...(selected ? [selected] : []),
+      ...projects.filter((project) => project.id !== selectedProjectId),
+    ]
+  }, [projects, selectedProjectId])
 
   return (
     <div className="scratchpad-panel" data-testid="scratchpad-panel">
@@ -150,24 +157,45 @@ export function ScratchpadPanel({
           data-testid="scratchpad-input"
         />
         <div className="scratchpad-capture-row">
-          <label className="scratchpad-capture-project">
-            <span>tag</span>
-            <select
-              value={captureProjectId}
-              disabled={state.pending}
-              onChange={(event) => dispatch({
-                type: 'projectChanged',
-                projectId: event.currentTarget.value,
+          <div className="scratchpad-capture-project" aria-label="Scratchpad target">
+            <span>target</span>
+            <div className="scratchpad-target-list" role="radiogroup">
+              {targetProjects.map((project, index) => {
+                const active = captureProjectId === project.id
+                return (
+                  <button
+                    key={project.id}
+                    type="button"
+                    className="scratchpad-target-chip"
+                    data-active={active ? 'true' : undefined}
+                    disabled={state.pending}
+                    onClick={() => dispatch({
+                      type: 'projectChanged',
+                      projectId: project.id,
+                    })}
+                    role="radio"
+                    aria-checked={active}
+                  >
+                    {index === 0 ? 'current' : project.name}
+                  </button>
+                )
               })}
-            >
-              <option value="">unassigned</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              <button
+                type="button"
+                className="scratchpad-target-chip"
+                data-active={captureProjectId === '' ? 'true' : undefined}
+                disabled={state.pending}
+                onClick={() => dispatch({
+                  type: 'projectChanged',
+                  projectId: '',
+                })}
+                role="radio"
+                aria-checked={captureProjectId === ''}
+              >
+                unassigned
+              </button>
+            </div>
+          </div>
           <button type="submit" disabled={state.pending || state.draft.trim().length === 0}>
             <Plus size={13} />
             Capture
