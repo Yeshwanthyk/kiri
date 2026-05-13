@@ -31,7 +31,6 @@ Rules:
 - `add` creates only a project row. Sessions are created explicitly from the board.
 - `hide` removes a project from the board without deleting metadata or sessions.
 - `delete` removes only kiri metadata; it does not delete the repo directory or session files.
-- First use transfers existing Aether state from `~/.aether/userdata/aether.sqlite` or repo-local `.aether/aether.sqlite` when the kiri database is still empty.
 - Prefer stable lowercase ids; omit `--id` only when the slugified name is acceptable.
 - Run `pnpm build` after changes touching app code or contracts.
 

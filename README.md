@@ -50,7 +50,6 @@ session model through `--model ...`.
 
 - TanStack Start app shell.
 - SQLite read model under `~/.kiri/userdata/kiri.sqlite` by default.
-- First run transfers an existing Aether database from `~/.aether/userdata/aether.sqlite` or repo-local `.aether/aether.sqlite` when the kiri database is still empty.
 - Pi is the first runtime via `pi --mode rpc`.
 - Pi JSONL is parsed as a transcript/read-model source, not the live command channel.
 - Pierre diffs render review artifacts.

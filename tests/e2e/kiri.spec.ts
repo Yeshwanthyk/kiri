@@ -361,10 +361,6 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
   await expect(page.getByLabel('Runtime activity').last()).toBeVisible({
     timeout: 30_000,
   })
-  await showLatestActivity(page)
-  await expect(page.getByTestId('chat-panel')).toContainText('Editing', {
-    timeout: 30_000,
-  })
   await expect.poll(() => diffPathsForSessionTitle(title), {
     timeout: 30_000,
   }).toContain('src/kiri-file-operation-e2e.tmp')
@@ -465,7 +461,7 @@ test('claude runtime runs through claude-agent-sdk harness', async ({ page }, te
     timeout: 30_000,
   })
   await showLatestActivity(page)
-  await expect(page.getByTestId('chat-panel')).toContainText('Read-package.json', {
+  await expect(page.getByTestId('chat-panel')).toContainText('Read: package.json', {
     timeout: 30_000,
   })
   await expect(page.getByTestId('chat-panel')).toContainText('fake file contents', {

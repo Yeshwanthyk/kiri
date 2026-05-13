@@ -8,7 +8,7 @@
 - Environment variables move from `AETHER_*` to `KIRI_*`.
 - No command/env compatibility aliases are kept.
 - Default SQLite data lives under `~/.kiri/userdata/kiri.sqlite`.
-- First run transfers existing Aether state from `~/.aether/userdata/aether.sqlite` or repo-local `.aether/aether.sqlite` when the kiri database is still empty.
+- Kiri starts from its own state; existing Aether databases are not copied or migrated.
 
 ## Checklist
 

@@ -1,12 +1,8 @@
 import {
   copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
-  renameSync,
-  rmSync,
 } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -193,7 +189,6 @@ const deletedSessionDbRowSchema = z.object({
 export function getDb() {
   if (db) return db
   const config = getKiriConfig()
-  const legacyMigration = migrateLegacyRepoState(config)
   const dbPath = config.dbPath
   mkdirSync(dirname(dbPath), { recursive: true })
   db = new DatabaseSync(dbPath)
@@ -201,121 +196,9 @@ export function getDb() {
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
   migrate(db)
-  if (legacyMigration) {
-    rewriteLegacyAgentStatePaths(db, legacyMigration.legacyStateDir, config.stateDir)
-  }
   normalizeSeededModels(db)
   removeLegacySeedProject(db)
   return db
-}
-
-function migrateLegacyRepoState(config: ReturnType<typeof getKiriConfig>) {
-  if (isLegacyAetherTarget(config.stateDir, config.dbPath)) return
-  if (kiriDatabaseState(config.dbPath) === 'nonempty') return
-
-  const legacyCandidates = [
-    resolve(config.rootDir, '.aether'),
-    resolve(config.rootDir, '.kiri'),
-  ]
-  if (resolve(config.stateDir) === resolve(config.kiriHome, 'userdata')) {
-    legacyCandidates.splice(1, 0, resolve(config.homeDir, '.aether', 'userdata'))
-  }
-  const legacyStateDir = legacyCandidates.find((candidate) => (
-    existsSync(join(candidate, 'aether.sqlite')) || existsSync(join(candidate, 'kiri.sqlite'))
-  ))
-
-  if (!legacyStateDir || resolve(legacyStateDir) === resolve(config.stateDir)) return
-  if (kiriDatabaseState(config.dbPath) === 'nonempty') return
-  mkdirSync(config.stateDir, { recursive: true })
-  cpSync(legacyStateDir, config.stateDir, { recursive: true, errorOnExist: false })
-  copyLegacyDatabaseFile(legacyStateDir, config.dbPath)
-  return { legacyStateDir }
-}
-
-function isLegacyAetherTarget(stateDir: string, dbPath: string) {
-  const stateParts = resolve(stateDir).split(/[\\/]+/)
-  const dbName = basename(dbPath)
-  return stateParts.includes('.aether') || dbName === 'aether.sqlite'
-}
-
-function kiriDatabaseState(dbPath: string) {
-  if (!existsSync(dbPath)) return 'missing'
-  if (!hasSqliteHeader(dbPath)) return 'unreadable'
-  try {
-    return isEmptyKiriDatabase(dbPath) ? 'empty' : 'nonempty'
-  } catch {
-    return 'unreadable'
-  }
-}
-
-function hasSqliteHeader(dbPath: string) {
-  const header = readFileSync(dbPath, { encoding: 'utf8', flag: 'r' }).slice(0, 16)
-  return header === '' || header === 'SQLite format 3\0'
-}
-
-function copyLegacyDatabaseFile(legacyStateDir: string, dbPath: string) {
-  const sourceName = existsSync(join(legacyStateDir, 'aether.sqlite')) ? 'aether.sqlite' : 'kiri.sqlite'
-  mkdirSync(dirname(dbPath), { recursive: true })
-  backupExistingDatabaseFiles(dbPath)
-  for (const suffix of ['', '-wal', '-shm']) {
-    const source = join(legacyStateDir, `${sourceName}${suffix}`)
-    const target = `${dbPath}${suffix}`
-    if (existsSync(source)) {
-      copyFileSync(source, target)
-    } else {
-      rmSync(target, { force: true })
-    }
-  }
-}
-
-function backupExistingDatabaseFiles(dbPath: string) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-  for (const suffix of ['', '-wal', '-shm']) {
-    const target = `${dbPath}${suffix}`
-    if (existsSync(target)) {
-      renameSync(target, `${target}.malformed-${stamp}`)
-    }
-  }
-}
-
-function isEmptyKiriDatabase(dbPath: string) {
-  const database = new DatabaseSync(dbPath)
-  try {
-    const hasProjectsTable = database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projects'")
-      .get()
-    if (!hasProjectsTable) return true
-    const count = database
-      .prepare('SELECT COUNT(*) AS count FROM projects')
-      .get() as { count: number }
-    return count.count === 0
-  } finally {
-    database.close()
-  }
-}
-
-function rewriteLegacyAgentStatePaths(database: DatabaseSync, legacyStateDir: string, stateDir: string) {
-  const rows = database
-    .prepare('SELECT id, session_dir AS sessionDir, session_file AS sessionFile FROM agent_slots')
-    .all() as Array<{ id: string, sessionDir: string, sessionFile: string | null }>
-  const update = database.prepare('UPDATE agent_slots SET session_dir = ?, session_file = ? WHERE id = ?')
-
-  for (const row of rows) {
-    const sessionDir = rewritePathWithin(row.sessionDir, legacyStateDir, stateDir)
-    const sessionFile = row.sessionFile ? rewritePathWithin(row.sessionFile, legacyStateDir, stateDir) : null
-    if (sessionDir !== row.sessionDir || sessionFile !== row.sessionFile) {
-      update.run(sessionDir, sessionFile, row.id)
-    }
-  }
-}
-
-function rewritePathWithin(path: string, fromRoot: string, toRoot: string) {
-  const absolutePath = resolve(path)
-  const absoluteFrom = resolve(fromRoot)
-  if (absolutePath === absoluteFrom) return resolve(toRoot)
-  const prefix = `${absoluteFrom}/`
-  if (!absolutePath.startsWith(prefix)) return path
-  return join(resolve(toRoot), absolutePath.slice(prefix.length))
 }
 
 export function getWorkspaceSnapshot(): WorkspaceSnapshot {
