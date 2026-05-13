@@ -580,11 +580,20 @@ test('sidebar switches between chat, diffs, and terminal', async ({ page, isMobi
     .getByRole('textbox', { name: 'Terminal input' })
     .first()
     .click()
+  const terminalInput = page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
   await page.keyboard.type('pwd')
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
 
-  await pressShiftKey(page, 'KeyC')
+  await expect(terminalInput).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(terminalInput).not.toBeFocused()
+  await page.keyboard.down('Shift')
+  await page.keyboard.press('KeyC')
+  await page.keyboard.up('Shift')
   await expect(page.getByTestId('chat-panel')).toBeVisible()
   await expect(page.getByTestId('chat-input')).toBeFocused()
 })
@@ -644,6 +653,25 @@ test('escape leaves chat composer so board keymaps work', async ({ page, isMobil
   await page.keyboard.press('KeyJ')
   await page.keyboard.up('Shift')
   await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
+})
+
+test('escape leaves scratchpad input so sidebar keymaps work', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop sidebar keymaps only')
+  const title = `Scratchpad Escape Session ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+
+  await page.getByTestId('tab-scratchpad').click()
+  await page.getByTestId('scratchpad-input').focus()
+  await expect(page.getByTestId('scratchpad-input')).toBeFocused()
+
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('scratchpad-input')).not.toBeFocused()
+  await page.keyboard.down('Shift')
+  await page.keyboard.press('KeyD')
+  await page.keyboard.up('Shift')
+  await expect(page.getByTestId('diff-panel')).toContainText('No diffs')
 })
 
 test('agent switching does not refocus chat after explicit chat focus', async ({ page, isMobile }, testInfo) => {
