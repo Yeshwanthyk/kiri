@@ -62,6 +62,19 @@ export function TerminalPanel({
         fitAddon = new FitAddon()
         term.loadAddon(fitAddon)
         term.open(host)
+        term.attachCustomKeyEventHandler((event) => {
+          if (
+            event.key === 'Escape' &&
+            !event.shiftKey &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            !event.altKey
+          ) {
+            term?.blur()
+            return true
+          }
+          return false
+        })
         fitAddon.fit()
         fitAddon.observeResize?.()
 

@@ -147,6 +147,10 @@ export function ScratchpadPanel({
   }
 
   function onDraftKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Escape') {
+      event.currentTarget.blur()
+      return
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       const form = event.currentTarget.form
