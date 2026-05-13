@@ -58,7 +58,7 @@ export const fetchWorkspaceSnapshot = createServerFn({ method: 'GET' }).handler(
   async () => getWorkspaceSnapshot(),
 )
 
-export const fetchAgentDetail = createServerFn({ method: 'GET' })
+const fetchAgentDetail = createServerFn({ method: 'GET' })
   .inputValidator(agentDetailInputSchema)
   .handler(async ({ data }) => getAgentDetail(data))
 

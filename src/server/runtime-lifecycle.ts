@@ -220,16 +220,16 @@ export function setRuntimeState(
   return projection ? projectRuntimeEvent(event, projection) : projectRuntimeEvent(event)
 }
 
-export function setRuntimeStatus(
+function setRuntimeStatus(
   agentId: string,
   status: AgentStatus,
   projection: RuntimeLifecycleProjection,
 ): Effect.Effect<void, never, never>
-export function setRuntimeStatus(
+function setRuntimeStatus(
   agentId: string,
   status: AgentStatus,
 ): Effect.Effect<void, never, RuntimeProjector>
-export function setRuntimeStatus(
+function setRuntimeStatus(
   agentId: string,
   status: AgentStatus,
   projection?: RuntimeLifecycleProjection,
@@ -238,18 +238,18 @@ export function setRuntimeStatus(
   return projection ? projectRuntimeEvent(event, projection) : projectRuntimeEvent(event)
 }
 
-export function recordRuntimeError(
+function recordRuntimeError(
   agentId: string,
   error: unknown,
   event: RuntimeErrorEvent,
   projection: RuntimeLifecycleProjection,
 ): Effect.Effect<void, never, never>
-export function recordRuntimeError(
+function recordRuntimeError(
   agentId: string,
   error: unknown,
   event: RuntimeErrorEvent,
 ): Effect.Effect<void, never, RuntimeProjector>
-export function recordRuntimeError(
+function recordRuntimeError(
   agentId: string,
   error: unknown,
   event: RuntimeErrorEvent,

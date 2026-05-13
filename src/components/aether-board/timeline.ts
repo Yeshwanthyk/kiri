@@ -132,9 +132,9 @@ function appendUnmatchedDiffEntries(
   usedDiffIds: Set<string>,
   cwd: string,
 ) {
-  const entries = diffs
-    .filter((diff) => !usedDiffIds.has(diff.id))
-    .map((diff) => diffArtifactToWorkEntry(diff, cwd))
+  const entries = diffs.flatMap((diff) =>
+    usedDiffIds.has(diff.id) ? [] : [diffArtifactToWorkEntry(diff, cwd)],
+  )
   if (entries.length === 0) return
 
   for (let index = rows.length - 1; index >= 0; index -= 1) {
@@ -218,7 +218,7 @@ export function workCallLabel(entry: TimelineWorkEntry) {
   return label || 'tool'
 }
 
-export function normalizeWorkCallLabel(value: string) {
+function normalizeWorkCallLabel(value: string) {
   const normalized = value.trim().toLowerCase()
   if (normalized === 'commandexecution' || normalized === 'command run' || normalized === 'ran command') {
     return 'bash'
@@ -273,7 +273,7 @@ export function normalizeTimelinePath(path: string, cwd: string | undefined) {
   return normalized
 }
 
-export function createDiffPathMap(diffs: DiffArtifact[], cwd: string) {
+function createDiffPathMap(diffs: DiffArtifact[], cwd: string) {
   const map = new Map<string, DiffArtifact>()
   for (const diff of diffs) {
     map.set(normalizeDiffPath(diff.path), diff)

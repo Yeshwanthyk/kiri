@@ -2,7 +2,7 @@ import { Context, Effect, Layer } from 'effect'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-export type AetherHostMode = 'web' | 'desktop'
+type AetherHostMode = 'web' | 'desktop'
 
 export type AetherConfig = {
   readonly hostMode: AetherHostMode

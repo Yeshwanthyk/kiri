@@ -82,7 +82,7 @@ export function createAetherFetchHandler(
   }
 }
 
-export function checkBackendReadiness() {
+function checkBackendReadiness() {
   getSettings()
   getDb()
 }

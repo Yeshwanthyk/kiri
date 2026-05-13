@@ -328,7 +328,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   }))
   const projectNameById = new Map(projects.map((project) => [project.id, project.name]))
   const visibleProjectIds = new Set(
-    projects.filter((project) => !project.hiddenAt).map((project) => project.id),
+    projects.flatMap((project) => project.hiddenAt ? [] : [project.id]),
   )
   const archivedSessions = agents
     .flatMap((agent) => {
@@ -520,7 +520,7 @@ export function listProjectSummaries(includeHidden = false) {
     .map(projectSummaryFromDbRow)
 }
 
-export function requireProjectSummary(id: string, includeHidden = false) {
+function requireProjectSummary(id: string, includeHidden = false) {
   const project = getDb()
     .prepare(
       `
@@ -582,7 +582,7 @@ export function listSessionSummaries(input: {
   return rows.map(sessionSummaryFromDbRow)
 }
 
-export function requireSessionSummary(agentId: string, includeArchived = false) {
+function requireSessionSummary(agentId: string, includeArchived = false) {
   const id = agentId.trim()
   const session = getDb()
     .prepare(
@@ -1084,7 +1084,7 @@ function unhideProjectRow(id: string) {
   return projectId
 }
 
-export function listScratchpadBlocks(): ScratchpadBlock[] {
+function listScratchpadBlocks(): ScratchpadBlock[] {
   return getDb()
     .prepare(
       `
@@ -1441,11 +1441,11 @@ export function recordPiMessages(input: {
   `)
   const currentTurn = currentPiTurn(input.messages, input.promptText)
   const rows = currentTurn
-    .map((message, index) => {
+    .flatMap((message, index) => {
       const role = normalizePiRole(message.role)
       const text = piMessageToText(message)
-      if (!role || !text) return null
-      if (role === 'user' && text === input.promptText.trim()) return null
+      if (!role || !text) return []
+      if (role === 'user' && text === input.promptText.trim()) return []
       const timestamp = new Date(
         piMessageTimestamp({
           message,
@@ -1457,14 +1457,13 @@ export function recordPiMessages(input: {
           turnCompletedAt: input.turnCompletedAt,
         }),
       ).toISOString()
-      return {
+      return [{
         id: liveMessageId(input.agentId, role, text, timestamp),
         role,
         text,
         timestamp,
-      }
+      }]
     })
-    .filter((row): row is NonNullable<typeof row> => row !== null)
   const preview = lastMessageText(rows, 'assistant') ?? rows[rows.length - 1]?.text
 
   database.exec('BEGIN')
@@ -1918,9 +1917,11 @@ function hydratePersistedPiSessions(database: DatabaseSync) {
     )
 
     const slots = readdirSync(projectSessionRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && entry.name.startsWith('session-'))
-      .map((entry) => entry.name)
-      .filter((slot) => !deletedSlots.has(slot))
+      .flatMap((entry) =>
+        entry.isDirectory() && entry.name.startsWith('session-') && !deletedSlots.has(entry.name)
+          ? [entry.name]
+          : [],
+      )
       .sort()
 
     for (const slot of slots) {
@@ -2217,8 +2218,7 @@ function readPendingQuestion(agentId: string) {
 function latestPiSessionFile(sessionDir: string) {
   if (!existsSync(sessionDir)) return undefined
   return readdirSync(sessionDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
-    .map((entry) => join(sessionDir, entry.name))
+    .flatMap((entry) => entry.isFile() && entry.name.endsWith('.jsonl') ? [join(sessionDir, entry.name)] : [])
     .sort()
     .at(-1)
 }
@@ -2574,15 +2574,14 @@ function piMessageToText(message: PiRpcMessage) {
   if (typeof message.content === 'string') return message.content.trim()
   if (!Array.isArray(message.content)) return ''
   return message.content
-    .map((part) => {
-      if (!part || typeof part !== 'object') return ''
-      if ('text' in part && typeof part.text === 'string') return part.text
+    .flatMap((part) => {
+      if (!part || typeof part !== 'object') return []
+      if ('text' in part && typeof part.text === 'string') return [part.text]
       if ('thinking' in part && typeof part.thinking === 'string') {
-        return part.thinking
+        return [part.thinking]
       }
-      return ''
+      return []
     })
-    .filter(Boolean)
     .join('\n')
     .trim()
 }

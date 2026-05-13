@@ -51,7 +51,7 @@ const LANG_ALIAS: Record<string, SupportedLang> = {
   zig: 'zig',
 }
 
-export function resolveLang(lang: string | undefined): SupportedLang | null {
+function resolveLang(lang: string | undefined): SupportedLang | null {
   if (!lang) return null
   return LANG_ALIAS[lang.toLowerCase()] ?? null
 }

@@ -559,18 +559,17 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
         source: 'codex',
         updatedAt,
         tasks: decoded.plan
-          .map((step, index) => {
+          .flatMap((step, index) => {
             const title = step.step.trim()
-            if (!title) return null
-            return {
+            if (!title) return []
+            return [{
               id: String(index + 1),
               title,
               status: normalizeTaskStatus(step.status) ?? 'pending',
               source: 'codex' as const,
               updatedAt,
-            }
+            }]
           })
-          .filter((task): task is NonNullable<typeof task> => task !== null),
       })
       return
     }

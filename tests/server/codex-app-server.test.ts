@@ -384,9 +384,14 @@ function listen(server: Server) {
 }
 
 async function waitForRequest(harness: Harness, method: string) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (harness.requests.some((request) => request.method === method)) return
-    await new Promise((resolve) => setTimeout(resolve, 10))
+  return waitForRequestAttempt(harness, method, 50)
+}
+
+async function waitForRequestAttempt(harness: Harness, method: string, attemptsRemaining: number): Promise<void> {
+  if (harness.requests.some((request) => request.method === method)) return
+  if (attemptsRemaining <= 0) {
+    throw new Error(`Timed out waiting for ${method}`)
   }
-  throw new Error(`Timed out waiting for ${method}`)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  return waitForRequestAttempt(harness, method, attemptsRemaining - 1)
 }

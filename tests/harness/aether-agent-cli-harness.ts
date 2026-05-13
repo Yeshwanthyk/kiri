@@ -219,10 +219,14 @@ function assertSkillTeachesAgents() {
     'pnpm aether:ctl sessions resume',
   ]
   for (const phrase of required) {
-    if (!body.includes(phrase)) {
+    if (body.search(escapedPhrasePattern(phrase)) === -1) {
       throw new Error(`Aether control skill is missing agent instruction: ${phrase}`)
     }
   }
+}
+
+function escapedPhrasePattern(phrase: string) {
+  return new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
 }
 
 function runCtl(args: string[]) {

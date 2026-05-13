@@ -22,14 +22,14 @@ import {
 } from './db'
 import { getSettings } from './settings'
 
-export type ModelChoice = {
+type ModelChoice = {
   readonly runtime: RuntimeKind
   readonly model: string
   readonly isDefault: boolean
   readonly contextWindow: number | null
 }
 
-export type ProjectSummary = {
+type ProjectSummary = {
   readonly id: string
   readonly name: string
   readonly cwd: string
@@ -37,7 +37,7 @@ export type ProjectSummary = {
   readonly sessionCount: number
 }
 
-export type SessionSummary = {
+type SessionSummary = {
   readonly id: string
   readonly projectId: string
   readonly projectName: string
@@ -51,7 +51,7 @@ export type SessionSummary = {
   readonly archivedAt: string | null
 }
 
-export class AetherControlError extends Schema.TaggedError<AetherControlError>()(
+class AetherControlError extends Schema.TaggedError<AetherControlError>()(
   'AetherControlError',
   {
     message: Schema.String,
@@ -89,7 +89,7 @@ export class AetherControl extends Context.Tag('@aether/AetherControl')<
   static readonly layer = Layer.sync(AetherControl, makeAetherControl)
 }
 
-export function makeAetherControl(): AetherControlApi {
+function makeAetherControl(): AetherControlApi {
   const snapshot = Effect.fn('AetherControl.snapshot')(function* () {
     return yield* fromSync(getWorkspaceSnapshot)
   })

@@ -444,8 +444,11 @@ function recordClaudeUserMessage(
   live: ClaudeLiveSession,
   message: Extract<SDKMessage, { type: 'user' }>,
 ) {
+  const inFlightToolByItemId = new Map(
+    [...live.inFlightTools.entries()].map(([index, tool]) => [tool.itemId, [index, tool] as const]),
+  )
   for (const result of toolResultBlocksFromUserMessage(message)) {
-    const entry = [...live.inFlightTools.entries()].find(([, tool]) => tool.itemId === result.toolUseId)
+    const entry = inFlightToolByItemId.get(result.toolUseId)
     if (!entry) continue
     const [index, tool] = entry
     const status = result.isError ? 'failed' : 'completed'
@@ -873,7 +876,7 @@ function messageDisplayText(message: SDKUserMessage) {
 function parseClaudeQuestions(input: Record<string, unknown>): PendingQuestion['questions'] {
   const rawQuestions = Array.isArray(input.questions) ? input.questions : []
   const questions = rawQuestions
-    .map((item, index) => {
+    .flatMap((item, index) => {
       const question = objectValue(item)
       const text = stringValue(question.question)?.trim() || `Question ${index + 1}`
       const options = Array.isArray(question.options)
@@ -885,15 +888,15 @@ function parseClaudeQuestions(input: Record<string, unknown>): PendingQuestion['
             }
           })
         : []
-      return {
+      if (!text) return []
+      return [{
         id: text,
         header: stringValue(question.header)?.trim() || `Question ${index + 1}`,
         question: text,
         options,
         multiSelect: question.multiSelect === true,
-      }
+      }]
     })
-    .filter((question) => question.question.length > 0)
   return questions.length > 0
     ? questions
     : [{
@@ -976,13 +979,12 @@ function assistantText(message: SDKAssistantMessage) {
   const content = objectValue(message.message).content
   if (!Array.isArray(content)) return ''
   return content
-    .map((item) => {
+    .flatMap((item) => {
       const object = objectValue(item)
-      if (object.type === 'text') return stringValue(object.text) ?? ''
-      if (object.type === 'thinking') return stringValue(object.thinking) ?? ''
-      return ''
+      if (object.type === 'text') return stringValue(object.text) ?? []
+      if (object.type === 'thinking') return stringValue(object.thinking) ?? []
+      return []
     })
-    .filter(Boolean)
     .join('\n')
 }
 
@@ -1238,7 +1240,7 @@ function fakeClaudeQuery(params: {
           }],
         },
       } as unknown as SDKMessage)
-      if (text.toLowerCase().includes('ask question')) {
+      if (/\bask question\b/.test(text.toLowerCase())) {
         await params.options.canUseTool?.(
           'AskUserQuestion',
           {
@@ -1350,7 +1352,6 @@ function messageText(message: SDKUserMessage) {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
   return content
-    .map((item) => stringValue(objectValue(item).text) ?? '')
-    .filter(Boolean)
+    .flatMap((item) => stringValue(objectValue(item).text) ?? [])
     .join('\n')
 }

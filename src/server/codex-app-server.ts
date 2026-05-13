@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { Cause, Data, Effect, Exit, Option, Schema } from 'effect'
-import type { RuntimeKind } from '~/lib/contracts'
 import { resolveRuntimeExecutable, runtimeProcessEnv } from './runtime-binaries'
 
 const JsonRpcIdSchema = Schema.Union(Schema.String, Schema.Number)
@@ -91,7 +90,7 @@ export const TurnPlanUpdatedParamsSchema = Schema.Struct({
   plan: Schema.Array(CodexPlanStepSchema),
 })
 
-export const TurnCompletedParamsSchema = Schema.Struct({
+const TurnCompletedParamsSchema = Schema.Struct({
   threadId: Schema.String,
   turn: CodexTurnSchema,
 })
@@ -108,14 +107,6 @@ export const ItemCompletedParamsSchema = Schema.Struct({
   completedAtMs: Schema.optional(Schema.Number),
 })
 
-export type ThreadTokenUsageUpdatedParams =
-  typeof ThreadTokenUsageUpdatedParamsSchema.Type
-export type ThreadCompactedParams = typeof ThreadCompactedParamsSchema.Type
-export type TurnDiffUpdatedParams = typeof TurnDiffUpdatedParamsSchema.Type
-export type TurnPlanUpdatedParams = typeof TurnPlanUpdatedParamsSchema.Type
-export type TurnCompletedParams = typeof TurnCompletedParamsSchema.Type
-export type TurnStartedParams = typeof TurnStartedParamsSchema.Type
-export type ItemCompletedParams = typeof ItemCompletedParamsSchema.Type
 type DecodableSchema<A> = Schema.Schema<A, A, never>
 
 export type CodexServerMessage = JsonRpcRequest | JsonRpcNotification
@@ -513,16 +504,7 @@ export class CodexAppServerAdapter {
       )
     })
 
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await sleep(250)
-      try {
-        const socket = new WebSocket(this.options.websocketUrl)
-        await waitForProbe(socket)
-        return
-      } catch {
-        // Keep polling until the child binds.
-      }
-    }
+    if (await waitForAppServerProbe(this.options.websocketUrl, 20)) return
 
     child.kill('SIGTERM')
     throw new Error(`Codex app-server did not become ready on port ${port}. ${stderr}`)
@@ -607,10 +589,6 @@ export function defaultCodexWebsocketUrl() {
   return process.env.AETHER_CODEX_APP_SERVER_URL ?? `ws://127.0.0.1:${defaultCodexPort}`
 }
 
-export function runtimeSupportsManagedAppServer(runtime: RuntimeKind) {
-  return runtime === 'codex'
-}
-
 function parseResponse(value: unknown): JsonRpcResponse | null {
   const object = objectValue(value)
   const id = decodeUnknownOption(JsonRpcIdSchema, object.id)
@@ -684,6 +662,18 @@ function waitForProbe(socket: WebSocket) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitForAppServerProbe(websocketUrl: string, attemptsRemaining: number): Promise<boolean> {
+  await sleep(250)
+  try {
+    const socket = new WebSocket(websocketUrl)
+    await waitForProbe(socket)
+    return true
+  } catch {
+    if (attemptsRemaining <= 1) return false
+    return waitForAppServerProbe(websocketUrl, attemptsRemaining - 1)
+  }
 }
 
 function cachedTurnResult(turn: CodexTurn) {

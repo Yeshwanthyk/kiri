@@ -30,6 +30,41 @@
     "preview": "vite preview",
     "start": "pnpx srvx --prod -s ../client dist/server/server.js"
   },
+  "knip": {
+    "entry": [
+      "src/desktop/preload.cjs",
+      "scripts/aether-projects.mjs",
+      "tests/harness/task-progress-db-harness.ts"
+    ]
+  },
+  "reactDoctor": {
+    "entryFiles": [
+      "src/desktop/preload.cjs",
+      "scripts/aether-projects.mjs",
+      "tests/harness/task-progress-db-harness.ts"
+    ],
+    "ignore": {
+      "overrides": [
+        {
+          "files": [
+            "src/components/AetherBoard.tsx"
+          ],
+          "rules": [
+            "react/no-danger",
+            "react-doctor/no-mirror-prop-effect",
+            "react-doctor/no-effect-chain",
+            "react-doctor/prefer-useReducer",
+            "react-doctor/no-giant-component",
+            "react-doctor/no-derived-useState",
+            "react-doctor/no-derived-state-effect",
+            "react-doctor/no-cascading-set-state",
+            "react-doctor/no-effect-event-handler",
+            "react-doctor/no-prop-callback-in-effect"
+          ]
+        }
+      ]
+    }
+  },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.138",
     "@effect/cli": "^0.75.1",

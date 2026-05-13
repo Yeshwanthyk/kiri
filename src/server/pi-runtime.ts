@@ -254,13 +254,17 @@ async function waitForLivePiAdapter(config: ReturnType<typeof getAgentLaunchConf
     throw new Error(`${config.runtime} agents can be configured, but only Pi can run chat today`)
   }
 
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const adapter = adapters.get(config.id)
-    if (adapter) return adapter
-    await sleep(100)
-  }
+  return waitForLivePiAdapterAttempt(config.id, 30)
+}
 
-  throw new Error('This session is not currently running in this Aether server process')
+async function waitForLivePiAdapterAttempt(agentId: string, attemptsRemaining: number): Promise<PiRpcProcessAdapter> {
+  const adapter = adapters.get(agentId)
+  if (adapter) return adapter
+  if (attemptsRemaining <= 0) {
+    throw new Error('This session is not currently running in this Aether server process')
+  }
+  await sleep(100)
+  return waitForLivePiAdapterAttempt(agentId, attemptsRemaining - 1)
 }
 
 function waitForLivePiAdapterEffect(config: ReturnType<typeof getAgentLaunchConfig>) {
@@ -315,8 +319,7 @@ function stopAdapter(agentId: string) {
 function archivePiSessionFiles(sessionDir: string) {
   if (!existsSync(sessionDir)) return
   const sessionFiles = readdirSync(sessionDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
-    .map((entry) => entry.name)
+    .flatMap((entry) => entry.isFile() && entry.name.endsWith('.jsonl') ? [entry.name] : [])
   if (!sessionFiles.length) return
 
   const archiveDir = join(sessionDir, '.archive', new Date().toISOString().replace(/[:.]/g, '-'))

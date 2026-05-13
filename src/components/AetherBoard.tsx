@@ -172,6 +172,7 @@ export function mergeAgentDetail(
 
 type GhosttyTerminalInstance = InstanceType<(typeof import('ghostty-web'))['Terminal']>
 type GhosttyFitAddonInstance = InstanceType<(typeof import('ghostty-web'))['FitAddon']>
+type TerminalDisposable = { dispose: () => void }
 
 type CommandPaletteAction = {
   id: string
@@ -1143,11 +1144,10 @@ function InlineSessionLauncher({
   const titleRef = React.useRef<HTMLInputElement>(null)
   const runtimes = Object.keys(settings.runtimes) as RuntimeKind[]
   const models = settings.runtimes[runtime].models
-  const activeResumableSessions = projects
-    .flatMap((item) =>
-      item.agents
-        .filter((agent) => agent.isSession)
-        .map((agent) => ({
+  const activeResumableSessions = projects.flatMap((item) =>
+    item.agents.flatMap((agent) =>
+      agent.isSession
+        ? [{
           archived: false as const,
           id: agent.id,
           projectId: item.id,
@@ -1158,8 +1158,10 @@ function InlineSessionLauncher({
           status: agent.status,
           preview: agent.preview,
           updatedAt: agent.updatedAt,
-        })),
-    )
+        }]
+        : [],
+    ),
+  )
   const archivedResumableSessions = archivedSessions.map((agent) => ({
     archived: true as const,
     id: agent.id,
@@ -1207,7 +1209,12 @@ function InlineSessionLauncher({
 
   return (
     <>
-      <div className="session-dialog-scrim" onClick={onCancel} />
+      <button
+        type="button"
+        className="session-dialog-scrim"
+        onClick={onCancel}
+        aria-label="Close session launcher"
+      />
       <form
         className="session-start-form session-dialog"
         onSubmit={submit}
@@ -1402,7 +1409,12 @@ function ConfirmDialog({
 
   return (
     <>
-      <div className="session-dialog-scrim" onClick={onCancel} />
+      <button
+        type="button"
+        className="session-dialog-scrim"
+        onClick={onCancel}
+        aria-label="Cancel confirmation"
+      />
       <div
         className={`session-dialog confirm-dialog${destructive ? ' confirm-dialog-destructive' : ''}`}
         role="alertdialog"
@@ -1565,7 +1577,7 @@ function ProjectManagerDialog({
             <p>Add, hide, and restore board rows.</p>
           </div>
           <button type="button" className="settings-close" onClick={onClose}>
-            Done
+            Close projects
           </button>
         </div>
         {error ? <span className="settings-error" role="status">{error}</span> : null}
@@ -2080,9 +2092,9 @@ function CommandPalette({
   }, [selectedIndex, visibleActions.length])
 
   function moveSelection(delta: number) {
-    const enabledIndexes = visibleActions
-      .map((action, index) => (action.disabled ? -1 : index))
-      .filter((index) => index >= 0)
+    const enabledIndexes = visibleActions.flatMap((action, index) =>
+      action.disabled ? [] : [index],
+    )
     if (enabledIndexes.length === 0) return
 
     const currentEnabledIndex = enabledIndexes.indexOf(selectedIndex)
@@ -2295,7 +2307,12 @@ function AgentSwitcherSheet({
 }) {
   return (
     <>
-      <div className="agent-switcher-scrim" onClick={onClose} />
+      <button
+        type="button"
+        className="agent-switcher-scrim"
+        onClick={onClose}
+        aria-label="Close agent switcher"
+      />
       <section
         className="agent-switcher-sheet"
         role="dialog"
@@ -3727,7 +3744,7 @@ function ChatComposer({
         {images.length ? (
           <div className="composer-attachments" aria-label="Attached images">
             {images.map((image, index) => (
-              <span key={`${image.name}-${index}`} className="composer-attachment">
+              <span key={imageKey(image)} className="composer-attachment">
                 {image.name}
                 <button
                   type="button"
@@ -4534,6 +4551,7 @@ function TerminalPanel({
     let socket: WebSocket | null = null
     let term: GhosttyTerminalInstance | null = null
     let fitAddon: GhosttyFitAddonInstance | null = null
+    const terminalDisposables: TerminalDisposable[] = []
 
     async function connect() {
       const host = hostRef.current
@@ -4566,39 +4584,41 @@ function TerminalPanel({
 
         const url = terminalWebSocketUrl(terminalConfig, agent.id, term.cols, term.rows)
         socket = new WebSocket(url)
-        socket.addEventListener('open', () => {
+        socket.onopen = () => {
           if (!term || !socket) return
           setStatus('Connected')
           socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
           const banner = `Aether terminal · ${project.cwd}\r\n\r\n`
           term.write(banner)
           appendTerminalTranscript(setTranscript, banner)
-        })
-        socket.addEventListener('message', (event) => {
+        }
+        socket.onmessage = (event) => {
           if (typeof event.data === 'string') {
             term?.write(event.data)
             appendTerminalTranscript(setTranscript, event.data)
           }
-        })
-        socket.addEventListener('close', () => {
+        }
+        socket.onclose = () => {
           if (!disposed) {
             setStatus('Closed')
             appendTerminalTranscript(setTranscript, '\r\n[Aether terminal socket closed]\r\n')
           }
-        })
-        socket.addEventListener('error', () => {
+        }
+        socket.onerror = () => {
           if (!disposed) setStatus('Connection failed')
-        })
-        term.onData((data) => {
-          if (socket?.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: 'input', data }))
-          }
-        })
-        term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
-          if (socket?.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: 'resize', cols, rows }))
-          }
-        })
+        }
+        terminalDisposables.push(
+          term.onData((data) => {
+            if (socket?.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: 'input', data }))
+            }
+          }),
+          term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
+            if (socket?.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: 'resize', cols, rows }))
+            }
+          }),
+        )
       } catch (error) {
         if (disposed) return
         setStatus(error instanceof Error ? error.message : String(error))
@@ -4609,7 +4629,16 @@ function TerminalPanel({
 
     return () => {
       disposed = true
+      if (socket) {
+        socket.onopen = null
+        socket.onmessage = null
+        socket.onclose = null
+        socket.onerror = null
+      }
       socket?.close()
+      for (const disposable of terminalDisposables) {
+        disposable.dispose()
+      }
       fitAddon?.dispose()
       term?.dispose()
     }
@@ -5069,11 +5098,13 @@ function isEditableTarget(target: EventTarget | null) {
 function formatTime(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ''
-  return new Intl.DateTimeFormat('en', {
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date)
+  return messageTimeFormatter.format(date)
 }
+
+const messageTimeFormatter = new Intl.DateTimeFormat('en', {
+  hour: 'numeric',
+  minute: '2-digit',
+})
 
 function formatTokenCount(value: number) {
   if (value >= 1_000_000) return `${trimFixed(value / 1_000_000)}M`
@@ -5088,6 +5119,18 @@ function trimFixed(value: number) {
 function pendingPromptText(text: string, images: SendMessageImage[]) {
   if (!images.length) return text
   return `${text}\n\nAttached images:\n${images.map((image) => `- ${image.name}`).join('\n')}`
+}
+
+function imageKey(image: SendMessageImage) {
+  return `${image.name}:${image.mimeType}:${image.data.length}:${hashString(image.data)}`
+}
+
+function hashString(value: string) {
+  let hash = 0
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0
+  }
+  return hash.toString(36)
 }
 
 function projectNameFromPath(path: string) {

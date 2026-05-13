@@ -35,7 +35,7 @@ type AetherTheme = Record<ThemeMode, ThemeTokens>
 
 export const defaultThemeSelection: ThemeSelection = { name: 'aether', mode: 'light' }
 
-export function isAetherThemeName(value: string): value is AetherThemeName {
+function isAetherThemeName(value: string): value is AetherThemeName {
   return (aetherThemeNames as readonly string[]).includes(value)
 }
 
@@ -51,7 +51,7 @@ export function normalizeThemeSelection(value: unknown): ThemeSelection {
   return { name, mode }
 }
 
-export function resolveAetherTheme(selection: ThemeSelection): Record<`--${string}`, string> {
+function resolveAetherTheme(selection: ThemeSelection): Record<`--${string}`, string> {
   const theme = aetherThemes[selection.name][selection.mode]
   const vars: Record<`--${string}`, string> = {
     '--paper': theme.paper,

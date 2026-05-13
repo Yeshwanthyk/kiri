@@ -18,7 +18,7 @@ const config = resolveAetherConfig({
 describe('backend server wrapper', () => {
   it('exposes deterministic environment metadata for desktop readiness', async () => {
     const fetch = createAetherFetchHandler(
-      async () => new Response('app'),
+      () => new Response('app'),
       { config, readiness: () => undefined },
     )
 
@@ -31,7 +31,7 @@ describe('backend server wrapper', () => {
 
   it('delegates non-readiness requests to the app fetch handler', async () => {
     const fetch = createAetherFetchHandler(
-      async (request) => new Response(`app:${new URL(request.url).pathname}`),
+      (request) => new Response(`app:${new URL(request.url).pathname}`),
       { config, readiness: () => undefined },
     )
 
@@ -42,7 +42,7 @@ describe('backend server wrapper', () => {
 
   it('reports unavailable when readiness fails', async () => {
     const fetch = createAetherFetchHandler(
-      async () => new Response('app'),
+      () => new Response('app'),
       {
         config,
         readiness: () => {
@@ -65,7 +65,7 @@ describe('backend server wrapper', () => {
     const server = await startAetherBackend({
       config,
       readiness: () => undefined,
-      fetch: async (request) =>
+      fetch: (request) =>
         new Response(request.runtime?.name ? `runtime:${request.runtime.name}` : 'runtime:missing'),
     })
     try {

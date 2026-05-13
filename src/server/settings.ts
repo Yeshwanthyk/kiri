@@ -10,7 +10,7 @@ export function getSettings(): AetherSettings {
   )
 
   for (const [runtime, config] of Object.entries(parsed.runtimes)) {
-    if (!config.models.includes(config.defaultModel)) {
+    if (!new Set(config.models).has(config.defaultModel)) {
       throw new Error(
         `settings.json ${runtime}.defaultModel must be listed in ${runtime}.models`,
       )

@@ -1,6 +1,6 @@
-export type HostMode = 'web' | 'desktop'
+type HostMode = 'web' | 'desktop'
 
-export type AetherHostInfo = {
+type AetherHostInfo = {
   readonly mode: HostMode
   readonly platform: string
 }

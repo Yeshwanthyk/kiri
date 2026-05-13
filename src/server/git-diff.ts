@@ -42,31 +42,27 @@ export function collectGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] {
     ])),
     ...untrackedPatches,
   ]
-  return patches
-    .map((patch) => {
-      const path = diffPath(patch)
-      if (!path || shouldSkipDiffPath(path)) return null
-      return {
-        title: basename(path),
-        path,
-        patch,
-      }
-    })
-    .filter((diff): diff is RuntimeDiffArtifact => diff !== null)
+  return patches.flatMap((patch) => {
+    const path = diffPath(patch)
+    if (!path || shouldSkipDiffPath(path)) return []
+    return [{
+      title: basename(path),
+      path,
+      patch,
+    }]
+  })
 }
 
 export function diffArtifactsFromPatch(patch: string): RuntimeDiffArtifact[] {
-  return splitGitPatch(patch)
-    .map((section) => {
-      const path = diffPath(section)
-      if (!path || shouldSkipDiffPath(path)) return null
-      return {
-        title: basename(path),
-        path,
-        patch: section,
-      }
-    })
-    .filter((diff): diff is RuntimeDiffArtifact => diff !== null)
+  return splitGitPatch(patch).flatMap((section) => {
+    const path = diffPath(section)
+    if (!path || shouldSkipDiffPath(path)) return []
+    return [{
+      title: basename(path),
+      path,
+      patch: section,
+    }]
+  })
 }
 
 function isGitWorkTree(cwd: string) {
@@ -93,7 +89,7 @@ function untrackedFiles(cwd: string) {
     if (status === '??' && path && !shouldSkipDiffPath(path)) {
       paths.push(path)
     }
-    if (status.includes('R') || status.includes('C')) {
+    if (/[RC]/.test(status)) {
       index += 1
     }
   }
@@ -101,18 +97,21 @@ function untrackedFiles(cwd: string) {
 }
 
 function shouldSkipDiffPath(path: string) {
-  return ['.pi/', '.aether/', 'node_modules/', 'dist/'].some((prefix) =>
-    path.startsWith(prefix),
-  )
+  for (const prefix of SKIPPED_DIFF_PREFIXES) {
+    if (path.startsWith(prefix)) return true
+  }
+  return false
 }
+
+const SKIPPED_DIFF_PREFIXES = new Set(['.pi/', '.aether/', 'node_modules/', 'dist/'])
 
 function splitGitPatch(patch: string) {
   const trimmed = patch.trim()
   if (!trimmed) return []
-  return trimmed
-    .split(/\n(?=diff --git )/)
-    .map((section) => section.trim())
-    .filter((section) => section.startsWith('diff --git '))
+  return trimmed.split(/\n(?=diff --git )/).flatMap((section) => {
+    const next = section.trim()
+    return next.startsWith('diff --git ') ? [next] : []
+  })
 }
 
 function diffPath(patch: string) {

@@ -8,7 +8,7 @@ export const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh
 export const thinkingLevelSchema = z.enum(thinkingLevels)
 export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>
 
-export const agentStatuses = [
+const agentStatuses = [
   'idle',
   'running',
   'queued',
@@ -18,7 +18,7 @@ export const agentStatuses = [
 export const agentStatusSchema = z.enum(agentStatuses)
 export type AgentStatus = z.infer<typeof agentStatusSchema>
 
-export const messageRoles = [
+const messageRoles = [
   'user',
   'assistant',
   'tool',
@@ -36,11 +36,11 @@ export const boardMessageSchema = z.object({
 })
 export type BoardMessage = z.infer<typeof boardMessageSchema>
 
-export const timelineEventTones = ['thinking', 'tool', 'info', 'error'] as const
+const timelineEventTones = ['thinking', 'tool', 'info', 'error'] as const
 export const timelineEventToneSchema = z.enum(timelineEventTones)
 export type TimelineEventTone = z.infer<typeof timelineEventToneSchema>
 
-export const timelineEventSchema = z.object({
+const timelineEventSchema = z.object({
   id: z.string(),
   kind: z.string(),
   tone: timelineEventToneSchema,
@@ -51,7 +51,7 @@ export const timelineEventSchema = z.object({
 })
 export type TimelineEvent = z.infer<typeof timelineEventSchema>
 
-export const boardTimelineItemSchema = z.discriminatedUnion('type', [
+const boardTimelineItemSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('message'),
     id: z.string(),
@@ -65,9 +65,9 @@ export const boardTimelineItemSchema = z.discriminatedUnion('type', [
     event: timelineEventSchema,
   }),
 ])
-export type BoardTimelineItem = z.infer<typeof boardTimelineItemSchema>
+type BoardTimelineItem = z.infer<typeof boardTimelineItemSchema>
 
-export const diffArtifactSchema = z.object({
+const diffArtifactSchema = z.object({
   id: z.string(),
   title: z.string(),
   path: z.string(),
@@ -76,7 +76,7 @@ export const diffArtifactSchema = z.object({
 })
 export type DiffArtifact = z.infer<typeof diffArtifactSchema>
 
-export const contextUsageSchema = z.object({
+const contextUsageSchema = z.object({
   usedTokens: z.number().int().nonnegative(),
   remainingTokens: z.number().int().nonnegative(),
   windowTokens: z.number().int().positive(),
@@ -99,9 +99,9 @@ export const pendingQuestionSchema = z.object({
 })
 export type PendingQuestion = z.infer<typeof pendingQuestionSchema>
 
-export const agentTaskStatuses = ['pending', 'inProgress', 'completed', 'failed'] as const
-export const agentTaskStatusSchema = z.enum(agentTaskStatuses)
-export type AgentTaskStatus = z.infer<typeof agentTaskStatusSchema>
+const agentTaskStatuses = ['pending', 'inProgress', 'completed', 'failed'] as const
+const agentTaskStatusSchema = z.enum(agentTaskStatuses)
+type AgentTaskStatus = z.infer<typeof agentTaskStatusSchema>
 
 export const agentTaskSchema = z.object({
   id: z.string().trim().min(1),
@@ -112,7 +112,7 @@ export const agentTaskSchema = z.object({
 })
 export type AgentTask = z.infer<typeof agentTaskSchema>
 
-export const agentCellSchema = z.object({
+const agentCellSchema = z.object({
   id: z.string(),
   projectId: z.string(),
   slot: z.string(),
@@ -137,7 +137,7 @@ export const agentCellSchema = z.object({
 })
 export type AgentCell = z.infer<typeof agentCellSchema>
 
-export const archivedSessionSummarySchema = z.object({
+const archivedSessionSummarySchema = z.object({
   id: z.string(),
   projectId: z.string(),
   projectName: z.string(),
@@ -156,17 +156,17 @@ export const agentDetailInputSchema = z.object({
   agentId: z.string().trim().min(1),
   limit: z.number().int().positive().max(500).default(500),
 })
-export type AgentDetailInput = z.infer<typeof agentDetailInputSchema>
+type AgentDetailInput = z.infer<typeof agentDetailInputSchema>
 
-export const agentDetailSchema = agentCellSchema
+export const agentDetailSchema = z.lazy(() => agentCellSchema)
 export type AgentDetail = z.infer<typeof agentDetailSchema>
 
-export const runtimeSettingsSchema = z.object({
+const runtimeSettingsSchema = z.object({
   models: z.array(z.string().trim().min(1)).min(1),
   defaultModel: z.string().trim().min(1),
   contextWindows: z.record(z.string(), z.number().int().positive()).optional(),
 })
-export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>
+type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>
 
 export const aetherSettingsSchema = z.object({
   runtimes: z.object({
@@ -177,7 +177,7 @@ export const aetherSettingsSchema = z.object({
 })
 export type AetherSettings = z.infer<typeof aetherSettingsSchema>
 
-export const projectRowSchema = z.object({
+const projectRowSchema = z.object({
   id: z.string(),
   name: z.string(),
   cwd: z.string(),
@@ -187,7 +187,7 @@ export const projectRowSchema = z.object({
 })
 export type ProjectRow = z.infer<typeof projectRowSchema>
 
-export const scratchpadBlockSchema = z.object({
+const scratchpadBlockSchema = z.object({
   id: z.string(),
   projectId: z.string().nullable(),
   projectName: z.string().nullable(),
@@ -221,19 +221,19 @@ export type AddProjectInput = z.infer<typeof addProjectInputSchema>
 export const deleteProjectInputSchema = z.object({
   id: z.string().trim().min(1),
 })
-export type DeleteProjectInput = z.infer<typeof deleteProjectInputSchema>
+type DeleteProjectInput = z.infer<typeof deleteProjectInputSchema>
 
 export const hideProjectInputSchema = z.object({
   id: z.string().trim().min(1),
 })
-export type HideProjectInput = z.infer<typeof hideProjectInputSchema>
+type HideProjectInput = z.infer<typeof hideProjectInputSchema>
 
 export const unhideProjectInputSchema = z.object({
   id: z.string().trim().min(1),
 })
-export type UnhideProjectInput = z.infer<typeof unhideProjectInputSchema>
+type UnhideProjectInput = z.infer<typeof unhideProjectInputSchema>
 
-export const sendMessageImageSchema = z.object({
+const sendMessageImageSchema = z.object({
   name: z.string().trim().min(1).max(160),
   mimeType: z.string().trim().regex(/^image\/(png|jpeg|jpg|webp|gif)$/),
   data: z.string().trim().min(1).max(7_000_000),
@@ -245,37 +245,37 @@ export const sendMessageInputSchema = z.object({
   text: z.string().trim().min(1),
   images: z.array(sendMessageImageSchema).max(4).default([]),
 })
-export type SendMessageInput = z.infer<typeof sendMessageInputSchema>
+type SendMessageInput = z.infer<typeof sendMessageInputSchema>
 
 export const steerMessageInputSchema = z.object({
   agentId: z.string().trim().min(1),
   text: z.string().trim().min(1),
   images: z.array(sendMessageImageSchema).max(4).default([]),
 })
-export type SteerMessageInput = z.infer<typeof steerMessageInputSchema>
+type SteerMessageInput = z.infer<typeof steerMessageInputSchema>
 
 export const interruptMessageInputSchema = z.object({
   agentId: z.string().trim().min(1),
 })
-export type InterruptMessageInput = z.infer<typeof interruptMessageInputSchema>
+type InterruptMessageInput = z.infer<typeof interruptMessageInputSchema>
 
 export const setThinkingLevelInputSchema = z.object({
   agentId: z.string().trim().min(1),
   level: thinkingLevelSchema.optional(),
 })
-export type SetThinkingLevelInput = z.infer<typeof setThinkingLevelInputSchema>
+type SetThinkingLevelInput = z.infer<typeof setThinkingLevelInputSchema>
 
 export const resetSessionInputSchema = z.object({
   agentId: z.string().trim().min(1),
 })
-export type ResetSessionInput = z.infer<typeof resetSessionInputSchema>
+type ResetSessionInput = z.infer<typeof resetSessionInputSchema>
 
 export const forkSessionInputSchema = z.object({
   agentId: z.string().trim().min(1),
 })
-export type ForkSessionInput = z.infer<typeof forkSessionInputSchema>
+type ForkSessionInput = z.infer<typeof forkSessionInputSchema>
 
-export const reviewTargetSchema = z.discriminatedUnion('type', [
+const reviewTargetSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('uncommittedChanges'),
   }),
@@ -290,12 +290,12 @@ export const reviewSessionInputSchema = z.object({
   agentId: z.string().trim().min(1),
   target: reviewTargetSchema,
 })
-export type ReviewSessionInput = z.infer<typeof reviewSessionInputSchema>
+type ReviewSessionInput = z.infer<typeof reviewSessionInputSchema>
 
 export const terminalConfigInputSchema = z.object({
   agentId: z.string().trim().min(1),
 })
-export type TerminalConfigInput = z.infer<typeof terminalConfigInputSchema>
+type TerminalConfigInput = z.infer<typeof terminalConfigInputSchema>
 
 export const answerQuestionInputSchema = z.object({
   agentId: z.string().trim().min(1),
@@ -330,7 +330,7 @@ export const renameSessionInputSchema = z.object({
   agentId: z.string().trim().min(1),
   title: z.string().trim().min(1).max(160),
 })
-export type RenameSessionInput = z.infer<typeof renameSessionInputSchema>
+type RenameSessionInput = z.infer<typeof renameSessionInputSchema>
 
 export const addScratchpadBlockInputSchema = z.object({
   body: z.string().trim().min(1).max(4000),
@@ -341,7 +341,7 @@ export type AddScratchpadBlockInput = z.infer<typeof addScratchpadBlockInputSche
 export const deleteScratchpadBlockInputSchema = z.object({
   id: z.string().trim().min(1),
 })
-export type DeleteScratchpadBlockInput = z.infer<typeof deleteScratchpadBlockInputSchema>
+type DeleteScratchpadBlockInput = z.infer<typeof deleteScratchpadBlockInputSchema>
 
 export const triggerScratchpadBlockInputSchema = z.object({
   id: z.string().trim().min(1),
@@ -351,7 +351,7 @@ export const triggerScratchpadBlockInputSchema = z.object({
   title: z.string().trim().optional(),
   thinkingLevel: thinkingLevelSchema.default('medium'),
 })
-export type TriggerScratchpadBlockInput = z.infer<typeof triggerScratchpadBlockInputSchema>
+type TriggerScratchpadBlockInput = z.infer<typeof triggerScratchpadBlockInputSchema>
 
 export type AgentRuntimeState = {
   kind: RuntimeKind

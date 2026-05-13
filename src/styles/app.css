@@ -153,7 +153,11 @@ button {
   position: fixed;
   z-index: 34;
   inset: 0;
+  padding: 0;
+  border: 0;
   background: var(--overlay);
+  appearance: none;
+  cursor: pointer;
 }
 
 .agent-switcher-sheet {
@@ -1300,8 +1304,12 @@ h1 {
   position: fixed;
   z-index: 49;
   inset: 0;
+  padding: 0;
+  border: 0;
   background: var(--overlay);
   backdrop-filter: blur(2px);
+  appearance: none;
+  cursor: pointer;
 }
 
 .session-dialog {

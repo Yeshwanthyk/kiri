@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from '@effect/vitest'
 import { Effect, Exit, Layer } from 'effect'
 import type { AgentStatus } from '../../src/lib/contracts'
-import type { RuntimeDiffArtifact } from '../../src/server/git-diff'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
@@ -126,21 +125,18 @@ describe('runtime lifecycle', () => {
 
     expect(result).toStrictEqual(Exit.fail(expect.any(Error)))
     expect(statuses(calls)).toEqual(['running', 'failed'])
-    expect(fake.project).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'timelineEvent',
-      value: expect.objectContaining({
+    expect(calls.find((call) => call.type === 'timeline')?.value).toMatchObject({
       agentId: 'agent-1',
       kind: 'runtime_error',
       label: 'Runtime error',
       detail: 'failed turn',
       tone: 'error',
-      }),
-    }))
+    })
   }))
 
   it.effect('preserves original turn errors at the Promise boundary', () =>
     Effect.gen(function* () {
-      const { fake, layer } = projection()
+      const { calls, layer } = projection()
       const turnError = new Error('provider exploded')
       const result = yield* Effect.promise(() => runRuntimeLifecyclePromise(
         runAgentTurnLifecycle({
@@ -155,12 +151,9 @@ describe('runtime lifecycle', () => {
       ))
 
       expect(result).toBe(turnError)
-      expect(fake.project).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'timelineEvent',
-        value: expect.objectContaining({
-          detail: 'provider exploded',
-        }),
-      }))
+      expect(calls.find((call) => call.type === 'timeline')?.value).toMatchObject({
+        detail: 'provider exploded',
+      })
     }))
 
   it.effect('preserves original queue errors at the Promise boundary', () =>

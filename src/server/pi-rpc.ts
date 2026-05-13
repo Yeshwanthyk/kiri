@@ -321,12 +321,12 @@ export class PiRpcProcessAdapter {
 
     child.stdout.on('data', (chunk) => {
       buffer += decoder.write(chunk)
-      let index = buffer.indexOf('\n')
+      let index = buffer.search(/\n/)
       while (index !== -1) {
         const line = buffer.slice(0, index).replace(/\r$/, '')
         buffer = buffer.slice(index + 1)
         this.handleLine(child, line)
-        index = buffer.indexOf('\n')
+        index = buffer.search(/\n/)
       }
     })
   }

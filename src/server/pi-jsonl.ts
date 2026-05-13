@@ -163,15 +163,14 @@ function contentToText(content: unknown): string {
   if (!Array.isArray(content)) return ''
 
   return content
-    .map((part) => {
-      if (!part || typeof part !== 'object') return ''
-      if ('text' in part && typeof part.text === 'string') return part.text
+    .flatMap((part) => {
+      if (!part || typeof part !== 'object') return []
+      if ('text' in part && typeof part.text === 'string') return [part.text]
       if ('thinking' in part && typeof part.thinking === 'string') {
-        return part.thinking
+        return [part.thinking]
       }
-      return ''
+      return []
     })
-    .filter(Boolean)
     .join('\n')
     .trim()
 }
@@ -233,22 +232,21 @@ function taskEventsFromContent(
     }
     if (tool.name === 'TaskList') {
       const tasks = arrayField(tool.arguments, 'tasks')
-        .map((task, index) => {
-          if (!task || typeof task !== 'object' || Array.isArray(task)) return null
+        .flatMap((task, index) => {
+          if (!task || typeof task !== 'object' || Array.isArray(task)) return []
           const record = task as Record<string, unknown>
           const title = stringField(record, 'subject') ??
             stringField(record, 'title') ??
             stringField(record, 'description')
-          if (!title) return null
-          return agentTaskSchema.parse({
+          if (!title) return []
+          return [agentTaskSchema.parse({
             id: stringField(record, 'taskId') ?? stringField(record, 'id') ?? String(index + 1),
             title,
             status: normalizeTaskStatus(stringField(record, 'status')) ?? 'pending',
             source: 'pi',
             updatedAt,
-          })
+          })]
         })
-        .filter((task): task is AgentTask => task !== null)
       events.push({ type: 'replace', tasks })
     }
   }

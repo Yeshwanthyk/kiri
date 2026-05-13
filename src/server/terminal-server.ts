@@ -115,7 +115,7 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
   return terminalServer
 }
 
-export function closeTerminalServerForTests() {
+function closeTerminalServerForTests() {
   httpServer?.close()
   httpServer = null
   terminalServer = null
