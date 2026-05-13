@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
+import { Effect } from 'effect'
 import type { SendMessageImage, ThinkingLevel } from '~/lib/contracts'
-import { PiRpcProcessAdapter } from './pi-rpc'
+import { PiRpcProcessAdapter, PiRpcProcessError } from './pi-rpc'
+import {
+  fileOperationFromPiEvent,
+  fileOperationStatusFromEvent,
+  isFileOperationCompletionEvent,
+} from './runtime-file-operations'
 import {
   appendUserMessage,
   createForkedSession,
@@ -10,11 +16,18 @@ import {
   recordAgentInfoEvent,
   recordPiTimelineEvent,
   recordPiMessages,
-  replaceAgentDiffArtifacts,
   resetSession,
   setAgentStatus,
 } from './db'
 import { collectGitDiffArtifacts } from './git-diff'
+import {
+  captureRuntimeDiffs,
+  enqueueAgentTurn,
+  projectRuntimeEvent,
+  RuntimeLifecycleError,
+  runRuntimeLifecyclePromise,
+  runRuntimeLifecycleSync,
+} from './runtime-lifecycle'
 import { getRuntimeSettings } from './settings'
 
 const adapters = new Map<string, PiRpcProcessAdapter>()
@@ -33,17 +46,9 @@ export async function promptPiAgent(input: {
   // Register the live adapter before the queued turn starts so immediate steer/interrupt
   // requests from the composer can find the process target.
   getOrCreatePiAdapter(config)
-  const previous = queues.get(config.id) ?? Promise.resolve()
-  const next = previous.then(() =>
+  await runRuntimeLifecyclePromise(enqueueAgentTurn(config.id, queues, () =>
     promptPiAgentNow(config, promptWithSavedImages(config.id, input.text, input.images ?? [])),
-  )
-  queues.set(
-    config.id,
-    next.catch(() => {
-      // Keep the queue alive after a failed turn.
-    }),
-  )
-  await next
+  ))
 }
 
 export async function steerPiAgent(input: {
@@ -51,123 +56,195 @@ export async function steerPiAgent(input: {
   text: string
   images?: SendMessageImage[]
 }) {
-  const config = getAgentLaunchConfig(input.agentId)
-  const adapter = await waitForLivePiAdapter(config)
-  const text = promptWithSavedImages(config.id, input.text, input.images ?? [])
-  await adapter.steer(text)
-  appendUserMessage({ agentId: config.id, text })
+  await runRuntimeLifecyclePromise(steerPiAgentEffect(input))
 }
 
 export async function interruptPiAgent(input: { agentId: string }) {
-  const config = getAgentLaunchConfig(input.agentId)
-  const adapter = await waitForLivePiAdapter(config)
-  await adapter.abort()
+  await runRuntimeLifecyclePromise(interruptPiAgentEffect(input))
 }
 
 export async function setPiThinkingLevel(input: {
   agentId: string
   level?: ThinkingLevel
 }) {
-  const config = getAgentLaunchConfig(input.agentId)
-  if (config.runtime !== 'pi') {
-    throw new Error(`${config.runtime} agents do not support /thinking yet`)
-  }
-
-  const adapter = getOrCreatePiAdapter(config)
-  adapter.start()
-  const level = input.level ?? await adapter.cycleThinkingLevel()
-  if (!level) throw new Error('No thinking levels available for this Pi model')
-  if (input.level) await adapter.setThinkingLevel(input.level)
-
-  recordAgentInfoEvent({
-    agentId: config.id,
-    kind: 'thinking_level',
-    label: 'Thinking level changed',
-    detail: level,
-  })
-  return level
+  return runRuntimeLifecyclePromise(setPiThinkingLevelEffect(input))
 }
 
 export async function resetPiSession(input: { agentId: string }) {
-  const config = getAgentLaunchConfig(input.agentId)
-  if (config.runtime !== 'pi') {
-    throw new Error(`${config.runtime} agents do not support /new yet`)
-  }
-  stopAdapter(config.id)
-  archivePiSessionFiles(config.sessionDir)
-  resetSession(config.id)
+  await runRuntimeLifecyclePromise(resetPiSessionEffect(input))
 }
 
 export async function forkPiSession(input: { agentId: string }) {
-  const config = getAgentLaunchConfig(input.agentId)
-  if (config.runtime !== 'pi') {
-    throw new Error(`${config.runtime} agents do not support /fork yet`)
-  }
-  const adapter = getOrCreatePiAdapter(config)
-  adapter.start()
-  try {
-    await adapter.clone()
-    const state = await adapter.getState()
-    if (!state.sessionFile) {
-      throw new Error('Pi did not return a cloned session file')
-    }
-    return createForkedSession({
-      sourceAgentId: config.id,
-      sessionFile: state.sessionFile,
-    })
-  } finally {
-    stopAdapter(config.id)
-  }
+  return runRuntimeLifecyclePromise(forkPiSessionEffect(input))
 }
 
 async function promptPiAgentNow(
   config: ReturnType<typeof getAgentLaunchConfig>,
   text: string,
 ) {
-  if (config.runtime !== 'pi') {
-    throw new Error(`${config.runtime} agents can be configured, but only Pi can run chat today`)
-  }
+  await runRuntimeLifecyclePromise(promptPiAgentNowEffect(config, text))
+}
 
-  const adapter = getOrCreatePiAdapter(config)
+function steerPiAgentEffect(input: {
+  agentId: string
+  text: string
+  images?: SendMessageImage[]
+}) {
+  return Effect.gen(function* () {
+    const config = yield* Effect.sync(() => getAgentLaunchConfig(input.agentId))
+    yield* requirePiRuntime(config, 'can be configured, but only Pi can run chat today')
+    const adapter = yield* waitForLivePiAdapterEffect(config)
+    const text = yield* Effect.sync(() =>
+      promptWithSavedImages(config.id, input.text, input.images ?? []))
+    yield* piRpcEffect(adapter.steerEffect(text))
+    yield* Effect.sync(() => {
+      appendUserMessage({ agentId: config.id, text })
+    })
+  })
+}
 
-  setAgentStatus(config.id, 'running')
-  appendUserMessage({ agentId: config.id, text })
-  let stopRecordingEvents: (() => void) | undefined
-  try {
-    adapter.start()
-    const thinkingLevel = getAgentThinkingLevel(config.id)
-    if (thinkingLevel) await adapter.setThinkingLevel(thinkingLevel)
-    stopRecordingEvents = adapter.onEvent((event) => {
-      try {
-        recordPiTimelineEvent({ agentId: config.id, event })
-      } catch {
-        // Runtime events are observability data; the turn transcript remains authoritative.
-      }
-    })
-    const before = await adapter.getState()
-    const turnStartedAt = Date.now()
-    const messages = await adapter.promptAndWait(text)
-    const turnCompletedAt = Date.now()
-    const after = await adapter.getState()
-    recordPiMessages({
-      agentId: config.id,
-      promptText: text,
-      messages,
-      turnStartedAt,
-      turnCompletedAt,
-      sessionFile: after.sessionFile ?? before.sessionFile,
-    })
-    try {
-      replaceAgentDiffArtifacts({
-        agentId: config.id,
-        diffs: collectGitDiffArtifacts(config.cwd),
-      })
-    } catch {
-      // Diff capture is a projection for the UI; chat persistence is authoritative.
+function interruptPiAgentEffect(input: { agentId: string }) {
+  return Effect.gen(function* () {
+    const config = yield* Effect.sync(() => getAgentLaunchConfig(input.agentId))
+    yield* requirePiRuntime(config, 'can be configured, but only Pi can run chat today')
+    const adapter = yield* waitForLivePiAdapterEffect(config)
+    yield* piRpcEffect(adapter.abortEffect())
+  })
+}
+
+function setPiThinkingLevelEffect(input: {
+  agentId: string
+  level?: ThinkingLevel
+}) {
+  return Effect.gen(function* () {
+    const config = yield* Effect.sync(() => getAgentLaunchConfig(input.agentId))
+    yield* requirePiRuntime(config, 'agents do not support /thinking yet')
+    const adapter = yield* Effect.sync(() => getOrCreatePiAdapter(config))
+    yield* piRpcEffect(adapter.startEffect())
+    const level = input.level ?? (yield* piRpcEffect(adapter.cycleThinkingLevelEffect()))
+    if (!level) {
+      return yield* runtimeFailure(new Error('No thinking levels available for this Pi model'))
     }
-  } finally {
-    stopRecordingEvents?.()
-    setAgentStatus(config.id, 'idle')
+    if (input.level) yield* piRpcEffect(adapter.setThinkingLevelEffect(input.level))
+
+    yield* Effect.sync(() => {
+      recordAgentInfoEvent({
+        agentId: config.id,
+        kind: 'thinking_level',
+        label: 'Thinking level changed',
+        detail: level,
+      })
+    })
+    return level
+  })
+}
+
+function resetPiSessionEffect(input: { agentId: string }) {
+  return Effect.gen(function* () {
+    const config = yield* Effect.sync(() => getAgentLaunchConfig(input.agentId))
+    yield* requirePiRuntime(config, 'agents do not support /new yet')
+    yield* Effect.sync(() => {
+      stopAdapter(config.id)
+      archivePiSessionFiles(config.sessionDir)
+      resetSession(config.id)
+    })
+  })
+}
+
+function forkPiSessionEffect(input: { agentId: string }) {
+  return Effect.gen(function* () {
+    const config = yield* Effect.sync(() => getAgentLaunchConfig(input.agentId))
+    yield* requirePiRuntime(config, 'agents do not support /fork yet')
+    const adapter = yield* Effect.sync(() => getOrCreatePiAdapter(config))
+    yield* piRpcEffect(adapter.startEffect())
+    return yield* Effect.gen(function* () {
+      yield* piRpcEffect(adapter.cloneEffect())
+      const state = yield* piRpcEffect(adapter.getStateEffect())
+      if (!state.sessionFile) {
+        return yield* runtimeFailure(new Error('Pi did not return a cloned session file'))
+      }
+      const sessionFile = state.sessionFile
+      return yield* Effect.sync(() =>
+        createForkedSession({
+          sourceAgentId: config.id,
+          sessionFile,
+        }))
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => {
+        stopAdapter(config.id)
+      })),
+    )
+  })
+}
+
+function promptPiAgentNowEffect(
+  config: ReturnType<typeof getAgentLaunchConfig>,
+  text: string,
+) {
+  return Effect.gen(function* () {
+    yield* requirePiRuntime(config, 'can be configured, but only Pi can run chat today')
+    const adapter = yield* Effect.sync(() => getOrCreatePiAdapter(config))
+    yield* Effect.sync(() => {
+      appendUserMessage({ agentId: config.id, text })
+      setAgentStatus(config.id, 'running')
+    })
+
+    let stopRecordingEvents: (() => void) | undefined
+    yield* Effect.gen(function* () {
+      yield* piRpcEffect(adapter.startEffect())
+      const thinkingLevel = getAgentThinkingLevel(config.id)
+      if (thinkingLevel) yield* piRpcEffect(adapter.setThinkingLevelEffect(thinkingLevel))
+      stopRecordingEvents = adapter.onEvent((event) => {
+        try {
+          recordPiTimelineEvent({ agentId: config.id, event })
+          recordPiFileOperationEvent(config.id, config.cwd, event)
+        } catch {
+          // Runtime events are observability data; the turn transcript remains authoritative.
+        }
+      })
+      const before = yield* piRpcEffect(adapter.getStateEffect())
+      const turnStartedAt = Date.now()
+      const messages = yield* piRpcEffect(adapter.promptAndWaitEffect(text))
+      const turnCompletedAt = Date.now()
+      const after = yield* piRpcEffect(adapter.getStateEffect())
+      yield* Effect.sync(() => {
+        recordPiMessages({
+          agentId: config.id,
+          promptText: text,
+          messages,
+          turnStartedAt,
+          turnCompletedAt,
+          sessionFile: after.sessionFile ?? before.sessionFile,
+        })
+      })
+      yield* captureRuntimeDiffs(config.id, () => collectGitDiffArtifacts(config.cwd))
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => {
+        stopRecordingEvents?.()
+        setAgentStatus(config.id, 'idle')
+      })),
+    )
+  })
+}
+
+function recordPiFileOperationEvent(agentId: string, cwd: string, event: Record<string, unknown>) {
+  const operation = fileOperationFromPiEvent(event)
+  if (!operation) return
+  const completed = isFileOperationCompletionEvent(event)
+  runRuntimeLifecycleSync(projectRuntimeEvent(completed
+    ? {
+        type: 'fileOperationCompleted',
+        agentId,
+        status: fileOperationStatusFromEvent(event),
+        ...operation,
+      }
+    : {
+        type: 'fileOperationStarted',
+        agentId,
+        ...operation,
+      }))
+  if (completed) {
+    runRuntimeLifecycleSync(captureRuntimeDiffs(agentId, () => collectGitDiffArtifacts(cwd)))
   }
 }
 
@@ -183,6 +260,43 @@ async function waitForLivePiAdapter(config: ReturnType<typeof getAgentLaunchConf
   }
 
   throw new Error('This session is not currently running in this Aether server process')
+}
+
+function waitForLivePiAdapterEffect(config: ReturnType<typeof getAgentLaunchConfig>) {
+  return Effect.tryPromise({
+    try: () => waitForLivePiAdapter(config),
+    catch: (cause) => new RuntimeLifecycleError({
+      message: 'Runtime turn failed',
+      cause,
+    }),
+  })
+}
+
+function requirePiRuntime(
+  config: ReturnType<typeof getAgentLaunchConfig>,
+  message: string,
+) {
+  return config.runtime === 'pi'
+    ? Effect.void
+    : runtimeFailure(new Error(`${config.runtime} ${message}`))
+}
+
+function piRpcEffect<A>(
+  effect: Effect.Effect<A, PiRpcProcessError, never>,
+) {
+  return effect.pipe(
+    Effect.mapError((error) => new RuntimeLifecycleError({
+      message: 'Runtime turn failed',
+      cause: error.cause,
+    })),
+  )
+}
+
+function runtimeFailure(error: Error) {
+  return Effect.fail(new RuntimeLifecycleError({
+    message: 'Runtime turn failed',
+    cause: error,
+  }))
 }
 
 function sleep(ms: number) {

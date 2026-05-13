@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
+import { Cause, Data, Effect, Exit, Option, Schema } from 'effect'
 import { z } from 'zod'
 import type { AgentRuntimeState, ThinkingLevel } from '~/lib/contracts'
 
@@ -16,12 +17,19 @@ const piRpcMessageSchema = z.object({
 })
 export type PiRpcMessage = z.infer<typeof piRpcMessageSchema>
 
+const jsonUnknownSchema = Schema.parseJson(Schema.Unknown)
+
 const piRpcEventSchema = z
   .object({
     type: z.string(),
   })
   .passthrough()
 export type PiRpcEvent = z.infer<typeof piRpcEventSchema>
+
+export class PiRpcProcessError extends Data.TaggedError('PiRpcProcessError')<{
+  operation: string
+  cause: unknown
+}> {}
 
 const piRpcResponseSchema = z
   .object({
@@ -57,70 +65,82 @@ export class PiRpcProcessAdapter {
   ) {}
 
   start() {
-    if (this.child) return
+    runPiRpcSync(this.startEffect())
+  }
 
-    const args = ['--mode', 'rpc', '--session-dir', this.options.sessionDir]
-    if (this.options.sessionFile) {
-      args.push('--session', this.options.sessionFile)
-    }
-    if (this.options.models?.length) {
-      args.push('--models', this.options.models.join(','))
-    }
-    if (this.options.model) {
-      args.push('--model', this.options.model)
-    }
+  startEffect() {
+    return piRpcSync('start', () => {
+      if (this.child) return
 
-    this.stderr = ''
-    const child = spawn('pi', args, {
-      cwd: this.options.cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-    this.child = child
+      const args = ['--mode', 'rpc', '--session-dir', this.options.sessionDir]
+      if (this.options.sessionFile) {
+        args.push('--session', this.options.sessionFile)
+      }
+      if (this.options.models?.length) {
+        args.push('--models', this.options.models.join(','))
+      }
+      if (this.options.model) {
+        args.push('--model', this.options.model)
+      }
 
-    child.on('error', (error) => {
-      if (this.child !== child) {
+      this.stderr = ''
+      const child = spawn('pi', args, {
+        cwd: this.options.cwd,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      this.child = child
+
+      child.on('error', (error) => {
+        if (this.child !== child) {
+          this.stopping.delete(child)
+          return
+        }
+        this.rejectPending(error)
         this.stopping.delete(child)
-        return
-      }
-      this.rejectPending(error)
-      this.stopping.delete(child)
-      this.child = null
-    })
+        this.child = null
+      })
 
-    child.on('exit', (code, signal) => {
-      if (this.child !== child) {
+      child.on('exit', (code, signal) => {
+        if (this.child !== child) {
+          this.stopping.delete(child)
+          return
+        }
+        if (!this.stopping.has(child)) {
+          this.rejectPending(
+            new Error(
+              `Pi RPC exited${code === null ? '' : ` with code ${code}`}${
+                signal ? ` from ${signal}` : ''
+              }. ${this.stderr}`,
+            ),
+          )
+        }
         this.stopping.delete(child)
-        return
-      }
-      if (!this.stopping.has(child)) {
-        this.rejectPending(
-          new Error(
-            `Pi RPC exited${code === null ? '' : ` with code ${code}`}${
-              signal ? ` from ${signal}` : ''
-            }. ${this.stderr}`,
-          ),
-        )
-      }
-      this.stopping.delete(child)
-      this.child = null
-    })
+        this.child = null
+      })
 
-    child.stderr.on('data', (chunk) => {
-      if (this.child !== child || this.stopping.has(child)) return
-      this.stderr += chunk.toString()
-      this.stderr = this.stderr.slice(-8000)
-    })
+      child.stderr.on('data', (chunk) => {
+        if (this.child !== child || this.stopping.has(child)) return
+        this.stderr += chunk.toString()
+        this.stderr = this.stderr.slice(-8000)
+      })
 
-    this.attachJsonlReader(child)
+      this.attachJsonlReader(child)
+    })
   }
 
   stop() {
-    if (!this.child) return
-    const child = this.child
-    this.stopping.add(child)
-    child.kill('SIGTERM')
-    this.child = null
-    this.rejectPending(new Error('Pi RPC process stopped'))
+    runPiRpcSync(this.stopEffect())
+  }
+
+  stopEffect() {
+    return piRpcSync('stop', () => {
+      if (!this.child) return
+      const child = this.child
+      this.stopping.add(child)
+      child.kill('SIGTERM')
+      this.child = null
+      this.rejectPending(new Error('Pi RPC process stopped'))
+    })
   }
 
   onEvent(listener: (event: PiRpcEvent) => void) {
@@ -129,102 +149,167 @@ export class PiRpcProcessAdapter {
   }
 
   async getState(): Promise<AgentRuntimeState> {
-    const response = await this.send('get_state', {})
-    const data = getResponseData(response)
-    return {
-      kind: 'pi',
-      sessionId: stringValue(data.sessionId),
-      sessionFile: stringValue(data.sessionFile),
-      isStreaming: data.isStreaming === true,
-      messageCount: numberValue(data.messageCount),
-      pendingMessageCount: numberValue(data.pendingMessageCount),
-    }
+    return runPiRpcPromise(this.getStateEffect())
+  }
+
+  getStateEffect(): Effect.Effect<AgentRuntimeState, PiRpcProcessError, never> {
+    return Effect.gen(this, function* () {
+      const response = yield* this.sendEffect('get_state', {})
+      const data = yield* piRpcSync('get_state', () => getResponseData(response))
+      return {
+        kind: 'pi',
+        sessionId: stringValue(data.sessionId),
+        sessionFile: stringValue(data.sessionFile),
+        isStreaming: data.isStreaming === true,
+        messageCount: numberValue(data.messageCount),
+        pendingMessageCount: numberValue(data.pendingMessageCount),
+      }
+    })
   }
 
   prompt(message: string) {
-    return this.send('prompt', { message })
+    return runPiRpcPromise(this.promptEffect(message))
+  }
+
+  promptEffect(message: string) {
+    return this.sendEffect('prompt', { message })
   }
 
   steer(message: string) {
-    return this.send('steer', { message })
+    return runPiRpcPromise(this.steerEffect(message))
+  }
+
+  steerEffect(message: string) {
+    return this.sendEffect('steer', { message })
   }
 
   async promptAndWait(message: string): Promise<PiRpcMessage[]> {
-    const completion = new Promise<PiRpcMessage[]>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup()
-        reject(new Error('Timed out waiting for Pi assistant response'))
-      }, 120_000)
-      const cleanup = this.onEvent((event) => {
-        const result = piRpcAgentEndEventSchema.safeParse(event)
-        if (!result.success) return
-        clearTimeout(timeout)
-        cleanup()
-        resolve(result.data.messages ?? [])
-      })
-    })
+    return runPiRpcPromise(this.promptAndWaitEffect(message))
+  }
 
-    await this.prompt(message)
-    return completion
+  promptAndWaitEffect(message: string) {
+    return Effect.gen(this, function* () {
+      let cleanup = () => {}
+      const completion = new Promise<PiRpcMessage[]>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          cleanup()
+          reject(new Error('Timed out waiting for Pi assistant response'))
+        }, 120_000)
+        const stopListening = this.onEvent((event) => {
+          const result = piRpcAgentEndEventSchema.safeParse(event)
+          if (!result.success) return
+          cleanup()
+          resolve(result.data.messages ?? [])
+        })
+        cleanup = () => {
+          clearTimeout(timeout)
+          stopListening()
+        }
+      })
+
+      yield* this.promptEffect(message).pipe(
+        Effect.tapError(() => Effect.sync(cleanup)),
+      )
+      return yield* piRpcPromise('promptAndWait', () => completion)
+    })
   }
 
   abort() {
-    return this.send('abort', {})
+    return runPiRpcPromise(this.abortEffect())
+  }
+
+  abortEffect() {
+    return this.sendEffect('abort', {})
   }
 
   async newSession() {
-    getResponseData(await this.send('new_session', {}))
+    return runPiRpcPromise(this.newSessionEffect())
+  }
+
+  newSessionEffect() {
+    return Effect.gen(this, function* () {
+      const response = yield* this.sendEffect('new_session', {})
+      yield* piRpcSync('new_session', () => getResponseData(response))
+    })
   }
 
   async clone() {
-    getResponseData(await this.send('clone', {}))
+    return runPiRpcPromise(this.cloneEffect())
+  }
+
+  cloneEffect() {
+    return Effect.gen(this, function* () {
+      const response = yield* this.sendEffect('clone', {})
+      yield* piRpcSync('clone', () => getResponseData(response))
+    })
   }
 
   async setThinkingLevel(level: ThinkingLevel) {
-    getResponseData(await this.send('set_thinking_level', { level }))
+    return runPiRpcPromise(this.setThinkingLevelEffect(level))
+  }
+
+  setThinkingLevelEffect(level: ThinkingLevel) {
+    return Effect.gen(this, function* () {
+      const response = yield* this.sendEffect('set_thinking_level', { level })
+      yield* piRpcSync('set_thinking_level', () => getResponseData(response))
+    })
   }
 
   async cycleThinkingLevel(): Promise<ThinkingLevel | null> {
-    const response = await this.send('cycle_thinking_level', {})
-    const data = getResponseData(response)
-    const level = stringValue(data.level)
-    return level === 'off' ||
-      level === 'minimal' ||
-      level === 'low' ||
-      level === 'medium' ||
-      level === 'high' ||
-      level === 'xhigh'
-      ? level
-      : null
+    return runPiRpcPromise(this.cycleThinkingLevelEffect())
   }
 
-  private send(type: string, body: Record<string, unknown>) {
-    if (!this.child) {
-      throw new Error('Pi RPC process is not started')
-    }
-    if (this.stopping.has(this.child)) {
-      throw new Error('Pi RPC process is stopping')
-    }
+  cycleThinkingLevelEffect(): Effect.Effect<ThinkingLevel | null, PiRpcProcessError, never> {
+    return Effect.gen(this, function* () {
+      const response = yield* this.sendEffect('cycle_thinking_level', {})
+      const data = yield* piRpcSync('cycle_thinking_level', () => getResponseData(response))
+      const level = stringValue(data.level)
+      return level === 'off' ||
+        level === 'minimal' ||
+        level === 'low' ||
+        level === 'medium' ||
+        level === 'high' ||
+        level === 'xhigh'
+        ? level
+        : null
+    })
+  }
 
-    const id = `aether-${++this.requestId}`
-    const command = JSON.stringify({ id, type, ...body }) + '\n'
+  private sendEffect(type: string, body: Record<string, unknown>) {
+    return Effect.suspend(() => {
+      if (!this.child) {
+        return Effect.fail(new PiRpcProcessError({
+          operation: type,
+          cause: new Error('Pi RPC process is not started'),
+        }))
+      }
+      if (this.stopping.has(this.child)) {
+        return Effect.fail(new PiRpcProcessError({
+          operation: type,
+          cause: new Error('Pi RPC process is stopping'),
+        }))
+      }
 
-    return new Promise<unknown>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        if (!this.pending.has(id)) return
-        this.pending.delete(id)
-        reject(new Error(`Timed out waiting for ${type}. ${this.stderr}`))
-      }, 30_000)
-      this.pending.set(id, { resolve, reject, timeout })
-      this.child?.stdin.write(command, (error) => {
-        if (!error) return
-        const pending = this.pending.get(id)
-        this.pending.delete(id)
-        if (pending) {
-          clearTimeout(pending.timeout)
-          pending.reject(error)
-        }
-      })
+      const id = `aether-${++this.requestId}`
+      const command = encodeJson({ id, type, ...body }) + '\n'
+
+      return piRpcPromise(type, () => new Promise<unknown>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          if (!this.pending.has(id)) return
+          this.pending.delete(id)
+          reject(new Error(`Timed out waiting for ${type}. ${this.stderr}`))
+        }, 30_000)
+        this.pending.set(id, { resolve, reject, timeout })
+        this.child?.stdin.write(command, (error) => {
+          if (!error) return
+          const pending = this.pending.get(id)
+          this.pending.delete(id)
+          if (pending) {
+            clearTimeout(pending.timeout)
+            pending.reject(error)
+          }
+        })
+      }))
     })
   }
 
@@ -249,7 +334,7 @@ export class PiRpcProcessAdapter {
 
     let payload: PiRpcEvent
     try {
-      payload = piRpcEventSchema.parse(JSON.parse(line))
+      payload = piRpcEventSchema.parse(decodeJson(line))
     } catch {
       return
     }
@@ -278,6 +363,57 @@ export class PiRpcProcessAdapter {
     }
     this.pending.clear()
   }
+}
+
+async function runPiRpcPromise<A>(
+  effect: Effect.Effect<A, PiRpcProcessError, never>,
+) {
+  const exit = await Effect.runPromiseExit(effect)
+  if (Exit.isSuccess(exit)) return exit.value
+  throw piRpcCause(exit.cause)
+}
+
+function runPiRpcSync<A>(
+  effect: Effect.Effect<A, PiRpcProcessError, never>,
+) {
+  const exit = Effect.runSyncExit(effect)
+  if (Exit.isSuccess(exit)) return exit.value
+  throw piRpcCause(exit.cause)
+}
+
+function piRpcCause(cause: Cause.Cause<PiRpcProcessError>) {
+  const failure = Option.getOrUndefined(Cause.failureOption(cause))
+  const causeValue = failure instanceof PiRpcProcessError ? failure.cause : failure
+  if (causeValue instanceof Error) return causeValue
+  if (failure) return failure
+  return Cause.squash(cause)
+}
+
+function piRpcError(operation: string, cause: unknown) {
+  if (cause instanceof PiRpcProcessError) return cause
+  return new PiRpcProcessError({ operation, cause })
+}
+
+function piRpcSync<A>(operation: string, run: () => A) {
+  return Effect.try({
+    try: run,
+    catch: (cause) => piRpcError(operation, cause),
+  })
+}
+
+function piRpcPromise<A>(operation: string, run: () => Promise<A>) {
+  return Effect.tryPromise({
+    try: run,
+    catch: (cause) => piRpcError(operation, cause),
+  })
+}
+
+function encodeJson(value: unknown) {
+  return Schema.encodeSync(jsonUnknownSchema)(value)
+}
+
+function decodeJson(value: string) {
+  return Schema.decodeUnknownSync(jsonUnknownSchema)(value)
 }
 
 function getResponseData(response: unknown): Record<string, unknown> {

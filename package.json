@@ -6,7 +6,12 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build && tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/server/codex-app-server.ts tests/server/**/*.ts --max-warnings=0",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "prepare": "effect-language-service patch",
     "aether:models": "node scripts/sync-models-dev.mjs",
     "aether:projects": "node scripts/aether-projects.mjs",
     "preview": "vite preview",
@@ -15,14 +20,18 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.138",
     "@fontsource-variable/geist": "^5.2.8",
+    "@fontsource/fira-code": "^5.2.7",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@pierre/diffs": "1.1.21",
+    "@pierre/trees": "^1.0.0-beta.3",
     "@tanstack/react-query": "^5.90.0",
     "@tanstack/react-query-devtools": "^5.90.0",
     "@tanstack/react-router": "^1.169.2",
     "@tanstack/react-router-devtools": "^1.166.13",
     "@tanstack/react-router-ssr-query": "^1.166.12",
     "@tanstack/react-start": "^1.167.65",
+    "effect": "^3.21.2",
     "ghostty-web": "^0.4.0",
     "lucide-react": "^1.14.0",
     "node-pty": "1.2.0-beta.12",
@@ -36,6 +45,9 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@effect/language-service": "^0.85.1",
+    "@effect/vitest": "^0.29.0",
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.2.2",
     "@types/node": "^22.5.4",
@@ -43,8 +55,11 @@
     "@types/react-dom": "^19.0.3",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.1",
+    "eslint": "^10.3.0",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
-    "vite": "^8.0.0"
+    "typescript-eslint": "^8.59.2",
+    "vite": "^8.0.0",
+    "vitest": "^3.2.4"
   }
 }

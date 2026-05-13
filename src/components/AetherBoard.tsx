@@ -1,12 +1,18 @@
 'use client'
 
 import { PatchDiff } from '@pierre/diffs/react'
-import { useQuery } from '@tanstack/react-query'
+import type { GitStatus } from '@pierre/trees'
+import {
+  FileTree as PierreFileTree,
+  useFileTree,
+} from '@pierre/trees/react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useServerFn } from '@tanstack/react-start'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   Activity,
+  AlertTriangle,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
@@ -26,7 +32,10 @@ import {
   MessageSquareText,
   Minimize2,
   Plus,
+  PencilLine,
+  FileText,
   Rows3,
+  Search,
   Send,
   Settings2,
   Square,
@@ -38,14 +47,15 @@ import {
 import * as React from 'react'
 import type {
   AgentCell,
+  ArchivedSessionSummary,
   BoardMessage,
   DiffArtifact,
   PendingQuestion,
   ProjectRow,
+  ReviewTarget,
   RuntimeKind,
   SendMessageImage,
   ThinkingLevel,
-  TimelineEvent,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import { thinkingLevelSchema } from '~/lib/contracts'
@@ -53,7 +63,6 @@ import {
   applyAetherTheme,
   defaultThemeSelection,
   getAetherThemeTokens,
-  normalizeThemeSelection,
   aetherThemeNames,
   type AetherThemeName,
   type ThemeMode,
@@ -72,6 +81,8 @@ import {
   interruptMessageMutation,
   renameSessionMutation,
   resetSessionMutation,
+  restoreSessionMutation,
+  reviewSessionMutation,
   sendMessageMutation,
   setThinkingLevelMutation,
   startSessionMutation,
@@ -79,60 +90,59 @@ import {
   terminalConfigQuery,
   unhideProjectMutation,
 } from '~/server/workspace'
+import {
+  classifyToolName,
+  compactWorkEntries,
+  deriveAgentTimelineRows,
+  diffLineStats,
+  displayPath,
+  isCommandEntry,
+  normalizeDiffPath,
+  summarizeWorkEntries,
+  timelineRowsContentVersion,
+  type AgentTimelineRow,
+  type TimelineWorkEntry,
+  workCallLabel,
+} from './aether-board/timeline'
+import {
+  actionForKey,
+  defaultKeymap,
+  formatKey,
+  keymapGroups,
+  keyOptions,
+  moveAgent,
+  moveProject,
+  updateKeymap,
+  type KeymapAction,
+  type KeymapSettings,
+  type Selection,
+} from './aether-board/navigation'
+import {
+  applyChatTypography,
+  chatFontSizes,
+  defaultChatTypography,
+  monoFonts,
+  readStoredChatDraft,
+  readStoredChatTypography,
+  readStoredKeymap,
+  readStoredThemeSelection,
+  saveChatTypography,
+  saveKeymap,
+  saveThemeSelection,
+  updateChatDraft,
+  type ChatFontSize,
+  type ChatTypographySettings,
+  type MonoFont,
+} from './aether-board/storage'
+import {
+  parseSlashCommand,
+  runSlashCommand,
+  supportsThinking,
+  type SlashCommand,
+} from './aether-board/slash-commands'
 
 type SidebarTab = 'chat' | 'diffs' | 'terminal'
 type DiffStyle = 'unified' | 'split'
-const THINKING_RUNTIMES = new Set<RuntimeKind>(['pi', 'codex', 'claude'])
-
-function supportsThinking(runtime: RuntimeKind) {
-  return THINKING_RUNTIMES.has(runtime)
-}
-
-type AgentTimelineRow =
-  | {
-      kind: 'message'
-      id: string
-      message: BoardMessage
-    }
-  | {
-      kind: 'work'
-      id: string
-      startedAt: string
-      entries: TimelineWorkEntry[]
-    }
-  | {
-      kind: 'working'
-      id: string
-      startedAt: string | null
-    }
-
-type TimelineWorkEntry = {
-  id: string
-  kind: string
-  tone: TimelineEvent['tone']
-  label: string
-  detail: string | null
-  timestamp: string
-}
-
-type KeymapAction =
-  | 'projectPrev'
-  | 'projectNext'
-  | 'agentPrev'
-  | 'agentNext'
-  | 'startSession'
-  | 'deleteSession'
-  | 'focusChat'
-  | 'openDiffs'
-  | 'openTerminal'
-
-type KeymapSettings = Record<KeymapAction, string>
-
-type ChatFontSize = 'compact' | 'comfortable' | 'large' | 'xlarge'
-
-type ChatTypographySettings = {
-  fontSize: ChatFontSize
-}
 
 type RefreshAgentDetail = () => Promise<void>
 
@@ -148,17 +158,13 @@ function mergeAgentDetail(
     timelineEvents: detail.timelineEvents,
     timeline: detail.timeline,
     diffs: detail.diffs,
+    contextUsage: detail.contextUsage,
     pendingQuestion: detail.pendingQuestion,
   }
 }
 
 type GhosttyTerminalInstance = InstanceType<(typeof import('ghostty-web'))['Terminal']>
 type GhosttyFitAddonInstance = InstanceType<(typeof import('ghostty-web'))['FitAddon']>
-
-type Selection = {
-  projectId: string
-  agentId: string
-}
 
 type CommandPaletteAction = {
   id: string
@@ -171,46 +177,6 @@ type CommandPaletteAction = {
 
 const sessionThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
 
-const defaultKeymap: KeymapSettings = {
-  projectPrev: 'k',
-  projectNext: 'j',
-  agentPrev: 'h',
-  agentNext: 'l',
-  startSession: 'n',
-  deleteSession: 'x',
-  focusChat: 'c',
-  openDiffs: 'd',
-  openTerminal: 't',
-}
-
-const keyOptions = [
-  'h',
-  'j',
-  'k',
-  'l',
-  'n',
-  'x',
-  'c',
-  'd',
-  't',
-  'arrowup',
-  'arrowdown',
-  'arrowleft',
-  'arrowright',
-]
-const chatFontSizes: Record<ChatFontSize, { label: string; size: string; lineHeight: string }> = {
-  compact: { label: 'Compact · 13px', size: '13px', lineHeight: '1.5' },
-  comfortable: { label: 'Comfortable · 14px', size: '14px', lineHeight: '1.58' },
-  large: { label: 'Large · 16px', size: '16px', lineHeight: '1.62' },
-  xlarge: { label: 'Extra large · 18px', size: '18px', lineHeight: '1.66' },
-}
-
-const defaultChatTypography: ChatTypographySettings = { fontSize: 'comfortable' }
-const keymapStorageKey = 'aether:keymap:v1'
-const themeStorageKey = 'aether:theme:v1'
-const chatTypographyStorageKey = 'aether:chat-typography:v1'
-const chatDraftStorageKey = 'aether:chat-drafts:v1'
-
 export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [workspace, setWorkspace] = React.useState(snapshot)
   const [selection, setSelection] = React.useState<Selection>(snapshot.selected)
@@ -221,6 +187,8 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [sessionLauncherOpen, setSessionLauncherOpen] = React.useState(false)
   const [agentSwitcherOpen, setAgentSwitcherOpen] = React.useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
+  const [pendingDelete, setPendingDelete] = React.useState<{ agentId: string; title: string } | null>(null)
+  const [deleteInFlight, setDeleteInFlight] = React.useState(false)
   const [keymap, setKeymap] = React.useState<KeymapSettings>(defaultKeymap)
   const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(defaultThemeSelection)
   const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(defaultChatTypography)
@@ -234,6 +202,8 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const hideProject = useServerFn(hideProjectMutation)
   const refreshWorkspace = useServerFn(fetchWorkspaceSnapshot)
   const resetSession = useServerFn(resetSessionMutation)
+  const restoreSession = useServerFn(restoreSessionMutation)
+  const reviewSession = useServerFn(reviewSessionMutation)
   const sendMessage = useServerFn(sendMessageMutation)
   const setThinkingLevel = useServerFn(setThinkingLevelMutation)
   const steerMessage = useServerFn(steerMessageMutation)
@@ -288,10 +258,14 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         return
       }
 
-      if (event.key === 'Escape' && (commandPaletteOpen || agentSwitcherOpen)) {
+      if (
+        event.key === 'Escape' &&
+        (commandPaletteOpen || agentSwitcherOpen || projectManagerOpen)
+      ) {
         event.preventDefault()
         setCommandPaletteOpen(false)
         setAgentSwitcherOpen(false)
+        setProjectManagerOpen(false)
         return
       }
 
@@ -360,7 +334,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [agentSwitcherOpen, commandPaletteOpen, keymap, workspace.projects])
+  }, [agentSwitcherOpen, commandPaletteOpen, projectManagerOpen, keymap, workspace.projects])
 
   async function handleAddProject(input: { id?: string; name: string; cwd: string }) {
     const next = await addProject({ data: input })
@@ -396,26 +370,36 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setWorkspace(next)
   }
 
-  async function handleDeleteSession(agentId: string) {
+  function handleDeleteSession(agentId: string) {
     const agent = selectedProject?.agents.find((item) => item.id === agentId)
     if (!agent || !selectedProject) return
-    if (!window.confirm(`Remove session "${agent.title}"?`)) return
+    setPendingDelete({ agentId, title: agent.title })
+  }
 
+  async function confirmDeleteSession() {
+    if (!pendingDelete || !selectedProject) return
+    const { agentId } = pendingDelete
     const currentProjectId = selectedProject.id
     const currentProject = selectedProject
     const currentIndex = currentProject.agents.findIndex((agent) => agent.id === agentId)
-    const next = await deleteSession({ data: { agentId } })
-    setWorkspace(next)
-    const project =
-      next.projects.find((item) => item.id === currentProjectId) ?? next.projects[0]
-    if (!project) return
-    const fallbackAgent =
-      project.agents[Math.max(0, Math.min(currentIndex - 1, project.agents.length - 1))]
-    setChatFocusRequest(0)
-    if (fallbackAgent) {
-      setSelection({ projectId: project.id, agentId: fallbackAgent.id })
-    } else {
-      setSelection({ projectId: project.id, agentId: '' })
+    setDeleteInFlight(true)
+    try {
+      const next = await deleteSession({ data: { agentId } })
+      setWorkspace(next)
+      const project =
+        next.projects.find((item) => item.id === currentProjectId) ?? next.projects[0]
+      if (!project) return
+      const fallbackAgent =
+        project.agents[Math.max(0, Math.min(currentIndex - 1, project.agents.length - 1))]
+      setChatFocusRequest(0)
+      if (fallbackAgent) {
+        setSelection({ projectId: project.id, agentId: fallbackAgent.id })
+      } else {
+        setSelection({ projectId: project.id, agentId: '' })
+      }
+    } finally {
+      setDeleteInFlight(false)
+      setPendingDelete(null)
     }
   }
 
@@ -429,7 +413,9 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     const poll = async () => {
       if (stopped) return
       try {
-        setWorkspace(await refreshWorkspace())
+        const next = await refreshWorkspace()
+        if (stopped) return
+        setWorkspace(next)
         await onPoll?.()
       } finally {
         if (!stopped) {
@@ -497,6 +483,11 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
   }
 
+  async function handleReviewSession(agentId: string, target: ReviewTarget) {
+    const next = await reviewSession({ data: { agentId, target } })
+    setWorkspace(next)
+  }
+
   async function handleAnswerQuestion(
     agentId: string,
     requestId: string,
@@ -525,6 +516,19 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       setSelection({ projectId: project.id, agentId: agent.id })
     }
     setAgentSwitcherOpen(false)
+    setSessionLauncherOpen(false)
+  }
+
+  async function handleResumeSession(projectId: string, agentId: string, archived: boolean) {
+    if (!archived) {
+      selectAgent(projectId, agentId)
+      setSessionLauncherOpen(false)
+      return
+    }
+    const next = await restoreSession({ data: { agentId } })
+    setWorkspace(next)
+    setChatFocusRequest(0)
+    setSelection({ projectId, agentId })
     setSessionLauncherOpen(false)
   }
 
@@ -685,7 +689,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         themeSelection={themeSelection}
         chatTypography={chatTypography}
         onKeymapChange={(action, value) =>
-          setKeymap((current) => updateKeymap(current, action, value))
+          setKeymap((current) => saveKeymap(updateKeymap(current, action, value)))
         }
         onKeymapReset={() => setKeymap(saveKeymap(defaultKeymap))}
         onThemeChange={(next) => setThemeSelection(saveThemeSelection(next))}
@@ -746,8 +750,12 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       {sessionLauncherOpen ? (
         <InlineSessionLauncher
           project={selectedProject}
+          projects={workspace.projects}
+          archivedSessions={workspace.archivedSessions}
+          selectedAgentId={selection.agentId}
           settings={workspace.settings}
           onStartSession={handleStartSession}
+          onResumeSession={handleResumeSession}
           onCancel={() => setSessionLauncherOpen(false)}
         />
       ) : null}
@@ -761,6 +769,25 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           onHide={handleHideProject}
           onUnhide={handleUnhideProject}
           onClose={() => setProjectManagerOpen(false)}
+        />
+      ) : null}
+
+      {pendingDelete ? (
+        <ConfirmDialog
+          title="Remove session?"
+          body={
+            <>
+              <strong>{pendingDelete.title}</strong> will be hidden from the board. You can restore it from Resume.
+            </>
+          }
+          confirmLabel="Remove session"
+          cancelLabel="Keep"
+          busy={deleteInFlight}
+          onConfirm={() => void confirmDeleteSession()}
+          onCancel={() => {
+            if (deleteInFlight) return
+            setPendingDelete(null)
+          }}
         />
       ) : null}
 
@@ -833,6 +860,7 @@ export function AetherBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onThinkingCommand={handleThinkingCommand}
         onResetSession={handleResetSession}
         onForkSession={handleForkSession}
+        onReviewSession={handleReviewSession}
         onAnswerQuestion={handleAnswerQuestion}
       />
     </main>
@@ -900,11 +928,18 @@ function SettingsScreen({
 
 function InlineSessionLauncher({
   project,
+  projects,
+  archivedSessions,
+  selectedAgentId,
   settings,
   onStartSession,
+  onResumeSession,
   onCancel,
 }: {
   project: ProjectRow
+  projects: ProjectRow[]
+  archivedSessions: ArchivedSessionSummary[]
+  selectedAgentId: string
   settings: WorkspaceSnapshot['settings']
   onStartSession: (input: {
     projectId: string
@@ -913,8 +948,10 @@ function InlineSessionLauncher({
     title?: string
     thinkingLevel: ThinkingLevel
   }) => Promise<void>
+  onResumeSession: (projectId: string, agentId: string, archived: boolean) => void | Promise<void>
   onCancel: () => void
 }) {
+  const [mode, setMode] = React.useState<'new' | 'resume'>('new')
   const [runtime, setRuntime] = React.useState<RuntimeKind>('pi')
   const [model, setModel] = React.useState(settings.runtimes.pi.defaultModel)
   const [title, setTitle] = React.useState('')
@@ -924,10 +961,42 @@ function InlineSessionLauncher({
   const titleRef = React.useRef<HTMLInputElement>(null)
   const runtimes = Object.keys(settings.runtimes) as RuntimeKind[]
   const models = settings.runtimes[runtime].models
+  const activeResumableSessions = projects
+    .flatMap((item) =>
+      item.agents
+        .filter((agent) => agent.isSession)
+        .map((agent) => ({
+          archived: false as const,
+          id: agent.id,
+          projectId: item.id,
+          projectName: item.name,
+          title: agent.title,
+          runtime: agent.runtime,
+          model: agent.model,
+          status: agent.status,
+          preview: agent.preview,
+          updatedAt: agent.updatedAt,
+        })),
+    )
+  const archivedResumableSessions = archivedSessions.map((agent) => ({
+    archived: true as const,
+    id: agent.id,
+    projectId: agent.projectId,
+    projectName: agent.projectName,
+    title: agent.title,
+    runtime: agent.runtime,
+    model: agent.model,
+    status: agent.status,
+    preview: agent.preview,
+    updatedAt: agent.updatedAt,
+  }))
+  const resumableSessions = [...activeResumableSessions, ...archivedResumableSessions]
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .slice(0, 10)
 
   React.useEffect(() => {
-    titleRef.current?.focus()
-  }, [])
+    if (mode === 'new') titleRef.current?.focus()
+  }, [mode])
 
   function updateRuntime(nextRuntime: RuntimeKind) {
     setRuntime(nextRuntime)
@@ -976,85 +1045,230 @@ function InlineSessionLauncher({
             <Bot size={16} />
           </span>
           <div>
-            <p className="settings-kicker">New session</p>
+            <p className="settings-kicker">Session launcher</p>
             <strong id="session-dialog-title">{project.name}</strong>
-            <small>Pick a runtime, then launch into chat.</small>
+            <small>{mode === 'new' ? 'Pick a runtime, then launch into chat.' : 'Jump back into a local session.'}</small>
           </div>
-          <button type="button" onClick={onCancel} aria-label="Cancel new session">
+          <button type="button" onClick={onCancel} aria-label="Close session launcher">
             ×
           </button>
         </div>
 
-        <label className="session-command-field">
-          <Command size={16} aria-hidden="true" />
-          <input
-            ref={titleRef}
-            value={title}
-            disabled={pending}
-            placeholder="Name this session (optional)"
-            aria-label="Session name"
-            data-testid="session-title"
-            onChange={(event) => setTitle(event.currentTarget.value)}
-          />
-          <span>optional</span>
-        </label>
-
-        <div className="session-dialog-grid">
-          <label>
-            <span>Runtime</span>
-            <select
-              value={runtime}
-              disabled={pending}
-              data-testid="session-runtime"
-              onChange={(event) => updateRuntime(event.currentTarget.value as RuntimeKind)}
-            >
-              {runtimes.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Model</span>
-            <select
-              value={model}
-              disabled={pending}
-              data-testid="session-model"
-              onChange={(event) => setModel(event.currentTarget.value)}
-            >
-              {models.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Thinking</span>
-            <select
-              value={thinkingLevel}
-              disabled={pending || !supportsThinking(runtime)}
-              data-testid="session-thinking-level"
-              onChange={(event) => setThinkingLevel(event.currentTarget.value as ThinkingLevel)}
-            >
-              {sessionThinkingLevels.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <div className="session-dialog-actions">
-          {error ? <span role="status">{error}</span> : null}
-          <button type="submit" disabled={pending}>
-            <Plus size={14} />
-            Start session
+        <div className="session-launcher-tabs" role="tablist" aria-label="Session launcher mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'new'}
+            data-active={mode === 'new' ? 'true' : undefined}
+            onClick={() => setMode('new')}
+          >
+            New
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'resume'}
+            data-active={mode === 'resume' ? 'true' : undefined}
+            onClick={() => setMode('resume')}
+          >
+            Resume
           </button>
         </div>
+
+        {mode === 'new' ? (
+          <>
+            <label className="session-command-field">
+              <Command size={16} aria-hidden="true" />
+              <input
+                ref={titleRef}
+                value={title}
+                disabled={pending}
+                placeholder="Name this session (optional)"
+                aria-label="Session name"
+                data-testid="session-title"
+                onChange={(event) => setTitle(event.currentTarget.value)}
+              />
+              <span>optional</span>
+            </label>
+
+            <div className="session-dialog-grid">
+              <label className="session-runtime-field">
+                <span>Runtime</span>
+                <select
+                  value={runtime}
+                  disabled={pending}
+                  data-testid="session-runtime"
+                  onChange={(event) => updateRuntime(event.currentTarget.value as RuntimeKind)}
+                >
+                  {runtimes.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="session-thinking-field">
+                <span>Thinking</span>
+                <select
+                  value={thinkingLevel}
+                  disabled={pending || !supportsThinking(runtime)}
+                  data-testid="session-thinking-level"
+                  onChange={(event) => setThinkingLevel(event.currentTarget.value as ThinkingLevel)}
+                >
+                  {sessionThinkingLevels.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="session-model-field">
+                <span>Model</span>
+                <select
+                  value={model}
+                  disabled={pending}
+                  data-testid="session-model"
+                  onChange={(event) => setModel(event.currentTarget.value)}
+                >
+                  {models.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="session-dialog-actions">
+              {error ? <span role="status">{error}</span> : null}
+              <button type="submit" disabled={pending}>
+                <Plus size={14} />
+                Start session
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="session-resume-panel" role="tabpanel">
+            {resumableSessions.length === 0 ? (
+              <div className="session-resume-empty">
+                <strong>No local sessions</strong>
+                <span>Start one first, then it will appear here.</span>
+              </div>
+            ) : (
+              <>
+                <div className="session-resume-kicker">Last {resumableSessions.length} local sessions</div>
+                <div className="session-resume-list">
+                  {resumableSessions.map((agent) => {
+                    const selected = agent.id === selectedAgentId
+                    return (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        className="session-resume-row"
+                        data-active={selected ? 'true' : undefined}
+                        onClick={() => onResumeSession(agent.projectId, agent.id, agent.archived)}
+                      >
+                        <span className={`status-dot ${agent.status}`} aria-hidden="true" />
+                        <span className="session-resume-main">
+                          <strong>{agent.title}</strong>
+                          <span>{agent.projectName}: {agent.preview || 'Ready.'}</span>
+                        </span>
+                        <span className="session-resume-meta">
+                          {agent.archived ? <span>archived</span> : null}
+                          <span>{agent.runtime}</span>
+                          <span>{agent.model}</span>
+                          <span>{formatAgo(agent.updatedAt)}</span>
+                        </span>
+                        {selected ? <Check size={14} aria-hidden="true" /> : null}
+                      </button>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </form>
+    </>
+  )
+}
+
+function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  cancelLabel,
+  destructive,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  title: string
+  body: React.ReactNode
+  confirmLabel: string
+  cancelLabel: string
+  destructive?: boolean
+  busy?: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  const confirmRef = React.useRef<HTMLButtonElement | null>(null)
+
+  React.useEffect(() => {
+    confirmRef.current?.focus()
+  }, [])
+
+  return (
+    <>
+      <div className="session-dialog-scrim" onClick={onCancel} />
+      <div
+        className={`session-dialog confirm-dialog${destructive ? ' confirm-dialog-destructive' : ''}`}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            onCancel()
+          } else if (event.key === 'Enter') {
+            event.preventDefault()
+            if (!busy) onConfirm()
+          }
+        }}
+        data-testid="confirm-dialog"
+      >
+        <div className="confirm-dialog-head">
+          <span className="confirm-dialog-icon" aria-hidden="true">
+            <AlertTriangle size={16} />
+          </span>
+          <div>
+            <p className="settings-kicker">Confirm</p>
+            <strong id="confirm-dialog-title">{title}</strong>
+          </div>
+        </div>
+        <p className="confirm-dialog-body">{body}</p>
+        <div className="session-dialog-actions">
+          <button
+            type="button"
+            className="confirm-dialog-cancel"
+            onClick={onCancel}
+            disabled={busy}
+            data-testid="confirm-dialog-cancel"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            ref={confirmRef}
+            type="button"
+            className="confirm-dialog-confirm"
+            onClick={onConfirm}
+            disabled={busy}
+            data-testid="confirm-dialog-confirm"
+          >
+            {busy ? 'Removing…' : confirmLabel}
+          </button>
+        </div>
+      </div>
     </>
   )
 }
@@ -1258,36 +1472,6 @@ function ProjectManagerDialog({
   )
 }
 
-const keymapGroups: { id: string; label: string; rows: { action: KeymapAction; label: string; hint: string }[] }[] = [
-  {
-    id: 'board',
-    label: 'Board navigation',
-    rows: [
-      { action: 'projectPrev', label: 'Project up', hint: 'Previous project row' },
-      { action: 'projectNext', label: 'Project down', hint: 'Next project row' },
-      { action: 'agentPrev', label: 'Agent left', hint: 'Previous session in row' },
-      { action: 'agentNext', label: 'Agent right', hint: 'Next session in row' },
-    ],
-  },
-  {
-    id: 'session',
-    label: 'Session',
-    rows: [
-      { action: 'startSession', label: 'Start session', hint: 'Open new-session dialog' },
-      { action: 'deleteSession', label: 'Remove session', hint: 'Delete the selected session' },
-    ],
-  },
-  {
-    id: 'focus',
-    label: 'Focus',
-    rows: [
-      { action: 'focusChat', label: 'Focus chat', hint: 'Jump cursor to composer' },
-      { action: 'openDiffs', label: 'Open diffs', hint: 'Switch sidebar to diffs' },
-      { action: 'openTerminal', label: 'Open terminal', hint: 'Switch sidebar to terminal' },
-    ],
-  },
-]
-
 function ThemeSettingsPanel({
   selection,
   onChange,
@@ -1433,9 +1617,9 @@ function ChatTypographySettingsPanel({
     <>
       <header className="settings-lane-head">
         <div className="settings-lane-title">
-          <p className="settings-kicker">Chat</p>
-          <h2>Reading size</h2>
-          <p>Affects chat messages and the composer only.</p>
+          <p className="settings-kicker">Typography</p>
+          <h2>Reading size &amp; code font</h2>
+          <p>Affects chat messages, the composer, and diff rendering.</p>
         </div>
         <button
           type="button"
@@ -1447,35 +1631,73 @@ function ChatTypographySettingsPanel({
         </button>
       </header>
 
-      <div className="chat-size-options" role="radiogroup" aria-label="Chat font size">
-        {(Object.keys(chatFontSizes) as ChatFontSize[]).map((size) => {
-          const option = chatFontSizes[size]
-          const [label, spec] = option.label.split(' · ')
-          const active = settings.fontSize === size
-          return (
-            <button
-              key={size}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              data-active={active}
-              data-testid={`chat-size-${size}`}
-              className="chat-size-option"
-              onClick={() => onChange({ fontSize: size })}
-            >
-              <strong>{label}</strong>
-              <small>{spec}</small>
-            </button>
-          )
-        })}
+      <div className="settings-subsection">
+        <p className="settings-subsection-label">Chat reading size</p>
+        <div className="chat-size-options" role="radiogroup" aria-label="Chat font size">
+          {(Object.keys(chatFontSizes) as ChatFontSize[]).map((size) => {
+            const option = chatFontSizes[size]
+            const [label, spec] = option.label.split(' · ')
+            const active = settings.fontSize === size
+            return (
+              <button
+                key={size}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                data-active={active}
+                data-testid={`chat-size-${size}`}
+                className="chat-size-option"
+                onClick={() => onChange({ ...settings, fontSize: size })}
+              >
+                <strong>{label}</strong>
+                <small>{spec}</small>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="chat-size-preview" style={previewStyle} aria-live="polite">
+          <p>
+            The model is rendering a diff while you review the previous turn.
+            This is roughly how chat copy will read at the selected size.
+          </p>
+          <small>preview · {current.size} / {current.lineHeight}</small>
+        </div>
       </div>
 
-      <div className="chat-size-preview" style={previewStyle} aria-live="polite">
-        <p>
-          The model is rendering a diff while you review the previous turn.
-          This is roughly how chat copy will read at the selected size.
-        </p>
-        <small>preview · {current.size} / {current.lineHeight}</small>
+      <div className="settings-subsection">
+        <p className="settings-subsection-label">Code &amp; diff font</p>
+        <div className="mono-font-options" role="radiogroup" aria-label="Code font">
+          {(Object.keys(monoFonts) as MonoFont[]).map((key) => {
+            const option = monoFonts[key]
+            const active = settings.monoFont === key
+            return (
+              <button
+                key={key}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                data-active={active}
+                data-testid={`mono-font-${key}`}
+                className="mono-font-option"
+                onClick={() => onChange({ ...settings, monoFont: key })}
+                style={{ '--mono-preview-stack': option.stack } as React.CSSProperties}
+              >
+                <span className="mono-font-option-text">
+                  <strong>{option.label}</strong>
+                  <small>0Oo il1 =&gt; !=</small>
+                </span>
+                {active ? (
+                  <span className="mono-font-check" aria-hidden="true">
+                    <Check size={10} strokeWidth={3} />
+                  </span>
+                ) : (
+                  <span className="mono-font-sample" aria-hidden="true">Aa 1·0</span>
+                )}
+              </button>
+            )
+          })}
+        </div>
       </div>
     </>
   )
@@ -1973,6 +2195,7 @@ function SelectedAgentPane({
   onThinkingCommand,
   onResetSession,
   onForkSession,
+  onReviewSession,
   onAnswerQuestion,
 }: {
   selectedProject: ProjectRow
@@ -1982,7 +2205,7 @@ function SelectedAgentPane({
   chatFocusRequest: number
   themeMode: ThemeMode
   onStartSession: () => void
-  onDeleteSession: (agentId: string) => Promise<void>
+  onDeleteSession: (agentId: string) => void
   onRenameSession: (agentId: string, title: string) => Promise<void>
   onSend: (
     agentId: string,
@@ -1995,6 +2218,7 @@ function SelectedAgentPane({
   onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
   onResetSession: (agentId: string) => Promise<void>
   onForkSession: (agentId: string) => Promise<void>
+  onReviewSession: (agentId: string, target: ReviewTarget) => Promise<void>
   onAnswerQuestion: (
     agentId: string,
     requestId: string,
@@ -2004,9 +2228,10 @@ function SelectedAgentPane({
   const revision = selectedAgent
     ? `${selectedAgent.updatedAt}:${selectedAgent.messageCount}:${selectedAgent.diffCount}:${selectedAgent.status}`
     : ''
-  const detailQuery = useQuery(
-    agentDetailQueryOptions(selectedAgent?.id ?? '', 100, revision),
-  )
+  const detailQuery = useQuery({
+    ...agentDetailQueryOptions(selectedAgent?.id ?? '', 100, revision),
+    placeholderData: keepPreviousData,
+  })
   const agent = mergeAgentDetail(selectedAgent, detailQuery.data)
   const refreshDetail = React.useCallback(async () => {
     if (!selectedAgent) return
@@ -2061,6 +2286,8 @@ function SelectedAgentPane({
             <ChatPanel
               key={agent.id}
               agent={agent}
+              cwd={selectedProject.cwd}
+              themeMode={themeMode}
               focusRequest={chatFocusRequest}
               onSend={(agentId, text, images) =>
                 onSend(agentId, text, images, refreshDetail)
@@ -2070,6 +2297,7 @@ function SelectedAgentPane({
               onThinkingCommand={onThinkingCommand}
               onResetSession={onResetSession}
               onForkSession={onForkSession}
+              onReviewSession={onReviewSession}
               onAnswerQuestion={onAnswerQuestion}
               onDetailRefresh={refreshDetail}
             />
@@ -2130,7 +2358,7 @@ function SidebarHeader({
 }: {
   project: ProjectRow
   agent: AgentCell
-  onDeleteSession: (agentId: string) => Promise<void>
+  onDeleteSession: (agentId: string) => void
   onRenameSession: (agentId: string, title: string) => Promise<void>
 }) {
   const [pending, setPending] = React.useState(false)
@@ -2170,17 +2398,9 @@ function SidebarHeader({
     }
   }
 
-  async function removeSession() {
+  function removeSession() {
     if (!agent.isSession) return
-    setPending(true)
-    setError(null)
-    try {
-      await onDeleteSession(agent.id)
-    } catch (cause) {
-      setError(errorMessage(cause))
-    } finally {
-      setPending(false)
-    }
+    onDeleteSession(agent.id)
   }
 
   function beginEdit() {
@@ -2202,13 +2422,13 @@ function SidebarHeader({
           title={agent.status}
           aria-label={`Status: ${agent.status}`}
         />
-        <span className="chat-meta" data-testid="selected-project" title={project.name}>
+        <span className="chat-meta" data-meta="project" data-testid="selected-project" title={project.name}>
           {project.name}
         </span>
-        <span className="chat-meta chat-meta-divider" aria-hidden="true">·</span>
-        <span className="chat-meta" title={agent.slot}>{agent.slot}</span>
-        <span className="chat-meta chat-meta-divider" aria-hidden="true">·</span>
-        <span className="chat-meta" title={`${agent.model} · thinking ${thinking}`}>
+        <span className="chat-meta chat-meta-divider" data-divider="slot" aria-hidden="true">·</span>
+        <span className="chat-meta" data-meta="slot" title={agent.slot}>{agent.slot}</span>
+        <span className="chat-meta chat-meta-divider" data-divider="model" aria-hidden="true">·</span>
+        <span className="chat-meta" data-meta="model" title={`${agent.model} · thinking ${thinking}`}>
           {agent.model}
           <span className="chat-meta-thinking">:{thinking}</span>
         </span>
@@ -2339,6 +2559,8 @@ function ContextUsageChip({
 
 function ChatPanel({
   agent,
+  cwd,
+  themeMode,
   focusRequest,
   onSend,
   onSteer,
@@ -2346,10 +2568,13 @@ function ChatPanel({
   onThinkingCommand,
   onResetSession,
   onForkSession,
+  onReviewSession,
   onAnswerQuestion,
   onDetailRefresh,
 }: {
   agent: AgentCell
+  cwd: string
+  themeMode: ThemeMode
   focusRequest: number
   onSend: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
   onSteer: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
@@ -2357,6 +2582,7 @@ function ChatPanel({
   onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
   onResetSession: (agentId: string) => Promise<void>
   onForkSession: (agentId: string) => Promise<void>
+  onReviewSession: (agentId: string, target: ReviewTarget) => Promise<void>
   onAnswerQuestion: (
     agentId: string,
     requestId: string,
@@ -2365,26 +2591,29 @@ function ChatPanel({
   onDetailRefresh: RefreshAgentDetail
 }) {
   const [pending, setPending] = React.useState(false)
-  const [pendingPrompt, setPendingPrompt] = React.useState<string | null>(null)
+  const [pendingPrompt, setPendingPrompt] = React.useState<
+    { text: string; baselineUserCount: number } | null
+  >(null)
   const [localRunning, setLocalRunning] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const isBackendRunning = agent.status === 'running'
   const isRunning = isBackendRunning || localRunning
+  const userMessageCount = React.useMemo(
+    () => agent.messages.reduce((count, message) => (message.role === 'user' ? count + 1 : count), 0),
+    [agent.messages],
+  )
   const pendingMessage = React.useMemo<BoardMessage | null>(
     () => {
       if (pendingPrompt === null) return null
-      const persisted = agent.messages.some(
-        (message) => message.role === 'user' && message.text === pendingPrompt,
-      )
-      if (persisted) return null
+      if (userMessageCount > pendingPrompt.baselineUserCount) return null
       return {
         id: `pending-${agent.id}`,
         role: 'user',
-        text: pendingPrompt,
+        text: pendingPrompt.text,
         timestamp: new Date().toISOString(),
       }
     },
-    [agent.id, agent.messages, pendingPrompt],
+    [agent.id, pendingPrompt, userMessageCount],
   )
   const visibleMessages = React.useMemo(
     () => (pendingMessage ? [...agent.messages, pendingMessage] : agent.messages),
@@ -2409,11 +2638,36 @@ function ChatPanel({
     [agent, pendingMessage, visibleMessages],
   )
   const rows = React.useMemo(
-    () => deriveAgentTimelineRows(timelineAgent),
-    [timelineAgent],
+    () => deriveAgentTimelineRows(timelineAgent, cwd),
+    [cwd, timelineAgent],
   )
   const messageListRef = React.useRef<HTMLDivElement | null>(null)
-  const latestRowId = rows.at(-1)?.id ?? ''
+  const timelineContentVersion = React.useMemo(() => timelineRowsContentVersion(rows), [rows])
+  const [hasNewContent, setHasNewContent] = React.useState(false)
+  const [selectedMessageId, setSelectedMessageId] = React.useState<string | null>(null)
+  const [composerEmpty, setComposerEmpty] = React.useState(true)
+  const didInitialScrollRef = React.useRef(false)
+  const wasAtBottomRef = React.useRef(true)
+
+  const messageRows = React.useMemo(
+    () =>
+      rows.filter(
+        (row): row is Extract<AgentTimelineRow, { kind: 'message' }> => row.kind === 'message',
+      ),
+    [rows],
+  )
+  const selectedIndex = React.useMemo(() => {
+    if (selectedMessageId === null) return -1
+    return messageRows.findIndex((row) => row.message.id === selectedMessageId)
+  }, [messageRows, selectedMessageId])
+
+  React.useEffect(() => {
+    setSelectedMessageId(null)
+  }, [agent.id])
+
+  React.useEffect(() => {
+    if (selectedMessageId !== null && selectedIndex === -1) setSelectedMessageId(null)
+  }, [selectedIndex, selectedMessageId])
 
   React.useEffect(() => {
     if (agent.status !== 'running') setLocalRunning(false)
@@ -2422,8 +2676,134 @@ function ChatPanel({
   React.useLayoutEffect(() => {
     const list = messageListRef.current
     if (!list) return
-    list.scrollTop = list.scrollHeight
-  }, [agent.id, agent.status, latestRowId, rows.length])
+
+    if (!didInitialScrollRef.current) {
+      if (rows.length === 0) return
+      list.scrollTop = list.scrollHeight
+      didInitialScrollRef.current = true
+      wasAtBottomRef.current = true
+      setHasNewContent(false)
+      return
+    }
+
+    if (selectedMessageId !== null) {
+      const distance = bottomDistance(list)
+      wasAtBottomRef.current = distance <= 24
+      if (!wasAtBottomRef.current) setHasNewContent(true)
+      return
+    }
+
+    if (wasAtBottomRef.current) {
+      list.scrollTop = list.scrollHeight
+      wasAtBottomRef.current = true
+      setHasNewContent(false)
+      return
+    }
+
+    const distance = bottomDistance(list)
+    wasAtBottomRef.current = distance <= 24
+    setHasNewContent(distance > 24)
+  }, [rows.length, selectedMessageId, timelineContentVersion])
+
+  React.useEffect(() => {
+    function isComposerTextarea(target: EventTarget | null): boolean {
+      return (
+        target instanceof HTMLTextAreaElement &&
+        target.dataset.testid === 'chat-input'
+      )
+    }
+
+    function scrollSelectedIntoView(messageId: string) {
+      requestAnimationFrame(() => {
+        const list = messageListRef.current
+        if (!list) return
+        const el = list.querySelector<HTMLElement>(
+          `[data-selected-id="${CSS.escape(messageId)}"]`,
+        )
+        el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      })
+    }
+
+    function selectIndex(nextIndex: number) {
+      const clamped = Math.max(0, Math.min(messageRows.length - 1, nextIndex))
+      const next = messageRows[clamped]
+      if (!next) return
+      setSelectedMessageId(next.message.id)
+      scrollSelectedIntoView(next.message.id)
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+
+      if (selectedMessageId === null) {
+        if (
+          event.key === 'ArrowUp' &&
+          !event.shiftKey &&
+          composerEmpty &&
+          isComposerTextarea(event.target) &&
+          messageRows.length > 0
+        ) {
+          event.preventDefault()
+          selectIndex(messageRows.length - 1)
+        }
+        return
+      }
+
+      if (event.shiftKey) return
+
+      const key = event.key
+      if (key === 'ArrowUp' || key === '[') {
+        event.preventDefault()
+        if (selectedIndex > 0) selectIndex(selectedIndex - 1)
+        return
+      }
+      if (key === 'ArrowDown' || key === ']') {
+        event.preventDefault()
+        if (selectedIndex >= messageRows.length - 1) {
+          setSelectedMessageId(null)
+        } else {
+          selectIndex(selectedIndex + 1)
+        }
+        return
+      }
+      if (key === 'j') {
+        event.preventDefault()
+        const list = messageListRef.current
+        if (list) list.scrollBy({ top: list.clientHeight * 0.5, behavior: 'smooth' })
+        return
+      }
+      if (key === 'k') {
+        event.preventDefault()
+        const list = messageListRef.current
+        if (list) list.scrollBy({ top: -list.clientHeight * 0.5, behavior: 'smooth' })
+        return
+      }
+      setSelectedMessageId(null)
+    }
+
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [composerEmpty, messageRows, selectedIndex, selectedMessageId])
+
+  React.useEffect(() => {
+    const list = messageListRef.current
+    if (!list) return
+    const onScroll = () => {
+      const distance = bottomDistance(list)
+      wasAtBottomRef.current = distance <= 24
+      if (wasAtBottomRef.current) setHasNewContent(false)
+    }
+    onScroll()
+    list.addEventListener('scroll', onScroll, { passive: true })
+    return () => list.removeEventListener('scroll', onScroll)
+  }, [agent.id])
+
+  function scrollToBottom() {
+    const list = messageListRef.current
+    if (!list) return
+    list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' })
+    setHasNewContent(false)
+  }
 
   async function interrupt() {
     setPending(true)
@@ -2461,6 +2841,7 @@ function ChatPanel({
           onThinkingCommand,
           onResetSession,
           onForkSession,
+          onReviewSession,
         })
         await onDetailRefresh()
         clearComposer()
@@ -2472,7 +2853,10 @@ function ChatPanel({
       return
     }
 
-    setPendingPrompt(pendingPromptText(prompt, promptImages))
+    setPendingPrompt({
+      text: pendingPromptText(prompt, promptImages),
+      baselineUserCount: userMessageCount,
+    })
     setError(null)
     clearComposer()
 
@@ -2501,7 +2885,25 @@ function ChatPanel({
 
   return (
     <div className="chat-panel" data-testid="chat-panel">
-      <MessageTimeline rows={rows} listRef={messageListRef} />
+      <div className="message-list-wrap">
+        <MessageTimeline
+          rows={rows}
+          themeMode={themeMode}
+          listRef={messageListRef}
+          selectedMessageId={selectedMessageId}
+        />
+        {hasNewContent ? (
+          <button
+            type="button"
+            className="jump-to-bottom"
+            onClick={scrollToBottom}
+            aria-label="Jump to latest messages"
+          >
+            <ChevronDown size={14} />
+            New messages
+          </button>
+        ) : null}
+      </div>
       {error ? <span className="chat-error" role="status">{error}</span> : null}
       {agent.pendingQuestion ? (
         <PendingQuestionPanel
@@ -2526,6 +2928,7 @@ function ChatPanel({
         onError={setError}
         onInterrupt={interrupt}
         onSubmitPrompt={submitPrompt}
+        onEmptyChange={setComposerEmpty}
       />
     </div>
   )
@@ -2541,6 +2944,7 @@ function ChatComposer({
   onError,
   onInterrupt,
   onSubmitPrompt,
+  onEmptyChange,
 }: {
   agentId: string
   contextUsage: AgentCell['contextUsage']
@@ -2555,12 +2959,17 @@ function ChatComposer({
     images: SendMessageImage[],
     clearComposer: () => void,
   ) => Promise<void>
+  onEmptyChange?: (empty: boolean) => void
 }) {
   const [draft, setDraft] = React.useState(() => readStoredChatDraft(agentId))
   const [images, setImages] = React.useState<SendMessageImage[]>([])
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
   const hasDraftContent = draft.trim().length > 0 || images.length > 0
+
+  React.useEffect(() => {
+    onEmptyChange?.(!hasDraftContent)
+  }, [hasDraftContent, onEmptyChange])
   const canInterrupt = isBackendRunning && !hasDraftContent
   const canSteer = isBackendRunning && hasDraftContent
   const canSend = !isRunning && hasDraftContent
@@ -2691,10 +3100,14 @@ function ChatComposer({
 
 const MessageTimeline = React.memo(function MessageTimeline({
   rows,
+  themeMode,
   listRef,
+  selectedMessageId,
 }: {
   rows: AgentTimelineRow[]
+  themeMode: ThemeMode
   listRef: React.RefObject<HTMLDivElement | null>
+  selectedMessageId: string | null
 }) {
   if (rows.length === 0) {
     return (
@@ -2704,18 +3117,46 @@ const MessageTimeline = React.memo(function MessageTimeline({
     )
   }
 
+  const hideTimestampByRowId = computeHiddenTimestamps(rows)
+
   return (
     <div className="message-list" ref={listRef}>
       {rows.map((row) => {
-        if (row.kind === 'work') return <WorkTimelineRow key={row.id} row={row} />
+        if (row.kind === 'work') {
+          return <WorkTimelineRow key={row.id} row={row} themeMode={themeMode} />
+        }
         if (row.kind === 'working') {
           return <WorkingTimelineRow key={row.id} row={row} />
         }
-        return <MessageTimelineRow key={row.id} message={row.message} />
+        return (
+          <MessageTimelineRow
+            key={row.id}
+            message={row.message}
+            hideTimestamp={hideTimestampByRowId.has(row.id)}
+            selected={selectedMessageId === row.message.id}
+          />
+        )
       })}
     </div>
   )
 })
+
+function computeHiddenTimestamps(rows: AgentTimelineRow[]): Set<string> {
+  const hidden = new Set<string>()
+  let prevRole: string | null = null
+  let prevTimeMs: number | null = null
+  for (const row of rows) {
+    if (row.kind !== 'message') continue
+    const ts = new Date(row.message.timestamp).getTime()
+    const valid = !Number.isNaN(ts)
+    const sameRole = prevRole === row.message.role
+    const within = prevTimeMs !== null && valid && ts - prevTimeMs <= 60_000
+    if (sameRole && within) hidden.add(row.id)
+    prevRole = row.message.role
+    if (valid) prevTimeMs = ts
+  }
+  return hidden
+}
 
 function PendingQuestionPanel({
   pendingQuestion,
@@ -2758,70 +3199,90 @@ function PendingQuestionPanel({
       <div className="pending-question-head">
         <strong>Claude needs input</strong>
       </div>
-      {pendingQuestion.questions.map((question) => (
-        <label key={question.id} className="pending-question-field">
-          <span>{question.question}</span>
-          {question.options.length > 0 && !question.multiSelect ? (
-	            <select
-	              value={String(answers[question.id] ?? '')}
-	              onChange={(event) => {
-	                const value = event.currentTarget.value
-	                setAnswers((current) => ({
-	                  ...current,
-	                  [question.id]: value,
-	                }))
-	              }}
-	            >
-              {question.options.map((option) => (
-                <option key={option.label} value={option.label}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          ) : question.options.length > 0 ? (
-            <div className="pending-question-options">
-              {question.options.map((option) => {
-                const selected = Array.isArray(answers[question.id])
-                  ? answers[question.id].includes(option.label)
-                  : false
-                return (
-	                  <label key={option.label}>
-	                    <input
-	                      type="checkbox"
-	                      checked={selected}
-	                      onChange={(event) => {
-	                        const checked = event.currentTarget.checked
-	                        setAnswers((current) => {
-	                          const currentAnswer = current[question.id]
-	                          const existing = Array.isArray(currentAnswer) ? currentAnswer : []
-	                          return {
-	                            ...current,
-	                            [question.id]: checked
-	                              ? [...existing, option.label]
-	                              : existing.filter((item: string) => item !== option.label),
-	                          }
-	                        })
-	                      }}
-	                    />
-                    <span>{option.label}</span>
-                  </label>
-                )
-              })}
-            </div>
-          ) : (
-	            <input
-	              value={String(answers[question.id] ?? '')}
-	              onChange={(event) => {
-	                const value = event.currentTarget.value
-	                setAnswers((current) => ({
-	                  ...current,
-	                  [question.id]: value,
-	                }))
-	              }}
-	            />
-          )}
-        </label>
-      ))}
+      {pendingQuestion.questions.map((question) => {
+        const labelId = `pending-question-${question.id}-label`
+        const hasOptions = question.options.length > 0
+        return (
+          <div key={question.id} className="pending-question-field">
+            <span id={labelId}>{question.question}</span>
+            {hasOptions && !question.multiSelect ? (
+              <div
+                className="pending-question-options"
+                role="radiogroup"
+                aria-labelledby={labelId}
+              >
+                {question.options.map((option) => {
+                  const selected = answers[question.id] === option.label
+                  return (
+                    <button
+                      key={option.label}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      className={`pending-question-chip${selected ? ' selected' : ''}`}
+                      onClick={() =>
+                        setAnswers((current) => ({
+                          ...current,
+                          [question.id]: option.label,
+                        }))
+                      }
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : hasOptions ? (
+              <div
+                className="pending-question-options"
+                role="group"
+                aria-labelledby={labelId}
+              >
+                {question.options.map((option) => {
+                  const currentAnswer = answers[question.id]
+                  const selected = Array.isArray(currentAnswer)
+                    ? currentAnswer.includes(option.label)
+                    : false
+                  return (
+                    <button
+                      key={option.label}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={selected}
+                      className={`pending-question-chip${selected ? ' selected' : ''}`}
+                      onClick={() =>
+                        setAnswers((current) => {
+                          const existing = Array.isArray(current[question.id])
+                            ? (current[question.id] as string[])
+                            : []
+                          const next = existing.includes(option.label)
+                            ? existing.filter((item) => item !== option.label)
+                            : [...existing, option.label]
+                          return { ...current, [question.id]: next }
+                        })
+                      }
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <input
+                aria-labelledby={labelId}
+                value={String(answers[question.id] ?? '')}
+                onChange={(event) => {
+                  const value = event.currentTarget.value
+                  setAnswers((current) => ({
+                    ...current,
+                    [question.id]: value,
+                  }))
+                }}
+              />
+            )}
+          </div>
+        )
+      })}
       <button type="submit" disabled={pending}>
         <Check size={14} />
         Answer
@@ -2830,13 +3291,32 @@ function PendingQuestionPanel({
   )
 }
 
-const MessageTimelineRow = React.memo(function MessageTimelineRow({ message }: { message: BoardMessage }) {
+const MessageTimelineRow = React.memo(function MessageTimelineRow({
+  message,
+  hideTimestamp = false,
+  selected = false,
+}: {
+  message: BoardMessage
+  hideTimestamp?: boolean
+  selected?: boolean
+}) {
+  const fullTime = formatTime(message.timestamp)
+  const selectedClass = selected ? ' is-selected' : ''
+  const selectedDataId = selected ? message.id : undefined
+  const ariaCurrent = selected ? ('true' as const) : undefined
+
   if (message.role === 'user') {
     return (
-      <article className="timeline-row user-row" data-message-role={message.role}>
+      <article
+        className={`timeline-row user-row${selectedClass}`}
+        data-message-role={message.role}
+        data-selected-id={selectedDataId}
+        aria-current={ariaCurrent}
+        title={hideTimestamp ? fullTime : undefined}
+      >
         <div className="user-bubble">
           <RichMessageBody text={message.text} />
-          <MessageMeta message={message} align="right" />
+          <MessageMeta message={message} align="right" hideTime={hideTimestamp} />
         </div>
       </article>
     )
@@ -2844,10 +3324,16 @@ const MessageTimelineRow = React.memo(function MessageTimelineRow({ message }: {
 
   if (message.role === 'assistant') {
     return (
-      <article className="timeline-row assistant-row" data-message-role={message.role}>
+      <article
+        className={`timeline-row assistant-row${selectedClass}`}
+        data-message-role={message.role}
+        data-selected-id={selectedDataId}
+        aria-current={ariaCurrent}
+        title={hideTimestamp ? fullTime : undefined}
+      >
         <RichMessageBody text={message.text} />
         <div className="assistant-meta-row">
-          <MessageMeta message={message} />
+          <MessageMeta message={message} hideTime={hideTimestamp} />
           <CopyTextButton text={message.text} label="Copy response" />
         </div>
       </article>
@@ -2856,12 +3342,15 @@ const MessageTimelineRow = React.memo(function MessageTimelineRow({ message }: {
 
   return (
     <article
-      className={`timeline-row note-row ${message.role}`}
+      className={`timeline-row note-row ${message.role}${selectedClass}`}
       data-message-role={message.role}
+      data-selected-id={selectedDataId}
+      aria-current={ariaCurrent}
+      title={hideTimestamp ? fullTime : undefined}
     >
       <div className="note-meta">
         <span>{message.role}</span>
-        <time>{formatTime(message.timestamp)}</time>
+        {hideTimestamp ? null : <time>{fullTime}</time>}
       </div>
       <RichMessageBody text={message.text} />
     </article>
@@ -2870,20 +3359,22 @@ const MessageTimelineRow = React.memo(function MessageTimelineRow({ message }: {
 
 const WorkTimelineRow = React.memo(function WorkTimelineRow({
   row,
+  themeMode,
 }: {
   row: Extract<AgentTimelineRow, { kind: 'work' }>
+  themeMode: ThemeMode
 }) {
   const [expanded, setExpanded] = React.useState(false)
-  const visibleEntries = expanded ? row.entries : row.entries.slice(0, 6)
-  const hiddenCount = row.entries.length - visibleEntries.length
-  const title = row.entries.some((entry) => entry.kind !== 'tool_execution_start')
-    ? 'Activity'
-    : 'Tool calls'
+  const [expandedDiffEntryId, setExpandedDiffEntryId] = React.useState<string | null>(null)
+  const entries = React.useMemo(() => compactWorkEntries(row.entries), [row.entries])
+  const visibleEntries = expanded ? entries : entries.slice(0, 6)
+  const hiddenCount = entries.length - visibleEntries.length
+  const summary = summarizeWorkEntries(entries)
 
   return (
     <section className="timeline-row work-row" aria-label="Runtime activity">
       <div className="work-row-header">
-        <span>{title} ({row.entries.length})</span>
+        <span>{summary}</span>
         {hiddenCount > 0 ? (
           <button type="button" onClick={() => setExpanded((value) => !value)}>
             <ChevronDown size={13} className={expanded ? 'expanded' : ''} />
@@ -2893,104 +3384,206 @@ const WorkTimelineRow = React.memo(function WorkTimelineRow({
       </div>
       <div className="work-entry-list">
         {visibleEntries.map((entry) => (
-          <WorkEntryRow key={entry.id} entry={entry} />
+          <WorkEntryRow
+            key={entry.id}
+            entry={entry}
+            themeMode={themeMode}
+            diffExpanded={expandedDiffEntryId === entry.id}
+            onToggleDiff={() =>
+              setExpandedDiffEntryId((current) => current === entry.id ? null : entry.id)
+            }
+          />
         ))}
       </div>
     </section>
   )
 })
 
-const WorkEntryRow = React.memo(function WorkEntryRow({ entry }: { entry: TimelineWorkEntry }) {
+const WorkEntryRow = React.memo(function WorkEntryRow({
+  entry,
+  themeMode,
+  diffExpanded,
+  onToggleDiff,
+}: {
+  entry: TimelineWorkEntry
+  themeMode: ThemeMode
+  diffExpanded: boolean
+  onToggleDiff: () => void
+}) {
   const [expanded, setExpanded] = React.useState(false)
-  const preview = workEntryPreview(entry)
-  const displayText = preview ? `${entry.label} - ${preview}` : entry.label
-  const fullText = preview ?? displayText
-  const canExpand = displayText.length > 72 || fullText.includes('\n')
+  const preview = formatWorkPreview(entry)
+  const previewText = preview?.text ?? null
+  const stats = entry.diff ? diffLineStats(entry.diff.patch) : null
+  const displayText = previewText ? `${entry.label} - ${previewText}` : entry.label
+  const fullText = entry.detail?.trim() || displayText
+  const canExpand = !entry.path && (displayText.length > 72 || fullText.includes('\n'))
+  const canToggle = canExpand || Boolean(entry.diff)
+  const icon = workEntryIcon(entry)
+  const command = isCommandEntry(entry)
 
   return (
-    <div className={`work-entry ${entry.tone} ${expanded ? 'expanded' : ''}`}>
-      <TerminalSquare size={13} className={`work-entry-icon ${entry.tone}`} />
+    <div className={`work-entry ${entry.tone} ${entry.diff ? 'has-diff' : ''} ${command ? 'is-command' : ''} ${icon ? '' : 'no-icon'} ${expanded ? 'expanded' : ''}`}>
+      {icon}
       <div className="work-entry-content">
         <div className="work-entry-title">
           <button
             type="button"
             onClick={() => {
+              if (entry.diff) {
+                onToggleDiff()
+                return
+              }
               if (canExpand) setExpanded((value) => !value)
             }}
-            className={`work-entry-toggle ${canExpand ? 'expandable' : ''}`}
-            aria-expanded={expanded}
-            disabled={!canExpand}
-            title={displayText}
+            className={`work-entry-toggle ${canToggle ? 'expandable' : ''}`}
+            aria-expanded={entry.diff ? diffExpanded : expanded}
+            disabled={!canToggle}
+            title={entry.diff ? `Show diff for ${previewText ?? entry.diff.path}` : displayText}
           >
             <span suppressHydrationWarning>
-              <strong>{entry.label}</strong>
-              {preview ? <> - {preview}</> : null}
+              {command && preview ? null : <strong>{entry.label}</strong>}
+              {command ? <span className="work-call-pill">{workCallLabel(entry)}</span> : null}
+              {preview ? (
+                <>
+                  {command ? null : <span className="work-entry-separator">{entry.diff ? '' : '-'}</span>}
+                  {preview.node}
+                </>
+              ) : null}
+              {entry.count && entry.count > 1 ? (
+                <span className="work-repeat-count">×{entry.count}</span>
+              ) : null}
+              {stats ? (
+                <span className="work-diff-stats">
+                  <span className="add">+{stats.added}</span>
+                  <span className="del">-{stats.deleted}</span>
+                </span>
+              ) : null}
+              {entry.diff ? (
+                <ChevronDown size={13} className={`work-entry-chevron ${diffExpanded ? 'expanded' : ''}`} />
+              ) : null}
             </span>
           </button>
-          <time>{formatTime(entry.timestamp)}</time>
         </div>
         {expanded && canExpand ? (
           <pre className="work-entry-detail"><code>{fullText}</code></pre>
+        ) : null}
+        {entry.diff ? (
+          <InlineDiffPreview
+            diff={entry.diff}
+            themeMode={themeMode}
+            expanded={diffExpanded}
+            onToggle={onToggleDiff}
+          />
         ) : null}
       </div>
     </div>
   )
 })
 
-function workEntryPreview(entry: TimelineWorkEntry) {
-  return entry.detail?.trim() || null
+function InlineDiffPreview({
+  diff,
+  themeMode,
+  expanded,
+  onToggle,
+}: {
+  diff: DiffArtifact
+  themeMode: ThemeMode
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const stats = React.useMemo(() => diffLineStats(diff.patch), [diff.patch])
+  return (
+    <div className={`inline-diff-card${expanded ? ' expanded' : ''}`}>
+      <button
+        type="button"
+        className="inline-diff-summary"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <GitPullRequest size={13} />
+        <span className="inline-diff-path">{diff.path}</span>
+        <span className="inline-diff-counts">
+          <span className="add">+{stats.added}</span>
+          <span className="del">-{stats.deleted}</span>
+        </span>
+        <ChevronDown size={13} className={expanded ? 'expanded' : ''} />
+      </button>
+      {expanded ? (
+        <div className="inline-pierre-host">
+          <PatchDiff
+            key={`${diff.id}:inline:${themeMode}`}
+            patch={diff.patch}
+            disableWorkerPool
+            options={{
+              diffStyle: 'unified',
+              overflow: 'wrap',
+              themeType: themeMode,
+            }}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
-type SlashCommand = {
-  name: 'thinking' | 'new' | 'fork'
-  level?: ThinkingLevel
+function workEntryIcon(entry: TimelineWorkEntry) {
+  const call = workCallLabel(entry)
+  if (entry.diff) {
+    return <PencilLine size={13} className="work-entry-icon diff" />
+  }
+  if (call === 'grep' || call === 'glob' || call === 'search') {
+    return <Search size={13} className="work-entry-icon search" />
+  }
+  if (call === 'read') {
+    return <FileText size={13} className="work-entry-icon file" />
+  }
+  if (call === 'edit' || call === 'write' || call === 'multiedit') {
+    return <PencilLine size={13} className="work-entry-icon diff" />
+  }
+  if (isCommandEntry(entry)) return null
+  return <TerminalSquare size={13} className={`work-entry-icon ${entry.tone}`} />
 }
 
-function parseSlashCommand(prompt: string): SlashCommand | null {
-  const [command = '', ...args] = prompt.trim().split(/\s+/)
-  if (command === '/new') {
-    if (args.length > 0) throw new Error('Usage: /new')
-    return { name: 'new' }
-  }
-  if (command === '/fork') {
-    if (args.length > 0) throw new Error('Usage: /fork')
-    return { name: 'fork' }
-  }
-  if (command !== '/thinking') return null
-  if (args.length === 0) return { name: 'thinking' }
-  if (args.length > 1) {
-    throw new Error('Usage: /thinking [off|minimal|low|medium|high|xhigh]')
-  }
-  if (args[0] === 'cycle') return { name: 'thinking' }
-  const parsed = thinkingLevelSchema.safeParse(args[0])
-  if (!parsed.success) {
-    throw new Error('Usage: /thinking [off|minimal|low|medium|high|xhigh]')
-  }
-  return { name: 'thinking', level: parsed.data }
-}
+type WorkPreview = { node: React.ReactNode; text: string }
 
-async function runSlashCommand(
-  command: SlashCommand,
-  agent: AgentCell,
-  actions: {
-    onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
-    onResetSession: (agentId: string) => Promise<void>
-    onForkSession: (agentId: string) => Promise<void>
-  },
-) {
-  if (command.name === 'new') {
-    await actions.onResetSession(agent.id)
-    return
-  }
-  if (command.name === 'fork') {
-    await actions.onForkSession(agent.id)
-    return
-  }
-  if (command.name === 'thinking') {
-    if (!supportsThinking(agent.runtime)) {
-      throw new Error(`${agent.runtime} sessions do not support /thinking yet`)
+function formatWorkPreview(entry: TimelineWorkEntry): WorkPreview | null {
+  if (entry.path) return renderPathPreview(entry.path)
+  const detail = entry.detail?.trim()
+  if (!detail || detail === '{}' || detail === '[]') return null
+
+  const colonIndex = detail.indexOf(': ')
+  if (colonIndex > 0 && colonIndex <= 32) {
+    const toolName = detail.slice(0, colonIndex)
+    const args = detail.slice(colonIndex + 2).trim()
+    if (args) {
+      const kind = classifyToolName(toolName)
+      if (kind === 'path') return renderPathPreview(args)
+      if (kind === 'command') return { node: <span className="work-arg-mono">{args}</span>, text: args }
+      if (kind === 'pattern') {
+        return { node: <span className="work-arg-mono">"{args}"</span>, text: `"${args}"` }
+      }
     }
-    await actions.onThinkingCommand(agent.id, command.level)
+  }
+
+  return { node: detail, text: detail }
+}
+
+function renderPathPreview(rawPath: string): WorkPreview {
+  const path = displayPath(rawPath.replace(/^["']|["']$/g, '').trim())
+  const slash = path.lastIndexOf('/')
+  if (slash <= 0 || slash >= path.length - 1) {
+    return { node: <span className="work-arg-path">{path}</span>, text: path }
+  }
+  const dir = path.slice(0, slash + 1)
+  const base = path.slice(slash + 1)
+  return {
+    node: (
+      <span className="work-arg-path">
+        <span className="work-arg-dir">{dir}</span>
+        <span className="work-arg-base">{base}</span>
+      </span>
+    ),
+    text: path,
   }
 }
 
@@ -2999,6 +3592,7 @@ function WorkingTimelineRow({
 }: {
   row: Extract<AgentTimelineRow, { kind: 'working' }>
 }) {
+  const elapsed = useElapsedSeconds(row.startedAt)
   return (
     <div className="timeline-row working-row">
       <span className="working-dots" aria-hidden="true">
@@ -3006,22 +3600,85 @@ function WorkingTimelineRow({
         <span />
         <span />
       </span>
-      <span>{row.startedAt ? `Working since ${formatTime(row.startedAt)}` : 'Working'}</span>
+      <span>
+        {elapsed === null ? 'Working' : `Working · ${formatElapsed(elapsed)}`}
+      </span>
     </div>
   )
+}
+
+function useElapsedSeconds(startedAt: string | null | undefined) {
+  const startMs = React.useMemo(() => {
+    if (!startedAt) return null
+    const ms = new Date(startedAt).getTime()
+    return Number.isNaN(ms) ? null : ms
+  }, [startedAt])
+
+  const [seconds, setSeconds] = React.useState<number | null>(() =>
+    startMs === null ? null : Math.max(0, Math.floor((Date.now() - startMs) / 1000)),
+  )
+
+  React.useEffect(() => {
+    if (startMs === null) {
+      setSeconds(null)
+      return
+    }
+    const tick = () => setSeconds(Math.max(0, Math.floor((Date.now() - startMs) / 1000)))
+    tick()
+    let timer: number | undefined
+    const start = () => {
+      if (timer !== undefined) return
+      timer = window.setInterval(tick, 1000)
+    }
+    const stop = () => {
+      if (timer === undefined) return
+      window.clearInterval(timer)
+      timer = undefined
+    }
+    if (document.visibilityState === 'visible') start()
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        tick()
+        start()
+      } else {
+        stop()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [startMs])
+
+  return seconds
+}
+
+function formatElapsed(totalSeconds: number) {
+  const seconds = totalSeconds % 60
+  const minutes = Math.floor(totalSeconds / 60) % 60
+  const hours = Math.floor(totalSeconds / 3600)
+  const ss = seconds.toString().padStart(2, '0')
+  if (hours > 0) {
+    const mm = minutes.toString().padStart(2, '0')
+    return `${hours}:${mm}:${ss}`
+  }
+  return `${minutes}:${ss}`
 }
 
 function MessageMeta({
   message,
   align = 'left',
+  hideTime = false,
 }: {
   message: BoardMessage
   align?: 'left' | 'right'
+  hideTime?: boolean
 }) {
   return (
     <div className={`message-meta ${align}`}>
       <span>{message.role}</span>
-      <time>{formatTime(message.timestamp)}</time>
+      {hideTime ? null : <time>{formatTime(message.timestamp)}</time>}
     </div>
   )
 }
@@ -3072,101 +3729,8 @@ function CopyTextButton({ text, label }: { text: string; label: string }) {
   )
 }
 
-function deriveAgentTimelineRows(agent: AgentCell): AgentTimelineRow[] {
-  const rows: AgentTimelineRow[] = []
-  let workEntries: TimelineWorkEntry[] = []
-  const timeline = agent.timeline.length
-    ? agent.timeline
-    : agent.messages.map((message) => ({
-        type: 'message' as const,
-        id: `message:${message.id}`,
-        timestamp: message.timestamp,
-        message,
-      }))
-
-  function flushWork() {
-    if (workEntries.length === 0) return
-    rows.push({
-      kind: 'work',
-      id: `work:${workEntries[0]?.id}:${workEntries[workEntries.length - 1]?.id}`,
-      startedAt: workEntries[0]?.timestamp ?? new Date(0).toISOString(),
-      entries: workEntries,
-    })
-    workEntries = []
-  }
-
-  for (const item of timeline) {
-    if (item.type === 'event') {
-      const entry = eventToWorkEntry(item.event)
-      if (entry) workEntries.push(entry)
-      continue
-    }
-
-    if (item.message.role === 'tool') {
-      workEntries.push(toolMessageToWorkEntry(item.message))
-      continue
-    }
-
-    flushWork()
-    rows.push({
-      kind: 'message',
-      id: `message:${item.message.id}`,
-      message: item.message,
-    })
-  }
-
-  flushWork()
-
-  if (agent.status === 'running') {
-    const lastRow = rows[rows.length - 1]
-    rows.push({
-      kind: 'working',
-      id: 'working-indicator',
-      startedAt: lastRow?.kind === 'message' ? lastRow.message.timestamp : null,
-    })
-  }
-
-  return rows
-}
-
-function eventToWorkEntry(event: TimelineEvent): TimelineWorkEntry | null {
-  if (!shouldShowRuntimeEvent(event)) return null
-
-  return {
-    id: event.id,
-    kind: event.kind,
-    tone: event.tone,
-    label: runtimeEventLabel(event),
-    detail: event.detail,
-    timestamp: event.timestamp,
-  }
-}
-
-function shouldShowRuntimeEvent(event: TimelineEvent) {
-  if (event.kind === 'codex_context_compacted') return true
-  if (event.kind.startsWith('claude_tool_')) return true
-  if (event.kind.startsWith('claude_question_')) return true
-  if (event.kind !== 'tool_execution_start') return false
-  return event.label.toLowerCase() !== 'taskupdate'
-}
-
-function runtimeEventLabel(event: TimelineEvent) {
-  const label = event.label.trim()
-  if (label.toLowerCase() === 'bash') return 'Ran command'
-  if (!label || label === 'tool execution start') return 'Tool'
-  return label
-}
-
-function toolMessageToWorkEntry(message: BoardMessage): TimelineWorkEntry {
-  const [firstLine, ...rest] = message.text.split('\n')
-  return {
-    id: message.id,
-    kind: 'tool.message',
-    tone: 'tool',
-    label: firstLine?.trim() || 'Tool output',
-    detail: rest.join('\n').trim() || message.text,
-    timestamp: message.timestamp,
-  }
+function bottomDistance(list: HTMLElement) {
+  return list.scrollHeight - list.clientHeight - list.scrollTop
 }
 
 function TerminalPanel({
@@ -3339,25 +3903,16 @@ function DiffPanel({ agent, themeMode }: { agent: AgentCell; themeMode: ThemeMod
   const [selectedDiffId, setSelectedDiffId] = React.useState<string | null>(null)
   const [diffStyle, setDiffStyle] = React.useState<DiffStyle>('unified')
   const [fullscreen, setFullscreen] = React.useState(false)
-  const fileButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([])
   const diffBodyRef = React.useRef<HTMLDivElement | null>(null)
   const diff =
     agent.diffs.find((item) => item.id === selectedDiffId) ?? agent.diffs[0]
   const selectedIndex = diff
     ? Math.max(0, agent.diffs.findIndex((item) => item.id === diff.id))
     : -1
-  const duplicateFileNames = React.useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const item of agent.diffs) {
-      const name = diffFileName(item)
-      counts.set(name, (counts.get(name) ?? 0) + 1)
-    }
-    return new Set(
-      [...counts.entries()]
-        .filter(([, count]) => count > 1)
-        .map(([name]) => name),
-    )
-  }, [agent.diffs])
+  const diffByPath = React.useMemo(
+    () => new Map(agent.diffs.map((item) => [normalizeDiffPath(item.path), item])),
+    [agent.diffs],
+  )
 
   React.useEffect(() => {
     setSelectedDiffId(null)
@@ -3382,12 +3937,12 @@ function DiffPanel({ agent, themeMode }: { agent: AgentCell; themeMode: ThemeMod
       }
       if (key === 'h') {
         event.preventDefault()
-        selectRelative(-1, false)
+        selectRelative(-1)
         return
       }
       if (key === 'l') {
         event.preventDefault()
-        selectRelative(1, false)
+        selectRelative(1)
         return
       }
       if (key === 'j') {
@@ -3405,49 +3960,16 @@ function DiffPanel({ agent, themeMode }: { agent: AgentCell; themeMode: ThemeMod
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [fullscreen, selectedIndex, agent.diffs])
 
-  React.useEffect(() => {
-    fileButtonRefs.current[selectedIndex]?.scrollIntoView({
-      block: 'nearest',
-      inline: 'nearest',
-    })
-  }, [selectedIndex])
-
-  function selectIndex(index: number, focus = false) {
+  function selectIndex(index: number) {
     if (!agent.diffs.length) return
     const nextIndex = Math.max(0, Math.min(index, agent.diffs.length - 1))
     setSelectedDiffId(agent.diffs[nextIndex]?.id ?? null)
-    if (focus) {
-      window.requestAnimationFrame(() => fileButtonRefs.current[nextIndex]?.focus())
-    }
   }
 
-  function selectRelative(delta: -1 | 1, focus = false) {
+  function selectRelative(delta: -1 | 1) {
     if (!agent.diffs.length || selectedIndex === -1) return
     const nextIndex = (selectedIndex + delta + agent.diffs.length) % agent.diffs.length
-    selectIndex(nextIndex, focus)
-  }
-
-  function onFileListKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    const key = event.key.toLowerCase()
-    if (key === 'h') {
-      event.preventDefault()
-      selectRelative(-1, true)
-      return
-    }
-    if (key === 'l') {
-      event.preventDefault()
-      selectRelative(1, true)
-      return
-    }
-    if (key === 'j') {
-      event.preventDefault()
-      scrollDiff(320)
-      return
-    }
-    if (key === 'k') {
-      event.preventDefault()
-      scrollDiff(-320)
-    }
+    selectIndex(nextIndex)
   }
 
   function scrollDiff(delta: number) {
@@ -3521,62 +4043,204 @@ function DiffPanel({ agent, themeMode }: { agent: AgentCell; themeMode: ThemeMod
           </button>
         </div>
       </div>
-      <div
-        className="diff-file-list"
-        role="tablist"
-        aria-label="Changed files"
-        onKeyDown={onFileListKeyDown}
-      >
-        {agent.diffs.map((item, index) => {
-          const fileName = diffFileName(item)
-          const folder = duplicateFileNames.has(fileName)
-            ? diffFileFolder(item.path)
-            : null
-          return (
-            <button
-              key={item.id}
-              ref={(element) => {
-                fileButtonRefs.current[index] = element
-              }}
-              type="button"
-              role="tab"
-              className={item.id === diff.id ? 'active' : ''}
-              onClick={() => setSelectedDiffId(item.id)}
-              aria-selected={item.id === diff.id}
-              tabIndex={item.id === diff.id ? 0 : -1}
-              title={item.path}
-            >
-              <span className="diff-file-name">{fileName}</span>
-              {folder ? <span className="diff-file-folder">{folder}</span> : null}
-            </button>
-          )
-        })}
-      </div>
-      <div className="pierre-host" ref={diffBodyRef}>
-        <PatchDiff
-          key={`${diff.id}:${diffStyle}:${themeMode}`}
-          patch={diff.patch}
-          disableWorkerPool
-          options={{
-            diffStyle,
-            overflow: 'wrap',
-            themeType: themeMode,
+      <div className="diff-body">
+        <DiffFileTree
+          diffs={agent.diffs}
+          selectedPath={normalizeDiffPath(diff.path)}
+          onSelectPath={(path) => {
+            const next = diffByPath.get(path)
+            if (next) setSelectedDiffId(next.id)
           }}
         />
+        <div className="pierre-host" ref={diffBodyRef}>
+          <PatchDiff
+            key={`${diff.id}:${diffStyle}:${themeMode}`}
+            patch={diff.patch}
+            disableWorkerPool
+            options={{
+              diffStyle,
+              overflow: 'wrap',
+              themeType: themeMode,
+            }}
+          />
+        </div>
       </div>
     </div>
   )
 }
 
-function diffFileName(file: Pick<DiffArtifact, 'path' | 'title'>) {
-  const normalized = file.path.replace(/\\/g, '/')
-  return normalized.split('/').filter(Boolean).at(-1) ?? file.title
+function DiffFileTree({
+  diffs,
+  selectedPath,
+  onSelectPath,
+}: {
+  diffs: DiffArtifact[]
+  selectedPath: string
+  onSelectPath: (path: string) => void
+}) {
+  const paths = React.useMemo(
+    () => diffs.map((diff) => normalizeDiffPath(diff.path)),
+    [diffs],
+  )
+  const statusByPath = React.useMemo(
+    () => new Map(
+      diffs.map((diff) => [
+        normalizeDiffPath(diff.path),
+        diffGitStatus(diff.patch),
+      ]),
+    ),
+    [diffs],
+  )
+  const pathSignature = paths.join('\0')
+  const selectablePathsRef = React.useRef(new Set(paths))
+  const onSelectPathRef = React.useRef(onSelectPath)
+  const selectedPathRef = React.useRef(selectedPath)
+  selectablePathsRef.current = new Set(paths)
+  onSelectPathRef.current = onSelectPath
+  selectedPathRef.current = selectedPath
+  const { model } = useFileTree({
+    density: 'compact',
+    flattenEmptyDirectories: false,
+    initialExpansion: 'open',
+    initialSelectedPaths: selectedPath ? [selectedPath] : [],
+    onSelectionChange: (selectedPaths) => {
+      const nextPath = selectedPaths[0]
+      if (
+        nextPath &&
+        nextPath !== selectedPathRef.current &&
+        selectablePathsRef.current.has(nextPath)
+      ) {
+        onSelectPathRef.current(nextPath)
+      }
+    },
+    paths,
+    renderRowDecoration: ({ item }) => {
+      if (item.kind !== 'file') return null
+      const status = statusByPath.get(item.path)
+      if (!status) return null
+      return {
+        text: diffGitStatusLabel(status),
+        title: `Changed file: ${diffGitStatusTitle(status)}`,
+      }
+    },
+    search: diffs.length > 8,
+    unsafeCSS: diffTreeUnsafeCSS,
+  })
+
+  React.useEffect(() => {
+    model.resetPaths(paths)
+  }, [model, pathSignature, paths])
+
+  React.useEffect(() => {
+    if (!selectedPath) return
+    const selectedPaths = model.getSelectedPaths()
+    if (selectedPaths.length === 1 && selectedPaths[0] === selectedPath) return
+    for (const path of selectedPaths) {
+      model.getItem(path)?.deselect()
+    }
+    const item = model.getItem(selectedPath)
+    if (item) {
+      item.select()
+      item.focus()
+      return
+    }
+    model.focusNearestPath(selectedPath)
+  }, [model, selectedPath])
+
+  return (
+    <aside className="diff-tree-pane" aria-label="Changed files">
+      <PierreFileTree
+        model={model}
+        header={<span className="diff-tree-header">Changed files</span>}
+        style={diffTreeStyle}
+      />
+    </aside>
+  )
 }
 
-function diffFileFolder(path: string) {
-  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean)
-  if (parts.length <= 1) return null
-  return parts.slice(0, -1).join('/')
+const diffTreeStyle: React.CSSProperties = {
+  height: '100%',
+  minHeight: 0,
+  width: '100%',
+  '--trees-bg-override': 'var(--panel-2)',
+  '--trees-bg-muted-override': 'color-mix(in oklab, var(--paper) 7%, var(--panel-2))',
+  '--trees-border-color-override': 'transparent',
+  '--trees-border-radius-override': '6px',
+  '--trees-fg-override': 'var(--ink)',
+  '--trees-muted-fg-override': 'var(--muted)',
+  '--trees-font-family-override': 'var(--font-mono)',
+  '--trees-font-size-override': '12px',
+  '--trees-item-padding-x-override': '6px',
+  '--trees-padding-inline-override': '10px',
+  '--trees-level-gap-override': '7px',
+  '--trees-icon-width-override': '14px',
+  '--trees-git-lane-width-override': '0px',
+  '--trees-selected-bg-override': 'var(--accent-soft)',
+  '--trees-selected-fg-override': 'var(--accent)',
+} as React.CSSProperties
+
+const diffTreeUnsafeCSS = `
+  [data-type='item'] {
+    letter-spacing: 0;
+  }
+
+  [data-item-section='content'] {
+    flex: 1 1 auto;
+  }
+
+  [data-item-section='decoration'] {
+    flex: 0 0 18px;
+    color: var(--trees-status-modified);
+    font-weight: var(--trees-font-weight-semibold);
+  }
+
+  [data-item-section='spacing-item'] {
+    opacity: 0.45;
+  }
+
+  :host(:hover) [data-item-section='spacing-item'] {
+    opacity: 0.7;
+  }
+`
+
+function diffGitStatus(patch: string): GitStatus {
+  if (/^(?:new file mode|--- \/dev\/null$)/m.test(patch)) return 'added'
+  if (/^(?:deleted file mode|\+\+\+ \/dev\/null$)/m.test(patch)) return 'deleted'
+  if (/^rename (?:from|to) /m.test(patch)) return 'renamed'
+  return 'modified'
+}
+
+function diffGitStatusLabel(status: GitStatus) {
+  switch (status) {
+    case 'added':
+    case 'untracked':
+      return 'A'
+    case 'deleted':
+      return 'D'
+    case 'renamed':
+      return 'R'
+    case 'ignored':
+      return ''
+    case 'modified':
+      return 'M'
+  }
+}
+
+function diffGitStatusTitle(status: GitStatus) {
+  switch (status) {
+    case 'added':
+      return 'added'
+    case 'deleted':
+      return 'deleted'
+    case 'ignored':
+      return 'ignored'
+    case 'renamed':
+      return 'renamed'
+    case 'untracked':
+      return 'untracked'
+    case 'modified':
+      return 'modified'
+  }
 }
 
 function RuntimeBadge({ runtime }: { runtime: string }) {
@@ -3618,45 +4282,6 @@ function formatAgo(iso: string): string {
   return `${d}d`
 }
 
-function moveProject(
-  projects: ProjectRow[],
-  current: Selection,
-  delta: 1 | -1,
-): Selection {
-  const index = projects.findIndex((project) => project.id === current.projectId)
-  const nextIndex = clamp(index + delta, 0, projects.length - 1)
-  const project = projects[nextIndex]
-  const currentProject = projects[index]
-  if (!project) return current
-  const agent =
-    project.agents.find((item) => item.id === current.agentId) ??
-    project.agents[
-      clamp(
-        currentProject?.agents.findIndex((item) => item.id === current.agentId) ??
-          0,
-        0,
-        project.agents.length - 1,
-      )
-    ]
-  return {
-    projectId: project.id,
-    agentId: agent?.id ?? current.agentId,
-  }
-}
-
-function moveAgent(project: ProjectRow, current: Selection, delta: 1 | -1): Selection {
-  const index = project.agents.findIndex((agent) => agent.id === current.agentId)
-  const nextIndex = clamp(index + delta, 0, project.agents.length - 1)
-  return {
-    projectId: project.id,
-    agentId: project.agents[nextIndex]?.id ?? current.agentId,
-  }
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value))
-}
-
 function isEditableTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
   const tag = target.tagName.toLowerCase()
@@ -3680,138 +4305,6 @@ function formatTokenCount(value: number) {
 
 function trimFixed(value: number) {
   return value.toFixed(value >= 10 ? 0 : 1).replace(/\.0$/, '')
-}
-
-function actionForKey(keymap: KeymapSettings, key: string): KeymapAction | undefined {
-  return (Object.entries(keymap) as Array<[KeymapAction, string]>).find(
-    ([, binding]) => binding === key,
-  )?.[0]
-}
-
-function updateKeymap(
-  current: KeymapSettings,
-  action: KeymapAction,
-  value: string,
-): KeymapSettings {
-  const keymap = { ...current }
-  const displacedAction = (
-    Object.entries(keymap) as Array<[KeymapAction, string]>
-  ).find(
-    ([otherAction, binding]) => otherAction !== action && binding === value,
-  )?.[0]
-
-  if (displacedAction) {
-    keymap[displacedAction] = current[action]
-  }
-  keymap[action] = value
-  return saveKeymap(keymap)
-}
-
-function readStoredKeymap(): KeymapSettings {
-  try {
-    const stored = window.localStorage.getItem(keymapStorageKey)
-    if (!stored) return defaultKeymap
-    const parsed = JSON.parse(stored) as Partial<KeymapSettings>
-    const next = { ...defaultKeymap, ...parsed }
-    const values = Object.values(next)
-    if (
-      values.length !== new Set(values).size ||
-      values.some((value) => !keyOptions.includes(value))
-    ) {
-      return defaultKeymap
-    }
-    return next
-  } catch {
-    return defaultKeymap
-  }
-}
-
-function saveKeymap(keymap: KeymapSettings): KeymapSettings {
-  window.localStorage.setItem(keymapStorageKey, JSON.stringify(keymap))
-  return keymap
-}
-
-function readStoredThemeSelection(): ThemeSelection {
-  try {
-    const stored = window.localStorage.getItem(themeStorageKey)
-    if (!stored) return defaultThemeSelection
-    return normalizeThemeSelection(JSON.parse(stored))
-  } catch {
-    return defaultThemeSelection
-  }
-}
-
-function saveThemeSelection(selection: ThemeSelection): ThemeSelection {
-  window.localStorage.setItem(themeStorageKey, JSON.stringify(selection))
-  return selection
-}
-
-function readStoredChatTypography(): ChatTypographySettings {
-  try {
-    const stored = window.localStorage.getItem(chatTypographyStorageKey)
-    if (!stored) return defaultChatTypography
-    const record = JSON.parse(stored) as Record<string, unknown>
-    return normalizeChatTypography(record)
-  } catch {
-    return defaultChatTypography
-  }
-}
-
-function saveChatTypography(settings: ChatTypographySettings): ChatTypographySettings {
-  window.localStorage.setItem(chatTypographyStorageKey, JSON.stringify(settings))
-  return settings
-}
-
-function readStoredChatDraft(agentId: string) {
-  return readStoredChatDrafts()[agentId] ?? ''
-}
-
-function updateChatDraft(
-  agentId: string,
-  value: string,
-  setDraft: React.Dispatch<React.SetStateAction<string>>,
-) {
-  setDraft(value)
-  const drafts = readStoredChatDrafts()
-  if (value) {
-    drafts[agentId] = value
-  } else {
-    delete drafts[agentId]
-  }
-  window.sessionStorage.setItem(chatDraftStorageKey, JSON.stringify(drafts))
-}
-
-function readStoredChatDrafts(): Record<string, string> {
-  try {
-    const stored = window.sessionStorage.getItem(chatDraftStorageKey)
-    if (!stored) return {}
-    const parsed = JSON.parse(stored) as Record<string, unknown>
-    return Object.fromEntries(
-      Object.entries(parsed).filter((entry): entry is [string, string] => (
-        typeof entry[0] === 'string' && typeof entry[1] === 'string'
-      )),
-    )
-  } catch {
-    return {}
-  }
-}
-
-function normalizeChatTypography(value: Record<string, unknown>): ChatTypographySettings {
-  const fontSize = typeof value.fontSize === 'string' && value.fontSize in chatFontSizes
-    ? value.fontSize as ChatFontSize
-    : defaultChatTypography.fontSize
-  return { fontSize }
-}
-
-function applyChatTypography(element: HTMLElement, settings: ChatTypographySettings): void {
-  const tokens = chatFontSizes[settings.fontSize]
-  element.style.setProperty('--chat-font-size', tokens.size)
-  element.style.setProperty('--chat-line-height', tokens.lineHeight)
-}
-
-function formatKey(key: string) {
-  if (key.startsWith('arrow')) return key.replace('arrow', 'Arrow ')
-  return key.toUpperCase()
 }
 
 function pendingPromptText(text: string, images: SendMessageImage[]) {

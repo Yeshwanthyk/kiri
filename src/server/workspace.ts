@@ -12,6 +12,8 @@ import {
   hideProjectInputSchema,
   interruptMessageInputSchema,
   resetSessionInputSchema,
+  reviewSessionInputSchema,
+  restoreSessionInputSchema,
   sendMessageInputSchema,
   setThinkingLevelInputSchema,
   startSessionInputSchema,
@@ -24,6 +26,7 @@ import {
   deleteSession,
   deleteProject,
   renameSession,
+  restoreSession,
   getAgentDetail,
   getAgentLaunchConfig,
   getWorkspaceSnapshot,
@@ -37,6 +40,7 @@ import {
   interruptAgent,
   promptAgent,
   resetAgentSession,
+  reviewAgentSession,
   setAgentThinkingLevel,
   steerAgent,
 } from './runtime'
@@ -78,6 +82,10 @@ export const chooseProjectDirectoryMutation = createServerFn({ method: 'POST' })
 export const deleteSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(deleteSessionInputSchema)
   .handler(async ({ data }) => deleteSession(data))
+
+export const restoreSessionMutation = createServerFn({ method: 'POST' })
+  .inputValidator(restoreSessionInputSchema)
+  .handler(async ({ data }) => restoreSession(data))
 
 export const renameSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(renameSessionInputSchema)
@@ -123,6 +131,13 @@ export const forkSessionMutation = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const agentId = await forkAgentSession(data)
     return { agentId, snapshot: getWorkspaceSnapshot() }
+  })
+
+export const reviewSessionMutation = createServerFn({ method: 'POST' })
+  .inputValidator(reviewSessionInputSchema)
+  .handler(async ({ data }) => {
+    await reviewAgentSession(data)
+    return getWorkspaceSnapshot()
   })
 
 export const answerQuestionMutation = createServerFn({ method: 'POST' })

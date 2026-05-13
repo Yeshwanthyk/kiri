@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -10,6 +11,7 @@ import type {
   ContextUsage,
   DiffArtifact,
   DeleteSessionInput,
+  RestoreSessionInput,
   StartSessionInput,
   MessageRole,
   ThinkingLevel,
@@ -61,6 +63,16 @@ const agentDbRowSchema = z.object({
   updatedAt: z.string().nullable(),
   diffCount: z.number().int().nonnegative(),
   threadId: z.string().nullable(),
+  archivedAt: z.string().nullable(),
+})
+
+const agentDetailDbRowSchema = agentDbRowSchema.extend({
+  cwd: z.string(),
+})
+
+const archivedSessionDbRowSchema = agentDbRowSchema.extend({
+  projectName: z.string(),
+  archivedAt: z.string(),
 })
 
 const messageDbRowSchema = z.object({
@@ -160,6 +172,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
         SELECT
           a.id,
           a.project_id AS projectId,
+          p.cwd,
           a.slot,
           a.title,
           a.runtime,
@@ -168,6 +181,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
           a.session_dir AS sessionDir,
           a.session_file AS sessionFile,
           a.position,
+          a.archived_at AS archivedAt,
           t.id AS threadId,
           t.preview,
           t.message_count AS messageCount,
@@ -178,12 +192,13 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
             WHERE d.agent_id = a.id
           ) AS diffCount
         FROM agent_slots a
+        INNER JOIN projects p ON p.id = a.project_id
         LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
         ORDER BY a.position ASC
       `,
     )
     .all()
-    .map((row) => agentDbRowSchema.parse(row))
+    .map((row) => agentDetailDbRowSchema.parse(row))
 
   const contextUsages = database
     .prepare(
@@ -204,11 +219,14 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   const contextUsageByAgent = new Map(
     contextUsages.map((usage) => [usage.agentId, usage]),
   )
-  const agentsByProject = groupBy(agents, (agent) => agent.projectId)
+  const activeAgentsByProject = groupBy(
+    agents.filter((agent) => !agent.archivedAt),
+    (agent) => agent.projectId,
+  )
 
   const snapshotProjectRows = projects.map((project) => ({
     ...project,
-    agents: (agentsByProject.get(project.id) ?? []).map((agent) => {
+    agents: (activeAgentsByProject.get(project.id) ?? []).map((agent) => {
       return {
         id: agent.id,
         projectId: agent.projectId,
@@ -221,7 +239,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
         sessionFile: agent.sessionFile,
         preview: agent.preview ?? 'No messages yet',
         messageCount: agent.messageCount ?? 0,
-        diffCount: agent.diffCount,
+        diffCount: readDirtyDiffs(database, agent.id, agent.cwd).length,
         contextUsage: readContextUsage(
           agent,
           settings,
@@ -237,6 +255,33 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
       }
     }),
   }))
+  const projectNameById = new Map(projects.map((project) => [project.id, project.name]))
+  const visibleProjectIds = new Set(
+    projects.filter((project) => !project.hiddenAt).map((project) => project.id),
+  )
+  const archivedSessions = agents
+    .flatMap((agent) => {
+      if (!agent.archivedAt || !visibleProjectIds.has(agent.projectId)) return []
+      return [archivedSessionDbRowSchema.parse({
+        ...agent,
+        projectName: projectNameById.get(agent.projectId) ?? agent.projectId,
+        archivedAt: agent.archivedAt,
+      })]
+    })
+    .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))
+    .map((agent) => ({
+      id: agent.id,
+      projectId: agent.projectId,
+      projectName: agent.projectName,
+      title: agent.title,
+      runtime: agent.runtime,
+      model: agent.model,
+      status: agent.status,
+      preview: agent.preview ?? 'No messages yet',
+      messageCount: agent.messageCount ?? 0,
+      updatedAt: agent.updatedAt ?? new Date(0).toISOString(),
+      archivedAt: agent.archivedAt,
+    }))
   const snapshotProjects = snapshotProjectRows.filter((project) => !project.hiddenAt)
   const hiddenProjects = snapshotProjectRows.filter((project) => project.hiddenAt)
   const selectedProject = snapshotProjects[0]
@@ -246,6 +291,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
     settings,
     projects: snapshotProjects,
     hiddenProjects,
+    archivedSessions,
     selected: {
       projectId: selectedProject?.id ?? '',
       agentId: selectedAgent?.id ?? '',
@@ -267,6 +313,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
         SELECT
           a.id,
           a.project_id AS projectId,
+          p.cwd,
           a.slot,
           a.title,
           a.runtime,
@@ -275,6 +322,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
           a.session_dir AS sessionDir,
           a.session_file AS sessionFile,
           a.position,
+          a.archived_at AS archivedAt,
           t.id AS threadId,
           t.preview,
           t.message_count AS messageCount,
@@ -285,12 +333,13 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
             WHERE d.agent_id = a.id
           ) AS diffCount
         FROM agent_slots a
+        INNER JOIN projects p ON p.id = a.project_id
         LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
         WHERE a.id = ?
       `,
     )
     .get(agentId)
-  const parsedAgent = agentDbRowSchema.parse(agent)
+  const parsedAgent = agentDetailDbRowSchema.parse(agent)
   const usage = database
     .prepare(
       `
@@ -347,17 +396,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
     )
     .all(agentId, limit)
     .map((row) => timelineEventFromDbRow(timelineEventDbRowSchema.parse(row)))
-  const diffs = database
-    .prepare(
-      `
-        SELECT id, agent_id AS agentId, title, path, patch, updated_at AS updatedAt
-        FROM diff_artifacts
-        WHERE agent_id = ?
-        ORDER BY updated_at DESC
-      `,
-    )
-    .all(agentId)
-    .map((row) => diffDbRowSchema.parse(row))
+  const diffs = readDirtyDiffs(database, agentId, parsedAgent.cwd)
   const timeline = mergeTimeline(
     messages.map(({ agentId: _agentId, ...message }) => message),
     timelineEvents.map(({ agentId: _agentId, ...event }) => event),
@@ -375,7 +414,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
     sessionFile: parsedAgent.sessionFile,
     preview: parsedAgent.preview ?? 'No messages yet',
     messageCount: parsedAgent.messageCount ?? 0,
-    diffCount: parsedAgent.diffCount,
+    diffCount: diffs.length,
     contextUsage: readContextUsage(
       parsedAgent,
       settings,
@@ -506,15 +545,10 @@ export function deleteSession(input: DeleteSessionInput) {
 
   database.exec('BEGIN')
   try {
+    const archivedAt = new Date().toISOString()
     database
-      .prepare(
-        `
-          INSERT OR REPLACE INTO deleted_sessions (project_id, slot, deleted_at)
-          VALUES (?, ?, ?)
-        `,
-      )
-      .run(row.projectId, row.slot, new Date().toISOString())
-    database.prepare('DELETE FROM agent_slots WHERE id = ?').run(agentId)
+      .prepare('UPDATE agent_slots SET archived_at = ? WHERE id = ?')
+      .run(archivedAt, agentId)
     const rows = database
       .prepare(
         'SELECT id FROM agent_slots WHERE project_id = ? ORDER BY position ASC, id ASC',
@@ -531,6 +565,23 @@ export function deleteSession(input: DeleteSessionInput) {
     throw error
   }
 
+  return getWorkspaceSnapshot()
+}
+
+export function restoreSession(input: RestoreSessionInput) {
+  const database = getDb()
+  const agentId = input.agentId.trim()
+  const row = database
+    .prepare('SELECT id, project_id AS projectId, slot, archived_at AS archivedAt FROM agent_slots WHERE id = ?')
+    .get(agentId) as { id: string; projectId: string; slot: string; archivedAt: string | null } | undefined
+  if (!row) throw new Error(`Session not found: ${agentId}`)
+  if (!row.slot.startsWith('session-')) {
+    throw new Error('Only started sessions can be restored')
+  }
+
+  database
+    .prepare('UPDATE agent_slots SET archived_at = NULL WHERE id = ?')
+    .run(agentId)
   return getWorkspaceSnapshot()
 }
 
@@ -764,21 +815,6 @@ export function getAgentLaunchConfig(agentId: string) {
     .get(agentId)
   if (!row) throw new Error(`Agent not found: ${agentId}`)
   return agentLaunchConfigSchema.parse(row)
-}
-
-export function getSessionDiffFallbackCwds(agentId: string) {
-  const database = getDb()
-  const rows = database
-    .prepare(
-      `
-        SELECT DISTINCT p.cwd
-        FROM agent_slots a
-        INNER JOIN projects p ON p.id = a.project_id
-        ORDER BY CASE WHEN a.id = ? THEN 0 ELSE 1 END, p.position ASC, p.cwd ASC
-      `,
-    )
-    .all(agentId) as Array<{ cwd: string }>
-  return rows.map((row) => row.cwd)
 }
 
 export function getAgentRuntimeState(agentId: string) {
@@ -1146,6 +1182,19 @@ export function replaceAgentDiffArtifacts(input: {
   diffs: Array<Pick<DiffArtifact, 'title' | 'path' | 'patch'>>
 }) {
   const database = getDb()
+  const row = database
+    .prepare(
+      `
+        SELECT p.cwd
+        FROM agent_slots a
+        INNER JOIN projects p ON p.id = a.project_id
+        WHERE a.id = ?
+      `,
+    )
+    .get(input.agentId) as { cwd: string } | undefined
+  const diffs = row
+    ? input.diffs.filter((diff) => diffPathIsDirty(row.cwd, diff.path))
+    : []
   const updatedAt = new Date().toISOString()
   database.exec('BEGIN')
   try {
@@ -1154,7 +1203,7 @@ export function replaceAgentDiffArtifacts(input: {
       INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `)
-    for (const diff of input.diffs) {
+    for (const diff of diffs) {
       const hash = createHash('sha256')
         .update(`${input.agentId}\n${diff.path}\n${diff.patch}`)
         .digest('hex')
@@ -1173,6 +1222,21 @@ export function replaceAgentDiffArtifacts(input: {
     database.exec('ROLLBACK')
     throw error
   }
+}
+
+function readDirtyDiffs(database: DatabaseSync, agentId: string, cwd: string) {
+  return database
+    .prepare(
+      `
+        SELECT id, agent_id AS agentId, title, path, patch, updated_at AS updatedAt
+        FROM diff_artifacts
+        WHERE agent_id = ?
+        ORDER BY updated_at DESC
+      `,
+    )
+    .all(agentId)
+    .map((row) => diffDbRowSchema.parse(row))
+    .filter((diff) => diffPathIsDirty(cwd, diff.path))
 }
 
 function migrate(database: DatabaseSync) {
@@ -1196,6 +1260,7 @@ function migrate(database: DatabaseSync) {
       session_dir TEXT NOT NULL,
       session_file TEXT,
       runtime_state_json TEXT,
+      archived_at TEXT,
       position INTEGER NOT NULL
     );
 
@@ -1262,6 +1327,7 @@ function migrate(database: DatabaseSync) {
   addContextUsageWindowTokensColumn(database)
   addProjectHiddenAtColumn(database)
   addRuntimeStateColumn(database)
+  addAgentArchivedAtColumn(database)
   repairAgentSlotReferences(database)
   removeLegacyDefaultAgentSlots(database)
 }
@@ -1290,6 +1356,14 @@ function addRuntimeStateColumn(database: DatabaseSync) {
   database.exec('ALTER TABLE agent_slots ADD COLUMN runtime_state_json TEXT')
 }
 
+function addAgentArchivedAtColumn(database: DatabaseSync) {
+  const columns = database
+    .prepare('PRAGMA table_info(agent_slots)')
+    .all() as Array<{ name: string }>
+  if (columns.some((column) => column.name === 'archived_at')) return
+  database.exec('ALTER TABLE agent_slots ADD COLUMN archived_at TEXT')
+}
+
 function removeLegacyDefaultAgentSlots(database: DatabaseSync) {
   database.prepare("DELETE FROM agent_slots WHERE slot NOT LIKE 'session-%'").run()
 }
@@ -1316,13 +1390,14 @@ function widenRuntimeCheck(database: DatabaseSync) {
       session_dir TEXT NOT NULL,
       session_file TEXT,
       runtime_state_json TEXT,
+      archived_at TEXT,
       position INTEGER NOT NULL
     );
 
     INSERT INTO agent_slots (
-      id, project_id, slot, title, runtime, model, status, session_dir, session_file, runtime_state_json, position
+      id, project_id, slot, title, runtime, model, status, session_dir, session_file, runtime_state_json, archived_at, position
     )
-    SELECT id, project_id, slot, title, runtime, model, status, session_dir, session_file, NULL, position
+    SELECT id, project_id, slot, title, runtime, model, status, session_dir, session_file, NULL, NULL, position
     FROM agent_slots_old;
 
     DROP TABLE agent_slots_old;
@@ -1334,6 +1409,18 @@ function widenRuntimeCheck(database: DatabaseSync) {
 function runtimeSessionDir(runtime: string, projectId: string, slot: string) {
   if (runtime === 'pi') return join(process.cwd(), '.aether', 'pi-sessions', projectId, slot)
   return join(process.cwd(), '.aether', 'runtime-sessions', runtime, projectId, slot)
+}
+
+function diffPathIsDirty(cwd: string, path: string) {
+  try {
+    return execFileSync('git', ['status', '--porcelain=v1', '--', path], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim().length > 0
+  } catch {
+    return false
+  }
 }
 
 function repairAgentSlotReferences(database: DatabaseSync) {
@@ -1614,20 +1701,13 @@ function readContextUsage(
   settings: ReturnType<typeof getSettings>,
   persistedUsage: z.infer<typeof contextUsageDbRowSchema> | undefined,
 ): ContextUsage | null {
+  if (!persistedUsage) return null
+
   const windowTokens =
-    persistedUsage?.windowTokens ?? settings.runtimes[agent.runtime].contextWindows?.[agent.model]
+    persistedUsage.windowTokens ?? settings.runtimes[agent.runtime].contextWindows?.[agent.model]
   if (!windowTokens) return null
 
-  const usedTokens = persistedUsage?.usedTokens
-  if (usedTokens === undefined) {
-    return {
-      usedTokens: 0,
-      remainingTokens: windowTokens,
-      windowTokens,
-      usedPercent: 0,
-    }
-  }
-
+  const usedTokens = persistedUsage.usedTokens
   return {
     usedTokens,
     remainingTokens: Math.max(windowTokens - usedTokens, 0),
@@ -1719,7 +1799,10 @@ function normalizeSeededModels(database: DatabaseSync) {
 
 function timelineEventFromDbRow(row: z.infer<typeof timelineEventDbRowSchema>) {
   const payload = parseEventPayload(row.payloadJson)
-  const derived = payload ? piEventDisplayFields(payload, row.kind) : undefined
+  const derived = payload && !row.kind.startsWith('fileOperation')
+    ? piEventDisplayFields(payload, row.kind)
+    : undefined
+  const path = eventPath(payload)
   return {
     id: row.id,
     agentId: row.agentId,
@@ -1727,8 +1810,15 @@ function timelineEventFromDbRow(row: z.infer<typeof timelineEventDbRowSchema>) {
     tone: row.tone,
     label: derived?.label ?? row.label,
     detail: derived?.detail ?? row.detail,
+    ...(path ? { path } : {}),
     timestamp: row.timestamp,
   }
+}
+
+function eventPath(payload: Record<string, unknown> | null | undefined) {
+  if (!payload) return undefined
+  const path = stringField(payload, 'path')
+  return path?.trim() || undefined
 }
 
 function piEventToTimelineEvent(agentId: string, event: PiRpcEvent) {

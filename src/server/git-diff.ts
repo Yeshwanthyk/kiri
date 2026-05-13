@@ -44,23 +44,6 @@ export function collectGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] {
     .filter((diff): diff is RuntimeDiffArtifact => diff !== null)
 }
 
-export function collectGitDiffArtifactsWithFallback(
-  primaryCwd: string,
-  fallbackCwds: string[],
-): RuntimeDiffArtifact[] {
-  const primaryDiffs = collectGitDiffArtifacts(primaryCwd)
-  if (primaryDiffs.length) return primaryDiffs
-
-  const seen = new Set([primaryCwd])
-  const fallbackDiffs: RuntimeDiffArtifact[] = []
-  for (const cwd of fallbackCwds) {
-    if (seen.has(cwd)) continue
-    seen.add(cwd)
-    fallbackDiffs.push(...collectGitDiffArtifacts(cwd))
-  }
-  return fallbackDiffs
-}
-
 export function diffArtifactsFromPatch(patch: string): RuntimeDiffArtifact[] {
   return splitGitPatch(patch)
     .map((section) => {
