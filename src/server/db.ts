@@ -1842,6 +1842,7 @@ function migrate(database: DatabaseSync) {
   addRuntimeStateColumn(database)
   addAgentArchivedAtColumn(database)
   addAgentInterfaceModeColumn(database)
+  normalizeClaudeInterfaceMode(database)
   repairAgentSlotReferences(database)
   removeLegacyDefaultAgentSlots(database)
 }
@@ -1884,6 +1885,12 @@ function addAgentInterfaceModeColumn(database: DatabaseSync) {
     .all() as Array<{ name: string }>
   if (columns.some((column) => column.name === 'interface_mode')) return
   database.exec("ALTER TABLE agent_slots ADD COLUMN interface_mode TEXT NOT NULL DEFAULT 'gui'")
+}
+
+function normalizeClaudeInterfaceMode(database: DatabaseSync) {
+  database
+    .prepare("UPDATE agent_slots SET interface_mode = 'terminal' WHERE runtime = 'claude' AND interface_mode <> 'terminal'")
+    .run()
 }
 
 function removeLegacyDefaultAgentSlots(database: DatabaseSync) {

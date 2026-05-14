@@ -144,6 +144,7 @@ function migrate(database) {
   addRuntimeStateColumn(database)
   addAgentArchivedAtColumn(database)
   addAgentInterfaceModeColumn(database)
+  normalizeClaudeInterfaceMode(database)
 }
 
 function listProjects(database, options) {
@@ -288,6 +289,12 @@ function addAgentInterfaceModeColumn(database) {
   const columns = database.prepare('PRAGMA table_info(agent_slots)').all()
   if (columns.some((column) => column.name === 'interface_mode')) return
   database.exec("ALTER TABLE agent_slots ADD COLUMN interface_mode TEXT NOT NULL DEFAULT 'gui'")
+}
+
+function normalizeClaudeInterfaceMode(database) {
+  database
+    .prepare("UPDATE agent_slots SET interface_mode = 'terminal' WHERE runtime = 'claude' AND interface_mode <> 'terminal'")
+    .run()
 }
 
 function nextProjectPosition(database) {
