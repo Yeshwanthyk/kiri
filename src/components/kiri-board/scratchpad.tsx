@@ -139,7 +139,10 @@ export function ScratchpadPanel({
   function updateTriggerRuntime(runtime: RuntimeKind) {
     setTriggerRuntime(runtime)
     setTriggerModel(settings.runtimes[runtime].defaultModel)
-    setTriggerInterfaceMode((current) => sessionInterfaceModeForRuntime(runtime, current))
+    setTriggerInterfaceMode((current) =>
+      triggerRuntime === 'claude' && runtime !== 'claude'
+        ? 'gui'
+        : sessionInterfaceModeForRuntime(runtime, current))
   }
 
   async function submitCapture(event: React.FormEvent<HTMLFormElement>) {

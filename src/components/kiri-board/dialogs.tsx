@@ -256,7 +256,10 @@ export function InlineSessionLauncher({
   function updateRuntime(nextRuntime: RuntimeKind) {
     setRuntime(nextRuntime)
     setModel(settings.runtimes[nextRuntime].defaultModel)
-    setInterfaceMode((current) => sessionInterfaceModeForRuntime(nextRuntime, current))
+    setInterfaceMode((current) =>
+      runtime === 'claude' && nextRuntime !== 'claude'
+        ? 'gui'
+        : sessionInterfaceModeForRuntime(nextRuntime, current))
   }
 
   function selectLaunchProject(projectId: string) {
