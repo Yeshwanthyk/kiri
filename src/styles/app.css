@@ -3481,6 +3481,7 @@ h1 {
 
 .assistant-row .rich-message-body {
   color: color-mix(in oklab, var(--ink) 92%, var(--muted));
+  font-family: var(--font-mono);
 }
 
 .rich-message-body {
