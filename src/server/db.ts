@@ -1268,6 +1268,7 @@ export function getAgentLaunchConfig(agentId: string) {
         FROM agent_slots a
         INNER JOIN projects p ON p.id = a.project_id
         WHERE a.id = ?
+          AND a.archived_at IS NULL
       `,
     )
     .get(agentId)

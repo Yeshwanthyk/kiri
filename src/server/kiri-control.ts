@@ -33,6 +33,7 @@ import {
 } from './db'
 import { promptAgent } from './runtime'
 import { getSettings } from './settings'
+import { closeAgentRuntimeTerminal } from './terminal-server'
 
 type ModelChoice = {
   readonly runtime: RuntimeKind
@@ -199,7 +200,9 @@ function makeKiriControl(): KiriControlApi {
   )
 
   const deleteSessionEffect = Effect.fn('KiriControl.deleteSession')(function* (agentId: string) {
-    return yield* fromSync(() => deleteSessionSummary({ agentId }))
+    const session = yield* fromSync(() => deleteSessionSummary({ agentId }))
+    yield* fromSync(() => closeAgentRuntimeTerminal(agentId))
+    return session
   })
 
   const restoreSessionEffect = Effect.fn('KiriControl.restoreSession')(function* (input: RestoreSessionInput) {

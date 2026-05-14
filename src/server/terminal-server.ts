@@ -56,6 +56,11 @@ export function ensureTerminalServer(): Promise<TerminalServerInfo> {
   return terminalServerPromise
 }
 
+export function closeAgentRuntimeTerminal(agentId: string) {
+  const session = terminalSessions.get(`${agentId}:runtime`)
+  if (session) killTerminalSession(session)
+}
+
 async function startTerminalServer(): Promise<TerminalServerInfo> {
   const host = process.env.KIRI_TERMINAL_HOST ?? '127.0.0.1'
   const requestedPort = numberFromEnv(process.env.KIRI_TERMINAL_PORT, 0)

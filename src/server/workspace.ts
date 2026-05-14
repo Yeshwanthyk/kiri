@@ -60,7 +60,7 @@ import {
   setAgentThinkingLevel,
   steerAgent,
 } from './runtime'
-import { ensureTerminalServer } from './terminal-server'
+import { closeAgentRuntimeTerminal, ensureTerminalServer } from './terminal-server'
 import {
   setAgentByProjectPreference,
   setChatTypographyPreference,
@@ -108,7 +108,11 @@ export const chooseProjectDirectoryMutation = createServerFn({ method: 'POST' })
 
 export const deleteSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(deleteSessionInputSchema)
-  .handler(async ({ data }) => deleteSession(data))
+  .handler(async ({ data }) => {
+    const snapshot = deleteSession(data)
+    closeAgentRuntimeTerminal(data.agentId)
+    return snapshot
+  })
 
 export const restoreSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(restoreSessionInputSchema)
