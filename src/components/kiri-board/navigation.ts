@@ -1,53 +1,21 @@
 import type { ProjectRow } from '~/lib/contracts'
-
-export type KeymapAction =
-  | 'projectPrev'
-  | 'projectNext'
-  | 'agentPrev'
-  | 'agentNext'
-  | 'startSession'
-  | 'deleteSession'
-  | 'focusChat'
-  | 'openDiffs'
-  | 'openTerminal'
-  | 'openScratchpad'
-
-export type KeymapSettings = Record<KeymapAction, string>
+export {
+  defaultKeymap,
+  keyOptions,
+  type KeymapAction,
+  type KeymapSettings,
+} from '~/lib/ui-preferences'
+import {
+  defaultKeymap,
+  keyOptions,
+  type KeymapAction,
+  type KeymapSettings,
+} from '~/lib/ui-preferences'
 
 export type Selection = {
   projectId: string
   agentId: string
 }
-
-export const defaultKeymap: KeymapSettings = {
-  projectPrev: 'k',
-  projectNext: 'j',
-  agentPrev: 'h',
-  agentNext: 'l',
-  startSession: 'n',
-  deleteSession: 'x',
-  focusChat: 'c',
-  openDiffs: 'd',
-  openTerminal: 't',
-  openScratchpad: 's',
-}
-
-export const keyOptions: readonly string[] = [
-  'h',
-  'j',
-  'k',
-  'l',
-  'n',
-  'x',
-  'c',
-  'd',
-  't',
-  's',
-  'arrowup',
-  'arrowdown',
-  'arrowleft',
-  'arrowright',
-] as const
 
 export const keymapGroups: {
   id: string

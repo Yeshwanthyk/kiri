@@ -42,6 +42,7 @@ import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
 import { getKiriConfig, runtimeSessionDirPath } from './kiri-config'
+import { getUiPreferences } from './preferences'
 
 let db: DatabaseSync | undefined
 
@@ -341,6 +342,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
 
   const snapshot = {
     settings,
+    preferences: getUiPreferences(),
     projects: snapshotProjects,
     hiddenProjects,
     archivedSessions,

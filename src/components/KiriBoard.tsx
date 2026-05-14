@@ -50,6 +50,10 @@ import {
   restoreSessionMutation,
   reviewSessionMutation,
   sendMessageMutation,
+  setAgentByProjectPreferenceMutation,
+  setChatTypographyPreferenceMutation,
+  setKeymapPreferenceMutation,
+  setThemePreferenceMutation,
   setThinkingLevelMutation,
   startSessionMutation,
   steerMessageMutation,
@@ -78,10 +82,6 @@ import {
   readStoredChatTypography,
   readStoredKeymap,
   readStoredThemeSelection,
-  saveChatTypography,
-  saveKeymap,
-  saveThemeSelection,
-  writeStoredAgentByProject,
   type ChatTypographySettings,
 } from './kiri-board/storage'
 
@@ -107,10 +107,11 @@ import {
 } from './kiri-board/board-types'
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
+  const migrationAttemptedRef = React.useRef(false)
   const [workspace, setWorkspace] = React.useState(snapshot)
   const [activeProjectId, setActiveProjectId] = React.useState<string>(snapshot.selected.projectId)
   const [agentByProject, setAgentByProject] = React.useState<Record<string, string>>(() =>
-    readStoredAgentByProject(snapshot),
+    snapshot.preferences.agentByProject,
   )
   const [tab, setTab] = React.useState<SidebarTab>('chat')
   const [hydrated, setHydrated] = React.useState(false)
@@ -127,9 +128,11 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [deleteInFlight, setDeleteInFlight] = React.useState(false)
   const [pendingProjectDelete, setPendingProjectDelete] = React.useState<ProjectRow | null>(null)
   const [projectDeleteInFlight, setProjectDeleteInFlight] = React.useState(false)
-  const [keymap, setKeymap] = React.useState<KeymapSettings>(defaultKeymap)
-  const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(defaultThemeSelection)
-  const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(defaultChatTypography)
+  const [keymap, setKeymap] = React.useState<KeymapSettings>(snapshot.preferences.keymap)
+  const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(snapshot.preferences.theme)
+  const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(
+    snapshot.preferences.chatTypography,
+  )
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
   const addProject = useServerFn(addProjectMutation)
   const addScratchpadBlock = useServerFn(addScratchpadBlockMutation)
@@ -145,6 +148,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const restoreSession = useServerFn(restoreSessionMutation)
   const reviewSession = useServerFn(reviewSessionMutation)
   const sendMessage = useServerFn(sendMessageMutation)
+  const setAgentByProjectPreference = useServerFn(setAgentByProjectPreferenceMutation)
+  const setChatTypographyPreference = useServerFn(setChatTypographyPreferenceMutation)
+  const setKeymapPreference = useServerFn(setKeymapPreferenceMutation)
+  const setThemePreference = useServerFn(setThemePreferenceMutation)
   const setThinkingLevel = useServerFn(setThinkingLevelMutation)
   const steerMessage = useServerFn(steerMessageMutation)
   const interruptMessage = useServerFn(interruptMessageMutation)
@@ -176,8 +183,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setAgentSwitcherOpen(false)
     if (agentByProject[projectId] === agentId) return
     const next = { ...agentByProject, [projectId]: agentId }
-    setAgentByProject(next)
-    writeStoredAgentByProject(next)
+    persistAgentByProject(next, agentByProject)
   }
 
   const selectProject = (projectId: string) => {
@@ -188,8 +194,15 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const forgetProject = (projectId: string) => {
     if (!(projectId in agentByProject)) return
     const { [projectId]: _omitted, ...next } = agentByProject
+    persistAgentByProject(next, agentByProject)
+  }
+
+  function persistAgentByProject(next: Record<string, string>, previous: Record<string, string>) {
     setAgentByProject(next)
-    writeStoredAgentByProject(next)
+    void setAgentByProjectPreference({ data: next }).catch((error) => {
+      console.error('Failed to save selected session preference', error)
+      setAgentByProject(previous)
+    })
   }
 
   React.useEffect(() => {
@@ -197,11 +210,53 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }, [snapshot])
 
   React.useEffect(() => {
+    if (migrationAttemptedRef.current) return
+    migrationAttemptedRef.current = true
     setHydrated(true)
-    setKeymap(readStoredKeymap())
-    setThemeSelection(readStoredThemeSelection())
-    setChatTypography(readStoredChatTypography())
-  }, [])
+    const storedTheme = readStoredThemeSelection()
+    if (sameJson(snapshot.preferences.theme, defaultThemeSelection) && !sameJson(storedTheme, defaultThemeSelection)) {
+      setThemeSelection(storedTheme)
+      void setThemePreference({ data: storedTheme }).catch((error) => {
+        console.error('Failed to migrate theme preference', error)
+      })
+    }
+
+    const storedKeymap = readStoredKeymap()
+    if (sameJson(snapshot.preferences.keymap, defaultKeymap) && !sameJson(storedKeymap, defaultKeymap)) {
+      setKeymap(storedKeymap)
+      void setKeymapPreference({ data: storedKeymap }).catch((error) => {
+        console.error('Failed to migrate keymap preference', error)
+      })
+    }
+
+    const storedTypography = readStoredChatTypography()
+    if (
+      sameJson(snapshot.preferences.chatTypography, defaultChatTypography) &&
+      !sameJson(storedTypography, defaultChatTypography)
+    ) {
+      setChatTypography(storedTypography)
+      void setChatTypographyPreference({ data: storedTypography }).catch((error) => {
+        console.error('Failed to migrate chat typography preference', error)
+      })
+    }
+
+    const storedAgentByProject = readStoredAgentByProject(snapshot)
+    if (
+      Object.keys(snapshot.preferences.agentByProject).length === 0 &&
+      Object.keys(storedAgentByProject).length > 0
+    ) {
+      setAgentByProject(storedAgentByProject)
+      void setAgentByProjectPreference({ data: storedAgentByProject }).catch((error) => {
+        console.error('Failed to migrate selected session preference', error)
+      })
+    }
+  }, [
+    setAgentByProjectPreference,
+    setChatTypographyPreference,
+    setKeymapPreference,
+    setThemePreference,
+    snapshot,
+  ])
 
   React.useEffect(() => {
     applyKiriTheme(document.documentElement, themeSelection)
@@ -749,18 +804,65 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     return unsubscribe
   }, [commandActions])
 
+  async function handleThemePreferenceChange(next: ThemeSelection) {
+    const previous = themeSelection
+    setThemeSelection(next)
+    try {
+      const preferences = await setThemePreference({ data: next })
+      setThemeSelection(preferences.theme)
+    } catch (error) {
+      console.error('Failed to save theme preference', error)
+      setThemeSelection(previous)
+    }
+  }
+
+  async function handleKeymapPreferenceChange(action: KeymapAction, value: string) {
+    const previous = keymap
+    const next = updateKeymap(keymap, action, value)
+    setKeymap(next)
+    try {
+      const preferences = await setKeymapPreference({ data: next })
+      setKeymap(preferences.keymap)
+    } catch (error) {
+      console.error('Failed to save keymap preference', error)
+      setKeymap(previous)
+    }
+  }
+
+  async function handleKeymapPreferenceReset() {
+    const previous = keymap
+    setKeymap(defaultKeymap)
+    try {
+      const preferences = await setKeymapPreference({ data: defaultKeymap })
+      setKeymap(preferences.keymap)
+    } catch (error) {
+      console.error('Failed to reset keymap preference', error)
+      setKeymap(previous)
+    }
+  }
+
+  async function handleChatTypographyPreferenceChange(next: ChatTypographySettings) {
+    const previous = chatTypography
+    setChatTypography(next)
+    try {
+      const preferences = await setChatTypographyPreference({ data: next })
+      setChatTypography(preferences.chatTypography)
+    } catch (error) {
+      console.error('Failed to save chat typography preference', error)
+      setChatTypography(previous)
+    }
+  }
+
   if (settingsOpen) {
     return (
       <SettingsScreen
         keymap={keymap}
         themeSelection={themeSelection}
         chatTypography={chatTypography}
-        onKeymapChange={(action, value) =>
-          setKeymap((current) => saveKeymap(updateKeymap(current, action, value)))
-        }
-        onKeymapReset={() => setKeymap(saveKeymap(defaultKeymap))}
-        onThemeChange={(next) => setThemeSelection(saveThemeSelection(next))}
-        onChatTypographyChange={(next) => setChatTypography(saveChatTypography(next))}
+        onKeymapChange={(action, value) => void handleKeymapPreferenceChange(action, value)}
+        onKeymapReset={() => void handleKeymapPreferenceReset()}
+        onThemeChange={(next) => void handleThemePreferenceChange(next)}
+        onChatTypographyChange={(next) => void handleChatTypographyPreferenceChange(next)}
         onClose={() => setSettingsOpen(false)}
       />
     )
@@ -1023,4 +1125,8 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       />
     </main>
   )
+}
+
+function sameJson(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right)
 }

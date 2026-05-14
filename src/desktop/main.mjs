@@ -115,6 +115,7 @@ async function startBackend() {
   const appPath = resolveApplicationRoot()
   const backendCwd = appPath.endsWith('.asar') ? dirname(appPath) : appPath
   const settingsPath = join(userData, 'settings.json')
+  const preferencesPath = join(userData, 'preferences.json')
   const sourceSettings = join(appPath, 'settings.json')
   if (!existsSync(settingsPath) && existsSync(sourceSettings)) {
     mkdirSync(dirname(settingsPath), { recursive: true })
@@ -131,6 +132,7 @@ async function startBackend() {
       KIRI_ROOT_DIR: appPath,
       KIRI_HOME: join(app.getPath('home'), '.kiri'),
       KIRI_SETTINGS_PATH: settingsPath,
+      KIRI_PREFERENCES_PATH: preferencesPath,
       KIRI_DEFAULT_PROJECT_CWD: app.getPath('home'),
       KIRI_BACKEND_HOST: '0.0.0.0',
       KIRI_BACKEND_PORT: '0',

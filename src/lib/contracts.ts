@@ -1,4 +1,11 @@
 import { z } from 'zod'
+import {
+  agentByProjectSchema,
+  chatTypographySchema,
+  keymapSettingsSchema,
+  themeSelectionSchema,
+  uiPreferencesSchema,
+} from './ui-preferences'
 
 export const runtimeKinds = ['pi', 'codex', 'claude'] as const
 export const runtimeKindSchema = z.enum(runtimeKinds)
@@ -200,6 +207,7 @@ export type ScratchpadBlock = z.infer<typeof scratchpadBlockSchema>
 
 export const workspaceSnapshotSchema = z.object({
   settings: kiriSettingsSchema,
+  preferences: uiPreferencesSchema,
   projects: z.array(projectRowSchema),
   hiddenProjects: z.array(projectRowSchema),
   archivedSessions: z.array(archivedSessionSummarySchema).default([]),
@@ -210,6 +218,11 @@ export const workspaceSnapshotSchema = z.object({
   }),
 })
 export type WorkspaceSnapshot = z.infer<typeof workspaceSnapshotSchema>
+
+export const setThemePreferenceInputSchema = themeSelectionSchema
+export const setKeymapPreferenceInputSchema = keymapSettingsSchema
+export const setChatTypographyPreferenceInputSchema = chatTypographySchema
+export const setAgentByProjectPreferenceInputSchema = agentByProjectSchema
 
 export const addProjectInputSchema = z.object({
   id: z.string().trim().optional(),

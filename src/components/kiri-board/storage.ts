@@ -1,91 +1,34 @@
 import type * as React from 'react'
 import type { WorkspaceSnapshot } from '~/lib/contracts'
 import {
+  chatFontSizes,
+  defaultChatTypography,
+  defaultKeymap,
+  keyOptions,
+  monoFonts,
+  normalizeChatTypography,
+  type ChatFontSize,
+  type ChatTypographySettings,
+  type KeymapSettings,
+  type MonoFont,
+} from '~/lib/ui-preferences'
+import {
   defaultThemeSelection,
   normalizeThemeSelection,
   type ThemeSelection,
 } from '~/theme/kiri-themes'
-import {
-  defaultKeymap,
-  keyOptions,
-  type KeymapSettings,
-} from './navigation'
 
-export type ChatFontSize = 'compact' | 'comfortable' | 'large' | 'xlarge'
-
-export type MonoFont =
-  | 'jetbrains'
-  | 'fira'
-  | 'plex'
-  | 'proto'
-  | 'berkeley'
-  | 'blex'
-  | 'commit'
-  | 'dank'
-  | 'operator'
-  | 'system'
-
-export type ChatTypographySettings = {
-  fontSize: ChatFontSize
-  monoFont: MonoFont
-}
+export {
+  chatFontSizes,
+  defaultChatTypography,
+  monoFonts,
+  normalizeChatTypography,
+  type ChatFontSize,
+  type ChatTypographySettings,
+  type MonoFont,
+} from '~/lib/ui-preferences'
 
 export type StorageLike = Pick<Storage, 'getItem' | 'setItem'>
-
-export const chatFontSizes: Record<ChatFontSize, { label: string; size: string; lineHeight: string }> = {
-  compact: { label: 'Compact · 13px', size: '13px', lineHeight: '1.5' },
-  comfortable: { label: 'Comfortable · 14px', size: '14px', lineHeight: '1.58' },
-  large: { label: 'Large · 16px', size: '16px', lineHeight: '1.62' },
-  xlarge: { label: 'Extra large · 18px', size: '18px', lineHeight: '1.66' },
-}
-
-export const monoFonts: Record<MonoFont, { label: string; stack: string }> = {
-  jetbrains: {
-    label: 'JetBrains Mono',
-    stack: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  fira: {
-    label: 'Fira Code',
-    stack: '"Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  plex: {
-    label: 'IBM Plex Mono',
-    stack: '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  proto: {
-    label: '0xProto Nerd Font',
-    stack: '"0xProto Nerd Font Mono", "0xProto Nerd Font", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  berkeley: {
-    label: 'BerkeleyMono Nerd Font',
-    stack: '"BerkeleyMono Nerd Font", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  blex: {
-    label: 'BlexMono Nerd Font',
-    stack: '"BlexMono Nerd Font Mono", "BlexMono Nerd Font", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  commit: {
-    label: 'CommitMono Nerd Font',
-    stack: '"CommitMono Nerd Font Mono", "CommitMono Nerd Font", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  dank: {
-    label: 'DankMono Nerd Font',
-    stack: '"DankMono Nerd Font Mono", "DankMono Nerd Font", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  operator: {
-    label: 'Operator Mono Lig',
-    stack: '"OperatorMonoLig Nerd Font Mono", "Operator Mono Lig Book", "Operator Mono Lig Light", ui-monospace, SFMono-Regular, Menlo, monospace',
-  },
-  system: {
-    label: 'System Mono',
-    stack: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-  },
-}
-
-export const defaultChatTypography: ChatTypographySettings = {
-  fontSize: 'comfortable',
-  monoFont: 'jetbrains',
-}
 
 const keymapStorageKey = 'kiri:keymap:v1'
 const themeStorageKey = 'kiri:theme:v1'
@@ -103,7 +46,7 @@ export function readStoredKeymap(storage?: StorageLike): KeymapSettings {
     const values = Object.values(next)
     if (
       values.length !== new Set(values).size ||
-      values.some((value) => !keyOptions.includes(value))
+      values.some((value) => !(keyOptions as readonly string[]).includes(value))
     ) {
       return defaultKeymap
     }
@@ -205,16 +148,6 @@ export function readStoredChatDrafts(
   } catch {
     return {}
   }
-}
-
-export function normalizeChatTypography(value: Record<string, unknown>): ChatTypographySettings {
-  const fontSize = typeof value.fontSize === 'string' && value.fontSize in chatFontSizes
-    ? value.fontSize as ChatFontSize
-    : defaultChatTypography.fontSize
-  const monoFont = typeof value.monoFont === 'string' && value.monoFont in monoFonts
-    ? value.monoFont as MonoFont
-    : defaultChatTypography.monoFont
-  return { fontSize, monoFont }
 }
 
 export function readStoredAgentByProject(

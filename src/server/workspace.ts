@@ -18,6 +18,10 @@ import {
   reviewSessionInputSchema,
   restoreSessionInputSchema,
   sendMessageInputSchema,
+  setAgentByProjectPreferenceInputSchema,
+  setChatTypographyPreferenceInputSchema,
+  setKeymapPreferenceInputSchema,
+  setThemePreferenceInputSchema,
   setThinkingLevelInputSchema,
   startSessionInputSchema,
   steerMessageInputSchema,
@@ -55,6 +59,12 @@ import {
   steerAgent,
 } from './runtime'
 import { ensureTerminalServer } from './terminal-server'
+import {
+  setAgentByProjectPreference,
+  setChatTypographyPreference,
+  setKeymapPreference,
+  setThemePreference,
+} from './preferences'
 
 export const fetchWorkspaceSnapshot = createServerFn({ method: 'GET' }).handler(
   async () => getWorkspaceSnapshot(),
@@ -132,6 +142,22 @@ export const setThinkingLevelMutation = createServerFn({ method: 'POST' })
     await setAgentThinkingLevel(data)
     return getWorkspaceSnapshot()
   })
+
+export const setThemePreferenceMutation = createServerFn({ method: 'POST' })
+  .inputValidator(setThemePreferenceInputSchema)
+  .handler(async ({ data }) => setThemePreference(data))
+
+export const setKeymapPreferenceMutation = createServerFn({ method: 'POST' })
+  .inputValidator(setKeymapPreferenceInputSchema)
+  .handler(async ({ data }) => setKeymapPreference(data))
+
+export const setChatTypographyPreferenceMutation = createServerFn({ method: 'POST' })
+  .inputValidator(setChatTypographyPreferenceInputSchema)
+  .handler(async ({ data }) => setChatTypographyPreference(data))
+
+export const setAgentByProjectPreferenceMutation = createServerFn({ method: 'POST' })
+  .inputValidator(setAgentByProjectPreferenceInputSchema)
+  .handler(async ({ data }) => setAgentByProjectPreference(data))
 
 export const resetSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(resetSessionInputSchema)
