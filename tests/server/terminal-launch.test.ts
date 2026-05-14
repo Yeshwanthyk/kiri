@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildTerminalProcessLaunch,
@@ -74,6 +77,23 @@ describe('buildTerminalProcessLaunch', () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     )
     expect(first.env.KIRI_CLAUDE_SESSION_ID).toBe(second.env.KIRI_CLAUDE_SESSION_ID)
+  })
+
+  it('resumes Claude Code when the deterministic session already exists on disk', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kiri-claude-home-'))
+    vi.stubEnv('KIRI_CLAUDE_HOME', home)
+    const config = launchConfig('claude')
+    const sessionId = claudeTerminalSessionId(config.id)
+    const projectDir = join(home, '.claude/projects', resolve(config.cwd).replace(/[\\/]/g, '-'))
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, `${sessionId}.jsonl`), '')
+
+    const launch = buildTerminalProcessLaunch(config, 'runtime', shell)
+
+    expect(launch.args).toContain('--resume')
+    expect(launch.args).toContain(sessionId)
+    expect(launch.args).not.toContain('--session-id')
+    expect(launch.env.KIRI_CLAUDE_SESSION_ID).toBe(sessionId)
   })
 
   it('preserves an explicit Claude resume state when one already exists', () => {

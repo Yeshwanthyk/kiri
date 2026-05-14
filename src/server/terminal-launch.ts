@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { RuntimeKind, TerminalMode } from '~/lib/contracts'
 import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { resolveRuntimeExecutable, runtimeProcessEnv } from './runtime-binaries'
 
@@ -45,6 +46,7 @@ export function buildTerminalProcessLaunch(
 
 function claudeLaunch(config: TerminalAgentLaunchConfig): TerminalProcessLaunch {
   const state = objectState(config.runtimeStateJson)
+  const homePath = process.env.KIRI_CLAUDE_HOME ?? stringValue(state.homePath)
   const args = [
     '--dangerously-skip-permissions',
     '--mcp-config',
@@ -59,7 +61,11 @@ function claudeLaunch(config: TerminalAgentLaunchConfig): TerminalProcessLaunch 
     args.push('--resume', resume)
   } else {
     sessionId = claudeTerminalSessionId(config.id, state)
-    args.push('--session-id', sessionId)
+    if (claudeSessionExists(config.cwd, sessionId, homePath)) {
+      args.push('--resume', sessionId)
+    } else {
+      args.push('--session-id', sessionId)
+    }
   }
 
   const env = baseTerminalEnv(config)
@@ -69,7 +75,6 @@ function claudeLaunch(config: TerminalAgentLaunchConfig): TerminalProcessLaunch 
     delete env.ANTHROPIC_AUTH_TOKEN
     delete env.ANTHROPIC_OAUTH_TOKEN
   }
-  const homePath = process.env.KIRI_CLAUDE_HOME ?? stringValue(state.homePath)
   if (homePath) env.HOME = homePath
 
   return {
@@ -134,6 +139,17 @@ function deterministicUuid(input: string) {
 
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+function claudeSessionExists(cwd: string, sessionId: string, homePath: string | undefined) {
+  const claudeHome = join(homePath ?? homedir(), '.claude')
+  const projectDir = join(claudeHome, 'projects', claudeProjectKey(cwd))
+  return existsSync(join(projectDir, `${sessionId}.jsonl`))
+    || existsSync(join(projectDir, sessionId))
+}
+
+function claudeProjectKey(cwd: string) {
+  return resolve(cwd).replace(/[\\/]/g, '-')
 }
 
 function codexLaunch(config: TerminalAgentLaunchConfig): TerminalProcessLaunch {
