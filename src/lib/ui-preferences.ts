@@ -16,6 +16,7 @@ export const keymapActions = [
   'openDiffs',
   'openTerminal',
   'openScratchpad',
+  'toggleTerminalFocus',
 ] as const
 
 export type KeymapAction = (typeof keymapActions)[number]
@@ -32,6 +33,7 @@ export const keyOptions = [
   'd',
   't',
   's',
+  'tab',
   'arrowup',
   'arrowdown',
   'arrowleft',
@@ -49,6 +51,7 @@ export const defaultKeymap: KeymapSettings = {
   openDiffs: 'd',
   openTerminal: 't',
   openScratchpad: 's',
+  toggleTerminalFocus: 'tab',
 }
 
 export const chatFontSizeOptions = ['compact', 'comfortable', 'large', 'xlarge'] as const
@@ -139,16 +142,17 @@ const keyBindingSchema = z.string().refine(
 )
 
 export const keymapSettingsSchema = z.object({
-  projectPrev: keyBindingSchema,
-  projectNext: keyBindingSchema,
-  agentPrev: keyBindingSchema,
-  agentNext: keyBindingSchema,
-  startSession: keyBindingSchema,
-  deleteSession: keyBindingSchema,
-  focusChat: keyBindingSchema,
-  openDiffs: keyBindingSchema,
-  openTerminal: keyBindingSchema,
-  openScratchpad: keyBindingSchema,
+  projectPrev: keyBindingSchema.default(defaultKeymap.projectPrev),
+  projectNext: keyBindingSchema.default(defaultKeymap.projectNext),
+  agentPrev: keyBindingSchema.default(defaultKeymap.agentPrev),
+  agentNext: keyBindingSchema.default(defaultKeymap.agentNext),
+  startSession: keyBindingSchema.default(defaultKeymap.startSession),
+  deleteSession: keyBindingSchema.default(defaultKeymap.deleteSession),
+  focusChat: keyBindingSchema.default(defaultKeymap.focusChat),
+  openDiffs: keyBindingSchema.default(defaultKeymap.openDiffs),
+  openTerminal: keyBindingSchema.default(defaultKeymap.openTerminal),
+  openScratchpad: keyBindingSchema.default(defaultKeymap.openScratchpad),
+  toggleTerminalFocus: keyBindingSchema.default(defaultKeymap.toggleTerminalFocus),
 }).superRefine((value, context) => {
   const seen = new Map<string, KeymapAction>()
   for (const action of keymapActions) {

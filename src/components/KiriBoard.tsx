@@ -21,6 +21,7 @@ import type {
   ReviewTarget,
   RuntimeKind,
   ScratchpadBlock,
+  SessionInterfaceMode,
   SendMessageImage,
   ThinkingLevel,
   WorkspaceSnapshot,
@@ -45,6 +46,7 @@ import {
   hideProjectMutation,
   interruptMessageMutation,
   renameSessionMutation,
+  refreshTerminalDiffsMutation,
   reorderProjectsMutation,
   resetSessionMutation,
   restoreSessionMutation,
@@ -134,6 +136,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     snapshot.preferences.chatTypography,
   )
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
+  const [terminalFocusRequest, setTerminalFocusRequest] = React.useState(0)
   const addProject = useServerFn(addProjectMutation)
   const addScratchpadBlock = useServerFn(addScratchpadBlockMutation)
   const answerQuestion = useServerFn(answerQuestionMutation)
@@ -156,6 +159,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const steerMessage = useServerFn(steerMessageMutation)
   const interruptMessage = useServerFn(interruptMessageMutation)
   const renameSession = useServerFn(renameSessionMutation)
+  const refreshTerminalDiffs = useServerFn(refreshTerminalDiffsMutation)
   const reorderProjects = useServerFn(reorderProjectsMutation)
   const startSession = useServerFn(startSessionMutation)
   const triggerScratchpadBlock = useServerFn(triggerScratchpadBlockMutation)
@@ -175,6 +179,9 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       agentId: selectedAgent?.id ?? '',
     }),
     [selectedAgent, selectedProject],
+  )
+  const visibleTerminalSelected = Boolean(
+    selectedAgent && (tab === 'terminal' || (tab === 'chat' && selectedAgent.interfaceMode === 'terminal')),
   )
 
   const selectAgent = (projectId: string, agentId: string) => {
@@ -293,6 +300,14 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
       const action = actionForKey(keymap, key)
       if (!action) return
+
+      if (action === 'toggleTerminalFocus') {
+        if (!visibleTerminalSelected) return
+        event.preventDefault()
+        setTerminalFocusRequest((request) => request + 1)
+        return
+      }
+
       event.preventDefault()
 
       if (action === 'focusChat') {
@@ -377,6 +392,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     selectedProject,
     selection.agentId,
     selection.projectId,
+    visibleTerminalSelected,
     workspace.projects,
   ])
 
@@ -510,6 +526,15 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     await onDetailRefresh?.()
   }
 
+  async function handleRefreshTerminalDiffs(
+    agentId: string,
+    onDetailRefresh?: RefreshAgentDetail,
+  ) {
+    const next = await refreshTerminalDiffs({ data: { agentId } })
+    setWorkspace(next)
+    await onDetailRefresh?.()
+  }
+
   async function handleSteerMessage(
     agentId: string,
     text: string,
@@ -562,6 +587,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   async function handleStartSession(input: {
     projectId: string
     runtime: RuntimeKind
+    interfaceMode: SessionInterfaceMode
     model?: string
     title?: string
     thinkingLevel: ThinkingLevel
@@ -576,6 +602,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     if (project && agent) {
       selectAgent(project.id, agent.id)
     }
+    setTab('chat')
     setSessionLauncherOpen(false)
     setSessionLauncherPreset(null)
   }
@@ -592,7 +619,14 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
   async function handleTriggerBlock(
     block: ScratchpadBlock,
-    overrides?: { projectId?: string; runtime?: RuntimeKind; model?: string; thinkingLevel?: ThinkingLevel; title?: string },
+    overrides?: {
+      projectId?: string
+      runtime?: RuntimeKind
+      interfaceMode?: SessionInterfaceMode
+      model?: string
+      thinkingLevel?: ThinkingLevel
+      title?: string
+    },
   ) {
     const projectId = overrides?.projectId ?? block.projectId ?? selectedProject?.id
     if (!projectId) throw new Error('Pick a project before triggering a block')
@@ -601,6 +635,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         id: block.id,
         projectId,
         runtime: overrides?.runtime,
+        interfaceMode: overrides?.interfaceMode,
         model: overrides?.model,
         title: overrides?.title,
         thinkingLevel: overrides?.thinkingLevel ?? 'medium',
@@ -614,12 +649,14 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   async function handleResumeSession(projectId: string, agentId: string, archived: boolean) {
     if (!archived) {
       selectAgent(projectId, agentId)
+      setTab('chat')
       setSessionLauncherOpen(false)
       return
     }
     const next = await restoreSession({ data: { agentId } })
     setWorkspace(next)
     selectAgent(projectId, agentId)
+    setTab('chat')
     setSessionLauncherOpen(false)
   }
 
@@ -1103,12 +1140,15 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         tab={tab}
         onTabChange={setTab}
         chatFocusRequest={chatFocusRequest}
+        terminalFocusRequest={terminalFocusRequest}
         themeMode={themeSelection.mode}
+        keymap={keymap}
         startSessionKey={keymap.startSession}
         onStartSession={() => openSessionLauncher()}
         onDeleteSession={handleDeleteSession}
         onRenameSession={handleRenameSession}
         onSend={handleSendMessage}
+        onRefreshTerminalDiffs={handleRefreshTerminalDiffs}
         onSteer={handleSteerMessage}
         onInterrupt={handleInterruptMessage}
         onThinkingCommand={handleThinkingCommand}

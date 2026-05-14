@@ -22,6 +22,7 @@ function project(id: string, agentIds: string[]): ProjectRow {
       slot: `session-${agentId}`,
       title: agentId,
       runtime: 'codex',
+      interfaceMode: 'gui',
       model: 'gpt-5.5',
       status: 'idle',
       sessionDir: `/tmp/${agentId}`,
@@ -73,6 +74,7 @@ describe('board navigation', () => {
 describe('keymap helpers', () => {
   it('finds actions by key', () => {
     expect(actionForKey(defaultKeymap, 'k')).toBe('projectPrev')
+    expect(actionForKey(defaultKeymap, 'tab')).toBe('toggleTerminalFocus')
     expect(actionForKey(defaultKeymap, '?')).toBeUndefined()
   })
 
@@ -86,6 +88,7 @@ describe('keymap helpers', () => {
 
   it('formats display labels for regular and arrow keys', () => {
     expect(formatKey('c')).toBe('C')
+    expect(formatKey('tab')).toBe('Tab')
     expect(formatKey('arrowleft')).toBe('Arrow left')
   })
 })

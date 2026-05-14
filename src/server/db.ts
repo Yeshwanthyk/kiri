@@ -34,6 +34,8 @@ import {
   messageRoleSchema,
   pendingQuestionSchema,
   runtimeKindSchema,
+  sessionInterfaceModeForRuntime,
+  sessionInterfaceModeSchema,
   thinkingLevelSchema,
   timelineEventToneSchema,
   workspaceSnapshotSchema,
@@ -60,6 +62,7 @@ const agentDbRowSchema = z.object({
   slot: z.string(),
   title: z.string(),
   runtime: runtimeKindSchema,
+  interfaceMode: sessionInterfaceModeSchema.default('gui'),
   model: z.string(),
   status: agentStatusSchema,
   sessionDir: z.string(),
@@ -96,6 +99,7 @@ const sessionSummaryDbRowSchema = z.object({
   projectName: z.string(),
   title: z.string(),
   runtime: runtimeKindSchema,
+  interfaceMode: sessionInterfaceModeSchema.default('gui'),
   model: z.string(),
   status: agentStatusSchema,
   preview: z.string().nullable(),
@@ -161,6 +165,7 @@ const scratchpadBlockDbRowSchema = z.object({
 
 const agentLaunchConfigSchema = z.object({
   id: z.string(),
+  projectId: z.string(),
   runtime: runtimeKindSchema,
   sessionDir: z.string(),
   sessionFile: z.string().nullable(),
@@ -227,6 +232,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
           a.slot,
           a.title,
           a.runtime,
+          a.interface_mode AS interfaceMode,
           a.model,
           a.status,
           a.session_dir AS sessionDir,
@@ -284,6 +290,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
         slot: agent.slot,
         title: agent.title,
         runtime: agent.runtime,
+        interfaceMode: agent.interfaceMode,
         model: agent.model,
         status: agent.status,
         sessionDir: agent.sessionDir,
@@ -326,8 +333,9 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
       projectId: agent.projectId,
       projectName: agent.projectName,
       title: agent.title,
-      runtime: agent.runtime,
-      model: agent.model,
+        runtime: agent.runtime,
+        interfaceMode: agent.interfaceMode,
+        model: agent.model,
       status: agent.status,
       preview: agent.preview ?? 'No messages yet',
       messageCount: agent.messageCount ?? 0,
@@ -371,6 +379,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
           a.slot,
           a.title,
           a.runtime,
+          a.interface_mode AS interfaceMode,
           a.model,
           a.status,
           a.session_dir AS sessionDir,
@@ -455,6 +464,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
     slot: parsedAgent.slot,
     title: parsedAgent.title,
     runtime: parsedAgent.runtime,
+    interfaceMode: parsedAgent.interfaceMode,
     model: parsedAgent.model,
     status: parsedAgent.status,
     sessionDir: parsedAgent.sessionDir,
@@ -540,6 +550,7 @@ export function listSessionSummaries(input: {
           p.name AS projectName,
           a.title,
           a.runtime,
+          a.interface_mode AS interfaceMode,
           a.model,
           a.status,
           t.preview,
@@ -575,6 +586,7 @@ function requireSessionSummary(agentId: string, includeArchived = false) {
           p.name AS projectName,
           a.title,
           a.runtime,
+          a.interface_mode AS interfaceMode,
           a.model,
           a.status,
           t.preview,
@@ -613,6 +625,7 @@ function sessionSummaryFromDbRow(row: unknown) {
     projectName: parsed.projectName,
     title: parsed.title,
     runtime: parsed.runtime,
+    interfaceMode: parsed.interfaceMode,
     model: parsed.model,
     status: parsed.status,
     preview: parsed.preview ?? 'No messages yet',
@@ -685,6 +698,8 @@ function insertSession(input: StartSessionInput) {
   if (!project) throw new Error(`Project not found: ${projectId}`)
 
   const runtime = runtimeKindSchema.parse(input.runtime ?? 'pi')
+  const requestedInterfaceMode = sessionInterfaceModeSchema.parse(input.interfaceMode ?? 'gui')
+  const interfaceMode = sessionInterfaceModeForRuntime(runtime, requestedInterfaceMode)
   const runtimeSettings = getRuntimeSettings(runtime)
   const model = input.model?.trim() || runtimeSettings.defaultModel
   assertConfiguredModel(runtime, model)
@@ -705,9 +720,9 @@ function insertSession(input: StartSessionInput) {
       .prepare(
         `
           INSERT INTO agent_slots (
-            id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
+            id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, position
           )
-          VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, NULL, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, NULL, ?)
         `,
       )
       .run(
@@ -716,6 +731,7 @@ function insertSession(input: StartSessionInput) {
         slot,
         title,
         runtime,
+        interfaceMode,
         model,
         sessionDir,
         nextPosition.position,
@@ -885,6 +901,7 @@ export function createForkedSession(input: {
           a.project_id AS projectId,
           a.title,
           a.runtime,
+          a.interface_mode AS interfaceMode,
           a.model
         FROM agent_slots a
         WHERE a.id = ?
@@ -896,6 +913,7 @@ export function createForkedSession(input: {
         projectId: string
         title: string
         runtime: string
+        interfaceMode: string
         model: string
       }
     | undefined
@@ -926,9 +944,9 @@ export function createForkedSession(input: {
       .prepare(
         `
           INSERT INTO agent_slots (
-            id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
+            id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, position
           )
-          VALUES (?, ?, ?, ?, 'pi', ?, 'idle', ?, ?, ?)
+          VALUES (?, ?, ?, ?, 'pi', ?, ?, 'idle', ?, ?, ?)
         `,
       )
       .run(
@@ -936,6 +954,7 @@ export function createForkedSession(input: {
         source.projectId,
         slot,
         `${source.title} fork`,
+        source.interfaceMode,
         source.model,
         sessionDir,
         sessionFile,
@@ -1239,6 +1258,7 @@ export function getAgentLaunchConfig(agentId: string) {
       `
         SELECT
           a.id,
+          a.project_id AS projectId,
           a.runtime,
           a.session_dir AS sessionDir,
           a.session_file AS sessionFile,
@@ -1721,6 +1741,7 @@ function migrate(database: DatabaseSync) {
       slot TEXT NOT NULL,
       title TEXT NOT NULL,
       runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude')),
+      interface_mode TEXT NOT NULL DEFAULT 'gui' CHECK (interface_mode IN ('gui', 'terminal')),
       model TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
       session_dir TEXT NOT NULL,
@@ -1820,6 +1841,7 @@ function migrate(database: DatabaseSync) {
   addProjectHiddenAtColumn(database)
   addRuntimeStateColumn(database)
   addAgentArchivedAtColumn(database)
+  addAgentInterfaceModeColumn(database)
   repairAgentSlotReferences(database)
   removeLegacyDefaultAgentSlots(database)
 }
@@ -1856,6 +1878,14 @@ function addAgentArchivedAtColumn(database: DatabaseSync) {
   database.exec('ALTER TABLE agent_slots ADD COLUMN archived_at TEXT')
 }
 
+function addAgentInterfaceModeColumn(database: DatabaseSync) {
+  const columns = database
+    .prepare('PRAGMA table_info(agent_slots)')
+    .all() as Array<{ name: string }>
+  if (columns.some((column) => column.name === 'interface_mode')) return
+  database.exec("ALTER TABLE agent_slots ADD COLUMN interface_mode TEXT NOT NULL DEFAULT 'gui'")
+}
+
 function removeLegacyDefaultAgentSlots(database: DatabaseSync) {
   database.prepare("DELETE FROM agent_slots WHERE slot NOT LIKE 'session-%'").run()
 }
@@ -1877,6 +1907,7 @@ function widenRuntimeCheck(database: DatabaseSync) {
       slot TEXT NOT NULL,
       title TEXT NOT NULL,
       runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude')),
+      interface_mode TEXT NOT NULL DEFAULT 'gui' CHECK (interface_mode IN ('gui', 'terminal')),
       model TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
       session_dir TEXT NOT NULL,
@@ -1887,9 +1918,9 @@ function widenRuntimeCheck(database: DatabaseSync) {
     );
 
     INSERT INTO agent_slots (
-      id, project_id, slot, title, runtime, model, status, session_dir, session_file, runtime_state_json, archived_at, position
+      id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, runtime_state_json, archived_at, position
     )
-    SELECT id, project_id, slot, title, runtime, model, status, session_dir, session_file, NULL, NULL, position
+    SELECT id, project_id, slot, title, runtime, 'gui', model, status, session_dir, session_file, NULL, NULL, position
     FROM agent_slots_old;
 
     DROP TABLE agent_slots_old;
@@ -2066,9 +2097,9 @@ function createPersistedSessionAgent(
     .prepare(
       `
         INSERT INTO agent_slots (
-          id, project_id, slot, title, runtime, model, status, session_dir, session_file, position
+          id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, position
         )
-        VALUES (?, ?, ?, ?, 'pi', ?, 'idle', ?, ?, ?)
+        VALUES (?, ?, ?, ?, 'pi', 'gui', ?, 'idle', ?, ?, ?)
       `,
     )
     .run(

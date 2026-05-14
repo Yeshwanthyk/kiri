@@ -1,33 +1,43 @@
 'use client'
 
+import '@xterm/xterm/css/xterm.css'
 import { useServerFn } from '@tanstack/react-start'
+import { KeyboardOff } from 'lucide-react'
 import * as React from 'react'
-import type { AgentCell, ProjectRow } from '~/lib/contracts'
+import type { AgentCell, ProjectRow, TerminalConfig, TerminalMode } from '~/lib/contracts'
 import { terminalConfigQuery } from '~/server/workspace'
 import type { ThemeMode } from '~/theme/kiri-themes'
 
-type GhosttyTerminalInstance = InstanceType<(typeof import('ghostty-web'))['Terminal']>
-type GhosttyFitAddonInstance = InstanceType<(typeof import('ghostty-web'))['FitAddon']>
+type XTermTerminalInstance = InstanceType<(typeof import('@xterm/xterm'))['Terminal']>
+type XTermFitAddonInstance = InstanceType<(typeof import('@xterm/addon-fit'))['FitAddon']>
 type TerminalDisposable = { dispose: () => void }
 
 export function TerminalPanel({
   agent,
+  focusRequest,
+  mode,
   project,
   themeMode,
+  toggleFocusKey,
   visible,
 }: {
   agent: AgentCell
+  focusRequest: number
+  mode: TerminalMode
   project: ProjectRow
   themeMode: ThemeMode
+  toggleFocusKey: string
   visible: boolean
 }) {
   const getTerminalConfig = useServerFn(terminalConfigQuery)
   const getTerminalConfigRef = React.useRef(getTerminalConfig)
   const hostRef = React.useRef<HTMLDivElement | null>(null)
-  const fitAddonRef = React.useRef<GhosttyFitAddonInstance | null>(null)
+  const terminalRef = React.useRef<XTermTerminalInstance | null>(null)
+  const fitAddonRef = React.useRef<XTermFitAddonInstance | null>(null)
   const themeModeRef = React.useRef(themeMode)
+  const transcriptEnabledRef = React.useRef(false)
   const [status, setStatus] = React.useState('Connecting')
-  const [transcript, setTranscript] = React.useState('')
+  const [transcript, setTranscript] = React.useState<string | null>(null)
 
   React.useEffect(() => {
     getTerminalConfigRef.current = getTerminalConfig
@@ -43,54 +53,81 @@ export function TerminalPanel({
   }, [visible])
 
   React.useEffect(() => {
+    if (focusRequest === 0 || !visible) return
+    terminalRef.current?.focus()
+  }, [focusRequest, visible])
+
+  React.useEffect(() => {
     let disposed = false
     let socket: WebSocket | null = null
-    let term: GhosttyTerminalInstance | null = null
-    let fitAddon: GhosttyFitAddonInstance | null = null
+    let term: XTermTerminalInstance | null = null
+    let fitAddon: XTermFitAddonInstance | null = null
+    let resizeObserver: ResizeObserver | null = null
+    let pendingWrite = ''
+    let writeFrame: number | null = null
     const terminalDisposables: TerminalDisposable[] = []
+
+    function enqueueWrite(data: string) {
+      if (!term) return
+      pendingWrite += data
+      if (writeFrame !== null) return
+      writeFrame = window.requestAnimationFrame(() => {
+        writeFrame = null
+        const chunk = pendingWrite
+        pendingWrite = ''
+        term?.write(chunk)
+      })
+    }
+
+    function appendTranscript(data: string) {
+      if (!transcriptEnabledRef.current) return
+      appendTerminalTranscript(setTranscript, data)
+    }
 
     async function connect() {
       const host = hostRef.current
       if (!host) return
       host.textContent = ''
-      setTranscript('')
+      transcriptEnabledRef.current = window.localStorage.getItem('kiri:terminal-transcript') === '1'
+      setTranscript(transcriptEnabledRef.current ? '' : null)
       setStatus('Loading')
 
       try {
-        const [{ init, Terminal, FitAddon }, terminalConfig] = await Promise.all([
-          import('ghostty-web'),
-          getTerminalConfigRef.current({ data: { agentId: agent.id } }),
+        const [{ Terminal }, { FitAddon }, terminalConfig] = await Promise.all([
+          import('@xterm/xterm'),
+          import('@xterm/addon-fit'),
+          getTerminalConfigRef.current({ data: { agentId: agent.id, mode } }),
         ])
-        if (disposed) return
-
-        await init()
         if (disposed) return
 
         term = new Terminal({
           fontSize: 13,
           fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
           cursorBlink: true,
+          convertEol: true,
+          scrollback: 1000,
           theme: terminalTheme(themeModeRef.current),
         })
+        terminalRef.current = term
         fitAddon = new FitAddon()
         fitAddonRef.current = fitAddon
         term.loadAddon(fitAddon)
         term.open(host)
         term.attachCustomKeyEventHandler((event) => {
-          if (
-            event.key === 'Escape' &&
-            !event.shiftKey &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.altKey
-          ) {
+          if (isTerminalToggleFocusEvent(event, toggleFocusKey)) {
             term?.blur()
-            return true
+            return false
           }
-          return false
+          return true
         })
         fitAddon.fit()
-        fitAddon.observeResize?.()
+        resizeObserver = new ResizeObserver(() => {
+          fitAddon?.fit()
+          if (socket?.readyState === WebSocket.OPEN && term) {
+            socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+          }
+        })
+        resizeObserver.observe(host)
 
         const url = terminalWebSocketUrl(terminalConfig, agent.id, term.cols, term.rows)
         socket = new WebSocket(url)
@@ -98,20 +135,22 @@ export function TerminalPanel({
           if (!term || !socket) return
           setStatus('Connected')
           socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-          const banner = `kiri terminal · ${project.cwd}\r\n\r\n`
-          term.write(banner)
-          appendTerminalTranscript(setTranscript, banner)
+          const banner = mode === 'runtime'
+            ? `kiri agent terminal · ${terminalConfig.runtime} · ${terminalConfig.model} · ${project.cwd}\r\n\r\n`
+            : `kiri shell terminal · ${project.cwd}\r\n\r\n`
+          enqueueWrite(banner)
+          appendTranscript(banner)
         }
         socket.onmessage = (event) => {
           if (typeof event.data === 'string') {
-            term?.write(event.data)
-            appendTerminalTranscript(setTranscript, event.data)
+            enqueueWrite(event.data)
+            appendTranscript(event.data)
           }
         }
         socket.onclose = () => {
           if (!disposed) {
             setStatus('Closed')
-            appendTerminalTranscript(setTranscript, '\r\n[kiri terminal socket closed]\r\n')
+            appendTranscript('\r\n[kiri terminal socket closed]\r\n')
           }
         }
         socket.onerror = () => {
@@ -146,41 +185,78 @@ export function TerminalPanel({
         socket.onerror = null
       }
       socket?.close()
+      if (writeFrame !== null) window.cancelAnimationFrame(writeFrame)
+      resizeObserver?.disconnect()
       for (const disposable of terminalDisposables) {
         disposable.dispose()
       }
       fitAddon?.dispose()
       fitAddonRef.current = null
+      terminalRef.current = null
+      transcriptEnabledRef.current = false
       term?.dispose()
     }
-  }, [agent.id, project.cwd])
+  }, [agent.id, mode, project.cwd, toggleFocusKey])
 
+  const label = mode === 'runtime' ? 'Agent terminal' : 'Shell terminal'
+  const toggleFocusLabel = `Toggle terminal focus (Shift+${formatTerminalKey(toggleFocusKey)})`
   return (
     <section className="terminal-panel" data-testid="terminal-panel" hidden={!visible}>
       <div className="terminal-header">
         <div>
-          <strong>{project.name}</strong>
+          <strong>{label}</strong>
           <span>{project.cwd}</span>
+          <span>{mode === 'runtime' ? `${agent.runtime} · ${agent.model}` : project.name}</span>
         </div>
-        <span className="terminal-status">{status}</span>
+        <div className="terminal-header-actions">
+          <button
+            type="button"
+            aria-label={toggleFocusLabel}
+            title={toggleFocusLabel}
+            onClick={() => terminalRef.current?.blur()}
+          >
+            <KeyboardOff size={13} aria-hidden="true" />
+          </button>
+          <span className="terminal-status">{status}</span>
+        </div>
       </div>
       <div ref={hostRef} className="terminal-host" />
-      <pre className="terminal-transcript" data-testid="terminal-transcript" aria-live="polite">
-        {transcript}
-      </pre>
+      {transcript !== null ? (
+        <pre className="terminal-transcript" data-testid="terminal-transcript" aria-live="polite">
+          {transcript}
+        </pre>
+      ) : null}
     </section>
   )
 }
 
+function isTerminalToggleFocusEvent(event: KeyboardEvent, key: string) {
+  return event.shiftKey &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    terminalEventKey(event) === key
+}
+
+function terminalEventKey(event: KeyboardEvent) {
+  return event.key.toLowerCase()
+}
+
+function formatTerminalKey(key: string) {
+  if (key === 'tab') return 'Tab'
+  if (key.startsWith('arrow')) return key.replace('arrow', 'Arrow ')
+  return key.toUpperCase()
+}
+
 function appendTerminalTranscript(
-  setTranscript: React.Dispatch<React.SetStateAction<string>>,
+  setTranscript: React.Dispatch<React.SetStateAction<string | null>>,
   data: string,
 ) {
-  setTranscript((current) => `${current}${data}`.slice(-8_000))
+  setTranscript((current) => `${current ?? ''}${data}`.slice(-8_000))
 }
 
 function terminalWebSocketUrl(
-  config: { host: string; port: number; path: string; token?: string },
+  config: TerminalConfig,
   agentId: string,
   cols: number,
   rows: number,
@@ -194,25 +270,35 @@ function terminalWebSocketUrl(
       : config.host
   const url = new URL(`${protocol}//${host}:${config.port}${config.path}`)
   url.searchParams.set('agentId', agentId)
+  url.searchParams.set('mode', config.mode)
   url.searchParams.set('cols', String(cols))
   url.searchParams.set('rows', String(rows))
-  if (config.token) url.searchParams.set('token', config.token)
+  url.searchParams.set('token', config.token)
   return url.toString()
 }
 
-function terminalTheme(themeMode: ThemeMode) {
-  if (themeMode === 'dark') {
-    return {
-      background: '#101216',
-      foreground: '#e6e8ef',
-      cursor: '#f5c15c',
-      selectionBackground: '#334155',
-    }
-  }
+function terminalTheme(_themeMode: ThemeMode) {
   return {
-    background: '#fbfaf7',
-    foreground: '#1f2937',
-    cursor: '#9a5b00',
-    selectionBackground: '#d7e3ee',
+    background: '#101216',
+    foreground: '#e6e8ef',
+    cursor: '#f5c15c',
+    cursorAccent: '#101216',
+    selectionBackground: '#334155',
+    black: '#101216',
+    red: '#ef4444',
+    green: '#22c55e',
+    yellow: '#f5c15c',
+    blue: '#60a5fa',
+    magenta: '#c084fc',
+    cyan: '#2dd4bf',
+    white: '#e6e8ef',
+    brightBlack: '#64748b',
+    brightRed: '#f87171',
+    brightGreen: '#4ade80',
+    brightYellow: '#facc15',
+    brightBlue: '#93c5fd',
+    brightMagenta: '#d8b4fe',
+    brightCyan: '#67e8f9',
+    brightWhite: '#f8fafc',
   }
 }

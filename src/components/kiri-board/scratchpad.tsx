@@ -1,6 +1,7 @@
 import { Check, NotebookPen, Plus, Send, Trash2 } from 'lucide-react'
 import * as React from 'react'
-import type { ProjectRow, RuntimeKind, ScratchpadBlock, ThinkingLevel, WorkspaceSnapshot } from '~/lib/contracts'
+import type { ProjectRow, RuntimeKind, ScratchpadBlock, SessionInterfaceMode, ThinkingLevel, WorkspaceSnapshot } from '~/lib/contracts'
+import { sessionInterfaceModeForRuntime } from '~/lib/contracts'
 import { errorMessage, formatBlockDay, formatBlockTime, formatTokenCount } from './format'
 import { supportsThinking } from './slash-commands'
 
@@ -98,16 +99,24 @@ export function ScratchpadPanel({
   onDelete: (id: string) => Promise<void>
   onTrigger: (
     block: ScratchpadBlock,
-    overrides?: { runtime?: RuntimeKind; model?: string; thinkingLevel?: ThinkingLevel },
+    overrides?: {
+      runtime?: RuntimeKind
+      interfaceMode?: SessionInterfaceMode
+      model?: string
+      thinkingLevel?: ThinkingLevel
+    },
   ) => Promise<void>
 }) {
   const [state, dispatch] = React.useReducer(scratchpadReducer, initialScratchpadState)
   const [triggerRuntime, setTriggerRuntime] = React.useState<RuntimeKind>('codex')
+  const [triggerInterfaceMode, setTriggerInterfaceMode] = React.useState<SessionInterfaceMode>('gui')
   const [triggerModel, setTriggerModel] = React.useState(settings.runtimes.codex.defaultModel)
   const [triggerThinkingLevel, setTriggerThinkingLevel] = React.useState<ThinkingLevel>('medium')
   const captureRef = React.useRef<HTMLTextAreaElement>(null)
   const triggerModels = settings.runtimes[triggerRuntime].models
   const triggerSupportsThinking = supportsThinking(triggerRuntime)
+  const triggerInterfaceModes = triggerRuntime === 'claude' ? ['terminal'] as const : ['gui', 'terminal'] as const
+  const selectedTriggerInterfaceMode = sessionInterfaceModeForRuntime(triggerRuntime, triggerInterfaceMode)
 
   React.useEffect(() => {
     captureRef.current?.focus()
@@ -130,6 +139,7 @@ export function ScratchpadPanel({
   function updateTriggerRuntime(runtime: RuntimeKind) {
     setTriggerRuntime(runtime)
     setTriggerModel(settings.runtimes[runtime].defaultModel)
+    setTriggerInterfaceMode((current) => sessionInterfaceModeForRuntime(runtime, current))
   }
 
   async function submitCapture(event: React.FormEvent<HTMLFormElement>) {
@@ -170,6 +180,7 @@ export function ScratchpadPanel({
     try {
       await onTrigger(block, {
         runtime: triggerRuntime,
+        interfaceMode: selectedTriggerInterfaceMode,
         model: triggerModel,
         thinkingLevel: triggerThinkingLevel,
       })
@@ -274,7 +285,26 @@ export function ScratchpadPanel({
       <section className="scratchpad-trigger-config" aria-label="Scratchpad trigger profile">
         <div className="scratchpad-trigger-head">
           <span>trigger as</span>
-          <strong>{triggerRuntime} · {triggerModel} · {triggerThinkingLevel}</strong>
+          <strong>{selectedTriggerInterfaceMode} · {triggerRuntime} · {triggerModel} · {triggerThinkingLevel}</strong>
+        </div>
+        <div className="scratchpad-trigger-row" role="radiogroup" aria-label="Trigger interface">
+          {triggerInterfaceModes.map((mode) => {
+            const active = selectedTriggerInterfaceMode === mode
+            return (
+              <button
+                key={mode}
+                type="button"
+                className="scratchpad-trigger-chip"
+                data-active={active ? 'true' : undefined}
+                onClick={() => setTriggerInterfaceMode(mode)}
+                disabled={state.pendingId !== null}
+                role="radio"
+                aria-checked={active}
+              >
+                {mode}
+              </button>
+            )
+          })}
         </div>
         <div className="scratchpad-trigger-row" role="radiogroup" aria-label="Trigger runtime">
           {scratchpadRuntimeOrder.map((runtime) => {

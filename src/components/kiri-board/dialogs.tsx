@@ -18,7 +18,8 @@ import {
   Trash2,
 } from 'lucide-react'
 import * as React from 'react'
-import type { ArchivedSessionSummary, ProjectRow, RuntimeKind, ThinkingLevel, WorkspaceSnapshot } from '~/lib/contracts'
+import type { ArchivedSessionSummary, ProjectRow, RuntimeKind, SessionInterfaceMode, ThinkingLevel, WorkspaceSnapshot } from '~/lib/contracts'
+import { sessionInterfaceModeForRuntime } from '~/lib/contracts'
 import { defaultThemeSelection, getKiriThemeTokens, kiriThemeNames, type KiriThemeName, type ThemeMode, type ThemeSelection } from '~/theme/kiri-themes'
 import { errorMessage, formatAgo, formatTokenCount, projectNameFromPath, projectSummary } from './format'
 import { formatKey, keymapGroups, keyOptions, type KeymapAction, type KeymapSettings } from './navigation'
@@ -158,6 +159,7 @@ export function InlineSessionLauncher({
   onStartSession: (input: {
     projectId: string
     runtime: RuntimeKind
+    interfaceMode: SessionInterfaceMode
     model?: string
     title?: string
     thinkingLevel: ThinkingLevel
@@ -171,6 +173,7 @@ export function InlineSessionLauncher({
   const [projectPickerOpen, setProjectPickerOpen] = React.useState(false)
   const initialLauncherRuntime = initialRuntime ?? 'codex'
   const [runtime, setRuntime] = React.useState<RuntimeKind>(initialLauncherRuntime)
+  const [interfaceMode, setInterfaceMode] = React.useState<SessionInterfaceMode>('gui')
   const [model, setModel] = React.useState(
     settings.runtimes[initialLauncherRuntime].defaultModel,
   )
@@ -183,6 +186,8 @@ export function InlineSessionLauncher({
   const models = settings.runtimes[runtime].models
   const launchProject = projects.find((item) => item.id === launchProjectId) ?? project
   const runtimeSupportsThinking = supportsThinking(runtime)
+  const availableInterfaceModes = runtime === 'claude' ? ['terminal'] as const : ['gui', 'terminal'] as const
+  const selectedInterfaceMode = sessionInterfaceModeForRuntime(runtime, interfaceMode)
   const normalizedProjectQuery = projectQuery.trim().toLowerCase()
   const visibleTargetProjects = projects.filter((item) => {
     if (!normalizedProjectQuery) return true
@@ -238,6 +243,7 @@ export function InlineSessionLauncher({
     const nextRuntime = initialRuntime ?? 'codex'
     setRuntime(nextRuntime)
     setModel(settingsRef.current.runtimes[nextRuntime].defaultModel)
+    setInterfaceMode(sessionInterfaceModeForRuntime(nextRuntime, 'gui'))
   }, [initialProjectId, initialRuntime])
 
   React.useEffect(() => {
@@ -250,6 +256,7 @@ export function InlineSessionLauncher({
   function updateRuntime(nextRuntime: RuntimeKind) {
     setRuntime(nextRuntime)
     setModel(settings.runtimes[nextRuntime].defaultModel)
+    setInterfaceMode((current) => sessionInterfaceModeForRuntime(nextRuntime, current))
   }
 
   function selectLaunchProject(projectId: string) {
@@ -267,6 +274,7 @@ export function InlineSessionLauncher({
       await onStartSession({
         projectId: launchProject.id,
         runtime,
+        interfaceMode: selectedInterfaceMode,
         model,
         title: title || undefined,
         thinkingLevel,
@@ -406,6 +414,31 @@ export function InlineSessionLauncher({
               />
               <span>optional</span>
             </label>
+
+            <section className="session-picker-section" aria-label="Interface">
+              <div className="session-picker-head">
+                <strong>Interface</strong>
+                <span>Chat tab can be GUI or agent terminal.</span>
+              </div>
+              <div className="session-thinking-list" data-testid="session-interface-mode">
+                {availableInterfaceModes.map((item) => {
+                  const active = selectedInterfaceMode === item
+                  return (
+                    <button
+                      key={item}
+                      type="button"
+                      className="session-thinking-chip"
+                      data-active={active ? 'true' : undefined}
+                      onClick={() => setInterfaceMode(item)}
+                      disabled={pending}
+                      aria-pressed={active}
+                    >
+                      {item === 'gui' ? 'GUI' : 'Terminal'}
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
 
             <section className="session-picker-section" aria-label="Runtime">
               <div className="session-picker-head">

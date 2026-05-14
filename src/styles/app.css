@@ -4447,7 +4447,7 @@ h1 {
   background: var(--panel);
 }
 
-.terminal-header div {
+.terminal-header > div:first-child {
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -4480,16 +4480,48 @@ h1 {
   font-weight: 800;
 }
 
+.terminal-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-header-actions button {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  padding: 0;
+}
+
+.terminal-header-actions button:hover,
+.terminal-header-actions button:focus-visible {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
 .terminal-host {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
-  background: light-dark(#fbfaf7, #101216);
+  background: #101216;
 }
 
 .terminal-host > * {
   width: 100%;
   height: 100%;
+}
+
+.terminal-host .xterm {
+  width: 100%;
+  height: 100%;
+  padding: 8px 10px;
 }
 
 .terminal-transcript {

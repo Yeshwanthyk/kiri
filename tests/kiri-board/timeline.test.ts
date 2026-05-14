@@ -21,6 +21,7 @@ function agent(overrides: Partial<AgentCell>): AgentCell {
     slot: 'session-1',
     title: 'Agent',
     runtime: 'codex',
+    interfaceMode: 'gui',
     model: 'gpt-5.5',
     status: 'idle',
     sessionDir: '/tmp/session',

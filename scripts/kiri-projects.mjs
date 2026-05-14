@@ -71,6 +71,7 @@ function migrate(database) {
       slot TEXT NOT NULL,
       title TEXT NOT NULL,
       runtime TEXT NOT NULL CHECK (runtime IN ('pi', 'codex', 'claude')),
+      interface_mode TEXT NOT NULL DEFAULT 'gui' CHECK (interface_mode IN ('gui', 'terminal')),
       model TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'queued', 'blocked', 'failed')),
       session_dir TEXT NOT NULL,
@@ -142,6 +143,7 @@ function migrate(database) {
   addProjectHiddenAtColumn(database)
   addRuntimeStateColumn(database)
   addAgentArchivedAtColumn(database)
+  addAgentInterfaceModeColumn(database)
 }
 
 function listProjects(database, options) {
@@ -280,6 +282,12 @@ function addAgentArchivedAtColumn(database) {
   const columns = database.prepare('PRAGMA table_info(agent_slots)').all()
   if (columns.some((column) => column.name === 'archived_at')) return
   database.exec('ALTER TABLE agent_slots ADD COLUMN archived_at TEXT')
+}
+
+function addAgentInterfaceModeColumn(database) {
+  const columns = database.prepare('PRAGMA table_info(agent_slots)').all()
+  if (columns.some((column) => column.name === 'interface_mode')) return
+  database.exec("ALTER TABLE agent_slots ADD COLUMN interface_mode TEXT NOT NULL DEFAULT 'gui'")
 }
 
 function nextProjectPosition(database) {

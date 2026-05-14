@@ -8,14 +8,6 @@ import {
   steerCodexAgent,
 } from './codex-runtime'
 import {
-  answerClaudeQuestion,
-  interruptClaudeAgent,
-  promptClaudeAgent,
-  resetClaudeSession,
-  setClaudeThinkingLevel,
-  steerClaudeAgent,
-} from './claude-runtime'
-import {
   forkPiSession,
   interruptPiAgent,
   promptPiAgent,
@@ -72,11 +64,10 @@ export const runtimeAdapters: Record<RuntimeKind, ProviderRuntimeAdapter> = {
     review: reviewCodexSession,
   },
   claude: {
-    prompt: promptClaudeAgent,
-    steer: steerClaudeAgent,
-    interrupt: interruptClaudeAgent,
-    setThinkingLevel: setClaudeThinkingLevel,
-    reset: resetClaudeSession,
-    answerQuestion: answerClaudeQuestion,
+    prompt: rejectClaudeGuiRuntime,
   },
+}
+
+async function rejectClaudeGuiRuntime(): Promise<never> {
+  throw new Error('Claude sessions run in terminal mode only')
 }

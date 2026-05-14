@@ -6,10 +6,12 @@ import type {
   ScratchpadBlock,
   RestoreSessionInput,
   RuntimeKind,
+  SessionInterfaceMode,
   StartSessionInput,
   ThinkingLevel,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
+import { sessionInterfaceModeForRuntime } from '~/lib/contracts'
 import {
   addScratchpadBlockSummary,
   addProjectSummary,
@@ -53,6 +55,7 @@ type SessionSummary = {
   readonly projectName: string
   readonly title: string
   readonly runtime: RuntimeKind
+  readonly interfaceMode: SessionInterfaceMode
   readonly model: string
   readonly status: AgentCell['status']
   readonly preview: string
@@ -77,6 +80,7 @@ type TriggerScratchpadInput = {
   readonly id: string
   readonly projectId: string
   readonly runtime?: RuntimeKind
+  readonly interfaceMode?: SessionInterfaceMode
   readonly model?: string
   readonly title?: string
   readonly thinkingLevel?: ThinkingLevel
@@ -223,21 +227,26 @@ function makeKiriControl(): KiriControlApi {
         if (!found) throw new Error(`Scratchpad block not found: ${input.id}`)
         return found
       })
+      const runtime = input.runtime ?? 'pi'
+      const interfaceMode = sessionInterfaceModeForRuntime(runtime, input.interfaceMode ?? 'gui')
       const agentId = yield* fromSync(() => startSessionAndGetId({
         projectId: input.projectId,
-        runtime: input.runtime,
+        runtime,
+        interfaceMode,
         model: input.model,
         title: input.title,
         thinkingLevel: input.thinkingLevel ?? 'medium',
       }))
-      yield* Effect.tryPromise({
-        try: () => promptAgent({ agentId, text: block.body, images: [] }),
-        catch: normalizeError,
-      }).pipe(Effect.catchAll((error) =>
-        fromSync(() => deleteSessionSummary({ agentId })).pipe(
-          Effect.catchAll(() => Effect.void),
-          Effect.zipRight(Effect.fail(error)),
-        )))
+      if (interfaceMode !== 'terminal') {
+        yield* Effect.tryPromise({
+          try: () => promptAgent({ agentId, text: block.body, images: [] }),
+          catch: normalizeError,
+        }).pipe(Effect.catchAll((error) =>
+          fromSync(() => deleteSessionSummary({ agentId })).pipe(
+            Effect.catchAll(() => Effect.void),
+            Effect.zipRight(Effect.fail(error)),
+          )))
+      }
       yield* fromSync(() => markScratchpadBlockTriggered(input.id, agentId))
       const session = yield* fromSync(() => renameSafeSessionRead(agentId))
       return { agentId, session, block }
@@ -319,6 +328,7 @@ function sessionSummaryFromAgent(
     projectName: project.name,
     title: agent.title,
     runtime: agent.runtime,
+    interfaceMode: agent.interfaceMode,
     model: agent.model,
     status: agent.status,
     preview: agent.preview,

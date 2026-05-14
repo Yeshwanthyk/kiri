@@ -10,6 +10,7 @@ import {
   deleteSessionInputSchema,
   deleteProjectInputSchema,
   renameSessionInputSchema,
+  refreshTerminalDiffsInputSchema,
   forkSessionInputSchema,
   hideProjectInputSchema,
   interruptMessageInputSchema,
@@ -28,6 +29,7 @@ import {
   terminalConfigInputSchema,
   triggerScratchpadBlockInputSchema,
   unhideProjectInputSchema,
+  sessionInterfaceModeForRuntime,
 } from '~/lib/contracts'
 import {
   addProject,
@@ -65,6 +67,7 @@ import {
   setKeymapPreference,
   setThemePreference,
 } from './preferences'
+import { refreshTerminalSessionDiffs } from './diff-refresh'
 
 export const fetchWorkspaceSnapshot = createServerFn({ method: 'GET' }).handler(
   async () => getWorkspaceSnapshot(),
@@ -190,9 +193,19 @@ export const answerQuestionMutation = createServerFn({ method: 'POST' })
 export const terminalConfigQuery = createServerFn({ method: 'GET' })
   .inputValidator(terminalConfigInputSchema)
   .handler(async ({ data }) => {
-    getAgentLaunchConfig(data.agentId)
-    return ensureTerminalServer()
+    const config = getAgentLaunchConfig(data.agentId)
+    const server = await ensureTerminalServer()
+    return {
+      ...server,
+      mode: data.mode,
+      runtime: config.runtime,
+      model: config.model,
+    }
   })
+
+export const refreshTerminalDiffsMutation = createServerFn({ method: 'POST' })
+  .inputValidator(refreshTerminalDiffsInputSchema)
+  .handler(async ({ data }) => refreshTerminalSessionDiffs(data.agentId))
 
 export const startSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(startSessionInputSchema)
@@ -211,18 +224,23 @@ export const triggerScratchpadBlockMutation = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const block = getScratchpadBlock(data.id)
     if (!block) throw new Error(`Scratchpad block not found: ${data.id}`)
+    const runtime = data.runtime ?? 'pi'
+    const interfaceMode = sessionInterfaceModeForRuntime(runtime, data.interfaceMode)
     const agentId = startSessionAndGetId({
       projectId: data.projectId,
-      runtime: data.runtime,
+      runtime,
+      interfaceMode,
       model: data.model,
       title: data.title,
       thinkingLevel: data.thinkingLevel,
     })
     markScratchpadBlockTriggered(data.id, agentId)
     const snapshot = getWorkspaceSnapshot()
-    void promptAgent({ agentId, text: block.body, images: [] }).catch((error) => {
-      console.error('Scratchpad trigger prompt failed', error)
-    })
+    if (interfaceMode !== 'terminal') {
+      void promptAgent({ agentId, text: block.body, images: [] }).catch((error) => {
+        console.error('Scratchpad trigger prompt failed', error)
+      })
+    }
     return { agentId, snapshot }
   })
 

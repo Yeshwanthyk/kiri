@@ -21,6 +21,9 @@ test.afterAll(async () => {
 })
 
 test.beforeEach(async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('kiri:terminal-transcript', '1')
+  })
   if (fakeCodexServer) fakeCodexServer.requests.length = 0
   rmSync(fileOperationFixturePath, { force: true })
   rmSync(detailFixturePath, { force: true })
@@ -241,8 +244,10 @@ test('session launcher keeps runtime presets isolated from normal starts', async
   await expect(page.getByTestId('session-launcher')).toBeVisible()
   await expectRuntimeSelected(page, 'claude')
   await expect(page.getByTestId('session-model')).toContainText('claude-opus-4-7')
+  await expect(page.getByTestId('session-interface-mode').getByRole('button')).toHaveCount(1)
+  await expect(page.getByTestId('session-interface-mode').getByRole('button', { name: 'Terminal' })).toBeVisible()
 
-  await page.getByTestId('session-launcher').getByRole('button', { name: 'Close session launcher' }).click()
+  await page.keyboard.press('Escape')
   await pressShiftKey(page, 'KeyN')
   await expect(page.getByTestId('session-launcher')).toBeVisible()
   await expectRuntimeSelected(page, 'codex')
@@ -468,66 +473,6 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
   expect(reviewRequests.at(-1)?.params?.target).toEqual({ type: 'baseBranch', branch: 'main' })
 })
 
-test('claude runtime runs through claude-agent-sdk harness', async ({ page }, testInfo) => {
-  const title = `Claude Session ${testInfo.project.name}`
-  const text = `hello claude ${testInfo.project.name}`
-
-  await page.goto('/')
-  await createSession(page, title, 'claude', 'high')
-
-  await page.getByTestId('chat-input').fill(text)
-  await page.getByRole('button', { name: 'Send prompt' }).click()
-
-  await expect(page.getByTestId('chat-panel')).toContainText(text, {
-    timeout: 30_000,
-  })
-  await expect(page.getByTestId('chat-panel')).toContainText(`fake claude received: ${text}`, {
-    timeout: 30_000,
-  })
-  await expect(page.getByLabel('Runtime activity').last()).toBeVisible({
-    timeout: 30_000,
-  })
-  await showLatestActivity(page)
-  await expect(page.getByTestId('chat-panel')).toContainText('Read: package.json', {
-    timeout: 30_000,
-  })
-  await expect(page.getByTestId('chat-panel')).toContainText('fake file contents', {
-    timeout: 30_000,
-  })
-  await expect(page.locator('.context-chip')).toHaveAttribute(
-    'title',
-    /20 \/ 1,000,000 tokens used/,
-  )
-
-  await page.getByTestId('chat-input').fill('/thinking off')
-  await page.getByRole('button', { name: 'Send prompt' }).click()
-  await expect(page.getByTestId('thinking-level')).toContainText('Thinking off')
-})
-
-test('claude runtime answers AskUserQuestion requests', async ({ page, isMobile }, testInfo) => {
-  test.skip(isMobile, 'mobile composer currently overlays pending-question controls')
-
-  const title = `Claude Question ${testInfo.project.name}`
-  const text = `please ask question ${testInfo.project.name}`
-
-  await page.goto('/')
-  await createSession(page, title, 'claude', 'medium')
-
-  await page.getByTestId('chat-input').fill(text)
-  await page.getByRole('button', { name: 'Send prompt' }).click()
-
-  await expect(page.getByTestId('pending-question')).toContainText(
-    'Which option should Claude use?',
-    { timeout: 30_000 },
-  )
-  await page.getByTestId('pending-question').getByRole('radio', { name: 'Option B' }).click()
-  await page.getByTestId('pending-question').getByRole('button', { name: 'Answer' }).click()
-  await expect(page.getByTestId('pending-question')).toHaveCount(0, { timeout: 30_000 })
-  await expect(page.getByTestId('chat-panel')).toContainText(`fake claude received: ${text}`, {
-    timeout: 30_000,
-  })
-})
-
 test('codex runtime replaces a missing rollout thread on first prompt', async ({ page }, testInfo) => {
   const title = `Missing Rollout ${testInfo.project.name}`
   const text = `first prompt after missing rollout ${testInfo.project.name}`
@@ -589,7 +534,17 @@ test('sidebar switches between chat, diffs, and terminal', async ({ page, isMobi
   await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
 
   await expect(terminalInput).toBeFocused()
-  await page.keyboard.press('Escape')
+  await page.keyboard.down('Shift')
+  await page.keyboard.press('Tab')
+  await page.keyboard.up('Shift')
+  await expect(terminalInput).not.toBeFocused()
+  await page.keyboard.down('Shift')
+  await page.keyboard.press('Tab')
+  await page.keyboard.up('Shift')
+  await expect(terminalInput).toBeFocused()
+  await page.keyboard.down('Shift')
+  await page.keyboard.press('Tab')
+  await page.keyboard.up('Shift')
   await expect(terminalInput).not.toBeFocused()
   await page.keyboard.down('Shift')
   await page.keyboard.press('KeyC')
@@ -633,6 +588,29 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
   await expect(page.getByTestId('terminal-transcript')).toContainText(
     `preserved:tab-preserved:${projectRoot}/src`,
   )
+})
+
+test('terminal interface sessions render the agent runtime in chat and shell in terminal tab', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop sidebar tabs only')
+  const title = `Terminal Interface ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title, 'claude', 'medium')
+
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  await expect(page.getByTestId('terminal-panel')).toContainText('Agent terminal')
+  await expect(page.getByTestId('terminal-transcript')).toContainText('kiri agent terminal')
+
+  await page.getByTestId('tab-terminal').click()
+  await expect(page.getByTestId('terminal-panel')).toContainText('Shell terminal')
+  await page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+    .click()
+  await page.keyboard.type('pwd')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
 })
 
 test('selected agent detail loads chat, diffs, and local drafts', async ({ page, isMobile }) => {
@@ -749,10 +727,12 @@ async function createSession(
   title: string,
   runtime: 'pi' | 'codex' | 'claude' = 'pi',
   thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh',
+  interfaceMode: 'gui' | 'terminal' = 'gui',
 ) {
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
   await pressShiftKey(page, 'KeyN')
   await clickRuntime(page, runtime)
+  await clickInterfaceMode(page, runtime === 'claude' ? 'terminal' : interfaceMode)
   if (thinkingLevel) {
     await clickThinkingLevel(page, thinkingLevel)
   }
@@ -762,6 +742,16 @@ async function createSession(
     .getByRole('button', { name: /^Start .* session$/ })
     .click()
   await expect(page.getByTestId('selected-agent')).toHaveText(title)
+}
+
+async function clickInterfaceMode(
+  page: import('@playwright/test').Page,
+  interfaceMode: 'gui' | 'terminal',
+) {
+  await page
+    .getByTestId('session-interface-mode')
+    .getByRole('button', { name: interfaceMode === 'gui' ? 'GUI' : 'Terminal' })
+    .click()
 }
 
 const runtimeLabels = {

@@ -13,6 +13,7 @@ function agent(runtime: AgentCell['runtime']): AgentCell {
     slot: 'session-1',
     title: 'Agent',
     runtime,
+    interfaceMode: 'gui',
     model: 'model',
     status: 'idle',
     sessionDir: '/tmp/session',

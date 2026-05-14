@@ -4,8 +4,10 @@ import { Effect } from 'effect'
 import { z } from 'zod/v4'
 import {
   runtimeKinds,
+  sessionInterfaceModes,
   thinkingLevels,
   type RuntimeKind,
+  type SessionInterfaceMode,
   type ThinkingLevel,
 } from '~/lib/contracts'
 import type { KiriControlApi } from './kiri-control'
@@ -16,6 +18,7 @@ const optionalProjectIdSchema = {
   projectId: z.string().trim().min(1).optional().describe('Project id. Defaults only where the tool says it can.'),
 }
 const runtimeSchema = z.enum(runtimeKinds).optional()
+const interfaceModeSchema = z.enum(sessionInterfaceModes).optional()
 const thinkingSchema = z.enum(thinkingLevels).optional()
 
 export async function runKiriMcpServer(control: KiriControlApi) {
@@ -122,6 +125,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
     inputSchema: {
       projectId: z.string().trim().min(1).describe('Project id.'),
       runtime: runtimeSchema.describe('Runtime/provider. Defaults to Kiri runtime default.'),
+      interfaceMode: interfaceModeSchema.describe('Chat tab interface. Defaults to gui; Claude sessions are always terminal.'),
       model: z.string().trim().min(1).optional().describe('Model id from settings.json.'),
       title: z.string().trim().min(1).optional().describe('Session title.'),
       thinkingLevel: thinkingSchema.describe('Thinking level. Defaults to medium.'),
@@ -129,6 +133,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
   }, async (input) => toolResult(await withContext(await run(control.startSession({
     ...input,
     runtime: input.runtime as RuntimeKind | undefined,
+    interfaceMode: (input.interfaceMode as SessionInterfaceMode | undefined) ?? 'gui',
     thinkingLevel: (input.thinkingLevel as ThinkingLevel | undefined) ?? 'medium',
   })))))
 
@@ -209,6 +214,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
       id: z.string().trim().min(1).describe('Scratchpad block id.'),
       projectId: z.string().trim().min(1).optional().describe('Project id. Defaults to selected project.'),
       runtime: runtimeSchema.describe('Runtime/provider. Defaults to Kiri runtime default.'),
+      interfaceMode: interfaceModeSchema.describe('Chat tab interface. Defaults to gui; Claude sessions are always terminal.'),
       model: z.string().trim().min(1).optional().describe('Model id from settings.json.'),
       title: z.string().trim().min(1).optional().describe('Session title.'),
       thinkingLevel: thinkingSchema.describe('Thinking level. Defaults to medium.'),
@@ -221,6 +227,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
       id: input.id,
       projectId,
       runtime: input.runtime as RuntimeKind | undefined,
+      interfaceMode: (input.interfaceMode as SessionInterfaceMode | undefined) ?? 'gui',
       model: input.model,
       title: input.title,
       thinkingLevel: (input.thinkingLevel as ThinkingLevel | undefined) ?? 'medium',

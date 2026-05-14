@@ -11,6 +11,21 @@ export const runtimeKinds = ['pi', 'codex', 'claude'] as const
 export const runtimeKindSchema = z.enum(runtimeKinds)
 export type RuntimeKind = z.infer<typeof runtimeKindSchema>
 
+export const sessionInterfaceModes = ['gui', 'terminal'] as const
+export const sessionInterfaceModeSchema = z.enum(sessionInterfaceModes)
+export type SessionInterfaceMode = z.infer<typeof sessionInterfaceModeSchema>
+
+export function sessionInterfaceModeForRuntime(
+  runtime: RuntimeKind,
+  interfaceMode?: SessionInterfaceMode,
+): SessionInterfaceMode {
+  return runtime === 'claude' ? 'terminal' : interfaceMode ?? 'gui'
+}
+
+export const terminalModes = ['runtime', 'shell'] as const
+export const terminalModeSchema = z.enum(terminalModes)
+export type TerminalMode = z.infer<typeof terminalModeSchema>
+
 export const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
 export const thinkingLevelSchema = z.enum(thinkingLevels)
 export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>
@@ -125,6 +140,7 @@ const agentCellSchema = z.object({
   slot: z.string(),
   title: z.string(),
   runtime: runtimeKindSchema,
+  interfaceMode: sessionInterfaceModeSchema.default('gui'),
   model: z.string(),
   status: agentStatusSchema,
   sessionDir: z.string(),
@@ -150,6 +166,7 @@ const archivedSessionSummarySchema = z.object({
   projectName: z.string(),
   title: z.string(),
   runtime: runtimeKindSchema,
+  interfaceMode: sessionInterfaceModeSchema.default('gui'),
   model: z.string(),
   status: agentStatusSchema,
   preview: z.string(),
@@ -312,8 +329,25 @@ type ReviewSessionInput = z.infer<typeof reviewSessionInputSchema>
 
 export const terminalConfigInputSchema = z.object({
   agentId: z.string().trim().min(1),
+  mode: terminalModeSchema.default('shell'),
 })
 type TerminalConfigInput = z.infer<typeof terminalConfigInputSchema>
+
+export const refreshTerminalDiffsInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+})
+type RefreshTerminalDiffsInput = z.infer<typeof refreshTerminalDiffsInputSchema>
+
+export const terminalConfigSchema = z.object({
+  host: z.string(),
+  port: z.number().int().nonnegative(),
+  path: z.string(),
+  token: z.string(),
+  mode: terminalModeSchema,
+  runtime: runtimeKindSchema,
+  model: z.string(),
+})
+export type TerminalConfig = z.infer<typeof terminalConfigSchema>
 
 export const answerQuestionInputSchema = z.object({
   agentId: z.string().trim().min(1),
@@ -329,6 +363,7 @@ export const startSessionInputSchema = z.object({
   projectId: z.string().trim().min(1),
   title: z.string().trim().optional(),
   runtime: runtimeKindSchema.optional(),
+  interfaceMode: sessionInterfaceModeSchema.default('gui'),
   model: z.string().trim().optional(),
   thinkingLevel: thinkingLevelSchema.default('medium'),
 })
@@ -365,6 +400,7 @@ export const triggerScratchpadBlockInputSchema = z.object({
   id: z.string().trim().min(1),
   projectId: z.string().trim().min(1),
   runtime: runtimeKindSchema.optional(),
+  interfaceMode: sessionInterfaceModeSchema.default('gui'),
   model: z.string().trim().optional(),
   title: z.string().trim().optional(),
   thinkingLevel: thinkingLevelSchema.default('medium'),

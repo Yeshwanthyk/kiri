@@ -28,6 +28,7 @@ try {
   const agentId = startSessionAndGetId({
     projectId: 'tasks',
     runtime: 'codex',
+    interfaceMode: 'gui',
     model: 'gpt-5.5',
     thinkingLevel: 'medium',
   })

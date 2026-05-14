@@ -29,7 +29,6 @@ export default defineConfig({
       KIRI_DB_PATH: e2eDbPath,
       KIRI_SETTINGS_PATH: e2eSettingsPath,
       KIRI_CODEX_APP_SERVER_URL: 'ws://127.0.0.1:39111',
-      KIRI_FAKE_CLAUDE: '1',
     },
     url: 'http://localhost:3109/@vite/client',
     reuseExistingServer: false,

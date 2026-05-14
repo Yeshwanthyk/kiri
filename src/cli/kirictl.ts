@@ -5,8 +5,10 @@ import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { Console, Effect, Layer, Option } from 'effect'
 import {
   runtimeKinds,
+  sessionInterfaceModes,
   thinkingLevels,
   type RuntimeKind,
+  type SessionInterfaceMode,
   type ThinkingLevel,
 } from '~/lib/contracts'
 import { KiriControl } from '~/server/kiri-control'
@@ -29,6 +31,10 @@ const requiredProjectIdOption = Options.text('project').pipe(
 )
 const runtimeOption = Options.choice('runtime', runtimeKinds).pipe(
   Options.withDescription('Runtime/provider'),
+  Options.optional,
+)
+const interfaceOption = Options.choice('interface', sessionInterfaceModes).pipe(
+  Options.withDescription('Session interface shown in the Chat tab'),
   Options.optional,
 )
 const modelOption = Options.text('model').pipe(
@@ -165,17 +171,19 @@ const sessionsCreateCommand = Command.make(
   {
     project: requiredProjectIdOption,
     runtime: runtimeOption,
+    interfaceMode: interfaceOption,
     model: modelOption,
     title: titleOption,
     thinking: thinkingOption,
     json,
   },
-  ({ project, runtime, model, title, thinking, json }) =>
+  ({ project, runtime, interfaceMode, model, title, thinking, json }) =>
     Effect.gen(function* () {
       const control = yield* KiriControl
       const session = yield* control.startSession({
         projectId: project,
         runtime: optionValue(runtime),
+        interfaceMode: optionValue(interfaceMode) ?? 'gui',
         model: optionValue(model),
         title: optionValue(title),
         thinkingLevel: optionValue(thinking) ?? 'medium',
@@ -285,18 +293,20 @@ const scratchpadTriggerCommand = Command.make(
     id: idOption,
     project: requiredProjectIdOption,
     runtime: runtimeOption,
+    interfaceMode: interfaceOption,
     model: modelOption,
     title: titleOption,
     thinking: thinkingOption,
     json,
   },
-  ({ id, project, runtime, model, title, thinking, json }) =>
+  ({ id, project, runtime, interfaceMode, model, title, thinking, json }) =>
     Effect.gen(function* () {
       const control = yield* KiriControl
       const result = yield* control.triggerScratchpad({
         id,
         projectId: project,
         runtime: optionValue(runtime),
+        interfaceMode: optionValue(interfaceMode) ?? 'gui',
         model: optionValue(model),
         title: optionValue(title),
         thinkingLevel: optionValue(thinking) ?? 'medium',
@@ -395,6 +405,7 @@ function formatSessions(rows: readonly {
   projectId: string
   title: string
   runtime: RuntimeKind
+  interfaceMode: SessionInterfaceMode
   model: string
   status: string
   archivedAt: string | null
@@ -403,7 +414,7 @@ function formatSessions(rows: readonly {
   return rows
     .map((row) => {
       const state = row.archivedAt ? 'archived' : row.status
-      return `${row.id}\t${row.projectId}\t${row.title}\t${row.runtime}\t${row.model}\t${state}`
+      return `${row.id}\t${row.projectId}\t${row.title}\t${row.interfaceMode}\t${row.runtime}\t${row.model}\t${state}`
     })
     .join('\n')
 }

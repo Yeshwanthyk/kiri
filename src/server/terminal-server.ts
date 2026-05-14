@@ -1,10 +1,13 @@
 import { createServer, type Server } from 'node:http'
 import { randomBytes } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { platform } from 'node:os'
 import { parse } from 'node:url'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import * as pty from 'node-pty'
+import { terminalModeSchema, type TerminalMode } from '~/lib/contracts'
 import { getAgentLaunchConfig } from './db'
+import { buildTerminalProcessLaunch, type TerminalAgentLaunchConfig } from './terminal-launch'
 
 type TerminalServerInfo = {
   host: string
@@ -25,8 +28,10 @@ type TerminalClientMessage =
     }
 
 type TerminalSession = {
-  agentId: string
+  key: string
   cwd: string
+  mode: TerminalMode
+  label: string
   proc: pty.IPty
   sockets: Set<WebSocket>
   buffer: string
@@ -41,7 +46,7 @@ const terminalSessions = new Map<string, TerminalSession>()
 
 const terminalPath = '/terminal'
 const terminalToken = randomBytes(32).toString('base64url')
-const maxReplayBytes = 80_000
+const maxReplayBytes = 32_000
 const idleKillMs = 5 * 60 * 1000
 
 export function ensureTerminalServer(): Promise<TerminalServerInfo> {
@@ -73,9 +78,10 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
     let session: TerminalSession
     try {
       const config = getAgentLaunchConfig(agentId)
+      const mode = parseTerminalMode(query.mode)
       const cols = positiveInt(query.cols, 100)
       const rows = positiveInt(query.rows, 30)
-      session = getOrCreateTerminalSession(config.id, config.cwd, cols, rows)
+      session = getOrCreateTerminalSession(config, mode, cols, rows)
       attachTerminalSocket(session, socket)
     } catch (error) {
       closeWithReason(socket, error instanceof Error ? error.message : String(error))
@@ -114,9 +120,15 @@ function closeTerminalServerForTests() {
   terminalServerPromise = null
 }
 
-function getOrCreateTerminalSession(agentId: string, cwd: string, cols: number, rows: number) {
-  const existing = terminalSessions.get(agentId)
-  if (existing && existing.cwd === cwd) {
+function getOrCreateTerminalSession(
+  config: TerminalAgentLaunchConfig,
+  mode: TerminalMode,
+  cols: number,
+  rows: number,
+) {
+  const key = terminalSessionKey(config, mode)
+  const existing = terminalSessions.get(key)
+  if (existing && existing.cwd === config.cwd) {
     existing.proc.resize(cols, rows)
     return existing
   }
@@ -124,30 +136,27 @@ function getOrCreateTerminalSession(agentId: string, cwd: string, cols: number, 
     killTerminalSession(existing)
   }
 
-  const shell = defaultShell()
-  const proc = pty.spawn(shell.command, shell.args, {
+  const launch = buildTerminalProcessLaunch(config, mode, defaultShell())
+  cleanupStaleClaudeSession(launch)
+  const proc = pty.spawn(launch.command, launch.args, {
     name: 'xterm-256color',
     cols,
     rows,
-    cwd,
-    env: {
-      ...process.env,
-      TERM: 'xterm-256color',
-      COLORTERM: 'truecolor',
-      KIRI_AGENT_ID: agentId,
-      KIRI_PROJECT_CWD: cwd,
-    },
+    cwd: launch.cwd,
+    env: launch.env,
   })
   const session: TerminalSession = {
-    agentId,
-    cwd,
+    key,
+    cwd: config.cwd,
+    mode,
+    label: launch.label,
     proc,
     sockets: new Set(),
-    buffer: `\r\n[kiri terminal: ${cwd}]\r\n`,
+    buffer: `\r\n[kiri terminal: ${launch.label} @ ${config.cwd}]\r\n`,
     idleTimer: null,
     exited: false,
   }
-  terminalSessions.set(agentId, session)
+  terminalSessions.set(key, session)
 
   proc.onData((data) => {
     appendTerminalBuffer(session, data)
@@ -165,7 +174,7 @@ function getOrCreateTerminalSession(agentId: string, cwd: string, cols: number, 
     for (const socket of session.sockets) {
       socket.close()
     }
-    terminalSessions.delete(agentId)
+    terminalSessions.delete(key)
   })
 
   return session
@@ -196,7 +205,7 @@ function killTerminalSession(session: TerminalSession) {
     clearTimeout(session.idleTimer)
     session.idleTimer = null
   }
-  terminalSessions.delete(session.agentId)
+  terminalSessions.delete(session.key)
   session.proc.kill()
 }
 
@@ -261,6 +270,64 @@ function defaultShell() {
   const command = process.env.SHELL ?? '/bin/zsh'
   if (command.endsWith('/bash') || command === 'bash') return { command, args: ['--login', '-i'] }
   return { command, args: ['-l', '-i'] }
+}
+
+function parseTerminalMode(value: unknown): TerminalMode {
+  return terminalModeSchema.catch('shell').parse(value)
+}
+
+function terminalSessionKey(config: TerminalAgentLaunchConfig, mode: TerminalMode) {
+  return mode === 'shell'
+    ? `${config.projectId}:shell`
+    : `${config.id}:runtime`
+}
+
+function cleanupStaleClaudeSession(launch: ReturnType<typeof buildTerminalProcessLaunch>) {
+  if (launch.label !== 'claude') return
+  if (process.env.KIRI_TERMINAL_CLEANUP_STALE_CLAUDE === '0') return
+  const sessionId = launch.env.KIRI_CLAUDE_SESSION_ID
+  if (!sessionId) return
+  const pids = findClaudeSessionPids(sessionId)
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      // Already gone.
+    }
+  }
+  if (pids.length === 0) return
+  waitForClaudeSessionExit(sessionId, 800)
+}
+
+function findClaudeSessionPids(sessionId: string) {
+  if (platform() === 'win32') return []
+  try {
+    return execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' })
+      .split('\n')
+      .flatMap((line) => {
+        const match = /^\s*(\d+)\s+(.+)$/.exec(line)
+        if (!match) return []
+        const pid = Number(match[1])
+        const command = match[2] ?? ''
+        if (!Number.isInteger(pid) || pid === process.pid) return []
+        if (!command.includes('claude') || !command.includes('--session-id') || !command.includes(sessionId)) return []
+        return [pid]
+      })
+  } catch {
+    return []
+  }
+}
+
+function waitForClaudeSessionExit(sessionId: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (findClaudeSessionPids(sessionId).length === 0) return
+    sleepSync(50)
+  }
+}
+
+function sleepSync(ms: number) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
 function positiveInt(value: unknown, fallback: number) {

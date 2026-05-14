@@ -30,8 +30,8 @@ export const runtimeCopy = {
   },
   claude: {
     label: 'Claude',
-    meta: 'code',
-    detail: 'Run a Claude Code session with the same project target.',
+    meta: 'terminal',
+    detail: 'Run Claude Code in the agent terminal for this project.',
   },
 } as const satisfies Record<RuntimeKind, { label: string; meta: string; detail: string }>
 

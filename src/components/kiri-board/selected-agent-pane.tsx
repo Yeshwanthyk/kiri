@@ -3,7 +3,17 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { GitPullRequest, MessageSquareText, NotebookPen, Plus, TerminalSquare } from 'lucide-react'
 import * as React from 'react'
-import type { AgentCell, ProjectRow, ReviewTarget, RuntimeKind, ScratchpadBlock, SendMessageImage, ThinkingLevel, WorkspaceSnapshot } from '~/lib/contracts'
+import type {
+  AgentCell,
+  ProjectRow,
+  ReviewTarget,
+  RuntimeKind,
+  ScratchpadBlock,
+  SendMessageImage,
+  SessionInterfaceMode,
+  ThinkingLevel,
+  WorkspaceSnapshot,
+} from '~/lib/contracts'
 import { thinkingLevelSchema } from '~/lib/contracts'
 import { agentDetailQueryOptions } from '~/server/workspace'
 import type { ThemeMode } from '~/theme/kiri-themes'
@@ -14,6 +24,7 @@ import { DiffPanel } from './diff-panel'
 import { TerminalPanel } from './terminal-panel'
 import { mergeAgentDetail } from './agent-detail'
 import type { RefreshAgentDetail, SidebarTab } from './board-types'
+import type { KeymapSettings } from './navigation'
 
 export function SelectedAgentPane({
   selectedProject,
@@ -21,12 +32,15 @@ export function SelectedAgentPane({
   tab,
   onTabChange,
   chatFocusRequest,
+  terminalFocusRequest,
   themeMode,
+  keymap,
   startSessionKey,
   onStartSession,
   onDeleteSession,
   onRenameSession,
   onSend,
+  onRefreshTerminalDiffs,
   onSteer,
   onInterrupt,
   onThinkingCommand,
@@ -46,7 +60,9 @@ export function SelectedAgentPane({
   tab: SidebarTab
   onTabChange: (tab: SidebarTab) => void
   chatFocusRequest: number
+  terminalFocusRequest: number
   themeMode: ThemeMode
+  keymap: KeymapSettings
   startSessionKey: string
   onStartSession: () => void
   onDeleteSession: (agentId: string) => void
@@ -55,6 +71,10 @@ export function SelectedAgentPane({
     agentId: string,
     text: string,
     images?: SendMessageImage[],
+    onDetailRefresh?: RefreshAgentDetail,
+  ) => Promise<void>
+  onRefreshTerminalDiffs: (
+    agentId: string,
     onDetailRefresh?: RefreshAgentDetail,
   ) => Promise<void>
   onSteer: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
@@ -78,6 +98,7 @@ export function SelectedAgentPane({
     overrides?: {
       projectId?: string
       runtime?: RuntimeKind
+      interfaceMode?: SessionInterfaceMode
       model?: string
       thinkingLevel?: ThinkingLevel
       title?: string
@@ -92,16 +113,26 @@ export function SelectedAgentPane({
     placeholderData: keepPreviousData,
   })
   const agent = mergeAgentDetail(selectedAgent, detailQuery.data)
-  const [terminalAgentId, setTerminalAgentId] = React.useState<string | null>(null)
-  const shouldMountTerminal = Boolean(agent && (tab === 'terminal' || terminalAgentId === agent.id))
+  const chatUsesTerminal = agent?.interfaceMode === 'terminal'
+  const visibleTerminalMode = agent && tab === 'terminal'
+    ? 'shell'
+    : agent && tab === 'chat' && chatUsesTerminal
+      ? 'runtime'
+      : null
   const refreshDetail = React.useCallback(async () => {
     if (!selectedAgent) return
     await detailQuery.refetch()
   }, [detailQuery, selectedAgent])
+  const previousTabRef = React.useRef(tab)
 
   React.useEffect(() => {
-    if (agent && tab === 'terminal') setTerminalAgentId(agent.id)
-  }, [agent, tab])
+    const enteredDiffs = tab === 'diffs' && previousTabRef.current !== 'diffs'
+    previousTabRef.current = tab
+    if (!enteredDiffs || !agent || agent.interfaceMode !== 'terminal') return
+    void onRefreshTerminalDiffs(agent.id, refreshDetail).catch((error) => {
+      console.error('Failed to refresh terminal diffs', error)
+    })
+  }, [agent, onRefreshTerminalDiffs, refreshDetail, tab])
 
   const tabBar = (
     <div className="sidebar-tabs" role="tablist">
@@ -179,7 +210,7 @@ export function SelectedAgentPane({
           onDelete={onDeleteBlock}
           onTrigger={onTriggerBlock}
         />
-      ) : agent && tab === 'chat' ? (
+      ) : agent && tab === 'chat' && !chatUsesTerminal ? (
         <ChatPanel
           key={agent.id}
           agent={agent}
@@ -204,7 +235,7 @@ export function SelectedAgentPane({
           agent={agent}
           themeMode={themeMode}
         />
-      ) : agent && tab === 'terminal' ? null : !agent ? (
+      ) : agent && (tab === 'terminal' || (tab === 'chat' && chatUsesTerminal)) ? null : !agent ? (
         <EmptySessionPanel
           project={selectedProject}
           startSessionKey={startSessionKey}
@@ -212,13 +243,18 @@ export function SelectedAgentPane({
         />
       ) : null}
 
-      {agent && shouldMountTerminal ? (
+      {agent && visibleTerminalMode ? (
         <TerminalPanel
-          key={`terminal-${agent.id}`}
+          key={visibleTerminalMode === 'shell'
+            ? `terminal-${selectedProject.id}-shell`
+            : `terminal-${agent.id}-runtime`}
           agent={agent}
+          focusRequest={terminalFocusRequest}
+          toggleFocusKey={keymap.toggleTerminalFocus}
+          mode={visibleTerminalMode}
           project={selectedProject}
           themeMode={themeMode}
-          visible={tab === 'terminal'}
+          visible
         />
       ) : null}
     </aside>

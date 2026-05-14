@@ -18,10 +18,15 @@ describe('provider runtime registry', () => {
     expect(runtimeAdapters.codex.review).toBeTypeOf('function')
 
     expect(runtimeAdapters.claude.prompt).toBeTypeOf('function')
-    expect(runtimeAdapters.claude.steer).toBeTypeOf('function')
-    expect(runtimeAdapters.claude.interrupt).toBeTypeOf('function')
-    expect(runtimeAdapters.claude.setThinkingLevel).toBeTypeOf('function')
-    expect(runtimeAdapters.claude.reset).toBeTypeOf('function')
-    expect(runtimeAdapters.claude.answerQuestion).toBeTypeOf('function')
+    expect(runtimeAdapters.claude.steer).toBeUndefined()
+    expect(runtimeAdapters.claude.interrupt).toBeUndefined()
+    expect(runtimeAdapters.claude.setThinkingLevel).toBeUndefined()
+    expect(runtimeAdapters.claude.reset).toBeUndefined()
+    expect(runtimeAdapters.claude.answerQuestion).toBeUndefined()
+  })
+
+  it('rejects chat prompts for terminal-only Claude sessions', async () => {
+    await expect(runtimeAdapters.claude.prompt({ agentId: 'agent-1', text: 'hello' }))
+      .rejects.toThrow('Claude sessions run in terminal mode only')
   })
 })

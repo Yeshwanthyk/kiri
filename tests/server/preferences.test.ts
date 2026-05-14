@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@effect/vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { defaultKeymap } from '~/components/kiri-board/navigation'
@@ -57,6 +57,21 @@ describe('ui preferences', () => {
       const selected = setAgentByProjectPreference({ kiri: 'session-1' }, path)
       expect(selected.agentByProject).toEqual({ kiri: 'session-1' })
       expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual(selected)
+    })
+  })
+
+  it('fills new keymap defaults when reading older preference files', () => {
+    withPreferencesPath((path) => {
+      const oldKeymap: Partial<typeof defaultKeymap> = { ...defaultKeymap }
+      delete oldKeymap.toggleTerminalFocus
+      writeFileSync(path, JSON.stringify({
+        theme: defaultThemeSelection,
+        keymap: oldKeymap,
+        chatTypography: defaultChatTypography,
+        agentByProject: {},
+      }))
+
+      expect(getUiPreferences(path).keymap.toggleTerminalFocus).toBe(defaultKeymap.toggleTerminalFocus)
     })
   })
 
