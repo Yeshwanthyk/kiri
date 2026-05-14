@@ -338,7 +338,7 @@ async function waitForClaudeSessionExit(sessionId: string, timeoutMs: number) {
 }
 
 function sessionIdPattern(sessionId: string) {
-  return new RegExp(`(?:^|\\s)--session-id(?:=|\\s+)${escapeRegExp(sessionId)}(?:\\s|$)`)
+  return new RegExp(`(?:^|\\s)--(?:session-id|resume)(?:=|\\s+)${escapeRegExp(sessionId)}(?:\\s|$)`)
 }
 
 function escapeRegExp(value: string) {
