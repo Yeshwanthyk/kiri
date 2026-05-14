@@ -123,12 +123,19 @@ export function SelectedAgentPane({
     if (!selectedAgent) return
     await detailQuery.refetch()
   }, [detailQuery, selectedAgent])
-  const previousTabRef = React.useRef(tab)
+  const previousDiffRefreshRef = React.useRef<{
+    tab: SidebarTab | null
+    agentId: string | null
+  }>({ tab: null, agentId: null })
 
   React.useEffect(() => {
-    const enteredDiffs = tab === 'diffs' && previousTabRef.current !== 'diffs'
-    previousTabRef.current = tab
-    if (!enteredDiffs || !agent || agent.interfaceMode !== 'terminal') return
+    const previous = previousDiffRefreshRef.current
+    const agentId = agent?.id ?? null
+    previousDiffRefreshRef.current = { tab, agentId }
+    const shouldRefresh = tab === 'diffs'
+      && agent?.interfaceMode === 'terminal'
+      && (previous.tab !== 'diffs' || previous.agentId !== agent.id)
+    if (!shouldRefresh) return
     void onRefreshTerminalDiffs(agent.id, refreshDetail).catch((error) => {
       console.error('Failed to refresh terminal diffs', error)
     })
