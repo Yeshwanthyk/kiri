@@ -1,4 +1,4 @@
-import { createServer, type Server } from 'node:http'
+import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { platform } from 'node:os'
@@ -63,6 +63,18 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
   const wss = new WebSocketServer({ server, path: terminalPath })
 
   wss.on('connection', (socket, request) => {
+    void handleTerminalConnection(socket, request).catch((error) => {
+      closeWithReason(socket, error instanceof Error ? error.message : String(error))
+    })
+  })
+
+  const port = await listen(server, requestedPort, host)
+  httpServer = server
+  terminalServer = { host, port, path: terminalPath, token: terminalToken }
+  return terminalServer
+}
+
+async function handleTerminalConnection(socket: WebSocket, request: IncomingMessage) {
     const query = parse(request.url ?? '', true).query
     if (query.token !== terminalToken) {
       closeWithReason(socket, 'Invalid terminal token')
@@ -81,7 +93,7 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
       const mode = parseTerminalMode(query.mode)
       const cols = positiveInt(query.cols, 100)
       const rows = positiveInt(query.rows, 30)
-      session = getOrCreateTerminalSession(config, mode, cols, rows)
+      session = await getOrCreateTerminalSession(config, mode, cols, rows)
       attachTerminalSocket(session, socket)
     } catch (error) {
       closeWithReason(socket, error instanceof Error ? error.message : String(error))
@@ -101,12 +113,6 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
     socket.on('close', () => {
       detachTerminalSocket(session, socket)
     })
-  })
-
-  const port = await listen(server, requestedPort, host)
-  httpServer = server
-  terminalServer = { host, port, path: terminalPath, token: terminalToken }
-  return terminalServer
 }
 
 function closeTerminalServerForTests() {
@@ -120,7 +126,7 @@ function closeTerminalServerForTests() {
   terminalServerPromise = null
 }
 
-function getOrCreateTerminalSession(
+async function getOrCreateTerminalSession(
   config: TerminalAgentLaunchConfig,
   mode: TerminalMode,
   cols: number,
@@ -137,7 +143,7 @@ function getOrCreateTerminalSession(
   }
 
   const launch = buildTerminalProcessLaunch(config, mode, defaultShell())
-  cleanupStaleClaudeSession(launch)
+  await cleanupStaleClaudeSession(launch)
   const proc = pty.spawn(launch.command, launch.args, {
     name: 'xterm-256color',
     cols,
@@ -282,7 +288,7 @@ function terminalSessionKey(config: TerminalAgentLaunchConfig, mode: TerminalMod
     : `${config.id}:runtime`
 }
 
-function cleanupStaleClaudeSession(launch: ReturnType<typeof buildTerminalProcessLaunch>) {
+async function cleanupStaleClaudeSession(launch: ReturnType<typeof buildTerminalProcessLaunch>) {
   if (launch.label !== 'claude') return
   if (process.env.KIRI_TERMINAL_CLEANUP_STALE_CLAUDE === '0') return
   const sessionId = launch.env.KIRI_CLAUDE_SESSION_ID
@@ -296,7 +302,7 @@ function cleanupStaleClaudeSession(launch: ReturnType<typeof buildTerminalProces
     }
   }
   if (pids.length === 0) return
-  waitForClaudeSessionExit(sessionId, 800)
+  await waitForClaudeSessionExit(sessionId, 800)
 }
 
 function findClaudeSessionPids(sessionId: string) {
@@ -310,7 +316,7 @@ function findClaudeSessionPids(sessionId: string) {
         const pid = Number(match[1])
         const command = match[2] ?? ''
         if (!Number.isInteger(pid) || pid === process.pid) return []
-        if (!command.includes('claude') || !command.includes('--session-id') || !command.includes(sessionId)) return []
+        if (!command.includes('claude') || !sessionIdPattern(sessionId).test(command)) return []
         return [pid]
       })
   } catch {
@@ -318,16 +324,24 @@ function findClaudeSessionPids(sessionId: string) {
   }
 }
 
-function waitForClaudeSessionExit(sessionId: string, timeoutMs: number) {
+async function waitForClaudeSessionExit(sessionId: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (findClaudeSessionPids(sessionId).length === 0) return
-    sleepSync(50)
+    await sleep(50)
   }
 }
 
-function sleepSync(ms: number) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+function sessionIdPattern(sessionId: string) {
+  return new RegExp(`(?:^|\\s)--session-id(?:=|\\s+)${escapeRegExp(sessionId)}(?:\\s|$)`)
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function positiveInt(value: unknown, fallback: number) {
