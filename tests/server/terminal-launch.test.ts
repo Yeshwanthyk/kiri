@@ -125,7 +125,10 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.command).toBe('/bin/zsh')
     expect(launch.args).toEqual(['-l', '-i'])
     expect(launch.label).toBe('shell')
-    expect(launch.env.KIRI_RUNTIME).toBe('claude')
+    expect(launch.env.KIRI_PROJECT_CWD).toBe('/tmp/project')
+    expect(launch.env.KIRI_AGENT_ID).toBeUndefined()
+    expect(launch.env.KIRI_RUNTIME).toBeUndefined()
+    expect(launch.env.KIRI_SESSION_DIR).toBeUndefined()
   })
 
   it('removes color-disabling env from terminal sessions', () => {

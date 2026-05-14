@@ -33,7 +33,7 @@ export function buildTerminalProcessLaunch(
       command: shell.command,
       args: shell.args,
       cwd: config.cwd,
-      env: baseTerminalEnv(config),
+      env: shellTerminalEnv(config.cwd),
       label: 'shell',
     }
   }
@@ -165,11 +165,7 @@ function piLaunch(config: TerminalAgentLaunchConfig): TerminalProcessLaunch {
 function baseTerminalEnv(config: TerminalAgentLaunchConfig, extra?: NodeJS.ProcessEnv) {
   const env = runtimeProcessEnv({
     ...extra,
-    TERM: 'xterm-256color',
-    COLORTERM: 'truecolor',
-    FORCE_COLOR: '3',
-    CLICOLOR: '1',
-    CLICOLOR_FORCE: '1',
+    ...commonTerminalEnv(),
     KIRI_AGENT_ID: config.id,
     KIRI_PROJECT_CWD: config.cwd,
     KIRI_RUNTIME: config.runtime,
@@ -180,6 +176,26 @@ function baseTerminalEnv(config: TerminalAgentLaunchConfig, extra?: NodeJS.Proce
   delete env.NO_COLOR
   delete env.NODE_DISABLE_COLORS
   return env
+}
+
+function shellTerminalEnv(cwd: string) {
+  const env = runtimeProcessEnv({
+    ...commonTerminalEnv(),
+    KIRI_PROJECT_CWD: cwd,
+  })
+  delete env.NO_COLOR
+  delete env.NODE_DISABLE_COLORS
+  return env
+}
+
+function commonTerminalEnv() {
+  return {
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+    FORCE_COLOR: '3',
+    CLICOLOR: '1',
+    CLICOLOR_FORCE: '1',
+  }
 }
 
 function objectState(value: string | null | undefined) {
