@@ -2,40 +2,129 @@ import { existsSync } from 'node:fs'
 import { delimiter } from 'node:path'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { Context, Data, Effect, Layer } from 'effect'
 
-const DESKTOP_PATH_ENTRIES = [
+export class RuntimeBinaryError extends Data.TaggedError('RuntimeBinaryError')<{
+  readonly message: string
+  readonly cause?: unknown
+}> {}
+
+export type RuntimeBinariesApi = {
+  readonly resolveExecutable: (input: {
+    readonly command: string
+    readonly configuredPath?: string
+  }) => Effect.Effect<string, RuntimeBinaryError>
+  readonly processEnv: (extra?: NodeJS.ProcessEnv) => Effect.Effect<NodeJS.ProcessEnv, RuntimeBinaryError>
+}
+
+type RuntimeBinariesServiceInput = {
+  readonly getEnv?: () => NodeJS.ProcessEnv
+  readonly getHomeDir?: () => string
+  readonly exists?: (path: string) => boolean
+}
+
+type RuntimeBinariesContext = {
+  readonly env: NodeJS.ProcessEnv
+  readonly homeDir: string
+  readonly exists: (path: string) => boolean
+}
+
+export class RuntimeBinariesService extends Context.Tag('@kiri/RuntimeBinaries')<
+  RuntimeBinariesService,
+  RuntimeBinariesApi
+>() {
+  static readonly layer = Layer.succeed(
+    RuntimeBinariesService,
+    RuntimeBinariesService.of(makeRuntimeBinariesService()),
+  )
+}
+
+export function makeRuntimeBinariesService(
+  input: RuntimeBinariesServiceInput = {},
+): RuntimeBinariesApi {
+  const context = (): RuntimeBinariesContext => ({
+    env: input.getEnv?.() ?? process.env,
+    homeDir: input.getHomeDir?.() ?? homedir(),
+    exists: input.exists ?? existsSync,
+  })
+
+  return {
+    resolveExecutable: (request) => Effect.try({
+      try: () => resolveRuntimeExecutableWith(context(), request.command, request.configuredPath),
+      catch: toRuntimeBinaryError,
+    }),
+    processEnv: (extra) => Effect.try({
+      try: () => runtimeProcessEnvWith(context(), extra),
+      catch: toRuntimeBinaryError,
+    }),
+  }
+}
+
+function desktopPathEntries(homeDir: string) {
+  return [
   '/opt/homebrew/bin',
   '/usr/local/bin',
-  join(homedir(), '.local', 'bin'),
-  join(homedir(), '.bun', 'bin'),
-  join(homedir(), '.npm-global', 'bin'),
-]
+    join(homeDir, '.local', 'bin'),
+    join(homeDir, '.bun', 'bin'),
+    join(homeDir, '.npm-global', 'bin'),
+  ]
+}
 
 export function resolveRuntimeExecutable(command: string, configuredPath?: string) {
+  return resolveRuntimeExecutableWith(
+    { env: process.env, homeDir: homedir(), exists: existsSync },
+    command,
+    configuredPath,
+  )
+}
+
+function resolveRuntimeExecutableWith(
+  context: RuntimeBinariesContext,
+  command: string,
+  configuredPath?: string,
+) {
   const explicit = configuredPath?.trim()
   if (explicit) return explicit
-  return executableOnPath(command) ?? firstExistingPath(DESKTOP_PATH_ENTRIES.map((entry) => join(entry, command))) ?? command
+  const desktopPaths = desktopPathEntries(context.homeDir).map((entry) => join(entry, command))
+  return executableOnPath(context, command) ?? firstExistingPath(context, desktopPaths) ?? command
 }
 
 export function runtimeProcessEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const path = process.env.PATH ?? ''
-  const entries = [...DESKTOP_PATH_ENTRIES, ...path.split(delimiter).filter(Boolean)]
+  return runtimeProcessEnvWith(
+    { env: process.env, homeDir: homedir(), exists: existsSync },
+    extra,
+  )
+}
+
+function runtimeProcessEnvWith(
+  context: RuntimeBinariesContext,
+  extra?: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const path = context.env.PATH ?? ''
+  const entries = [...desktopPathEntries(context.homeDir), ...path.split(delimiter).filter(Boolean)]
   return {
-    ...process.env,
+    ...context.env,
     ...extra,
     PATH: Array.from(new Set(entries)).join(delimiter),
   }
 }
 
-function executableOnPath(command: string) {
-  for (const entry of process.env.PATH?.split(delimiter) ?? []) {
+function executableOnPath(context: RuntimeBinariesContext, command: string) {
+  for (const entry of context.env.PATH?.split(delimiter) ?? []) {
     if (!entry) continue
     const candidate = join(entry, command)
-    if (existsSync(candidate)) return candidate
+    if (context.exists(candidate)) return candidate
   }
   return undefined
 }
 
-function firstExistingPath(paths: ReadonlyArray<string>) {
-  return paths.find((path) => existsSync(path))
+function firstExistingPath(context: RuntimeBinariesContext, paths: ReadonlyArray<string>) {
+  return paths.find((path) => context.exists(path))
+}
+
+function toRuntimeBinaryError(error: unknown) {
+  return new RuntimeBinaryError({
+    message: error instanceof Error ? error.message : 'Runtime binary resolution failed',
+    cause: error,
+  })
 }

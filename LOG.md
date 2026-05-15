@@ -66,6 +66,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed config/settings service hardening. Review caught and fixed a settings error-message compatibility regression; typed service tests now pin injected config/file reads, validation, and model assertions; typecheck, focused eslint, focused tests, lint, effect audit, build, and diff check passed.
 - 2026-05-15: Started UI preferences service hardening. Added typed injectable `UiPreferencesService` over `KiriConfigService` and an atomic file adapter seam while preserving sync preference exports.
 - 2026-05-15: Completed UI preferences service hardening. Review passed after adding layer wiring coverage and correcting tracker exactness; focused tests now cover default reads, atomic writes, typed errors, and service-layer provisioning.
+- 2026-05-15: Started runtime binary resolver hardening. Added typed injectable `RuntimeBinariesService` for executable resolution and runtime PATH construction while preserving sync wrappers.
+- 2026-05-15: Completed runtime binary resolver hardening. Review passed after tightening desktop fallback precedence and PATH de-duplication tests; focused runtime binary and terminal launch checks passed.
 
 ## Remaining Knip Findings
 

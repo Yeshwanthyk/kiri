@@ -56,7 +56,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/pi-runtime.ts` | runtime-adapter | `runtime/pi/{runtime-service,retained-state,attachments}.ts` | not-started | required | Main Pi retained-state and cleanup risk. |
 | `src/server/preferences.ts` | config | `config/preferences-service.ts` with atomic file and in-memory adapters | migrating | required | Typed injectable preferences service added; review/verification pending. |
 | `src/server/provider-runtime.ts` | use-case | `runtime/registry.ts` with injected runtime services | not-started | required | Registry exists; adapters are still imported singletons. |
-| `src/server/runtime-binaries.ts` | process-adapter | `integrations/runtime-binaries.ts` resolver service | not-started | required | Direct PATH/executable resolution. |
+| `src/server/runtime-binaries.ts` | process-adapter | `integrations/runtime-binaries.ts` resolver service | migrating | required | Typed injectable runtime binary service added; review/verification pending. |
 | `src/server/runtime-file-operations.ts` | pure | pure runtime file-operation classifier | explicit-non-migration | not-required | Keep pure unless telemetry/resource dependencies are added. |
 | `src/server/runtime-lifecycle.ts` | use-case | `runtime/lifecycle.ts` and `runtime/projection.ts` | not-started | required | Best current Effect shape; live projector should depend on repositories. |
 | `src/server/runtime.ts` | use-case | runtime registry-backed command surface | migrating | required | Runtime command service now dispatches through `RuntimeRegistry`; review/verification pending. |
@@ -88,6 +88,28 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/runtime-binaries.ts
+
+- Status: migrating; final status waits for terminal/process adapters to consume the service instead of the compatibility sync exports.
+- Target seam: typed injectable `RuntimeBinariesService` for executable resolution and runtime process env construction.
+- Behavior preserved: `resolveRuntimeExecutable` still prefers trimmed configured paths, then PATH hits, then desktop fallback paths, then bare command; `runtimeProcessEnv` still prepends desktop paths, de-duplicates PATH entries, merges extras, and preserves process env.
+- Dependencies moved: process env, home directory, and executable existence checks can now be injected for tests.
+- Baseline tests before migration: terminal launch tests around runtime binary env vars and commands.
+- Tests added/updated: `tests/server/runtime-binaries.test.ts` covers explicit path precedence, PATH-before-desktop ordering, desktop fallback precedence, de-duplicated PATH ordering, service layer process env, and compatibility wrappers.
+- Post-migration parity tests: focused runtime-binaries and terminal-launch tests passed.
+- Perf/memory impact: no retained state added; service resolves from current providers on each call, matching prior global behavior.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/runtime-binaries.test.ts tests/server/terminal-launch.test.ts` - passed, 2 files / 14 tests
+  - `pnpm exec eslint src/server/runtime-binaries.ts tests/server/runtime-binaries.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 37 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `git diff --check` - passed
+- Review subagent summary: Erdos found no code blockers; first pass requested stronger assertions for desktop fallback ordering and PATH de-duplication, second pass found no blockers.
+- Findings fixed: tightened tests to pin desktop fallback precedence when multiple desktop candidates exist and exact de-duplicated PATH ordering.
+- Residual risk: callers still use compatibility sync exports until terminal/runtime adapter service phases.
 
 ### src/server/preferences.ts
 
