@@ -108,6 +108,7 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed Codex app-server protocol split. Review found no blockers; typecheck, lint, effect audit, build, focused Codex protocol/adapter tests, full test suite, and diff check passed.
 - 2026-05-15: Final review flagged history access beyond the default 500-row page as a no-regression risk. Added agent-detail `offset` paging metadata, a selected-agent "Load older history" path, and merge tests so default hydration stays bounded while older chat history remains reachable.
 - 2026-05-15: Older-history second-pass review found no blockers after preserving `timelinePage` through detail merge and dropping stale in-flight older-page responses on agent/revision changes. Final gates passed: typecheck, targeted eslint, lint, effect audit, perf harness, build, 57-file/238-test unit suite, focused Playwright smokes, Knip triage, HTML script parse, and diff check.
+- 2026-05-15: Final full-branch review found one scratchpad prompt-failure cleanup leak. Fixed live scratchpad failure cleanup to archive through runtime cleanup, and expanded the scratchpad harness to prove retained Codex state is fully cleared after async prompt enqueue failure.
 
 ## Remaining Knip Findings
 

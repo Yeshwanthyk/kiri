@@ -195,10 +195,10 @@ Copy this section under `## Migration Records` for each file or inseparable file
 
 - Status: migrating; final status waits for DB/session/runtime command dependencies to be leaf Effect services instead of compatibility functions.
 - Target seam: `ScratchpadTriggerService` owns scratchpad block lookup, session creation, trigger marking, optional GUI prompt enqueue, prompt-failure cleanup, and session summary return.
-- Behavior preserved: `triggerScratchpadSession(input, prompt?)` compatibility export remains; terminal sessions do not enqueue prompts; GUI prompt enqueue failures asynchronously archive the created session and report the prompt failure; missing blocks fail before session creation.
+- Behavior preserved: `triggerScratchpadSession(input, prompt?)` compatibility export remains; terminal sessions do not enqueue prompts; GUI prompt enqueue failures asynchronously archive the created session through runtime cleanup and report the prompt failure; missing blocks fail before session creation.
 - Dependencies moved: DB reads/writes, session start/delete/list, prompt enqueue, and prompt-failure reporting are now behind `ScratchpadTriggerDependencies`.
 - Baseline tests before migration: `tests/harness/scratchpad-trigger-harness.ts` covered terminal no-prompt and GUI failed-prompt archive behavior through the public compatibility export.
-- Tests added/updated: `tests/server/scratchpad-trigger-service.test.ts` covers terminal no-prompt, GUI prompt-failure cleanup/reporting, and missing-block precondition using injected dependencies.
+- Tests added/updated: `tests/server/scratchpad-trigger-service.test.ts` covers terminal no-prompt, GUI prompt-failure cleanup/reporting, and missing-block precondition using injected dependencies. `tests/harness/scratchpad-trigger-harness.ts` now proves the public compatibility path clears retained Codex state after async GUI prompt enqueue failure.
 - Post-migration parity tests: focused service, public harness, workspace-service, and KiriControl service tests passed.
 - Perf/memory impact: no payload/query changes; the async prompt failure cleanup remains bounded to one retained session cleanup path and is now directly unit-testable.
 - Verification commands and results:
@@ -207,11 +207,13 @@ Copy this section under `## Migration Records` for each file or inseparable file
   - `pnpm exec vitest run tests/server/scratchpad-trigger-service.test.ts tests/server/scratchpad-trigger.test.ts tests/server/workspace-service.test.ts tests/server/kiri-control-service.test.ts` - passed, 4 files / 14 tests
   - `pnpm effect:audit` - passed, 44 tracked/server files
   - `pnpm exec vitest run tests/server/scratchpad-trigger-service.test.ts tests/server/scratchpad-trigger.test.ts tests/server/workspace-service.test.ts tests/server/kiri-control-service.test.ts tests/server/kiri-control-cli.test.ts tests/server/kiri-mcp.test.ts` - passed, 6 files / 17 tests
+  - `pnpm exec eslint src/server/scratchpad-trigger.ts tests/harness/scratchpad-trigger-harness.ts tests/server/scratchpad-trigger.test.ts tests/server/scratchpad-trigger-service.test.ts --max-warnings=0` - passed after final cleanup fix
+  - `pnpm exec vitest run tests/server/scratchpad-trigger.test.ts tests/server/scratchpad-trigger-service.test.ts tests/server/runtime-cleanup.test.ts tests/server/runtime-retention.test.ts` - passed after final cleanup fix, 4 files / 14 tests
   - `pnpm lint` - passed
   - `pnpm build` - passed with existing Vite chunk-size warning
   - `pnpm test -- --runInBand` - passed, 52 files / 221 tests including `tests/server/perf-gates.test.ts`
-- Review subagent summary: Sagan found no blockers. Notes: compatibility export still accepts custom `prompt`, normal `Error` failures unwrap for existing callers, GUI prompt failure cleanup and terminal no-prompt behavior are preserved.
-- Findings fixed: typecheck caught that live `getScratchpadBlock` can return `undefined`; dependency type now allows `null | undefined` so the service preserves the existing missing-block behavior.
+- Review subagent summary: Sagan found no blockers. Notes: compatibility export still accepts custom `prompt`, normal `Error` failures unwrap for existing callers, GUI prompt failure cleanup and terminal no-prompt behavior are preserved. Final branch review later found the live async failure path used raw archive instead of runtime cleanup; follow-up review found no blockers after the dependency was switched and harness tightened.
+- Findings fixed: typecheck caught that live `getScratchpadBlock` can return `undefined`; dependency type now allows `null | undefined` so the service preserves the existing missing-block behavior. Final full-branch review caught retained runtime state leaking on GUI prompt enqueue failure; live cleanup now uses `deleteSessionSummaryWithRuntimeCleanup`.
 - Residual risk: the compatibility export builds a small one-off layer per call to preserve the optional prompt override; final app-layer composition should provide the service once at the transport boundary.
 
 ### src/server/pi-jsonl.ts and src/server/pi-jsonl-file.ts
@@ -748,7 +750,7 @@ Copy this section under `## Migration Records` for each file or inseparable file
   - `pnpm exec vitest run tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts` - passed.
   - `pnpm exec vitest run tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts tests/kiri-board/detail-merge.test.ts` - passed after adding older-page access.
   - `pnpm exec eslint src/server/db.ts src/server/db/agent-detail.ts src/server/workspace.ts src/components/kiri-board/agent-detail.ts src/components/kiri-board/selected-agent-pane.tsx src/components/kiri-board/chat-panel.tsx tests/server/agent-detail-history.test.ts tests/kiri-board/detail-merge.test.ts --max-warnings=0` - passed after adding older-page access.
-  - `pnpm exec tsx tests/perf/run-perf.ts` - passed after older-page access, detail 89.57ms and RSS delta 43.09MB.
+  - `pnpm exec tsx tests/perf/run-perf.ts` - passed after older-page access and final cleanup fix, detail 88.42ms and RSS delta 45.22MB.
   - `pnpm typecheck` - passed.
   - `pnpm lint` - passed.
   - `pnpm build` - passed with existing Vite chunk-size warning.

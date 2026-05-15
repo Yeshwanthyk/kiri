@@ -298,8 +298,8 @@
       <article class="panel quarter">
         <span class="label">Observed run</span>
         <div class="metric"><span>Detail payload</span><strong>1.08 MB</strong></div>
-        <div class="metric"><span>RSS delta</span><strong>43.09 MB</strong></div>
-        <div class="metric"><span>Detail latency</span><strong>89.57 ms</strong></div>
+        <div class="metric"><span>RSS delta</span><strong>45.22 MB</strong></div>
+        <div class="metric"><span>Detail latency</span><strong>88.42 ms</strong></div>
         <p class="cite">Source: <a href="../tests/perf/run-perf.ts">tests/perf/run-perf.ts:18</a>, final run 2026-05-15.</p>
       </article>
       <article class="panel quarter">
@@ -415,7 +415,7 @@
               <tr><td>DB</td><td><code>db/connection</code>, migrations, row schemas, repositories, projections, paged detail reader, and <code>KiriDbService</code>.</td><td>Hot paths and startup repairs are testable without treating <code>db.ts</code> as one giant unit.</td></tr>
               <tr><td>Config</td><td>Settings, preferences, Kiri config, runtime binary resolution, directory picker, terminal launch, and git diff now have typed service seams.</td><td>Tests can inject file/process behavior instead of mutating user state or environment.</td></tr>
               <tr><td>Runtime</td><td>Runtime command service, registry cleanup seam, retained-state modules, projection layer, Pi JSONL file reader, Kiri MCP runtime, and Codex protocol module.</td><td>Leak-prone maps and protocol parsing have narrower ownership and direct cleanup tests.</td></tr>
-              <tr><td>Control</td><td>Workspace service, Kiri control dependency injection, scratchpad trigger service, backend readiness service, and MCP runtime context handling.</td><td>UI, CLI, MCP, and backend readiness now share behavior through use-case seams rather than copied control logic.</td></tr>
+              <tr><td>Control</td><td>Workspace service, Kiri control dependency injection, scratchpad trigger service, backend readiness service, and MCP runtime context handling.</td><td>UI, CLI, MCP, and backend readiness now share behavior through use-case seams; scratchpad prompt failure now archives through runtime cleanup.</td></tr>
             </tbody>
           </table>
           <p class="cite">Source: <a href="../docs/effect-migration-tracker.md">docs/effect-migration-tracker.md</a>, <a href="../LOG.md">LOG.md</a>.</p>
@@ -447,8 +447,9 @@
               <tr><td><code>pnpm typecheck</code></td><td>Passed</td><td>Whole TypeScript project.</td></tr>
               <tr><td><code>pnpm lint</code></td><td>Passed</td><td>Configured server/test lint surface.</td></tr>
               <tr><td><code>pnpm effect:audit</code></td><td>Passed</td><td>48 tracked server files, 43 migrating, 5 explicit non-migration, 0 not-started.</td></tr>
-              <tr><td><code>pnpm exec tsx tests/perf/run-perf.ts</code></td><td>Passed</td><td>6,000 timeline rows, 80 diffs, 500 returned rows, 50 returned diffs, 43.09 MB RSS delta.</td></tr>
+              <tr><td><code>pnpm exec tsx tests/perf/run-perf.ts</code></td><td>Passed</td><td>6,000 timeline rows, 80 diffs, 500 returned rows, 50 returned diffs, 45.22 MB RSS delta.</td></tr>
               <tr><td><code>agent-detail-history + detail-merge</code></td><td>Passed</td><td>Latest page, older offset page, and chronological prepend behavior.</td></tr>
+              <tr><td><code>scratchpad-trigger + runtime cleanup</code></td><td>Passed</td><td>Terminal no-prompt, GUI failure archive, and retained Codex state cleanup.</td></tr>
               <tr><td><code>pnpm build</code></td><td>Passed</td><td>Client and SSR production build; existing Vite large-chunk warning remains.</td></tr>
               <tr><td><code>pnpm test -- --runInBand</code></td><td>Passed</td><td>57 files, 238 tests.</td></tr>
               <tr><td><code>pnpm exec playwright test --project=chromium -g ...</code></td><td>Passed</td><td>Codex app-server, terminal persistence, selected detail hydration: 3 tests.</td></tr>
@@ -457,7 +458,7 @@
         </article>
         <article class="panel third">
           <span class="label">Review posture</span>
-          <p>Each meaningful migration chunk was reviewed before the next phase. Blockers found during the branch were fixed in-place: async readiness probes, stale PTY replacement deletion, stale Pi writes after reset, runtime command FiberFailure wrapping, public compatibility export gaps, and stale older-history page merging.</p>
+          <p>Each meaningful migration chunk was reviewed before the next phase. Blockers found during the branch were fixed in-place: async readiness probes, stale PTY replacement deletion, stale Pi writes after reset, runtime command FiberFailure wrapping, public compatibility export gaps, stale older-history page merging, and scratchpad prompt-failure runtime cleanup.</p>
           <p class="cite">Source: <a href="../docs/effect-migration-tracker.md">docs/effect-migration-tracker.md</a>, review summaries per migration record.</p>
         </article>
       </div>

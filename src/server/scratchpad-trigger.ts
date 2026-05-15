@@ -7,12 +7,12 @@ import type {
 import { sessionInterfaceModeForRuntime } from '~/lib/contracts'
 import { Context, Data, Effect, Either, Layer } from 'effect'
 import {
-  deleteSessionSummary,
   getScratchpadBlock,
   listSessionSummaries,
   markScratchpadBlockTriggered,
   startSessionAndGetId,
 } from './db'
+import { deleteSessionSummaryWithRuntimeCleanup } from './runtime-cleanup'
 import { promptAgent } from './runtime'
 
 type TriggerScratchpadInput = {
@@ -88,7 +88,7 @@ const liveScratchpadTriggerDependencies: ScratchpadTriggerDependencies = {
   startSessionAndGetId,
   markScratchpadBlockTriggered,
   listSessionSummaries,
-  deleteSessionSummary,
+  deleteSessionSummary: deleteSessionSummaryWithRuntimeCleanup,
   promptAgent,
   reportPromptFailure: (error) => console.error('Scratchpad trigger prompt failed', error),
 }

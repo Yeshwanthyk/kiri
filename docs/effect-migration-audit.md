@@ -276,7 +276,7 @@ The branch followed the recommended order instead of doing a broad rewrite. The 
 - DB is split into connection, migrations, schema, repositories, projections, paged agent detail, bootstrap repairs, session operations, and a compatibility `KiriDbService` facade.
 - Config and IO boundaries now have typed service seams for settings, preferences, Kiri config, runtime binary resolution, directory picker, terminal launch, git diff, and diff refresh.
 - Runtime lifecycle work now includes a command service, registry cleanup seam, retained-state modules for Codex and Pi, runtime projection, Pi JSONL file IO split, Kiri MCP runtime extraction, and pure Codex app protocol parsing.
-- Control surfaces now share more use-case code through workspace service, Kiri control dependency injection, scratchpad trigger service, backend readiness service, and MCP runtime context handling.
+- Control surfaces now share more use-case code through workspace service, Kiri control dependency injection, scratchpad trigger service with runtime cleanup on async prompt failure, backend readiness service, and MCP runtime context handling.
 - The migration tracker covers 48 server files: 43 marked migrating and 5 marked explicit non-migration, with no not-started rows left in the audit.
 
 ## Final Verification
@@ -286,8 +286,9 @@ Final branch gates run on 2026-05-15:
 - `pnpm typecheck` - passed.
 - `pnpm lint` - passed.
 - `pnpm effect:audit` - passed with 48 tracked server files, 43 migrating, 5 explicit non-migration, and no not-started rows.
-- `pnpm exec tsx tests/perf/run-perf.ts` - passed with 6,000 stored timeline rows, 500 returned timeline rows, 80 stored diffs, 50 returned diffs, 1.08 MB detail JSON, 89.57 ms detail hydration, and 43.09 MB RSS delta against a 64 MB budget.
+- `pnpm exec tsx tests/perf/run-perf.ts` - passed with 6,000 stored timeline rows, 500 returned timeline rows, 80 stored diffs, 50 returned diffs, 1.08 MB detail JSON, 88.42 ms detail hydration, and 45.22 MB RSS delta against a 64 MB budget.
 - `pnpm exec vitest run tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts tests/kiri-board/detail-merge.test.ts` - passed after the final older-history paging patch, proving the latest page, older offset page, perf budget, and chronological page merge behavior.
+- `pnpm exec vitest run tests/server/scratchpad-trigger.test.ts tests/server/scratchpad-trigger-service.test.ts tests/server/runtime-cleanup.test.ts tests/server/runtime-retention.test.ts` - passed after the final scratchpad cleanup patch, proving async prompt-failure cleanup archives through retained-runtime cleanup.
 - `pnpm build` - passed; the existing Vite large-chunk warning remains.
 - `pnpm test -- --runInBand` - passed, 57 files and 238 tests.
 - `pnpm exec playwright test --project=chromium -g "codex runtime runs through app-server harness|selected agent detail loads chat, diffs, and local drafts|terminal preserves running shell across sidebar tab switches"` - passed, 3 focused Chromium tests.

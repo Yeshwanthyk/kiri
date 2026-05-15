@@ -8,6 +8,7 @@ const harnessOutputSchema = z.object({
   failedPromptCalls: z.literal(1),
   terminalTriggered: z.literal(true),
   failedSessionArchived: z.literal(true),
+  failedRuntimeStateCleaned: z.literal(true),
 })
 
 describe('scratchpad trigger semantics', () => {

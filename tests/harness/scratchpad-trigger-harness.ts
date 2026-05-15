@@ -11,6 +11,7 @@ const outputSchema = z.object({
   failedPromptCalls: z.number(),
   terminalTriggered: z.boolean(),
   failedSessionArchived: z.boolean(),
+  failedRuntimeStateCleaned: z.boolean(),
 })
 
 process.env.KIRI_ROOT_DIR = root
@@ -29,9 +30,15 @@ try {
       listSessionSummaries,
     },
     { triggerScratchpadSession },
+    {
+      __unsafeClearCodexRuntimeStateForTest,
+      __unsafeRetainCodexRuntimeStateForTest,
+      codexRuntimeRetainedStateStats,
+    },
   ] = await Promise.all([
     import('../../src/server/db'),
     import('../../src/server/scratchpad-trigger'),
+    import('../../src/server/codex-runtime'),
   ])
 
   addProjectSummary({
@@ -51,8 +58,9 @@ try {
     runtime: 'codex',
     interfaceMode: 'terminal',
     model: 'gpt-5.5',
-  }, async () => {
+  }, () => {
     terminalPromptCalls += 1
+    return Promise.resolve()
   })
 
   let failedPromptCalls = 0
@@ -60,6 +68,7 @@ try {
     projectId: 'scratch',
     body: 'failed scratchpad body',
   })
+  __unsafeClearCodexRuntimeStateForTest()
   const originalError = console.error
   console.error = () => undefined
   const failed = await triggerScratchpadSession({
@@ -68,21 +77,34 @@ try {
     runtime: 'codex',
     interfaceMode: 'gui',
     model: 'gpt-5.5',
-  }, async () => {
+  }, ({ agentId }) => {
     failedPromptCalls += 1
-    throw new Error('prompt failed')
+    __unsafeRetainCodexRuntimeStateForTest({
+      agentId,
+      threadId: `thread-${agentId}`,
+      turnId: `turn-${agentId}`,
+    })
+    return Promise.reject(new Error('prompt failed'))
   })
   await new Promise((resolve) => setImmediate(resolve))
   console.error = originalError
 
   const failedSession = listSessionSummaries({ includeArchived: true })
     .find((session) => session.id === failed.agentId)
+  const failedRuntimeStats = codexRuntimeRetainedStateStats()
   const output = outputSchema.parse({
     ok: true,
     terminalPromptCalls,
     failedPromptCalls,
     terminalTriggered: getScratchpadBlock(terminalBlock.id)?.triggeredAgentId !== null,
-    failedSessionArchived: failedSession?.archivedAt !== null,
+    failedSessionArchived: failedSession !== undefined && failedSession.archivedAt !== null,
+    failedRuntimeStateCleaned:
+      failedRuntimeStats.threadAgents === 0 &&
+      failedRuntimeStats.agentThreads === 0 &&
+      failedRuntimeStats.threadTurns === 0 &&
+      failedRuntimeStats.queues === 0 &&
+      failedRuntimeStats.sessionGenerations === 0 &&
+      failedRuntimeStats.repoDiffRefreshedTurns === 0,
   })
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
