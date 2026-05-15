@@ -36,6 +36,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/migrations.ts` | repository | DB schema creation and migration helpers | migrating | required | Extracted and reviewed; final status waits for DB connection/transaction service boundary. |
 | `src/server/db/projects.ts` | repository | Project repository over DB connection/transaction helpers | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/scratchpad.ts` | repository | Scratchpad block repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
+| `src/server/db/sessions.ts` | repository | Session summary and lifecycle repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
 | `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
 | `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
@@ -200,6 +201,26 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: no blockers in initial or second-pass review; reviewer confirmed SQL, trim behavior, error strings, ordering, FK semantics, and no import cycle.
 - Findings fixed: added direct FK semantics coverage for missing triggered agent and `ON DELETE SET NULL` on agent/project deletion.
 - Residual risk: marking a nonexistent block remains a no-op, matching previous behavior and left unchanged.
+
+### src/server/db/sessions.ts
+
+- Status: extracted; final migration status remains `migrating|required` until repositories sit behind the DB service boundary.
+- Target seam: session lifecycle repository over `DatabaseSync`.
+- Behavior preserved: session summary list/order/defaults, start row creation, initial thread, thinking-level info event, archive/restore, rename, and started-session guards retain prior semantics.
+- Dependencies moved: session summary SQL and start/archive/restore/rename persistence moved out of `src/server/db.ts`.
+- Baseline tests before migration: CLI/MCP session flows, runtime lifecycle tests, broad server suite.
+- Tests added/updated: `tests/server/db-sessions.test.ts` covers start/list/require/archive/restore/rename, validation errors, deterministic slot/session-dir generation, thinking-level event persistence, and rollback on partial start failure.
+- Post-migration parity tests: CLI, MCP, and runtime lifecycle tests remained green after extraction.
+- Perf/memory impact: none expected; SQL was moved without changing query shape.
+- Verification commands and results:
+  - `pnpm effect:audit` - passed, 30 tracked files and 30 server files.
+  - `pnpm exec vitest run tests/server/db-sessions.test.ts tests/server/kiri-control-cli.test.ts tests/server/kiri-mcp.test.ts tests/server/runtime-lifecycle.test.ts` - passed, 4 files and 20 tests.
+  - `pnpm typecheck` - passed.
+  - `pnpm lint` - passed.
+  - `pnpm build` - passed with existing Vite chunk-size warning.
+- Review subagent summary: no blockers after second pass; reviewer confirmed SQL/order parity, transaction bracketing, duplicate project check for error precedence, and rollback coverage.
+- Findings fixed: restored legacy project-not-found error precedence before runtime/model validation; added forced thread-insert failure rollback test.
+- Residual risk: start-session facade still performs settings/model validation outside the repository until the settings service layer lands.
 
 ## Audit Command
 

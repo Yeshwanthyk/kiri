@@ -55,7 +55,6 @@ import {
   persistedSessionDbRowSchema,
   projectDbRowSchema,
   projectIdDbRowSchema,
-  sessionSummaryDbRowSchema,
   timelineEventDbRowSchema,
 } from './db/schema'
 import { openKiriDatabase } from './db/connection'
@@ -75,6 +74,15 @@ import {
   listScratchpadBlocks as listScratchpadBlocksFromDb,
   markScratchpadBlockTriggered as markScratchpadBlockTriggeredInDb,
 } from './db/scratchpad'
+import {
+  archiveSessionRow,
+  assertSessionProjectExists,
+  insertSessionRow,
+  listSessionSummaries as listSessionSummariesFromDb,
+  renameSessionRow as renameSessionRowInDb,
+  requireSessionSummary,
+  restoreSessionRow as restoreSessionRowFromDb,
+} from './db/sessions'
 import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
@@ -423,87 +431,7 @@ export function listSessionSummaries(input: {
   readonly projectId?: string
   readonly includeArchived?: boolean
 } = {}) {
-  const rows = getDb()
-    .prepare(
-      `
-        SELECT
-          a.id,
-          a.project_id AS projectId,
-          p.name AS projectName,
-          a.title,
-          a.runtime,
-          a.interface_mode AS interfaceMode,
-          a.model,
-          a.status,
-          t.preview,
-          t.message_count AS messageCount,
-          t.updated_at AS updatedAt,
-          a.archived_at AS archivedAt
-        FROM agent_slots a
-        INNER JOIN projects p ON p.id = a.project_id
-        LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
-        WHERE a.slot LIKE 'session-%'
-          AND (? IS NULL OR a.project_id = ?)
-          AND (? = 1 OR a.archived_at IS NULL)
-        ORDER BY COALESCE(t.updated_at, '') DESC, a.position ASC, a.id ASC
-      `,
-    )
-    .all(
-      input.projectId ?? null,
-      input.projectId ?? null,
-      input.includeArchived ? 1 : 0,
-    )
-
-  return rows.map(sessionSummaryFromDbRow)
-}
-
-function requireSessionSummary(agentId: string, includeArchived = false) {
-  const id = agentId.trim()
-  const session = getDb()
-    .prepare(
-      `
-        SELECT
-          a.id,
-          a.project_id AS projectId,
-          p.name AS projectName,
-          a.title,
-          a.runtime,
-          a.interface_mode AS interfaceMode,
-          a.model,
-          a.status,
-          t.preview,
-          t.message_count AS messageCount,
-          t.updated_at AS updatedAt,
-          a.archived_at AS archivedAt
-        FROM agent_slots a
-        INNER JOIN projects p ON p.id = a.project_id
-        LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
-        WHERE a.id = ?
-          AND a.slot LIKE 'session-%'
-          AND (? = 1 OR a.archived_at IS NULL)
-      `,
-    )
-    .get(id, includeArchived ? 1 : 0)
-  if (!session) throw new Error(`Session not found: ${id}`)
-  return sessionSummaryFromDbRow(session)
-}
-
-function sessionSummaryFromDbRow(row: unknown) {
-  const parsed = sessionSummaryDbRowSchema.parse(row)
-  return {
-    id: parsed.id,
-    projectId: parsed.projectId,
-    projectName: parsed.projectName,
-    title: parsed.title,
-    runtime: parsed.runtime,
-    interfaceMode: parsed.interfaceMode,
-    model: parsed.model,
-    status: parsed.status,
-    preview: parsed.preview ?? 'No messages yet',
-    messageCount: parsed.messageCount ?? 0,
-    updatedAt: parsed.updatedAt ?? new Date(0).toISOString(),
-    archivedAt: parsed.archivedAt,
-  }
+  return listSessionSummariesFromDb(getDb(), input)
 }
 
 export function addProject(input: AddProjectInput) {
@@ -524,17 +452,13 @@ export function startSession(input: StartSessionInput) {
 
 export function startSessionSummary(input: StartSessionInput) {
   const id = insertSession(input)
-  return requireSessionSummary(id, true)
+  return requireSessionSummary(getDb(), id, true)
 }
 
 function insertSession(input: StartSessionInput) {
   const database = getDb()
   const projectId = input.projectId.trim()
-  const project = database
-    .prepare('SELECT id FROM projects WHERE id = ?')
-    .get(projectId)
-  if (!project) throw new Error(`Project not found: ${projectId}`)
-
+  assertSessionProjectExists(database, projectId)
   const runtime = runtimeKindSchema.parse(input.runtime ?? 'pi')
   const requestedInterfaceMode = sessionInterfaceModeSchema.parse(input.interfaceMode ?? 'gui')
   const interfaceMode = sessionInterfaceModeForRuntime(runtime, requestedInterfaceMode)
@@ -542,60 +466,15 @@ function insertSession(input: StartSessionInput) {
   const model = input.model?.trim() || runtimeSettings.defaultModel
   assertConfiguredModel(runtime, model)
 
-  const nextPosition = database
-    .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM agent_slots WHERE project_id = ?')
-    .get(projectId) as { position: number }
-  const suffix = Math.random().toString(36).slice(2, 8)
-  const slot = `session-${Date.now().toString(36)}-${suffix}`
-  const id = `${projectId}-${slot}`
-  const title = input.title?.trim() || `Session ${nextPosition.position + 1}`
-  const now = new Date().toISOString()
-  const sessionDir = runtimeSessionDir(runtime, projectId, slot)
-
-  database.exec('BEGIN')
-  try {
-    database
-      .prepare(
-        `
-          INSERT INTO agent_slots (
-            id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, position
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, NULL, ?)
-        `,
-      )
-      .run(
-        id,
-        projectId,
-        slot,
-        title,
-        runtime,
-        interfaceMode,
-        model,
-        sessionDir,
-        nextPosition.position,
-      )
-    database
-      .prepare(
-        `
-          INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
-          VALUES (?, ?, 1, 'Ready.', 0, ?)
-        `,
-      )
-      .run(`thread-${id}`, id, now)
-    insertAgentInfoEvent(database, {
-      agentId: id,
-      kind: 'thinking_level',
-      label: 'Thinking level changed',
-      detail: input.thinkingLevel,
-      timestamp: now,
-    })
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
-
-  return id
+  return insertSessionRow(database, {
+    projectId,
+    title: input.title,
+    runtime,
+    interfaceMode,
+    model,
+    thinkingLevel: input.thinkingLevel,
+    sessionDirForSlot: (slot) => runtimeSessionDir(runtime, projectId, slot),
+  })
 }
 
 export function deleteSession(input: DeleteSessionInput) {
@@ -605,43 +484,11 @@ export function deleteSession(input: DeleteSessionInput) {
 
 export function deleteSessionSummary(input: DeleteSessionInput) {
   const id = archiveSession(input)
-  return requireSessionSummary(id, true)
+  return requireSessionSummary(getDb(), id, true)
 }
 
 function archiveSession(input: DeleteSessionInput) {
-  const database = getDb()
-  const agentId = input.agentId.trim()
-  const row = database
-    .prepare('SELECT id, project_id AS projectId, slot FROM agent_slots WHERE id = ?')
-    .get(agentId) as { id: string; projectId: string; slot: string } | undefined
-  if (!row) throw new Error(`Session not found: ${agentId}`)
-  if (!row.slot.startsWith('session-')) {
-    throw new Error('Only started sessions can be removed')
-  }
-
-  database.exec('BEGIN')
-  try {
-    const archivedAt = new Date().toISOString()
-    database
-      .prepare('UPDATE agent_slots SET archived_at = ? WHERE id = ?')
-      .run(archivedAt, agentId)
-    const rows = database
-      .prepare(
-        'SELECT id FROM agent_slots WHERE project_id = ? ORDER BY position ASC, id ASC',
-      )
-      .all(row.projectId)
-      .map((item) => idDbRowSchema.parse(item))
-    const update = database.prepare('UPDATE agent_slots SET position = ? WHERE id = ?')
-    for (const [position, item] of rows.entries()) {
-      update.run(position, item.id)
-    }
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
-
-  return agentId
+  return archiveSessionRow(getDb(), input.agentId)
 }
 
 export function restoreSession(input: RestoreSessionInput) {
@@ -651,24 +498,11 @@ export function restoreSession(input: RestoreSessionInput) {
 
 export function restoreSessionSummary(input: RestoreSessionInput) {
   const id = restoreSessionRow(input)
-  return requireSessionSummary(id, true)
+  return requireSessionSummary(getDb(), id, true)
 }
 
 function restoreSessionRow(input: RestoreSessionInput) {
-  const database = getDb()
-  const agentId = input.agentId.trim()
-  const row = database
-    .prepare('SELECT id, project_id AS projectId, slot, archived_at AS archivedAt FROM agent_slots WHERE id = ?')
-    .get(agentId) as { id: string; projectId: string; slot: string; archivedAt: string | null } | undefined
-  if (!row) throw new Error(`Session not found: ${agentId}`)
-  if (!row.slot.startsWith('session-')) {
-    throw new Error('Only started sessions can be restored')
-  }
-
-  database
-    .prepare('UPDATE agent_slots SET archived_at = NULL WHERE id = ?')
-    .run(agentId)
-  return agentId
+  return restoreSessionRowFromDb(getDb(), input.agentId)
 }
 
 export function renameSession(input: { agentId: string; title: string }) {
@@ -678,23 +512,11 @@ export function renameSession(input: { agentId: string; title: string }) {
 
 export function renameSessionSummary(input: { agentId: string; title: string }) {
   const id = renameSessionRow(input)
-  return requireSessionSummary(id, true)
+  return requireSessionSummary(getDb(), id, true)
 }
 
 function renameSessionRow(input: { agentId: string; title: string }) {
-  const database = getDb()
-  const agentId = input.agentId.trim()
-  const title = input.title.trim()
-  if (!title) throw new Error('Session title cannot be empty')
-  const row = database
-    .prepare('SELECT id, slot FROM agent_slots WHERE id = ?')
-    .get(agentId) as { id: string; slot: string } | undefined
-  if (!row) throw new Error(`Session not found: ${agentId}`)
-  if (!row.slot.startsWith('session-')) {
-    throw new Error('Only started sessions can be renamed')
-  }
-  database.prepare('UPDATE agent_slots SET title = ? WHERE id = ?').run(title, agentId)
-  return agentId
+  return renameSessionRowInDb(getDb(), input)
 }
 
 export function resetSession(agentId: string) {
