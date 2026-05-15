@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { runtimeAdapters } from '../../src/server/provider-runtime'
+import { describe, expect, it } from '@effect/vitest'
+import { Effect } from 'effect'
+import { RuntimeRegistry, runtimeAdapters } from '../../src/server/provider-runtime'
 
 describe('provider runtime registry', () => {
   it('exposes adapter capabilities by runtime kind', () => {
@@ -29,4 +30,12 @@ describe('provider runtime registry', () => {
     await expect(runtimeAdapters.claude.prompt({ agentId: 'agent-1', text: 'hello' }))
       .rejects.toThrow('Claude sessions run in terminal mode only')
   })
+
+  it.effect('exposes the registry as an Effect service', () =>
+    Effect.gen(function* () {
+      const registry = yield* RuntimeRegistry
+      const codex = yield* registry.get('codex')
+      expect(codex.prompt).toBeTypeOf('function')
+    }).pipe(Effect.provide(RuntimeRegistry.layer)),
+  )
 })

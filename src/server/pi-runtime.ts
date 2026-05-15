@@ -316,6 +316,18 @@ function stopAdapter(agentId: string) {
   queues.delete(agentId)
 }
 
+export function forgetPiRuntimeAgent(agentId: string) {
+  stopAdapter(agentId)
+}
+
+export function piRuntimeRetainedStateStats() {
+  return {
+    adapters: adapters.size,
+    adapterKeys: adapterKeys.size,
+    queues: queues.size,
+  }
+}
+
 function archivePiSessionFiles(sessionDir: string) {
   if (!existsSync(sessionDir)) return
   const sessionFiles = readdirSync(sessionDir, { withFileTypes: true })

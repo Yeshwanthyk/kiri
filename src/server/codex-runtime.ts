@@ -57,6 +57,7 @@ const threadTurns = new Map<string, string>()
 const queues = new Map<string, Promise<void>>()
 const sessionGenerations = new Map<string, number>()
 const repoDiffRefreshedTurns = new Set<string>()
+const maxRepoDiffRefreshedTurns = 1_000
 const CODEX_SANDBOX_MODE = 'danger-full-access'
 const CODEX_SANDBOX_POLICY = { type: 'dangerFullAccess' } as const
 
@@ -183,10 +184,7 @@ export async function resetCodexSession(input: { agentId: string }) {
       // Reset should clear local state even if the remote turn is already gone.
     }
   }
-  if (state.threadId) {
-    threadAgents.delete(state.threadId)
-    agentThreads.delete(input.agentId)
-  }
+  forgetCodexRuntimeAgent(input.agentId, { keepGeneration: true })
   clearAgentRuntimeState(input.agentId)
   resetStoredSession(input.agentId)
 }
@@ -293,8 +291,7 @@ function startOrSteerCodexTurn(input: {
     if (!isCurrentCodexGeneration(input.config.id, input.generation)) return false
     yield* Effect.sync(() => {
       input.setActiveThreadId(threadId)
-      threadAgents.set(threadId, input.config.id)
-      agentThreads.set(input.config.id, threadId)
+      rememberCodexThread(input.config.id, threadId)
     })
     const thread = yield* readCodexThreadEffect(input.adapter, threadId)
     yield* Effect.sync(() => {
@@ -354,8 +351,7 @@ function startCodexReview(input: {
     if (!isCurrentCodexGeneration(input.config.id, input.generation)) return false
     yield* Effect.sync(() => {
       input.setActiveThreadId(threadId)
-      threadAgents.set(threadId, input.config.id)
-      agentThreads.set(input.config.id, threadId)
+      rememberCodexThread(input.config.id, threadId)
     })
     const thread = yield* readCodexThreadEffect(input.adapter, threadId)
     const activeTurnId = activeTurnIdFromThread(thread)
@@ -632,7 +628,7 @@ function projectCodexFileOperation(
       const config = yield* Effect.sync(() => getAgentLaunchConfig(agentId))
       yield* captureRuntimeDiffs(agentId, () => collectGitDiffArtifacts(config.cwd))
       const turnKey = codexTurnKey(threadId, turnId)
-      if (turnKey) yield* Effect.sync(() => repoDiffRefreshedTurns.add(turnKey))
+      if (turnKey) yield* Effect.sync(() => rememberRepoDiffRefreshedTurn(turnKey))
     }
   })
 }
@@ -750,12 +746,96 @@ function isMissingRolloutError(error: unknown) {
 function forgetCodexThread(agentId: string, state: CodexRuntimeState) {
   if (state.threadId) {
     threadAgents.delete(state.threadId)
+    threadTurns.delete(state.threadId)
+    pruneRepoDiffRefreshedTurnsForThread(state.threadId)
     agentThreads.delete(agentId)
   }
   setCodexState(agentId, {
     ...state,
     threadId: undefined,
   })
+}
+
+export function forgetCodexRuntimeAgent(
+  agentId: string,
+  options: { readonly keepGeneration?: boolean } = {},
+) {
+  const threadId = agentThreads.get(agentId)
+  if (threadId) {
+    threadAgents.delete(threadId)
+    threadTurns.delete(threadId)
+    pruneRepoDiffRefreshedTurnsForThread(threadId)
+  }
+  for (const [candidateThreadId, candidateAgentId] of threadAgents) {
+    if (candidateAgentId !== agentId) continue
+    threadAgents.delete(candidateThreadId)
+    threadTurns.delete(candidateThreadId)
+    pruneRepoDiffRefreshedTurnsForThread(candidateThreadId)
+  }
+  agentThreads.delete(agentId)
+  queues.delete(agentId)
+  if (!options.keepGeneration) sessionGenerations.delete(agentId)
+}
+
+function rememberCodexThread(agentId: string, threadId: string) {
+  const previousThreadId = agentThreads.get(agentId)
+  if (previousThreadId && previousThreadId !== threadId) {
+    threadAgents.delete(previousThreadId)
+    threadTurns.delete(previousThreadId)
+    pruneRepoDiffRefreshedTurnsForThread(previousThreadId)
+  }
+  threadAgents.set(threadId, agentId)
+  agentThreads.set(agentId, threadId)
+}
+
+function rememberRepoDiffRefreshedTurn(turnKey: string) {
+  repoDiffRefreshedTurns.add(turnKey)
+  while (repoDiffRefreshedTurns.size > maxRepoDiffRefreshedTurns) {
+    const oldest = repoDiffRefreshedTurns.values().next().value as string | undefined
+    if (!oldest) break
+    repoDiffRefreshedTurns.delete(oldest)
+  }
+}
+
+function pruneRepoDiffRefreshedTurnsForThread(threadId: string) {
+  const prefix = `${threadId}:`
+  for (const turnKey of repoDiffRefreshedTurns) {
+    if (turnKey.startsWith(prefix)) repoDiffRefreshedTurns.delete(turnKey)
+  }
+}
+
+export function codexRuntimeRetainedStateStats() {
+  return {
+    adapters: adapters.size,
+    adapterListeners: adapterListeners.size,
+    threadAgents: threadAgents.size,
+    agentThreads: agentThreads.size,
+    threadTurns: threadTurns.size,
+    queues: queues.size,
+    sessionGenerations: sessionGenerations.size,
+    repoDiffRefreshedTurns: repoDiffRefreshedTurns.size,
+  }
+}
+
+export function __unsafeRetainCodexRuntimeStateForTest(input: {
+  readonly agentId: string
+  readonly threadId: string
+  readonly turnId?: string
+}) {
+  rememberCodexThread(input.agentId, input.threadId)
+  if (input.turnId) {
+    threadTurns.set(input.threadId, input.turnId)
+    rememberRepoDiffRefreshedTurn(codexTurnKey(input.threadId, input.turnId) ?? '')
+  }
+}
+
+export function __unsafeClearCodexRuntimeStateForTest() {
+  threadAgents.clear()
+  agentThreads.clear()
+  threadTurns.clear()
+  queues.clear()
+  sessionGenerations.clear()
+  repoDiffRefreshedTurns.clear()
 }
 
 function activeTurnIdFromThread(thread: CodexThread) {

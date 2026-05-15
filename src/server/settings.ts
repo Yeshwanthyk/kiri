@@ -1,7 +1,29 @@
 import { readFileSync } from 'node:fs'
+import { Context, Effect, Layer } from 'effect'
 import type { KiriSettings, RuntimeKind } from '~/lib/contracts'
 import { kiriSettingsSchema } from '~/lib/contracts'
 import { getKiriConfig } from './kiri-config'
+
+export type KiriSettingsApi = {
+  readonly get: Effect.Effect<KiriSettings>
+  readonly getRuntime: (runtime: RuntimeKind) => Effect.Effect<KiriSettings['runtimes'][RuntimeKind]>
+  readonly assertConfiguredModel: (runtime: RuntimeKind, model: string) => Effect.Effect<void>
+}
+
+export class KiriSettingsService extends Context.Tag('@kiri/KiriSettings')<
+  KiriSettingsService,
+  KiriSettingsApi
+>() {
+  static readonly layer = Layer.sync(KiriSettingsService, () =>
+    KiriSettingsService.of({
+      get: Effect.sync(() => getSettings()),
+      getRuntime: (runtime) => Effect.sync(() => getRuntimeSettings(runtime)),
+      assertConfiguredModel: (runtime, model) => Effect.sync(() => {
+        assertConfiguredModel(runtime, model)
+      }),
+    }),
+  )
+}
 
 export function getSettings(): KiriSettings {
   const settingsPath = getKiriConfig().settingsPath

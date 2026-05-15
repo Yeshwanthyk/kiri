@@ -11,29 +11,26 @@ import type {
   ThinkingLevel,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
-import { sessionInterfaceModeForRuntime } from '~/lib/contracts'
 import {
   addScratchpadBlockSummary,
   addProjectSummary,
   deleteProjectSummary,
   deleteScratchpadBlockSummary,
   deleteSessionSummary,
-  getScratchpadBlock,
   getWorkspaceSnapshot,
   hideProjectSummary,
   listScratchpadBlocks,
   listProjectSummaries,
   listSessionSummaries,
-  markScratchpadBlockTriggered,
   renameSessionSummary,
   restoreSessionSummary,
-  startSessionAndGetId,
   startSessionSummary,
   unhideProjectSummary,
 } from './db'
-import { promptAgent } from './runtime'
+import { triggerScratchpadSession } from './scratchpad-trigger'
 import { getSettings } from './settings'
 import { closeAgentRuntimeTerminal } from './terminal-server'
+import { forgetProviderRuntimeAgent } from './provider-runtime'
 
 type ModelChoice = {
   readonly runtime: RuntimeKind
@@ -200,7 +197,14 @@ function makeKiriControl(): KiriControlApi {
   )
 
   const deleteSessionEffect = Effect.fn('KiriControl.deleteSession')(function* (agentId: string) {
+    const config = yield* fromSync(() => {
+      const session = listSessionSummaries({ includeArchived: true })
+        .find((candidate) => candidate.id === agentId)
+      if (!session) throw new Error(`Session not found: ${agentId}`)
+      return session
+    })
     const session = yield* fromSync(() => deleteSessionSummary({ agentId }))
+    yield* fromSync(() => forgetProviderRuntimeAgent(config.runtime, agentId))
     yield* fromSync(() => closeAgentRuntimeTerminal(agentId))
     return session
   })
@@ -225,34 +229,10 @@ function makeKiriControl(): KiriControlApi {
 
   const triggerScratchpad = Effect.fn('KiriControl.triggerScratchpad')(
     function* (input: TriggerScratchpadInput) {
-      const block = yield* fromSync(() => {
-        const found = getScratchpadBlock(input.id)
-        if (!found) throw new Error(`Scratchpad block not found: ${input.id}`)
-        return found
+      return yield* Effect.tryPromise({
+        try: () => triggerScratchpadSession(input),
+        catch: normalizeError,
       })
-      const runtime = input.runtime ?? 'pi'
-      const interfaceMode = sessionInterfaceModeForRuntime(runtime, input.interfaceMode ?? 'gui')
-      const agentId = yield* fromSync(() => startSessionAndGetId({
-        projectId: input.projectId,
-        runtime,
-        interfaceMode,
-        model: input.model,
-        title: input.title,
-        thinkingLevel: input.thinkingLevel ?? 'medium',
-      }))
-      if (interfaceMode !== 'terminal') {
-        yield* Effect.tryPromise({
-          try: () => promptAgent({ agentId, text: block.body, images: [] }),
-          catch: normalizeError,
-        }).pipe(Effect.catchAll((error) =>
-          fromSync(() => deleteSessionSummary({ agentId })).pipe(
-            Effect.catchAll(() => Effect.void),
-            Effect.zipRight(Effect.fail(error)),
-          )))
-      }
-      yield* fromSync(() => markScratchpadBlockTriggered(input.id, agentId))
-      const session = yield* fromSync(() => renameSafeSessionRead(agentId))
-      return { agentId, session, block }
     },
   )
 
@@ -339,13 +319,6 @@ function sessionSummaryFromAgent(
     updatedAt: agent.updatedAt,
     archivedAt,
   }
-}
-
-function renameSafeSessionRead(agentId: string) {
-  const session = listSessionSummaries({ includeArchived: true })
-    .find((candidate) => candidate.id === agentId)
-  if (!session) throw new Error(`Session not found: ${agentId}`)
-  return session
 }
 
 function fromSync<A>(evaluate: () => A) {

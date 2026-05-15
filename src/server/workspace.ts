@@ -29,7 +29,6 @@ import {
   terminalConfigInputSchema,
   triggerScratchpadBlockInputSchema,
   unhideProjectInputSchema,
-  sessionInterfaceModeForRuntime,
 } from '~/lib/contracts'
 import {
   addProject,
@@ -37,8 +36,6 @@ import {
   deleteScratchpadBlock,
   deleteSession,
   deleteProject,
-  getScratchpadBlock,
-  markScratchpadBlockTriggered,
   renameSession,
   reorderProjects,
   restoreSession,
@@ -47,7 +44,6 @@ import {
   getWorkspaceSnapshot,
   hideProject,
   startSession,
-  startSessionAndGetId,
   unhideProject,
 } from './db'
 import {
@@ -60,6 +56,8 @@ import {
   setAgentThinkingLevel,
   steerAgent,
 } from './runtime'
+import { forgetProviderRuntimeAgent } from './provider-runtime'
+import { triggerScratchpadSession } from './scratchpad-trigger'
 import { closeAgentRuntimeTerminal, ensureTerminalServer } from './terminal-server'
 import {
   setAgentByProjectPreference,
@@ -109,7 +107,9 @@ export const chooseProjectDirectoryMutation = createServerFn({ method: 'POST' })
 export const deleteSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(deleteSessionInputSchema)
   .handler(async ({ data }) => {
+    const config = getAgentLaunchConfig(data.agentId)
     const snapshot = deleteSession(data)
+    forgetProviderRuntimeAgent(config.runtime, data.agentId)
     closeAgentRuntimeTerminal(data.agentId)
     return snapshot
   })
@@ -226,25 +226,8 @@ export const deleteScratchpadBlockMutation = createServerFn({ method: 'POST' })
 export const triggerScratchpadBlockMutation = createServerFn({ method: 'POST' })
   .inputValidator(triggerScratchpadBlockInputSchema)
   .handler(async ({ data }) => {
-    const block = getScratchpadBlock(data.id)
-    if (!block) throw new Error(`Scratchpad block not found: ${data.id}`)
-    const runtime = data.runtime ?? 'pi'
-    const interfaceMode = sessionInterfaceModeForRuntime(runtime, data.interfaceMode)
-    const agentId = startSessionAndGetId({
-      projectId: data.projectId,
-      runtime,
-      interfaceMode,
-      model: data.model,
-      title: data.title,
-      thinkingLevel: data.thinkingLevel,
-    })
-    markScratchpadBlockTriggered(data.id, agentId)
+    const { agentId } = await triggerScratchpadSession(data)
     const snapshot = getWorkspaceSnapshot()
-    if (interfaceMode !== 'terminal') {
-      void promptAgent({ agentId, text: block.body, images: [] }).catch((error) => {
-        console.error('Scratchpad trigger prompt failed', error)
-      })
-    }
     return { agentId, snapshot }
   })
 

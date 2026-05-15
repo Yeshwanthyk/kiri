@@ -1,3 +1,4 @@
+import { Context, Effect, Layer } from 'effect'
 import type { ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import {
   interruptCodexAgent,
@@ -6,6 +7,7 @@ import {
   reviewCodexSession,
   setCodexThinkingLevel,
   steerCodexAgent,
+  forgetCodexRuntimeAgent,
 } from './codex-runtime'
 import {
   forkPiSession,
@@ -14,6 +16,7 @@ import {
   resetPiSession,
   setPiThinkingLevel,
   steerPiAgent,
+  forgetPiRuntimeAgent,
 } from './pi-runtime'
 import type { RuntimeKind } from '~/lib/contracts'
 
@@ -46,6 +49,11 @@ export type ProviderRuntimeAdapter = {
   }) => Promise<unknown>
 }
 
+export type RuntimeRegistryApi = {
+  readonly get: (runtime: RuntimeKind) => Effect.Effect<ProviderRuntimeAdapter>
+  readonly list: Effect.Effect<Readonly<Record<RuntimeKind, ProviderRuntimeAdapter>>>
+}
+
 export const runtimeAdapters: Record<RuntimeKind, ProviderRuntimeAdapter> = {
   pi: {
     prompt: promptPiAgent,
@@ -66,6 +74,27 @@ export const runtimeAdapters: Record<RuntimeKind, ProviderRuntimeAdapter> = {
   claude: {
     prompt: rejectClaudeGuiRuntime,
   },
+}
+
+export class RuntimeRegistry extends Context.Tag('@kiri/RuntimeRegistry')<
+  RuntimeRegistry,
+  RuntimeRegistryApi
+>() {
+  static readonly layer = Layer.succeed(RuntimeRegistry, RuntimeRegistry.of(makeRuntimeRegistry(runtimeAdapters)))
+}
+
+export function makeRuntimeRegistry(
+  adapters: Readonly<Record<RuntimeKind, ProviderRuntimeAdapter>>,
+): RuntimeRegistryApi {
+  return {
+    get: (runtime) => Effect.succeed(adapters[runtime]),
+    list: Effect.succeed(adapters),
+  }
+}
+
+export function forgetProviderRuntimeAgent(runtime: RuntimeKind, agentId: string) {
+  if (runtime === 'pi') forgetPiRuntimeAgent(agentId)
+  if (runtime === 'codex') forgetCodexRuntimeAgent(agentId)
 }
 
 async function rejectClaudeGuiRuntime(): Promise<never> {
