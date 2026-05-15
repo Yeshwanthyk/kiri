@@ -5,6 +5,7 @@ import { z } from 'zod'
 const harnessOutputSchema = z.object({
   ok: z.literal(true),
   checked: z.array(z.string()),
+  requestedLimit: z.number(),
   messages: z.number(),
   events: z.number(),
   timeline: z.number(),
@@ -26,17 +27,18 @@ describe('agent detail history harness', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      messages: 620,
-      events: 1860,
-      timeline: 2480,
-      firstMessageId: 'message-0',
+      requestedLimit: 500,
+      messages: 125,
+      events: 375,
+      timeline: 500,
+      firstMessageId: 'message-495',
       lastMessageId: 'message-619',
     })
     expect(result.checked).toEqual(expect.arrayContaining([
-      'agent-detail-preserves-500-messages',
-      'agent-detail-loads-all-messages',
-      'agent-detail-keeps-runtime-events-for-the-message-window',
-      'timeline-no-longer-slices-messages-out',
+      'agent-detail-enforces-timeline-limit',
+      'agent-detail-returns-latest-page',
+      'agent-detail-keeps-events-inside-returned-page',
+      'agent-detail-derives-message-arrays-from-page',
       'unmatched-diff-appears-in-work-row',
     ]))
   }, 20_000)

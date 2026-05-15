@@ -7,6 +7,7 @@ import {
 import { createHash } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { Context, Effect, Layer } from 'effect'
 import { z } from 'zod'
 import type {
   AddProjectInput,
@@ -47,6 +48,21 @@ import { getKiriConfig, runtimeSessionDirPath } from './kiri-config'
 import { getUiPreferences } from './preferences'
 
 let db: DatabaseSync | undefined
+
+export type KiriDbApi = {
+  readonly get: Effect.Effect<DatabaseSync>
+}
+
+export class KiriDbService extends Context.Tag('@kiri/KiriDb')<
+  KiriDbService,
+  KiriDbApi
+>() {
+  static readonly layer = Layer.sync(KiriDbService, () =>
+    KiriDbService.of({
+      get: Effect.sync(() => getDb()),
+    }),
+  )
+}
 
 const projectDbRowSchema = z.object({
   id: z.string(),
@@ -364,10 +380,13 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
   return workspaceSnapshotSchema.parse(snapshot)
 }
 
+const agentDetailDiffLimit = 50
+
 export function getAgentDetail(input: { agentId: string; limit?: number }): AgentDetail {
   const database = getDb()
   hydratePersistedPiSessions(database)
   const agentId = input.agentId.trim()
+  const limit = Math.max(1, Math.min(input.limit ?? 500, 500))
   const settings = getSettings()
   const agent = database
     .prepare(
@@ -417,46 +436,71 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
       `,
     )
     .get(agentId)
-  const messageRows = database
+  const activeThread = database
     .prepare(
       `
-        SELECT m.id, t.agent_id AS agentId, m.role, m.text, m.timestamp
-        FROM messages m
-        INNER JOIN threads t ON t.id = m.thread_id
-        WHERE t.active = 1 AND t.agent_id = ?
-        ORDER BY m.timestamp ASC, m.id ASC
+        SELECT id
+        FROM threads
+        WHERE active = 1 AND agent_id = ?
       `,
     )
-    .all(agentId)
-    .map((row) => messageDbRowSchema.parse(row))
-  const eventRows = database
+    .get(agentId)
+  const activeThreadId = idDbRowSchema.parse(activeThread).id
+  const timelineRows = database
     .prepare(
       `
         SELECT
-          e.id,
-          t.agent_id AS agentId,
-          e.kind,
-          e.tone,
-          e.label,
-          e.detail,
-          e.timestamp,
-          e.payload_json AS payloadJson
-        FROM timeline_events e
-        INNER JOIN threads t ON t.id = e.thread_id
-        WHERE t.active = 1 AND t.agent_id = ?
-        ORDER BY e.timestamp ASC, e.id ASC
+          kind,
+          id,
+          role,
+          text,
+          event_kind AS eventKind,
+          tone,
+          label,
+          detail,
+          path,
+          timestamp,
+          payload_json AS payloadJson
+        FROM (
+          SELECT
+            'message' AS kind,
+            m.id,
+            m.role,
+            m.text,
+            NULL AS event_kind,
+            NULL AS tone,
+            NULL AS label,
+            NULL AS detail,
+            NULL AS path,
+            m.timestamp,
+            NULL AS payload_json
+          FROM messages m
+          WHERE m.thread_id = ?
+          UNION ALL
+          SELECT
+            'event' AS kind,
+            e.id,
+            NULL AS role,
+            NULL AS text,
+            e.kind AS event_kind,
+            e.tone,
+            e.label,
+            e.detail,
+            json_extract(e.payload_json, '$.path') AS path,
+            e.timestamp,
+            e.payload_json
+          FROM timeline_events e
+          WHERE e.thread_id = ?
+        )
+        ORDER BY timestamp DESC, id DESC
+        LIMIT ?
       `,
     )
-    .all(agentId)
-  const messages = messageRows
-  const timelineEvents = eventRows
-    .map((row) => timelineEventFromDbRow(timelineEventDbRowSchema.parse(row)))
-  const diffs = readDiffs(database, agentId)
+    .all(activeThreadId, activeThreadId, limit)
+    .reverse()
+  const timeline = timelineRows.map((row) => timelineItemFromDetailRow(row, agentId))
+  const diffs = readDiffs(database, agentId, agentDetailDiffLimit)
   const tasks = readAgentTasks(database, agentId)
-  const timeline = mergeTimeline(
-    messages.map(({ agentId: _agentId, ...message }) => message),
-    timelineEvents.map(({ agentId: _agentId, ...event }) => event),
-  )
 
   return agentDetailSchema.parse({
     id: parsedAgent.id,
@@ -1712,7 +1756,7 @@ export function replaceAgentDiffArtifacts(input: {
   }
 }
 
-function readDiffs(database: DatabaseSync, agentId: string) {
+function readDiffs(database: DatabaseSync, agentId: string, limit?: number) {
   return database
     .prepare(
       `
@@ -1720,9 +1764,10 @@ function readDiffs(database: DatabaseSync, agentId: string) {
         FROM diff_artifacts
         WHERE agent_id = ?
         ORDER BY updated_at DESC
+        ${limit === undefined ? '' : 'LIMIT ?'}
       `,
     )
-    .all(agentId)
+    .all(...(limit === undefined ? [agentId] : [agentId, limit]))
     .map((row) => diffDbRowSchema.parse(row))
 }
 
@@ -2569,6 +2614,69 @@ function mergeTimeline(
       event,
     })),
   ].sort(compareTimelineItems)
+}
+
+function timelineItemFromDetailRow(row: unknown, agentId: string) {
+  const parsed = z.object({
+    kind: z.enum(['message', 'event']),
+    id: z.string(),
+    role: messageRoleSchema.nullable(),
+    text: z.string().nullable(),
+    eventKind: z.string().nullable(),
+    tone: timelineEventToneSchema.nullable(),
+    label: z.string().nullable(),
+    detail: z.string().nullable(),
+    path: z.string().nullable(),
+    timestamp: z.string(),
+    payloadJson: z.string().nullable(),
+  }).parse(row)
+
+  if (parsed.kind === 'message') {
+    const message = messageDbRowSchema.parse({
+      id: parsed.id,
+      agentId,
+      role: parsed.role,
+      text: parsed.text,
+      timestamp: parsed.timestamp,
+    })
+    const { agentId: _agentId, ...value } = message
+    return {
+      type: 'message' as const,
+      id: `message:${value.id}`,
+      timestamp: value.timestamp,
+      message: value,
+    }
+  }
+
+  const event = timelineEventFromDbRow(timelineEventDbRowSchema.parse({
+    id: parsed.id,
+    agentId,
+    kind: parsed.eventKind,
+    tone: parsed.tone,
+    label: parsed.label,
+    detail: parsed.detail,
+    timestamp: parsed.timestamp,
+    payloadJson: parsed.path
+      ? JSON.stringify({ ...safeJson(parsed.payloadJson), path: parsed.path })
+      : parsed.payloadJson,
+  }))
+  const { agentId: _agentId, ...value } = event
+  return {
+    type: 'event' as const,
+    id: `event:${value.id}`,
+    timestamp: value.timestamp,
+    event: value,
+  }
+}
+
+function safeJson(value: string | null) {
+  if (!value) return {}
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
 }
 
 function piMessageTimestamp(input: {

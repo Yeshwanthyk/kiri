@@ -108,6 +108,10 @@ import {
   type SidebarTab,
 } from './kiri-board/board-types'
 
+const workspacePollInitialDelayMs = 250
+const workspacePollIntervalMs = 750
+const workspacePollMaxDurationMs = 120_000
+
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const migrationAttemptedRef = React.useRef(false)
   const [workspace, setWorkspace] = React.useState(snapshot)
@@ -489,8 +493,13 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   ) {
     let stopped = false
     let timer: number | undefined
+    const startedAt = Date.now()
     const poll = async () => {
       if (stopped) return
+      if (Date.now() - startedAt >= workspacePollMaxDurationMs) {
+        stopped = true
+        return
+      }
       try {
         const next = await refreshWorkspace()
         if (stopped) return
@@ -498,11 +507,11 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         await onPoll?.()
       } finally {
         if (!stopped) {
-          timer = window.setTimeout(poll, 750)
+          timer = window.setTimeout(poll, workspacePollIntervalMs)
         }
       }
     }
-    timer = window.setTimeout(poll, 250)
+    timer = window.setTimeout(poll, workspacePollInitialDelayMs)
     try {
       const result = await action()
       onResult(result)

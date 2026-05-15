@@ -16,6 +16,8 @@ import { TaskProgressStrip } from './task-progress'
 import { classifyToolName, deriveAgentTimelineRows, diffLineStats, displayPath, isAssistantStatusEntry, isCommandEntry, timelineRowsContentVersion, type AgentTimelineRow, type TimelineWorkEntry, workCallLabel } from './timeline'
 import type { RefreshAgentDetail } from './board-types'
 
+const maxMountedTimelineRows = 500
+
 export function ChatPanel({
   agent,
   cwd,
@@ -96,9 +98,13 @@ export function ChatPanel({
     }),
     [agent, pendingMessage, visibleMessages],
   )
-  const rows = React.useMemo(
+  const allRows = React.useMemo(
     () => deriveAgentTimelineRows(timelineAgent, cwd),
     [cwd, timelineAgent],
+  )
+  const rows = React.useMemo(
+    () => allRows.length > maxMountedTimelineRows ? allRows.slice(-maxMountedTimelineRows) : allRows,
+    [allRows],
   )
   const messageListRef = React.useRef<HTMLDivElement | null>(null)
   const timelineContentVersion = React.useMemo(() => timelineRowsContentVersion(rows), [rows])

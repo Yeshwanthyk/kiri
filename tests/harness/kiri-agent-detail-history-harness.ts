@@ -16,6 +16,7 @@ const eventsPerMessage = 3
 const harnessOutputSchema = z.object({
   ok: z.literal(true),
   checked: z.array(z.string()),
+  requestedLimit: z.number(),
   messages: z.number(),
   events: z.number(),
   timeline: z.number(),
@@ -41,19 +42,24 @@ try {
   const messageItems = detail.timeline.filter((item) => item.type === 'message')
   const eventItems = detail.timeline.filter((item) => item.type === 'event')
 
-  if (detail.messages.length !== totalRows) {
-    throw new Error(`Expected ${totalRows} messages, got ${detail.messages.length}`)
+  const expectedMessages = 125
+  const expectedEvents = 375
+  if (detail.messages.length !== expectedMessages) {
+    throw new Error(`Expected ${expectedMessages} messages, got ${detail.messages.length}`)
   }
-  if (messageItems.length !== totalRows) {
-    throw new Error(`Expected ${totalRows} message timeline items, got ${messageItems.length}`)
+  if (messageItems.length !== expectedMessages) {
+    throw new Error(`Expected ${expectedMessages} message timeline items, got ${messageItems.length}`)
   }
-  if (eventItems.length !== totalRows * eventsPerMessage) {
+  if (eventItems.length !== expectedEvents) {
     throw new Error(
-      `Expected ${totalRows * eventsPerMessage} event timeline items, got ${eventItems.length}`,
+      `Expected ${expectedEvents} event timeline items, got ${eventItems.length}`,
     )
   }
-  if (detail.messages[0]?.id !== 'message-0') {
-    throw new Error(`Expected oldest returned message-0, got ${detail.messages[0]?.id ?? 'none'}`)
+  if (detail.timeline.length !== requestedLimit) {
+    throw new Error(`Expected ${requestedLimit} timeline rows, got ${detail.timeline.length}`)
+  }
+  if (detail.messages[0]?.id !== 'message-495') {
+    throw new Error(`Expected oldest returned message-495, got ${detail.messages[0]?.id ?? 'none'}`)
   }
   if (detail.messages.at(-1)?.id !== 'message-619') {
     throw new Error(`Expected newest returned message-619, got ${detail.messages.at(-1)?.id ?? 'none'}`)
@@ -68,12 +74,13 @@ try {
   const output = harnessOutputSchema.parse({
     ok: true,
     checked: [
-      'agent-detail-preserves-500-messages',
-      'agent-detail-loads-all-messages',
-      'agent-detail-keeps-runtime-events-for-the-message-window',
-      'timeline-no-longer-slices-messages-out',
+      'agent-detail-enforces-timeline-limit',
+      'agent-detail-returns-latest-page',
+      'agent-detail-keeps-events-inside-returned-page',
+      'agent-detail-derives-message-arrays-from-page',
       'unmatched-diff-appears-in-work-row',
     ],
+    requestedLimit,
     messages: detail.messages.length,
     events: eventItems.length,
     timeline: detail.timeline.length,
