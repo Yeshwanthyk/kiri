@@ -51,7 +51,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/diff-refresh.ts` | use-case | terminal diff refresh service command | migrating | required | Typed injectable diff refresh service added; review/verification pending. |
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | migrating | required | Typed injectable git diff service added; review/verification pending. |
 | `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | migrating | required | Typed injectable config service added; review/verification pending. |
-| `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | not-started | required | Good Effect facade; needs injected DB/runtime/terminal/config dependencies. |
+| `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | migrating | required | Effect facade now shares delete-session cleanup sequencing; broader injected DB/runtime/config dependencies remain. |
 | `src/server/kiri-mcp.ts` | transport | `transport/mcp.ts` over `KiriControl` app layer | not-started | required | Keep MCP output parity. |
 | `src/server/pi-jsonl.ts` | projection | `db/projections/pi-jsonl.ts` plus file reader service | not-started | required | Split pure JSONL projection from file IO. |
 | `src/server/pi-rpc.ts` | runtime-adapter | `runtime/pi/rpc-adapter.ts` scoped process adapter | migrating | required | Prompt completion waiters now cancel on stop; full scoped process/listener lifetime remains. |
@@ -60,7 +60,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/preferences.ts` | config | `config/preferences-service.ts` with atomic file and in-memory adapters | migrating | required | Typed injectable preferences service added; review/verification pending. |
 | `src/server/provider-runtime.ts` | use-case | runtime registry with injected command and cleanup adapters | migrating | required | Cleanup now routes through typed registry; review/verification pending. |
 | `src/server/runtime-binaries.ts` | process-adapter | `integrations/runtime-binaries.ts` resolver service | migrating | required | Typed injectable runtime binary service added; review/verification pending. |
-| `src/server/runtime-cleanup.ts` | use-case | runtime cleanup use-case for session/project delete retained-state cleanup | migrating | required | Added during Pi retained-state review to close project-delete leak path. |
+| `src/server/runtime-cleanup.ts` | use-case | runtime cleanup use-case for session/project delete retained-state cleanup | migrating | required | Project and session delete cleanup now share tested ordering; final scoped finalizer model remains. |
 | `src/server/runtime-file-operations.ts` | pure | pure runtime file-operation classifier | explicit-non-migration | not-required | Keep pure unless telemetry/resource dependencies are added. |
 | `src/server/runtime-lifecycle.ts` | use-case | runtime lifecycle orchestration over injected `RuntimeProjector` | migrating | required | DB-backed live projector extracted; lifecycle now owns orchestration only. |
 | `src/server/runtime-projection.ts` | projection | DB-backed runtime projector layer | migrating | required | Extracted from `runtime-lifecycle.ts`; review/verification pending. |
@@ -70,7 +70,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/terminal-launch.ts` | process-adapter | terminal launch resolver service | migrating | required | Typed injectable terminal launch service added; review/verification pending. |
 | `src/server/terminal-registry.ts` | runtime-adapter | terminal session registry for PTY/socket state | migrating | required | Extracted from `terminal-server.ts`; review/verification pending. |
 | `src/server/terminal-server.ts` | runtime-adapter | scoped websocket/PTY service over terminal registry | migrating | required | Terminal session registry extracted; final service boundary pending. |
-| `src/server/workspace.ts` | transport | `transport/workspace-functions.ts` over `WorkspaceService` | not-started | required | Server functions should become parse/run/respond only. |
+| `src/server/workspace.ts` | transport | `transport/workspace-functions.ts` over `WorkspaceService` | migrating | required | Delete-session handler now delegates shared cleanup use-case; broader server functions still need transport-only reduction. |
 
 ## Per-File Record Template
 
@@ -118,6 +118,26 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: Dalton caught exported event type drift and non-Error boundary behavior drift. Pasteur second pass found no blockers after fixes.
 - Findings fixed: restored public event payload parity through type-only DB writer parameter references, preserved legacy non-Error throw identity/string formatting with explicit lint suppressions, and added regression coverage for non-Error runtime failures.
 - Residual risk: live projection still calls DB compatibility exports directly until DB repository services are promoted into projector dependencies.
+
+### src/server/runtime-cleanup.ts, src/server/workspace.ts delete session, and src/server/kiri-control.ts delete session
+
+- Status: migrating; final status waits for workspace/control to depend on a shared `WorkspaceService`/control service layer and for runtime cleanup to become a scoped finalizer boundary.
+- Target seam: shared session-delete cleanup use-case that captures runtime ownership, archives the session, then clears retained runtime and terminal state.
+- Behavior preserved: workspace delete keeps active-session-only lookup semantics; Kiri control keeps include-archived lookup semantics; both paths only clean retained state after the DB delete/archive call succeeds.
+- Dependencies moved: duplicated `forgetProviderRuntimeAgent` and `closeAgentRuntimeTerminal` sequencing moved out of `workspace.ts` and `kiri-control.ts` into `runtime-cleanup.ts`.
+- Baseline tests before migration: CLI/MCP tests covered session delete flows; runtime cleanup tests covered project delete cleanup ordering.
+- Tests added/updated: `tests/server/runtime-cleanup.test.ts` now covers session cleanup success ordering, workspace-returning helper parity, delete-failure safety, missing-session safety, and cleanup failure surfacing.
+- Post-migration parity tests: focused runtime cleanup, CLI, and MCP tests passed.
+- Perf/memory impact: session delete now uses the same retained-state cleanup seam in UI and Kiri-control paths, reducing leak risk from divergent sequencing without changing payload/query budgets.
+- Verification commands and results:
+  - `pnpm exec vitest run tests/server/runtime-cleanup.test.ts` - passed, 7 tests
+  - `pnpm exec eslint src/server/runtime-cleanup.ts src/server/kiri-control.ts tests/server/runtime-cleanup.test.ts --max-warnings=0` - passed
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/runtime-cleanup.test.ts tests/server/kiri-control-cli.test.ts tests/server/kiri-mcp.test.ts` - passed, 3 files / 10 tests
+  - `pnpm effect:audit` - passed, 43 tracked/server files
+- Review subagent summary: Sagan found no blockers. Follow-up notes led to preserving workspace active-only lookup, adding workspace helper coverage, and pinning cleanup-failure behavior; second pass found no blockers.
+- Findings fixed: split active-session lookup for workspace from include-archived lookup for Kiri control; added coverage for the workspace helper and cleanup failure after DB archive success.
+- Residual risk: cleanup still surfaces retained-state cleanup failures after the DB archive has succeeded, matching the existing fail-fast behavior; a later scoped finalizer phase can intentionally switch this to best-effort cleanup with explicit logging.
 
 ### src/server/pi-retained-state.ts, src/server/pi-runtime.ts, src/server/pi-rpc.ts, and project runtime cleanup
 

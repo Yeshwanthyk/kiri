@@ -33,7 +33,6 @@ import {
   addProject,
   addScratchpadBlock,
   deleteScratchpadBlock,
-  deleteSession,
   renameSession,
   reorderProjects,
   restoreSession,
@@ -54,10 +53,12 @@ import {
   setAgentThinkingLevel,
   steerAgent,
 } from './runtime'
-import { forgetProviderRuntimeAgent } from './provider-runtime'
-import { deleteProjectWithRuntimeCleanup } from './runtime-cleanup'
+import {
+  deleteProjectWithRuntimeCleanup,
+  deleteSessionWithRuntimeCleanup,
+} from './runtime-cleanup'
 import { triggerScratchpadSession } from './scratchpad-trigger'
-import { closeAgentRuntimeTerminal, ensureTerminalServer } from './terminal-server'
+import { ensureTerminalServer } from './terminal-server'
 import {
   setAgentByProjectPreference,
   setChatTypographyPreference,
@@ -100,13 +101,7 @@ export const chooseProjectDirectoryMutation = createServerFn({ method: 'POST' })
 
 export const deleteSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(deleteSessionInputSchema)
-  .handler(async ({ data }) => {
-    const config = getAgentLaunchConfig(data.agentId)
-    const snapshot = deleteSession(data)
-    forgetProviderRuntimeAgent(config.runtime, data.agentId)
-    closeAgentRuntimeTerminal(data.agentId)
-    return snapshot
-  })
+  .handler(async ({ data }) => deleteSessionWithRuntimeCleanup(data))
 
 export const restoreSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(restoreSessionInputSchema)

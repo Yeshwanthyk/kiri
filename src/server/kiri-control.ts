@@ -15,7 +15,6 @@ import {
   addScratchpadBlockSummary,
   addProjectSummary,
   deleteScratchpadBlockSummary,
-  deleteSessionSummary,
   getWorkspaceSnapshot,
   hideProjectSummary,
   listScratchpadBlocks,
@@ -28,9 +27,10 @@ import {
 } from './db'
 import { triggerScratchpadSession } from './scratchpad-trigger'
 import { getSettings } from './settings'
-import { closeAgentRuntimeTerminal } from './terminal-server'
-import { forgetProviderRuntimeAgent } from './provider-runtime'
-import { deleteProjectSummaryWithRuntimeCleanup } from './runtime-cleanup'
+import {
+  deleteProjectSummaryWithRuntimeCleanup,
+  deleteSessionSummaryWithRuntimeCleanup,
+} from './runtime-cleanup'
 
 type ModelChoice = {
   readonly runtime: RuntimeKind
@@ -160,7 +160,7 @@ function makeKiriControl(): KiriControlApi {
     })
   })
 
-  const listProjects = Effect.fn('KiriControl.listProjects')(function* (includeHidden = false) {
+  const listProjects = Effect.fn('KiriControl.listProjects')(function* (includeHidden: boolean = false) {
     return yield* fromSync(() => listProjectSummaries(includeHidden))
   })
 
@@ -197,16 +197,7 @@ function makeKiriControl(): KiriControlApi {
   )
 
   const deleteSessionEffect = Effect.fn('KiriControl.deleteSession')(function* (agentId: string) {
-    const config = yield* fromSync(() => {
-      const session = listSessionSummaries({ includeArchived: true })
-        .find((candidate) => candidate.id === agentId)
-      if (!session) throw new Error(`Session not found: ${agentId}`)
-      return session
-    })
-    const session = yield* fromSync(() => deleteSessionSummary({ agentId }))
-    yield* fromSync(() => forgetProviderRuntimeAgent(config.runtime, agentId))
-    yield* fromSync(() => closeAgentRuntimeTerminal(agentId))
-    return session
+    return yield* fromSync(() => deleteSessionSummaryWithRuntimeCleanup({ agentId }))
   })
 
   const restoreSessionEffect = Effect.fn('KiriControl.restoreSession')(function* (input: RestoreSessionInput) {
