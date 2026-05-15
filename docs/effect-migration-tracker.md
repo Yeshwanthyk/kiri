@@ -48,7 +48,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/workspace-snapshot.ts` | projection | Workspace snapshot projection over DB connection and provided settings/preferences | migrating | required | Extracted from `db.ts`; direct snapshot test added and review passed; final status waits for workspace service boundary. |
 | `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | not-started | required | Direct `git` subprocess boundary. |
-| `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | not-started | required | Thin service exists; move env parsing into typed config service. |
+| `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | migrating | required | Typed injectable config service added; review/verification pending. |
 | `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | not-started | required | Good Effect facade; needs injected DB/runtime/terminal/config dependencies. |
 | `src/server/kiri-mcp.ts` | transport | `transport/mcp.ts` over `KiriControl` app layer | not-started | required | Keep MCP output parity. |
 | `src/server/pi-jsonl.ts` | projection | `db/projections/pi-jsonl.ts` plus file reader service | not-started | required | Split pure JSONL projection from file IO. |
@@ -61,7 +61,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/runtime-lifecycle.ts` | use-case | `runtime/lifecycle.ts` and `runtime/projection.ts` | not-started | required | Best current Effect shape; live projector should depend on repositories. |
 | `src/server/runtime.ts` | use-case | runtime registry-backed command surface | migrating | required | Runtime command service now dispatches through `RuntimeRegistry`; review/verification pending. |
 | `src/server/scratchpad-trigger.ts` | use-case | scratchpad/workspace service method | not-started | required | Shared semantics are good; move behind shared service. |
-| `src/server/settings.ts` | config | `config/settings-service.ts` with typed config errors | not-started | required | Thin service exists; direct file read remains. |
+| `src/server/settings.ts` | config | `config/settings-service.ts` with typed config errors | migrating | required | Typed injectable settings service added; review/verification pending. |
 | `src/server/terminal-launch.ts` | process-adapter | `terminal/launch-resolver.ts` | not-started | required | Command construction and resume detection seam. |
 | `src/server/terminal-server.ts` | runtime-adapter | `terminal/registry.ts` scoped websocket/PTY registry | not-started | required | Singleton terminal sessions and idle timers need scoped cleanup. |
 | `src/server/workspace.ts` | transport | `transport/workspace-functions.ts` over `WorkspaceService` | not-started | required | Server functions should become parse/run/respond only. |
@@ -88,6 +88,28 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/kiri-config.ts and src/server/settings.ts
+
+- Status: migrating; final status waits for DB, workspace, and control callers to depend on the services instead of the compatibility sync exports.
+- Target seam: typed injectable `KiriConfigService` and `KiriSettingsService` layers with constructor helpers for tests.
+- Behavior preserved: synchronous exports `getKiriConfig`, `resolveKiriConfig`, `getSettings`, `getRuntimeSettings`, and `assertConfiguredModel` keep their existing call signatures and throw behavior for compatibility callers.
+- Dependencies moved: config resolution and settings file reads can now be injected through Effect service constructors; settings service depends on config service through `layerFromConfig`.
+- Baseline tests before migration: `kiri-config`, `effect-layers`, CLI/MCP tests that set `KIRI_SETTINGS_PATH`, and DB callers that validate configured models.
+- Tests added/updated: `tests/server/kiri-config.test.ts` now covers typed config service failures; `tests/server/settings-service.test.ts` covers injected settings reads, runtime lookups, default-model validation, and model assertions.
+- Post-migration parity tests: focused config/settings/effect-layer tests passed before and after review fixes.
+- Perf/memory impact: no retained state added; services perform the same on-demand config/settings reads as before, with injection points for later caching or test fixtures.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/kiri-config.test.ts tests/server/settings-service.test.ts tests/server/effect-layers.test.ts` - passed, 3 files / 11 tests
+  - `pnpm exec eslint src/server/kiri-config.ts src/server/settings.ts tests/server/kiri-config.test.ts tests/server/settings-service.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 37 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `git diff --check` - passed
+- Review subagent summary: Confucius found one compatibility blocker; second pass found no blockers.
+- Findings fixed: restored the previous sync-export invalid default-model error text (`settings.json <runtime>.defaultModel...`) and pinned it in `tests/server/settings-service.test.ts` while keeping typed service `path` metadata.
+- Residual risk: compatibility callers still read process env and settings files directly until DB/workspace/control move to injected services.
 
 ### Phase 1 guardrails
 

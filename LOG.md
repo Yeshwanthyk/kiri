@@ -62,6 +62,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed DB bootstrap extraction. Added direct startup repair tests; review passed; typecheck, lint, effect audit, diff check, and focused DB/effect-layer tests passed.
 - 2026-05-15: Started runtime command service migration with `RuntimeCommands` dispatching through `RuntimeRegistry` instead of direct adapter singleton indexing.
 - 2026-05-15: Completed runtime command service migration. Added typed `RuntimeCommandError`, injected command-service tests, public async rejection harness, and runtime parity tests; review passed after fixing FiberFailure unwrapping and capability typing; typecheck, focused eslint, lint, effect audit, build, diff check, and runtime tests passed.
+- 2026-05-15: Started config/settings service hardening. Added typed injectable `KiriConfigService` and `KiriSettingsService` constructors while preserving synchronous compatibility exports.
+- 2026-05-15: Completed config/settings service hardening. Review caught and fixed a settings error-message compatibility regression; typed service tests now pin injected config/file reads, validation, and model assertions; typecheck, focused eslint, focused tests, lint, effect audit, build, and diff check passed.
 
 ## Remaining Knip Findings
 

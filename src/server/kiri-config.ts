@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect'
+import { Context, Data, Effect, Layer } from 'effect'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -20,17 +20,35 @@ export type KiriConfig = {
   readonly defaultProjectCwd: string
 }
 
+export class KiriConfigError extends Data.TaggedError('KiriConfigError')<{
+  readonly message: string
+  readonly cause?: unknown
+}> {}
+
+export type KiriConfigApi = {
+  readonly get: Effect.Effect<KiriConfig, KiriConfigError>
+}
+
 export class KiriConfigService extends Context.Tag('@kiri/KiriConfig')<
   KiriConfigService,
-  {
-    readonly get: Effect.Effect<KiriConfig>
-  }
+  KiriConfigApi
 >() {
-  static readonly layer = Layer.sync(KiriConfigService, () =>
-    KiriConfigService.of({
-      get: Effect.sync(() => getKiriConfig()),
-    }),
+  static readonly layer = Layer.succeed(
+    KiriConfigService,
+    KiriConfigService.of(makeKiriConfigService()),
   )
+}
+
+export function makeKiriConfigService(input: {
+  readonly resolve?: () => KiriConfig
+} = {}): KiriConfigApi {
+  const resolveConfig = input.resolve ?? getKiriConfig
+  return {
+    get: Effect.try({
+      try: resolveConfig,
+      catch: toKiriConfigError,
+    }),
+  }
 }
 
 export function getKiriConfig(): KiriConfig {
@@ -97,6 +115,13 @@ function parseHostMode(value: string | undefined): KiriHostMode {
   if (value === undefined || value === 'web') return 'web'
   if (value === 'desktop') return 'desktop'
   throw new Error(`Invalid KIRI_HOST_MODE: ${value}`)
+}
+
+function toKiriConfigError(error: unknown) {
+  return new KiriConfigError({
+    message: error instanceof Error ? error.message : 'Failed to resolve Kiri config',
+    cause: error,
+  })
 }
 
 function envValue(value: string | undefined) {

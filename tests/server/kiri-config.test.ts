@@ -1,8 +1,10 @@
 import { describe, expect, it } from '@effect/vitest'
 import { Effect } from 'effect'
 import {
+  KiriConfigError,
   KiriConfigService,
   attachmentDirPath,
+  makeKiriConfigService,
   resolveKiriConfig,
   runtimeSessionDirPath,
 } from '~/server/kiri-config'
@@ -98,5 +100,22 @@ describe('kiri config', () => {
 
       expect(value.rootDir.length).toBeGreaterThan(0)
     }).pipe(Effect.provide(KiriConfigService.layer)),
+  )
+
+  it.effect('wraps config resolution failures in a typed service error', () =>
+    Effect.gen(function* () {
+      const config = makeKiriConfigService({
+        resolve: () => resolveKiriConfig({
+          cwd: '/repo/kiri',
+          homeDir: '/Users/yesh',
+          env: { KIRI_HOST_MODE: 'native' },
+        }),
+      })
+
+      const error = yield* config.get.pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(KiriConfigError)
+      expect(error.message).toBe('Invalid KIRI_HOST_MODE: native')
+    }),
   )
 })
