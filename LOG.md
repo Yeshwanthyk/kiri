@@ -104,6 +104,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed Kiri MCP runtime split. Follow-up review approved the fallback/context assertions; full typecheck/lint/audit/build/test/diff gates passed.
 - 2026-05-15: Started `db.ts` compatibility facade cleanup. Replaced the module-global database handle with an explicit `KiriDbService` cache/close seam and added focused DB lifecycle coverage.
 - 2026-05-15: Completed `db.ts` compatibility facade cleanup. Review found no blockers and called out the expected separate layer/facade handle caveat; full typecheck/lint/audit/build/test/diff gates passed.
+- 2026-05-15: Started Codex app-server protocol split. Moved pure JSON-RPC/Codex schemas and protocol parsers into `codex-app-protocol.ts` while preserving adapter exports for existing callers.
+- 2026-05-15: Completed Codex app-server protocol split. Review found no blockers; typecheck, lint, effect audit, build, focused Codex protocol/adapter tests, full test suite, and diff check passed.
 
 ## Remaining Knip Findings
 

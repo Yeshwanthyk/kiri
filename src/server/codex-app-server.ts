@@ -1,115 +1,34 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { Cause, Data, Effect, Exit, Option, Schema } from 'effect'
 import { resolveRuntimeExecutable, runtimeProcessEnv } from './runtime-binaries'
+import {
+  ReviewStartResponseSchema,
+  ThreadResponseSchema,
+  TurnCompletedParamsSchema,
+  TurnStartResponseSchema,
+  decodeServerParams,
+  parseResponse,
+  parseServerMessage,
+  type CodexServerMessage,
+  type CodexTurn,
+  type DecodableSchema,
+  type JsonRpcId,
+} from './codex-app-protocol'
 
-const JsonRpcIdSchema = Schema.Union(Schema.String, Schema.Number)
-type JsonRpcId = typeof JsonRpcIdSchema.Type
-
-type JsonRpcRequest = {
-  id: JsonRpcId
-  method: string
-  params?: unknown
-}
-
-type JsonRpcNotification = {
-  method: string
-  params?: unknown
-}
-
-type JsonRpcResponse = {
-  id: JsonRpcId
-  result?: unknown
-  error?: {
-    code?: number
-    message?: string
-    data?: unknown
-  }
-}
-
-const UnknownRecord = Schema.Record({ key: Schema.String, value: Schema.Unknown })
-
-const CodexTurnSchema = Schema.Struct({
-  id: Schema.optional(Schema.String),
-  status: Schema.optional(Schema.String),
-  items: Schema.optional(Schema.Array(Schema.Unknown)),
-})
-
-export type CodexTurn = typeof CodexTurnSchema.Type
-
-const CodexThreadSchema = Schema.Struct({
-  id: Schema.optional(Schema.String),
-  status: Schema.optional(UnknownRecord),
-  turns: Schema.optional(Schema.Array(CodexTurnSchema)),
-})
-
-export type CodexThread = typeof CodexThreadSchema.Type
-
-const ThreadResponseSchema = Schema.Struct({
-  thread: CodexThreadSchema,
-})
-
-const TurnStartResponseSchema = Schema.Struct({
-  turn: CodexTurnSchema,
-})
-
-const ReviewStartResponseSchema = Schema.Struct({
-  turn: CodexTurnSchema,
-  reviewThreadId: Schema.String,
-})
-
-const TokenUsageSchema = Schema.Struct({
-  total: UnknownRecord,
-  last: UnknownRecord,
-  modelContextWindow: Schema.optional(Schema.Number),
-})
-
-export const ThreadTokenUsageUpdatedParamsSchema = Schema.Struct({
-  threadId: Schema.String,
-  tokenUsage: TokenUsageSchema,
-})
-
-export const ThreadCompactedParamsSchema = Schema.Struct({
-  threadId: Schema.String,
-  turnId: Schema.optional(Schema.NullOr(Schema.String)),
-})
-
-export const TurnDiffUpdatedParamsSchema = Schema.Struct({
-  threadId: Schema.String,
-  diff: Schema.optional(Schema.String),
-})
-
-const CodexPlanStepSchema = Schema.Struct({
-  step: Schema.String,
-  status: Schema.optional(Schema.String),
-})
-
-export const TurnPlanUpdatedParamsSchema = Schema.Struct({
-  threadId: Schema.String,
-  turnId: Schema.optional(Schema.String),
-  explanation: Schema.optional(Schema.NullOr(Schema.String)),
-  plan: Schema.Array(CodexPlanStepSchema),
-})
-
-const TurnCompletedParamsSchema = Schema.Struct({
-  threadId: Schema.String,
-  turn: CodexTurnSchema,
-})
-
-export const TurnStartedParamsSchema = Schema.Struct({
-  threadId: Schema.String,
-  turnId: Schema.optional(Schema.String),
-  turn: Schema.optional(CodexTurnSchema),
-})
-
-export const ItemCompletedParamsSchema = Schema.Struct({
-  threadId: Schema.String,
-  item: Schema.Unknown,
-  completedAtMs: Schema.optional(Schema.Number),
-})
-
-type DecodableSchema<A> = Schema.Schema<A, A, never>
-
-export type CodexServerMessage = JsonRpcRequest | JsonRpcNotification
+export {
+  ItemCompletedParamsSchema,
+  ThreadCompactedParamsSchema,
+  ThreadTokenUsageUpdatedParamsSchema,
+  TurnDiffUpdatedParamsSchema,
+  TurnPlanUpdatedParamsSchema,
+  TurnStartedParamsSchema,
+  decodeServerParams,
+} from './codex-app-protocol'
+export type {
+  CodexServerMessage,
+  CodexThread,
+  CodexTurn,
+} from './codex-app-protocol'
 
 type PendingRequest = {
   resume: (effect: Effect.Effect<unknown, CodexAppServerError>) => void
@@ -589,48 +508,6 @@ export function defaultCodexWebsocketUrl() {
   return process.env.KIRI_CODEX_APP_SERVER_URL ?? `ws://127.0.0.1:${defaultCodexPort}`
 }
 
-function parseResponse(value: unknown): JsonRpcResponse | null {
-  const object = objectValue(value)
-  const id = decodeUnknownOption(JsonRpcIdSchema, object.id)
-  if (id === undefined) return null
-  if (!('result' in object) && !('error' in object)) return null
-  const error = objectValue(object.error)
-  return {
-    id,
-    result: object.result,
-    error: object.error
-      ? {
-          code: numberValue(error.code),
-          message: stringValue(error.message),
-          data: error.data,
-        }
-      : undefined,
-  }
-}
-
-function parseServerMessage(value: unknown): CodexServerMessage | null {
-  const object = objectValue(value)
-  const method = stringValue(object.method)
-  if (!method) return null
-  const id = decodeUnknownOption(JsonRpcIdSchema, object.id)
-  if (id === undefined) return { method, params: object.params }
-  return { id, method, params: object.params }
-}
-
-function objectValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
-
-function stringValue(value: unknown) {
-  return typeof value === 'string' ? value : undefined
-}
-
-function numberValue(value: unknown) {
-  return typeof value === 'number' ? value : undefined
-}
-
 function portFromWebsocketUrl(value: string) {
   try {
     const url = new URL(value)
@@ -701,15 +578,4 @@ function decodeUnknown<A>(
   return Schema.decodeUnknown(schema)(value).pipe(
     Effect.mapError((cause) => codexAppServerError(message, cause)),
   )
-}
-
-function decodeUnknownOption<A>(schema: DecodableSchema<A>, value: unknown) {
-  return Option.getOrUndefined(Schema.decodeUnknownOption(schema)(value))
-}
-
-export function decodeServerParams<A>(
-  message: CodexServerMessage,
-  schema: DecodableSchema<A>,
-) {
-  return decodeUnknownOption(schema, message.params)
 }

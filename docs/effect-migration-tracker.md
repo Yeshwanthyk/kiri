@@ -30,7 +30,8 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 |---|---|---|---|---|---|
 | `src/server/backend-readiness.ts` | use-case | readiness service over settings and DB dependencies | migrating | required | Extracted from `backend-server.ts`; review/verification pending. |
 | `src/server/backend-server.ts` | transport | `app/readiness` entrypoint over app layer | migrating | required | Readiness probe moved behind injectable service; transport behavior preserved. |
-| `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | not-started | required | Already uses Effect well; needs scoped lifecycle and smaller protocol/process modules. |
+| `src/server/codex-app-protocol.ts` | pure | Codex app-server JSON-RPC schemas and parsers | explicit-non-migration | not-required | Pure protocol/schema module extracted from adapter. |
+| `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | migrating | required | Protocol parsing extracted; scoped lifecycle and process adapter split remain. |
 | `src/server/codex-retained-state.ts` | runtime-adapter | Codex retained-state registry for adapters, listeners, threads, turns, queues, generations, and diff-turn guards | migrating | required | Extracted from `codex-runtime.ts`; review/verification pending. |
 | `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | migrating | required | Retained-state maps extracted; runtime service/projection/attachment splits remain. |
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | migrating | required | Compatibility facade now uses explicit `KiriDbService` cache/close seam over extracted repositories. |
@@ -306,6 +307,29 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: no blockers; confirmed cache/bootstrap behavior, sync facade compatibility, explicit diff mapping, and `startSession` behavior. Noted expected residual caveat that `KiriDbService.layer` instances and the legacy facade can still open separate handles until app composition moves to a scoped shared layer.
 - Findings fixed: focused eslint surfaced old unused facade imports and locals once `db.ts` entered strict targeted lint; removed stale imports, avoided an unused session id in `startSession`, and mapped diff rows explicitly instead of destructuring away `agentId`.
 - Residual risk: most facade exports still synchronously call `getDb()` for compatibility; final migration should push callers to repository/service layers and use `closeKiriDb()` from app shutdown/test harnesses.
+
+### src/server/codex-app-server.ts and src/server/codex-app-protocol.ts
+
+- Status: `codex-app-server.ts` is migrating; `codex-app-protocol.ts` is explicit non-migration pure protocol/schema code.
+- Target seam: Codex app-server adapter owns socket/process/request lifecycle; pure JSON-RPC and Codex notification schemas/parsers live in `codex-app-protocol.ts`.
+- Behavior preserved: public exports from `codex-app-server.ts` are re-exported for compatibility, request/notification parsing keeps the same tolerant behavior, decoded response validation still maps to `CodexAppServerError`, and adapter socket/turn lifecycle behavior is unchanged.
+- Dependencies moved: schema definitions, protocol message types, `parseResponse`, `parseServerMessage`, and `decodeServerParams` moved out of the adapter file.
+- Baseline tests before migration: `tests/server/codex-app-server.test.ts` covered request timeout cleanup, close rejection, RPC error cause preservation, decoded shape validation, review start, cached turn completion, malformed payloads, failed/interrupted turns, and socket-close waiter cleanup.
+- Tests added/updated: `tests/server/codex-app-protocol.test.ts` covers response parsing, error detail preservation, server request/notification parsing, and known notification param decoding.
+- Post-migration parity tests: focused Codex app protocol, app-server adapter, and retained-state tests passed.
+- Perf/memory impact: no runtime behavior change; pure protocol parsing is now testable without opening sockets or spawning processes, and the remaining adapter is smaller for lifecycle cleanup work.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec eslint src/server/codex-app-server.ts src/server/codex-app-protocol.ts tests/server/codex-app-server.test.ts tests/server/codex-app-protocol.test.ts --max-warnings=0` - passed
+  - `pnpm exec vitest run tests/server/codex-app-protocol.test.ts tests/server/codex-app-server.test.ts tests/server/codex-retained-state.test.ts` - passed, 3 files / 21 tests
+  - `pnpm lint` - passed
+  - `pnpm effect:audit` - passed, 48 tracked server files and no not-started rows
+  - `pnpm build` - passed, with existing Vite large-chunk warning only
+  - `pnpm test -- --runInBand` - passed, 57 files / 237 tests
+  - `git diff --check` - passed
+- Review subagent summary: no blockers; reviewer confirmed compatibility re-exports, parser behavior, Effect error mapping, and unchanged adapter lifecycle coverage.
+- Findings fixed: typecheck caught that `codex-runtime.ts` still imports protocol exports from `codex-app-server.ts`; added compatibility re-exports from the adapter module so existing callers do not move in this chunk.
+- Residual risk: process spawning/probe logic still lives inside `codex-app-server.ts`; final scoped runtime split should move child-process ownership to a process adapter with scoped finalization.
 
 ### src/server/pi-retained-state.ts, src/server/pi-runtime.ts, src/server/pi-rpc.ts, and project runtime cleanup
 
