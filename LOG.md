@@ -72,6 +72,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed git diff service hardening. Review passed after adding service parser parity and typed runner-failure coverage; focused git-diff/runtime lifecycle/runtime binary checks passed.
 - 2026-05-15: Started terminal diff refresh service hardening. Added typed injectable `DiffRefreshService` around terminal-only validation, git diff capture, diff replacement, and workspace snapshot return while preserving the sync export.
 - 2026-05-15: Completed terminal diff refresh service hardening. Review passed after adding live public-export harness coverage and a child-process timeout; focused diff-refresh/git-diff/runtime lifecycle checks passed.
+- 2026-05-15: Started project directory picker hardening. Extracted direct `osascript` process IO from `workspace.ts` into typed injectable `DirectoryPickerService`.
+- 2026-05-15: Completed project directory picker hardening. Review found no issues; focused directory-picker and host-capability tests passed.
 
 ## Remaining Knip Findings
 

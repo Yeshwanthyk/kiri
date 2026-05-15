@@ -1,6 +1,5 @@
 import { queryOptions } from '@tanstack/react-query'
 import { createServerFn } from '@tanstack/react-start'
-import { execFileSync } from 'node:child_process'
 import {
   addProjectInputSchema,
   addScratchpadBlockInputSchema,
@@ -66,6 +65,7 @@ import {
   setThemePreference,
 } from './preferences'
 import { refreshTerminalSessionDiffs } from './diff-refresh'
+import { chooseProjectDirectory } from './directory-picker'
 
 export const fetchWorkspaceSnapshot = createServerFn({ method: 'GET' }).handler(
   async () => getWorkspaceSnapshot(),
@@ -96,13 +96,7 @@ export const unhideProjectMutation = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => unhideProject(data.id))
 
 export const chooseProjectDirectoryMutation = createServerFn({ method: 'POST' })
-  .handler(async () => {
-    const output = execFileSync('osascript', [
-      '-e',
-      'POSIX path of (choose folder with prompt "Choose a project directory")',
-    ], { encoding: 'utf8' })
-    return output.trim()
-  })
+  .handler(async () => chooseProjectDirectory())
 
 export const deleteSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(deleteSessionInputSchema)

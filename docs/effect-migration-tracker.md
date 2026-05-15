@@ -46,6 +46,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/timeline-writes.ts` | repository | Timeline/message/task/diff write repository over DB connection | migrating | required | Extracted from `db.ts`; direct live/projection/diff persistence tests added and review passed; final status waits for DB service boundary. |
 | `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
 | `src/server/db/workspace-snapshot.ts` | projection | Workspace snapshot projection over DB connection and provided settings/preferences | migrating | required | Extracted from `db.ts`; direct snapshot test added and review passed; final status waits for workspace service boundary. |
+| `src/server/directory-picker.ts` | process-adapter | typed directory picker service over osascript | migrating | required | Extracted from `workspace.ts`; review/verification pending. |
 | `src/server/diff-refresh.ts` | use-case | terminal diff refresh service command | migrating | required | Typed injectable diff refresh service added; review/verification pending. |
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | migrating | required | Typed injectable git diff service added; review/verification pending. |
 | `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | migrating | required | Typed injectable config service added; review/verification pending. |
@@ -88,6 +89,28 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/directory-picker.ts and src/server/workspace.ts directory picker
+
+- Status: migrating; final status waits for `workspace.ts` to become transport-only over `WorkspaceService`.
+- Target seam: typed injectable `DirectoryPickerService` over the `osascript` folder picker command.
+- Behavior preserved: the server mutation still returns the trimmed selected path and still uses the same AppleScript prompt.
+- Dependencies moved: direct `execFileSync('osascript', ...)` moved out of `workspace.ts` into an injectable process adapter.
+- Baseline tests before migration: host-capability tests pin browser/desktop fallback behavior for project directory picking.
+- Tests added/updated: `tests/server/directory-picker.test.ts` covers exact osascript invocation, trimmed return value, and typed failure wrapping.
+- Post-migration parity tests: focused directory picker and host-capability tests passed.
+- Perf/memory impact: no retained state added; process execution remains one bounded synchronous command per user request.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/directory-picker.test.ts tests/lib/host-capabilities.test.ts` - passed, 2 files / 5 tests
+  - `pnpm exec eslint src/server/directory-picker.ts tests/server/directory-picker.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 38 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `git diff --check` - passed
+- Review subagent summary: Bacon found no findings; verified focused tests, typecheck, adapter lint, build, and confirmed direct `workspace.ts` lint only reports pre-existing `require-await` handlers.
+- Findings fixed: none.
+- Residual risk: `workspace.ts` still hosts many transport/use-case handlers until the workspace service phase.
 
 ### src/server/diff-refresh.ts
 
