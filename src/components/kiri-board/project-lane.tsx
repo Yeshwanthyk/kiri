@@ -4,7 +4,17 @@ import * as React from 'react'
 import type { AgentCell, ProjectRow } from '~/lib/contracts'
 import { formatAgo, formatKeyShort } from './format'
 
-export function ProjectLane({
+type ProjectLaneProps = {
+  project: ProjectRow
+  selectedProjectId: string
+  selectedAgentId: string
+  onSelect: (projectId: string, agentId: string) => void
+  onHide: (projectId: string) => void
+  startSessionKey: string
+  hideDisabled: boolean
+}
+
+export const ProjectLane = React.memo(function ProjectLane({
   project,
   selectedProjectId,
   selectedAgentId,
@@ -12,15 +22,7 @@ export function ProjectLane({
   onHide,
   startSessionKey,
   hideDisabled,
-}: {
-  project: ProjectRow
-  selectedProjectId: string
-  selectedAgentId: string
-  onSelect: (agentId: string) => void
-  onHide: () => void
-  startSessionKey: string
-  hideDisabled: boolean
-}) {
+}: ProjectLaneProps) {
   const isProjectSelected = project.id === selectedProjectId
   const railRef = React.useRef<HTMLDivElement | null>(null)
   const wrapRef = React.useRef<HTMLDivElement | null>(null)
@@ -100,7 +102,7 @@ export function ProjectLane({
           type="button"
           className="project-lane-hide"
           disabled={hideDisabled}
-          onClick={onHide}
+          onClick={() => onHide(project.id)}
           aria-label={`Hide ${project.name}`}
           title={`Hide ${project.name}`}
         >
@@ -126,7 +128,7 @@ export function ProjectLane({
                     ? 'selected'
                     : ''
                 }`}
-                onClick={() => onSelect(agent.id)}
+                onClick={() => onSelect(project.id, agent.id)}
                 data-agent-id={agent.id}
                 data-project-id={project.id}
                 data-selected={
@@ -187,6 +189,24 @@ export function ProjectLane({
       )}
     </section>
   )
+}, areProjectLanePropsEqual)
+
+function areProjectLanePropsEqual(previous: ProjectLaneProps, next: ProjectLaneProps) {
+  if (
+    previous.project !== next.project ||
+    previous.startSessionKey !== next.startSessionKey ||
+    previous.hideDisabled !== next.hideDisabled ||
+    previous.onSelect !== next.onSelect ||
+    previous.onHide !== next.onHide
+  ) {
+    return false
+  }
+
+  const wasSelected = previous.project.id === previous.selectedProjectId
+  const isSelected = next.project.id === next.selectedProjectId
+  if (wasSelected !== isSelected) return false
+  if (!isSelected) return true
+  return previous.selectedAgentId === next.selectedAgentId
 }
 
 

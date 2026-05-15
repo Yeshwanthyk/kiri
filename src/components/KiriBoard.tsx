@@ -121,6 +121,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [agentByProject, setAgentByProject] = React.useState<Record<string, string>>(() =>
     snapshot.preferences.agentByProject,
   )
+  const agentByProjectRef = React.useRef(agentByProject)
   const [tab, setTab] = React.useState<SidebarTab>('chat')
   const [hydrated, setHydrated] = React.useState(false)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
@@ -191,33 +192,41 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     selectedAgent && (tab === 'terminal' || (tab === 'chat' && selectedAgent.interfaceMode === 'terminal')),
   )
 
-  const selectAgent = (projectId: string, agentId: string) => {
+  const selectAgent = React.useCallback((projectId: string, agentId: string) => {
     setActiveProjectId(projectId)
     setChatFocusRequest(0)
     setAgentSwitcherOpen(false)
-    if (agentByProject[projectId] === agentId) return
-    const next = { ...agentByProject, [projectId]: agentId }
-    persistAgentByProject(next, agentByProject)
-  }
+    const previous = agentByProjectRef.current
+    if (previous[projectId] === agentId) return
+    const next = { ...previous, [projectId]: agentId }
+    persistAgentByProject(next, previous)
+  }, [])
 
   const selectProject = (projectId: string) => {
     setActiveProjectId(projectId)
     setChatFocusRequest(0)
   }
 
-  const forgetProject = (projectId: string) => {
-    if (!(projectId in agentByProject)) return
-    const { [projectId]: _omitted, ...next } = agentByProject
-    persistAgentByProject(next, agentByProject)
-  }
+  const forgetProject = React.useCallback((projectId: string) => {
+    const previous = agentByProjectRef.current
+    if (!(projectId in previous)) return
+    const { [projectId]: _omitted, ...next } = previous
+    persistAgentByProject(next, previous)
+  }, [])
 
   function persistAgentByProject(next: Record<string, string>, previous: Record<string, string>) {
+    agentByProjectRef.current = next
     setAgentByProject(next)
     void setAgentByProjectPreference({ data: next }).catch((error) => {
       console.error('Failed to save selected session preference', error)
+      agentByProjectRef.current = previous
       setAgentByProject(previous)
     })
   }
+
+  React.useEffect(() => {
+    agentByProjectRef.current = agentByProject
+  }, [agentByProject])
 
   React.useEffect(() => {
     setWorkspace(snapshot)
@@ -451,17 +460,17 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
   }
 
-  async function handleHideProject(projectId: string) {
+  const handleHideProject = React.useCallback(async (projectId: string) => {
     setProjectVisibilityPendingId(projectId)
     try {
       const next = await hideProject({ data: { id: projectId } })
       setWorkspace(next)
       forgetProject(projectId)
-      if (selection.projectId === projectId) setActiveProjectId(next.selected.projectId)
+      setActiveProjectId((current) => current === projectId ? next.selected.projectId : current)
     } finally {
       setProjectVisibilityPendingId((current) => current === projectId ? null : current)
     }
-  }
+  }, [forgetProject, hideProject])
 
   async function handleUnhideProject(projectId: string) {
     setProjectVisibilityPendingId(projectId)
@@ -1178,10 +1187,8 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               selectedProjectId={selection.projectId}
               startSessionKey={keymap.startSession}
               hideDisabled={workspace.projects.length <= 1 || projectVisibilityPendingId === project.id}
-              onHide={() => void handleHideProject(project.id)}
-              onSelect={(agentId) => {
-                selectAgent(project.id, agentId)
-              }}
+              onHide={handleHideProject}
+              onSelect={selectAgent}
             />
           ))}
         </div>
