@@ -43,6 +43,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/timeline-format.ts` | pure | Timeline event id/tone/display derivation helpers | explicit-non-migration | not-required | Pure formatting/normalization module shared by readers and writers. |
 | `src/server/db/timeline-writes.ts` | repository | Timeline/message/task/diff write repository over DB connection | migrating | required | Extracted from `db.ts`; direct live/projection/diff persistence tests added and review passed; final status waits for DB service boundary. |
 | `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
+| `src/server/db/workspace-snapshot.ts` | projection | Workspace snapshot projection over DB connection and provided settings/preferences | migrating | required | Extracted from `db.ts`; direct snapshot test added and review passed; final status waits for workspace service boundary. |
 | `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | not-started | required | Direct `git` subprocess boundary. |
 | `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | not-started | required | Thin service exists; move env parsing into typed config service. |
@@ -269,6 +270,22 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: first reviewer reported no blockers and identified missing direct persistence coverage; tests were added. Ramanujan reported no blocking findings and no edits; verified focused timeline-write test, typecheck, lint, and diff check.
 - Findings fixed: added direct persistence regression tests after the first reviewer identified missing coverage for Pi live/projection writes and diff replacement.
 - Residual risk: no direct test yet for low-level timeline event id collisions; covered through existing runtime lifecycle flow tests and unchanged event id helper.
+
+### src/server/db/workspace-snapshot.ts
+
+- Status: extracted; final migration status remains `migrating|required` until projections sit behind the DB/workspace service boundary.
+- Target seam: workspace snapshot projection over an injected DB connection with settings, UI preferences, and scratchpad blocks passed in by the compatibility facade.
+- Behavior preserved: visible/hidden project split, active agent grouping, archived session summaries, context usage math, pending question projection, selected project/agent defaults, diff counts, and empty detail arrays remain unchanged.
+- Dependencies moved: project/agent/context SQL, archived-session assembly, context usage mapping, pending-question reads, snapshot parsing, and local grouping helper moved out of `src/server/db.ts`.
+- Baseline tests before migration: perf snapshot gate, CLI/MCP/workspace flows, project/session/runtime-state repository tests.
+- Tests added/updated: `tests/server/db-workspace-snapshot.test.ts` covers visible and hidden projects, archived sessions, context usage, pending question, diff count, selected ids, and scratchpad passthrough.
+- Post-migration parity tests: focused snapshot projection test passed; broader facade/runtime tests run before commit.
+- Perf/memory impact: no query-shape or payload change; extraction only.
+- Verification commands and results:
+  - `pnpm exec vitest run tests/server/db-workspace-snapshot.test.ts` - passed, 1 test
+- Review subagent summary: Hypatia reported no blockers and no edits; verified focused snapshot test, runtime-state plus snapshot test, effect audit, typecheck, and diff check.
+- Findings fixed: none yet.
+- Residual risk: final workspace-service extraction still needs to move snapshot assembly behind a higher-level Effect service and remove direct settings/preferences calls from the facade.
 
 ### src/server/db/sessions.ts
 
