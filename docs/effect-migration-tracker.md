@@ -56,7 +56,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/pi-rpc.ts` | runtime-adapter | `runtime/pi/rpc-adapter.ts` scoped process adapter | not-started | required | Already Effect-aware; needs scoped process/listener lifetime. |
 | `src/server/pi-runtime.ts` | runtime-adapter | `runtime/pi/{runtime-service,retained-state,attachments}.ts` | not-started | required | Main Pi retained-state and cleanup risk. |
 | `src/server/preferences.ts` | config | `config/preferences-service.ts` with atomic file and in-memory adapters | migrating | required | Typed injectable preferences service added; review/verification pending. |
-| `src/server/provider-runtime.ts` | use-case | `runtime/registry.ts` with injected runtime services | not-started | required | Registry exists; adapters are still imported singletons. |
+| `src/server/provider-runtime.ts` | use-case | runtime registry with injected command and cleanup adapters | migrating | required | Cleanup now routes through typed registry; review/verification pending. |
 | `src/server/runtime-binaries.ts` | process-adapter | `integrations/runtime-binaries.ts` resolver service | migrating | required | Typed injectable runtime binary service added; review/verification pending. |
 | `src/server/runtime-file-operations.ts` | pure | pure runtime file-operation classifier | explicit-non-migration | not-required | Keep pure unless telemetry/resource dependencies are added. |
 | `src/server/runtime-lifecycle.ts` | use-case | `runtime/lifecycle.ts` and `runtime/projection.ts` | not-started | required | Best current Effect shape; live projector should depend on repositories. |
@@ -90,6 +90,28 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/provider-runtime.ts
+
+- Status: migrating; final status waits for Codex/Pi runtime services to replace imported singleton adapters.
+- Target seam: runtime registry for command adapter lookup and runtime-specific retained-state cleanup.
+- Behavior preserved: runtime command adapters keep the same capabilities; terminal-only Claude GUI prompts still reject with `Claude sessions run in terminal mode only`; `forgetProviderRuntimeAgent(runtime, agentId)` remains a synchronous compatibility export.
+- Dependencies moved: cleanup dispatch for Pi/Codex retained state now goes through injectable `RuntimeRegistry.forget` instead of a direct switch in the public wrapper.
+- Baseline tests before migration: provider runtime capability tests, runtime command tests, and runtime retention cleanup tests.
+- Tests added/updated: provider runtime tests now cover injected cleanup handlers and typed `RuntimeRegistryError` wrapping when cleanup fails.
+- Post-migration parity tests: focused provider-runtime/runtime-commands/runtime-retention tests passed.
+- Perf/memory impact: no retained state added; cleanup behavior is now injectable and directly testable before runtime retained maps are split.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/provider-runtime.test.ts tests/server/runtime-commands.test.ts tests/server/runtime-retention.test.ts` - passed, 3 files / 12 tests
+  - `pnpm exec eslint src/server/provider-runtime.ts tests/server/provider-runtime.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 39 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `git diff --check` - passed
+- Review subagent summary: Anscombe found no blockers; confirmed runtime adapter capabilities, synchronous compatibility cleanup, Pi/Codex retained-state cleanup semantics, effect-layer coverage, and wrapper cleanup smoke.
+- Findings fixed: focused lint caught the terminal-only Claude rejection helper as async without await; changed it to return a rejected Promise with the same error message.
+- Residual risk: registry adapters still import Codex/Pi singleton modules until runtime service extraction phases. Cleanup handlers are synchronous today; if they become async later, this boundary should move from `Effect.try` to `Effect.tryPromise`.
 
 ### src/server/terminal-registry.ts and src/server/terminal-server.ts
 

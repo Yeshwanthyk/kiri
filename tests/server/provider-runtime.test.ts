@@ -1,6 +1,11 @@
 import { describe, expect, it } from '@effect/vitest'
 import { Effect } from 'effect'
-import { RuntimeRegistry, runtimeAdapters } from '../../src/server/provider-runtime'
+import {
+  makeRuntimeRegistry,
+  RuntimeRegistry,
+  RuntimeRegistryError,
+  runtimeAdapters,
+} from '../../src/server/provider-runtime'
 
 describe('provider runtime registry', () => {
   it('exposes adapter capabilities by runtime kind', () => {
@@ -37,5 +42,38 @@ describe('provider runtime registry', () => {
       const codex = yield* registry.get('codex')
       expect(codex.prompt).toBeTypeOf('function')
     }).pipe(Effect.provide(RuntimeRegistry.layer)),
+  )
+
+  it.effect('routes cleanup through the injected registry cleanup handlers', () =>
+    Effect.gen(function* () {
+      const cleaned: string[] = []
+      const registry = makeRuntimeRegistry(runtimeAdapters, {
+        codex: (agentId) => {
+          cleaned.push(`codex:${agentId}`)
+        },
+      })
+
+      yield* registry.forget('codex', 'agent-1')
+      yield* registry.forget('claude', 'agent-2')
+
+      expect(cleaned).toEqual(['codex:agent-1'])
+    }),
+  )
+
+  it.effect('wraps cleanup failures in typed registry errors', () =>
+    Effect.gen(function* () {
+      const registry = makeRuntimeRegistry(runtimeAdapters, {
+        pi: () => {
+          throw new Error('cleanup exploded')
+        },
+      })
+
+      const error = yield* registry.forget('pi', 'agent-1').pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(RuntimeRegistryError)
+      expect(error.message).toBe('cleanup exploded')
+      expect(error.runtime).toBe('pi')
+      expect(error.agentId).toBe('agent-1')
+    }),
   )
 })

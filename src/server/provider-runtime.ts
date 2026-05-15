@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect'
+import { Context, Data, Effect, Either, Layer } from 'effect'
 import type { ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import {
   interruptCodexAgent,
@@ -52,7 +52,15 @@ export type ProviderRuntimeAdapter = {
 export type RuntimeRegistryApi = {
   readonly get: (runtime: RuntimeKind) => Effect.Effect<ProviderRuntimeAdapter>
   readonly list: Effect.Effect<Readonly<Record<RuntimeKind, ProviderRuntimeAdapter>>>
+  readonly forget: (runtime: RuntimeKind, agentId: string) => Effect.Effect<void, RuntimeRegistryError>
 }
+
+export class RuntimeRegistryError extends Data.TaggedError('RuntimeRegistryError')<{
+  readonly message: string
+  readonly runtime: RuntimeKind
+  readonly agentId?: string
+  readonly cause?: unknown
+}> {}
 
 export const runtimeAdapters: Record<RuntimeKind, ProviderRuntimeAdapter> = {
   pi: {
@@ -80,23 +88,50 @@ export class RuntimeRegistry extends Context.Tag('@kiri/RuntimeRegistry')<
   RuntimeRegistry,
   RuntimeRegistryApi
 >() {
-  static readonly layer = Layer.succeed(RuntimeRegistry, RuntimeRegistry.of(makeRuntimeRegistry(runtimeAdapters)))
+  static readonly layer = Layer.succeed(
+    RuntimeRegistry,
+    RuntimeRegistry.of(makeRuntimeRegistry(runtimeAdapters, {
+      pi: forgetPiRuntimeAgent,
+      codex: forgetCodexRuntimeAgent,
+    })),
+  )
 }
 
 export function makeRuntimeRegistry(
   adapters: Readonly<Record<RuntimeKind, ProviderRuntimeAdapter>>,
+  cleanup: Partial<Record<RuntimeKind, (agentId: string) => void>> = {},
 ): RuntimeRegistryApi {
   return {
     get: (runtime) => Effect.succeed(adapters[runtime]),
     list: Effect.succeed(adapters),
+    forget: (runtime, agentId) => Effect.try({
+      try: () => {
+        cleanup[runtime]?.(agentId)
+      },
+      catch: (error) => new RuntimeRegistryError({
+        message: error instanceof Error ? error.message : 'Runtime cleanup failed',
+        runtime,
+        agentId,
+        cause: error,
+      }),
+    }),
   }
 }
 
 export function forgetProviderRuntimeAgent(runtime: RuntimeKind, agentId: string) {
-  if (runtime === 'pi') forgetPiRuntimeAgent(agentId)
-  if (runtime === 'codex') forgetCodexRuntimeAgent(agentId)
+  const result = Effect.runSync(
+    Effect.gen(function* () {
+      const registry = yield* RuntimeRegistry
+      return yield* registry.forget(runtime, agentId)
+    }).pipe(
+      Effect.provide(RuntimeRegistry.layer),
+      Effect.either,
+    ),
+  )
+  if (Either.isRight(result)) return
+  throw result.left
 }
 
-async function rejectClaudeGuiRuntime(): Promise<never> {
-  throw new Error('Claude sessions run in terminal mode only')
+function rejectClaudeGuiRuntime(): Promise<never> {
+  return Promise.reject(new Error('Claude sessions run in terminal mode only'))
 }
