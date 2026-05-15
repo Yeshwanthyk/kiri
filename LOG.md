@@ -80,6 +80,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed terminal registry extraction. Review caught and fixed stale PTY exit deleting replacement sessions; focused registry/launch checks and terminal persistence e2e smoke passed.
 - 2026-05-15: Started runtime registry cleanup hardening. Added typed `RuntimeRegistry.forget` so retained-state cleanup dispatch is injectable while preserving `forgetProviderRuntimeAgent`.
 - 2026-05-15: Completed runtime registry cleanup hardening. Review found no blockers; focused provider-runtime/runtime-command/runtime-retention checks passed.
+- 2026-05-15: Started Codex retained-state extraction. Moved Codex adapter/listener/thread/turn/queue/generation/diff-turn maps behind `codex-retained-state.ts` while preserving runtime compatibility exports.
+- 2026-05-15: Completed Codex retained-state extraction. Review caught and fixed queued-turn reset invalidation, stale-thread alias ownership, and immediate turn-id retention; focused Codex retained-state/runtime retention checks passed.
 
 ## Remaining Knip Findings
 

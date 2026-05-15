@@ -16,6 +16,7 @@ import {
   type CodexThread,
   type CodexTurn,
 } from './codex-app-server'
+import { makeCodexRetainedState } from './codex-retained-state'
 import { attachmentDirPath, getKiriConfig } from './kiri-config'
 import {
   appendUserMessage,
@@ -49,15 +50,7 @@ type CodexRuntimeState = {
   userAgent?: string
 }
 
-const adapters = new Map<string, CodexAppServerAdapter>()
-const adapterListeners = new Set<string>()
-const threadAgents = new Map<string, string>()
-const agentThreads = new Map<string, string>()
-const threadTurns = new Map<string, string>()
-const queues = new Map<string, Promise<void>>()
-const sessionGenerations = new Map<string, number>()
-const repoDiffRefreshedTurns = new Set<string>()
-const maxRepoDiffRefreshedTurns = 1_000
+const retainedState = makeCodexRetainedState()
 const CODEX_SANDBOX_MODE = 'danger-full-access'
 const CODEX_SANDBOX_POLICY = { type: 'dangerFullAccess' } as const
 
@@ -91,10 +84,14 @@ export async function promptCodexAgent(input: {
     }
   }
 
-  await runRuntimeLifecyclePromise(enqueueAgentTurn(config.id, queues, () => promptCodexAgentNow({
-    ...config,
-    runtimeState: getAgentRuntimeState(config.id),
-  }, text)))
+  const generation = retainedState.generation(config.id)
+  await runRuntimeLifecyclePromise(enqueueAgentTurn(config.id, retainedState.queues, () => {
+    if (!retainedState.isCurrentGeneration(config.id, generation)) return Promise.resolve()
+    return promptCodexAgentNow({
+      ...config,
+      runtimeState: getAgentRuntimeState(config.id),
+    }, text, generation)
+  }))
 }
 
 export async function steerCodexAgent(input: {
@@ -147,7 +144,7 @@ export async function interruptCodexAgent(input: { agentId: string }) {
   })
 }
 
-export async function setCodexThinkingLevel(input: {
+export function setCodexThinkingLevel(input: {
   agentId: string
   level?: ThinkingLevel
 }) {
@@ -163,11 +160,11 @@ export async function setCodexThinkingLevel(input: {
     label: 'Thinking level changed',
     detail: level,
   })
-  return level
+  return Promise.resolve(level)
 }
 
 export async function resetCodexSession(input: { agentId: string }) {
-  sessionGenerations.set(input.agentId, (sessionGenerations.get(input.agentId) ?? 0) + 1)
+  retainedState.bumpGeneration(input.agentId)
   const state = codexState(getAgentRuntimeState(input.agentId))
   if (state.threadId) {
     try {
@@ -197,26 +194,29 @@ export async function reviewCodexSession(input: {
   if (config.runtime !== 'codex') {
     throw new Error(`${config.runtime} agents do not support /review yet`)
   }
-  await runRuntimeLifecyclePromise(enqueueAgentTurn(config.id, queues, () =>
-    reviewCodexSessionNow({
+  const generation = retainedState.generation(config.id)
+  await runRuntimeLifecyclePromise(enqueueAgentTurn(config.id, retainedState.queues, () => {
+    if (!retainedState.isCurrentGeneration(config.id, generation)) return Promise.resolve()
+    return reviewCodexSessionNow({
       ...config,
       runtimeState: getAgentRuntimeState(config.id),
-    }, input.target)))
+    }, input.target, generation)
+  }))
 }
 
 async function promptCodexAgentNow(
   config: ReturnType<typeof getAgentLaunchConfig> & { runtimeState: Record<string, unknown> },
   text: string,
+  generation: number,
 ) {
   const adapter = getOrCreateCodexAdapter(stringValue(config.runtimeState.websocketUrl))
   const state = codexState(config.runtimeState)
-  const generation = sessionGenerations.get(config.id) ?? 0
   let activeThreadId = state.threadId
   await runRuntimeLifecyclePromise(runAgentTurnLifecycle({
     agentId: config.id,
     displayText: text,
     errorEvent: { kind: 'codex_error', label: 'Codex error' },
-    isCurrent: () => (sessionGenerations.get(config.id) ?? 0) === generation,
+    isCurrent: () => retainedState.isCurrentGeneration(config.id, generation),
     successStatus: (markIdle) => markIdle ? 'idle' : null,
     onError: () => {
       setCodexState(config.id, {
@@ -241,17 +241,17 @@ async function promptCodexAgentNow(
 async function reviewCodexSessionNow(
   config: ReturnType<typeof getAgentLaunchConfig> & { runtimeState: Record<string, unknown> },
   target: ReviewTarget,
+  generation: number,
 ) {
   const adapter = getOrCreateCodexAdapter(stringValue(config.runtimeState.websocketUrl))
   const state = codexState(config.runtimeState)
-  const generation = sessionGenerations.get(config.id) ?? 0
   let activeThreadId = state.threadId
   const displayText = reviewDisplayText(target)
   await runRuntimeLifecyclePromise(runAgentTurnLifecycle({
     agentId: config.id,
     displayText,
     errorEvent: { kind: 'codex_error', label: 'Codex error' },
-    isCurrent: () => (sessionGenerations.get(config.id) ?? 0) === generation,
+    isCurrent: () => retainedState.isCurrentGeneration(config.id, generation),
     successStatus: (markIdle) => markIdle ? 'idle' : null,
     onError: () => {
       setCodexState(config.id, {
@@ -316,6 +316,7 @@ function startOrSteerCodexTurn(input: {
     }))
     const turnId = turnResponse.turn.id
     yield* Effect.sync(() => {
+      if (turnId) retainedState.rememberTurn(threadId, turnId)
       setCodexState(input.config.id, {
         ...input.state,
         threadId,
@@ -369,6 +370,7 @@ function startCodexReview(input: {
     }))
     const turnId = review.turn.id
     yield* Effect.sync(() => {
+      if (turnId) retainedState.rememberTurn(threadId, turnId)
       setCodexState(input.config.id, {
         ...input.state,
         threadId,
@@ -446,17 +448,17 @@ function ensureCodexThreadEffect(input: {
 
 function getOrCreateCodexAdapter(websocketUrl: string | undefined) {
   const url = adapterUrl(websocketUrl)
-  let adapter = adapters.get(url)
+  let adapter = retainedState.getAdapter(url)
   if (!adapter) {
     adapter = new CodexAppServerAdapter({
       websocketUrl: url,
       spawnIfMissing: !process.env.KIRI_CODEX_APP_SERVER_URL,
       codexHome: process.env.KIRI_CODEX_HOME,
     })
-    adapters.set(url, adapter)
+    retainedState.rememberAdapter(url, adapter)
   }
-  if (!adapterListeners.has(url)) {
-    adapterListeners.add(url)
+  if (!retainedState.hasAdapterListener(url)) {
+    retainedState.rememberAdapterListener(url)
     adapter.onMessage((message) => handleCodexServerMessage(adapter, message))
   }
   return adapter
@@ -470,8 +472,8 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
   return Effect.gen(function* () {
     const params = objectValue(message.params)
     const threadId = stringValue(params.threadId)
-    const agentId = threadId ? threadAgents.get(threadId) : undefined
-    if (agentId && agentThreads.get(agentId) !== threadId) return
+    const agentId = threadId ? retainedState.agentForThread(threadId) : undefined
+    if (agentId && retainedState.threadForAgent(agentId) !== threadId) return
 
     if ('id' in message) {
       if (agentId) {
@@ -537,7 +539,7 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
       if (!decoded) return
       const diff = decoded.diff ?? ''
       const turnKey = codexTurnKey(threadId, codexNotificationTurnId(params, threadId))
-      if (turnKey && repoDiffRefreshedTurns.has(turnKey)) return
+      if (turnKey && retainedState.hasRepoDiffRefreshedTurn(turnKey)) return
       yield* projectRuntimeEvent({
         type: 'diffsUpdated',
         agentId,
@@ -574,7 +576,7 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
       if (!decoded) return
       const turnId = decoded.turnId ?? decoded.turn?.id
       if (threadId && turnId) {
-        yield* Effect.sync(() => threadTurns.set(threadId, turnId))
+        yield* Effect.sync(() => retainedState.rememberTurn(threadId, turnId))
       }
       if (turnId) {
         const currentState = codexState(getAgentRuntimeState(agentId))
@@ -638,7 +640,7 @@ function codexTurnKey(threadId: string | undefined, turnId: string | undefined) 
 }
 
 function codexNotificationTurnId(params: Record<string, unknown>, threadId: string | undefined) {
-  return stringValue(params.turnId) ?? (threadId ? threadTurns.get(threadId) : undefined)
+  return stringValue(params.turnId) ?? (threadId ? retainedState.turnForThread(threadId) : undefined)
 }
 
 async function steerCodexTurn(
@@ -729,7 +731,7 @@ function runtimeCause(error: unknown) {
 }
 
 function isCurrentCodexGeneration(agentId: string, generation: number) {
-  return (sessionGenerations.get(agentId) ?? 0) === generation
+  return retainedState.isCurrentGeneration(agentId, generation)
 }
 
 function isUnmaterializedThreadReadError(error: unknown) {
@@ -744,12 +746,7 @@ function isMissingRolloutError(error: unknown) {
 }
 
 function forgetCodexThread(agentId: string, state: CodexRuntimeState) {
-  if (state.threadId) {
-    threadAgents.delete(state.threadId)
-    threadTurns.delete(state.threadId)
-    pruneRepoDiffRefreshedTurnsForThread(state.threadId)
-    agentThreads.delete(agentId)
-  }
+  retainedState.forgetThread(agentId, state.threadId)
   setCodexState(agentId, {
     ...state,
     threadId: undefined,
@@ -760,61 +757,19 @@ export function forgetCodexRuntimeAgent(
   agentId: string,
   options: { readonly keepGeneration?: boolean } = {},
 ) {
-  const threadId = agentThreads.get(agentId)
-  if (threadId) {
-    threadAgents.delete(threadId)
-    threadTurns.delete(threadId)
-    pruneRepoDiffRefreshedTurnsForThread(threadId)
-  }
-  for (const [candidateThreadId, candidateAgentId] of threadAgents) {
-    if (candidateAgentId !== agentId) continue
-    threadAgents.delete(candidateThreadId)
-    threadTurns.delete(candidateThreadId)
-    pruneRepoDiffRefreshedTurnsForThread(candidateThreadId)
-  }
-  agentThreads.delete(agentId)
-  queues.delete(agentId)
-  if (!options.keepGeneration) sessionGenerations.delete(agentId)
+  retainedState.forgetAgent(agentId, options)
 }
 
 function rememberCodexThread(agentId: string, threadId: string) {
-  const previousThreadId = agentThreads.get(agentId)
-  if (previousThreadId && previousThreadId !== threadId) {
-    threadAgents.delete(previousThreadId)
-    threadTurns.delete(previousThreadId)
-    pruneRepoDiffRefreshedTurnsForThread(previousThreadId)
-  }
-  threadAgents.set(threadId, agentId)
-  agentThreads.set(agentId, threadId)
+  retainedState.rememberThread(agentId, threadId)
 }
 
 function rememberRepoDiffRefreshedTurn(turnKey: string) {
-  repoDiffRefreshedTurns.add(turnKey)
-  while (repoDiffRefreshedTurns.size > maxRepoDiffRefreshedTurns) {
-    const oldest = repoDiffRefreshedTurns.values().next().value as string | undefined
-    if (!oldest) break
-    repoDiffRefreshedTurns.delete(oldest)
-  }
-}
-
-function pruneRepoDiffRefreshedTurnsForThread(threadId: string) {
-  const prefix = `${threadId}:`
-  for (const turnKey of repoDiffRefreshedTurns) {
-    if (turnKey.startsWith(prefix)) repoDiffRefreshedTurns.delete(turnKey)
-  }
+  retainedState.rememberRepoDiffRefreshedTurn(turnKey)
 }
 
 export function codexRuntimeRetainedStateStats() {
-  return {
-    adapters: adapters.size,
-    adapterListeners: adapterListeners.size,
-    threadAgents: threadAgents.size,
-    agentThreads: agentThreads.size,
-    threadTurns: threadTurns.size,
-    queues: queues.size,
-    sessionGenerations: sessionGenerations.size,
-    repoDiffRefreshedTurns: repoDiffRefreshedTurns.size,
-  }
+  return retainedState.stats()
 }
 
 export function __unsafeRetainCodexRuntimeStateForTest(input: {
@@ -822,20 +777,11 @@ export function __unsafeRetainCodexRuntimeStateForTest(input: {
   readonly threadId: string
   readonly turnId?: string
 }) {
-  rememberCodexThread(input.agentId, input.threadId)
-  if (input.turnId) {
-    threadTurns.set(input.threadId, input.turnId)
-    rememberRepoDiffRefreshedTurn(codexTurnKey(input.threadId, input.turnId) ?? '')
-  }
+  retainedState.retainForTest(input)
 }
 
 export function __unsafeClearCodexRuntimeStateForTest() {
-  threadAgents.clear()
-  agentThreads.clear()
-  threadTurns.clear()
-  queues.clear()
-  sessionGenerations.clear()
-  repoDiffRefreshedTurns.clear()
+  retainedState.clearRuntimeStateForTest()
 }
 
 function activeTurnIdFromThread(thread: CodexThread) {
@@ -914,7 +860,7 @@ function codexState(value: Record<string, unknown>): CodexRuntimeState {
 function readState(value: string | null | undefined) {
   if (!value) return null
   try {
-    const parsed = JSON.parse(value)
+    const parsed: unknown = JSON.parse(value)
     return objectValue(parsed)
   } catch {
     return null

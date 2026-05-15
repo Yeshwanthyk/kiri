@@ -30,7 +30,8 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 |---|---|---|---|---|---|
 | `src/server/backend-server.ts` | transport | `app/readiness` entrypoint over app layer | not-started | required | Readiness should probe layer dependencies, not direct DB state. |
 | `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | not-started | required | Already uses Effect well; needs scoped lifecycle and smaller protocol/process modules. |
-| `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | not-started | required | Main Codex retained-state and stale-turn risk. |
+| `src/server/codex-retained-state.ts` | runtime-adapter | Codex retained-state registry for adapters, listeners, threads, turns, queues, generations, and diff-turn guards | migrating | required | Extracted from `codex-runtime.ts`; review/verification pending. |
+| `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | migrating | required | Retained-state maps extracted; runtime service/projection/attachment splits remain. |
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | not-started | required | Highest priority split; preserve compatibility exports until callers move. |
 | `src/server/db/agent-detail.ts` | repository | Paged agent detail reader for timeline, diffs, tasks, and context usage | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/bootstrap.ts` | repository | Startup DB data repair and seed cleanup boundary | migrating | required | Extracted from `db.ts`; direct bootstrap tests added and review passed; final status waits for DB/settings service boundary. |
@@ -90,6 +91,29 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/codex-retained-state.ts and src/server/codex-runtime.ts retained state
+
+- Status: migrating; final status waits for Codex runtime use-cases, protocol projection, attachment handling, and adapter wiring to move behind scoped services.
+- Target seam: Codex retained-state registry for adapter/listener ownership, thread-agent indexes, active turn lookup, per-agent queues, reset generations, and bounded diff-refresh guards.
+- Behavior preserved: public Codex runtime functions, compatibility cleanup exports, adapter lookup/listener registration, active turn steering, reset generation checks, thread-status projection, and diff refresh guard behavior remain wired through `codex-runtime.ts`.
+- Dependencies moved: module-global Codex retained maps moved into `codex-retained-state.ts`; `codex-runtime.ts` now delegates map mutation, stats, test retention, cleanup, and diff guard pruning through the registry.
+- Baseline tests before migration: runtime retention tests covered Codex cleanup and 1,000-entry diff-turn guard bound.
+- Tests added/updated: `tests/server/codex-retained-state.test.ts` covers adapter/listener dedupe, active-thread replacement pruning, all-agent cleanup, generation-preserving reset cleanup, oldest diff-turn eviction, and test clear semantics.
+- Post-migration parity tests: focused Codex retained-state/runtime-retention/provider-runtime tests passed.
+- Perf/memory impact: retained Codex runtime maps are now isolated and directly unit-tested; stale thread replacement prunes old turn guards and the diff-turn guard remains bounded.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/codex-retained-state.test.ts tests/server/runtime-retention.test.ts tests/server/provider-runtime.test.ts` - passed, 3 files / 15 tests
+  - `pnpm exec eslint src/server/codex-retained-state.ts src/server/codex-runtime.ts tests/server/codex-retained-state.test.ts tests/server/runtime-retention.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 40 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `pnpm test -- --runInBand` - passed, 47 files / 193 tests including `tests/server/perf-gates.test.ts`
+  - `git diff --check` - passed
+- Review subagent summary: Mill found blockers around queued turns surviving reset, stale thread cleanup deleting the current alias, and startTurn/startReview turn IDs not being retained before notifications. Kepler second pass found no remaining blockers after fixes.
+- Findings fixed: focused lint caught a pre-existing async-without-await export and unsafe JSON parse assignment in the touched runtime file; fixed with `Promise.resolve(level)` and `unknown` JSON parsing annotation. Review blockers fixed by enqueue-time generation capture, ownership-checked stale thread cleanup, and immediate turn-id retention from startTurn/startReview responses.
+- Residual risk: Codex adapter lifetime is still process-global and not scoped/finalized; runtime use-cases, protocol projection, and attachment writes still live in `codex-runtime.ts`.
 
 ### src/server/provider-runtime.ts
 
