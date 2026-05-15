@@ -1,32 +1,35 @@
 # Mission
 
-Move Pican runtime lifecycle behavior toward Effect in safe phases, preserving runtime-specific protocol ownership while adding invariants, tests, review, and logical commits.
+Complete the Kiri performance, memory, and Effect migration in safe phases without feature loss, behavioral regressions, or unbounded retained state.
 
 # Done Criteria
 
-- [x] Phase 1 extracts boring shared Promise-compatible lifecycle behavior.
-- [x] Phase 1 has Quint lifecycle invariants and focused tests.
-- [x] Phase 1 review feedback is fixed and ready to commit.
-- [x] Phase 2 makes lifecycle helpers Effect-native while runtime exports stay Promise-compatible.
-- [x] Phase 2 uses Effect tests and is reviewed/fixed/ready to commit.
-- [ ] Phase 3 moves Codex, Claude, then Pi protocol cores to Effect where appropriate. Codex, Claude, and Pi are implemented; Pi review remains.
-- [ ] Phase 3 is tested, reviewed, fixed, and committed per runtime chunk.
-- [x] Phase 4 introduces Layers only where they replace real boundaries in tests.
-- [ ] Final build/test/lint pass is green.
+- [x] Existing work is committed in logical blocks on `kyendamuri/perf-improvements`.
+- [x] `LOG.md` tracks the goal, phase progress, verification, review findings, and residual risks.
+- [x] `docs/effect-migration-tracker.md` tracks every server migration target and per-file review gate.
+- [ ] Every migration-scope server file is either behind an Effect service/layer or explicitly classified as a non-migration with rationale.
+- [ ] Oversized DB/config/runtime/workspace/terminal modules are split only behind tests and compatibility exports.
+- [ ] Perf budgets stay enforced for snapshot hydration, agent detail hydration, returned timeline rows, returned diffs, payload size, and RSS delta.
+- [ ] Runtime and terminal retained state has bounded ownership and cleanup coverage.
+- [ ] UI, CLI, MCP, scratchpad, terminal, runtime, and project/session flows keep focused smoke coverage.
+- [ ] A review subagent runs after every migrated file or tightly-coupled group; blockers are fixed before the next phase.
+- [ ] Each phase is committed in a logical block after tests, lint, migration audit, and review pass.
+- [ ] Final branch verification runs typecheck, lint, unit tests, perf gates, migration audit, Knip triage, and relevant browser/Playwright smokes.
+- [ ] Final detailed interactive HTML explainer documents the completed architecture, harnesses, perf/memory wins, and remaining risks.
 
 # Guardrails
 
-- Preserve protocol logic inside runtime-specific files until its dedicated phase.
-- Do not touch unrelated dirty UI edits unless needed for this mission.
-- Keep changes behavior-preserving unless a lifecycle invariant requires a small correction.
-- Run subagent review for each coherent phase/chunk and fix confirmed findings before commit.
+- Preserve public behavior unless a test and tracker note explicitly pin a narrowed contract.
+- Do not remove features to simplify the Effect migration.
+- Consult `effect-solutions` before writing new Effect code.
+- Keep compatibility exports until all callers have moved to the service boundary.
+- Use focused tests before moving behavior, then review subagents before commits.
+- Do not rewrite large modules for aesthetics; split one responsibility at a time.
 
 # Critical Learnings
 
-- Quint is available locally; use simple pure state models first, then executable action specs only where needed.
-- Review caught that Pi reset/stop semantics must remain idle/silent in Phase 1; only queue and diff helpers are shared for Pi for now.
-- Phase 2 keeps typed `RuntimeLifecycleError` inside Effect but unwraps `Runtime turn failed` at Promise runtime boundaries to preserve provider error messages.
-- Codex protocol-core Effect migration reviewed clean; optional future hardening is direct coverage for non-missing adapter failures preserving provider error identity.
-- Claude protocol-core Effect migration reviewed with one fixed edge: `activeTurn` is now cleared if prompt queue push or turn completion fails.
-- Pi RPC now exposes typed Effect methods while preserving Promise callers; `promptAndWaitEffect` cleans completion listeners if prompt submission fails.
-- Phase 4 uses `RuntimeProjection` as a Layer-backed DB/projection boundary; production Promise/sync helpers provide the live layer, tests can provide fakes.
+- `getAgentDetail(limit)` now enforces bounded detail hydration and the perf gate proves row/diff/payload/RSS budgets.
+- Scratchpad session creation is unified through `triggerScratchpadSession`, preserving terminal behavior and GUI prompt enqueue cleanup.
+- DB extraction is progressing through compatibility exports; final migrated status waits for DB service/layer ownership.
+- Config, settings, preferences, runtime commands, runtime binaries, and git diff capture now have typed injectable service seams while legacy callers remain supported.
+- Review gates have caught real compatibility gaps, including FiberFailure unwrapping and settings error-message parity; keep exact sync export behavior pinned.
