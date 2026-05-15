@@ -33,6 +33,9 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 
 - 2026-05-15: Branch `kyendamuri/perf-improvements` created from `main`.
 - 2026-05-15: Kiri session renamed to `Kiri perf and memory`.
+- 2026-05-15: Committed existing perf/memory work in logical blocks before starting the Effect migration audit.
+- 2026-05-15: Kiri session renamed from perf/memory implementation to `Audit Effect migration`.
+- 2026-05-15: Started Effect migration/directory-structure audit and recorded findings in `docs/effect-migration-audit.md`.
 - 2026-05-15: `getAgentDetail(limit)` now pages latest timeline rows instead of loading all messages/events; harness updated to prove 500 returned rows from 2,480 stored rows.
 - 2026-05-15: Scratchpad triggers now go through `triggerScratchpadSession` for UI/MCP/CLI, with terminal sessions avoiding prompt enqueue and failed GUI prompt enqueue archiving the created session.
 - 2026-05-15: Added Effect layers for `KiriDbService`, `KiriSettingsService`, and `RuntimeRegistry`; `tests/harness/effect-layers.ts` proves isolated wiring.
