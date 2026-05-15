@@ -53,7 +53,8 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | migrating | required | Typed injectable git diff service added; review/verification pending. |
 | `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | migrating | required | Typed injectable config service added; review/verification pending. |
 | `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | migrating | required | Effect facade now has injectable dependencies and shared cleanup/trigger seams; final leaf service composition remains. |
-| `src/server/kiri-mcp.ts` | transport | `transport/mcp.ts` over `KiriControl` app layer | not-started | required | Keep MCP output parity. |
+| `src/server/kiri-mcp-runtime.ts` | use-case | MCP runtime glue for Effect execution and context selection | migrating | required | Extracted from `kiri-mcp.ts`; review/verification pending. |
+| `src/server/kiri-mcp.ts` | transport | `transport/mcp.ts` over `KiriControl` app layer | migrating | required | Effect execution/context glue moved to MCP runtime service; tool parity preserved. |
 | `src/server/pi-jsonl-file.ts` | projection | Pi JSONL file reader service over pure projection | migrating | required | File IO moved out of pure Pi JSONL projection; final filesystem service injection remains. |
 | `src/server/pi-jsonl.ts` | projection | pure Pi JSONL session projection | explicit-non-migration | not-required | Pure parser/projection module after file IO split. |
 | `src/server/pi-rpc.ts` | runtime-adapter | `runtime/pi/rpc-adapter.ts` scoped process adapter | migrating | required | Prompt completion waiters now cancel on stop; full scoped process/listener lifetime remains. |
@@ -258,6 +259,29 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: initial review found one blocker: async injected readiness probes were type-accepted but `Effect.try` treated rejected promises as success. Fixed by using `Effect.tryPromise`, awaiting both probes, making the compatibility readiness export async, and adding async rejection/openDb failure coverage. Follow-up review cleared the blocker.
 - Findings fixed: focused eslint caught `await` inference against a sync default readiness function; annotated the selected readiness callback as `ReadinessCheck`. Review caught false-ready async probe behavior; service now handles sync and async probes consistently.
 - Residual risk: live readiness still uses the compatibility function per request; final app-layer composition can provide and reuse `BackendReadinessService.layer`.
+
+### src/server/kiri-mcp.ts and src/server/kiri-mcp-runtime.ts
+
+- Status: migrating; final status waits for the MCP transport/tool registration split into a dedicated transport directory.
+- Target seam: MCP tool registration delegates Effect execution, context refresh, and selected-session fallback to `KiriMcpRuntimeService`.
+- Behavior preserved: tool names, schemas, structured content shape, CLI parity helper, selected-session rename fallback, selected-project scratchpad fallback, and mutation context refresh remain unchanged.
+- Dependencies moved: direct `Effect.runPromise`, context wrapper, and selected-session id lookup moved out of `kiri-mcp.ts` into `kiri-mcp-runtime.ts`.
+- Baseline tests before migration: `tests/server/kiri-mcp.test.ts` covered tool list, project/session/scratchpad mutations, and packaged helper behavior.
+- Tests added/updated: `tests/server/kiri-mcp-runtime.test.ts` covers Effect execution, mutation result context refresh, selected-session id resolution, and missing selected-session failure. `tests/server/kiri-mcp.test.ts` now also covers omitted `agentId` rename fallback, omitted `projectId` scratchpad fallback, and mutation `structuredContent.context` refresh.
+- Post-migration parity tests: focused MCP runtime, MCP parity, and KiriControl service tests passed.
+- Perf/memory impact: no wire payload changes; repeated context refresh behavior is centralized so later MCP/runtime cleanup can be audited in one place.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm lint` - passed
+  - `pnpm exec eslint src/server/kiri-mcp.ts src/server/kiri-mcp-runtime.ts tests/server/kiri-mcp-runtime.test.ts tests/server/kiri-mcp.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 47 tracked / 47 server files
+  - `pnpm exec vitest run tests/server/kiri-mcp-runtime.test.ts tests/server/kiri-mcp.test.ts tests/server/kiri-control-service.test.ts` - passed, 3 files / 10 tests
+  - `pnpm build` - passed, existing Vite large chunk warning only
+  - `pnpm test -- --runInBand` - passed, 55 files / 232 tests
+  - `git diff --check` - passed
+- Review subagent summary: no blockers; confirmed runtime lift preserves helper behavior, tool payload/schema behavior, enum defaults, and selected-session/context behavior. Suggested MCP-level fallback/context coverage was added after review, and follow-up review confirmed those assertions are meaningful and not brittle.
+- Findings fixed: focused typecheck caught a `runtime` name collision between the MCP helper and the `runtime` tool argument; renamed the helper to `mcpRuntime`. Focused eslint removed stale manual enum casts after schema inference carried the correct types.
+- Residual risk: `kiri-mcp.ts` still owns all tool registration; a future split can move tool definitions into smaller grouped modules once parity tests cover each group.
 
 ### src/server/pi-retained-state.ts, src/server/pi-runtime.ts, src/server/pi-rpc.ts, and project runtime cleanup
 

@@ -109,14 +109,25 @@ describe('kiri MCP server', () => {
     }))
     expect(renamed.title).toBe('MCP Session Renamed')
 
-    const block = scratchpadBlockSchema.parse(await callResult(client, 'kiri_add_scratchpad', {
-      projectId: primary.id,
-      body: 'MCP scratchpad block',
+    const defaultRenamed = sessionSummarySchema.parse(await callResult(client, 'kiri_rename_session', {
+      title: 'MCP Session Default Rename',
     }))
+    expect(defaultRenamed).toMatchObject({
+      id: session.id,
+      title: 'MCP Session Default Rename',
+    })
+
+    const scratchpadContent = await callStructured(client, 'kiri_add_scratchpad', {
+      body: 'MCP scratchpad block',
+    })
+    const block = scratchpadBlockSchema.parse(resultContent(scratchpadContent))
     expect(block).toMatchObject({
       projectId: primary.id,
       body: 'MCP scratchpad block',
     })
+    expect(z.object({
+      context: z.object({ scratchpadCount: z.number().min(1) }),
+    }).parse(scratchpadContent).context.scratchpadCount).toBeGreaterThanOrEqual(1)
 
     const listedBlocks = z.array(scratchpadBlockSchema).parse(await callItems(client, 'kiri_list_scratchpad', {
       projectId: primary.id,
@@ -194,7 +205,7 @@ async function startClient() {
 
 async function callResult(client: Client, name: string, args: Record<string, unknown>) {
   const content = await callStructured(client, name, args)
-  return z.object({ result: z.unknown() }).parse(content).result
+  return resultContent(content)
 }
 
 async function callItems(client: Client, name: string, args: Record<string, unknown>) {
@@ -208,4 +219,8 @@ async function callStructured(client: Client, name: string, args: Record<string,
     throw new Error(JSON.stringify(result.content))
   }
   return result.structuredContent
+}
+
+function resultContent(content: unknown) {
+  return z.object({ result: z.unknown() }).parse(content).result
 }

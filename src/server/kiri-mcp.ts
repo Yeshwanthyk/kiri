@@ -1,16 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { Effect } from 'effect'
 import { z } from 'zod/v4'
 import {
   runtimeKinds,
   sessionInterfaceModes,
   thinkingLevels,
-  type RuntimeKind,
-  type SessionInterfaceMode,
-  type ThinkingLevel,
 } from '~/lib/contracts'
 import type { KiriControlApi } from './kiri-control'
+import { makeKiriMcpRuntimeService } from './kiri-mcp-runtime'
 
 const version = '0.1.0'
 
@@ -33,18 +30,13 @@ export function createKiriMcpServer(control: KiriControlApi) {
     version,
   })
 
-  const run = <A>(effect: Effect.Effect<A, unknown>) => Effect.runPromise(effect)
-  const context = () => run(control.getContext())
-  const withContext = async <A>(result: A) => ({
-    result,
-    context: await context(),
-  })
+  const mcpRuntime = makeKiriMcpRuntimeService(control)
 
   server.registerTool('kiri_get_context', {
     title: 'Get Kiri context',
     description: 'Return compact current Kiri board context: selected project, selected session, projects, sessions, and scratchpad count.',
     annotations: { readOnlyHint: true },
-  }, async () => toolResult(await context()))
+  }, async () => toolResult(await mcpRuntime.context()))
 
   server.registerTool('kiri_describe_capabilities', {
     title: 'Describe Kiri capabilities',
@@ -53,7 +45,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
       filter: z.string().trim().optional().describe('Optional capability filter such as projects, sessions, scratchpad, models.'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ filter }) => toolResult(describeCapabilities(filter)))
+  }, ({ filter }) => toolResult(describeCapabilities(filter)))
 
   server.registerTool('kiri_list_models', {
     title: 'List Kiri models',
@@ -62,7 +54,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
       runtime: runtimeSchema.describe('Optional runtime/provider filter.'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ runtime }) => toolResult(await run(control.listModels(runtime))))
+  }, async ({ runtime }) => toolResult(await mcpRuntime.run(control.listModels(runtime))))
 
   server.registerTool('kiri_list_projects', {
     title: 'List Kiri projects',
@@ -71,7 +63,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
       includeHidden: z.boolean().optional().describe('Include hidden projects.'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ includeHidden }) => toolResult(await run(control.listProjects(includeHidden ?? false))))
+  }, async ({ includeHidden }) => toolResult(await mcpRuntime.run(control.listProjects(includeHidden ?? false))))
 
   server.registerTool('kiri_add_project', {
     title: 'Add Kiri project',
@@ -81,7 +73,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
       name: z.string().trim().min(1).describe('Project display name.'),
       cwd: z.string().trim().min(1).describe('Absolute project directory.'),
     },
-  }, async (input) => toolResult(await withContext(await run(control.addProject(input)))))
+  }, async (input) => toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.addProject(input)))))
 
   server.registerTool('kiri_hide_project', {
     title: 'Hide Kiri project',
@@ -89,7 +81,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
     inputSchema: {
       id: z.string().trim().min(1).describe('Project id.'),
     },
-  }, async ({ id }) => toolResult(await withContext(await run(control.hideProject(id)))))
+  }, async ({ id }) => toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.hideProject(id)))))
 
   server.registerTool('kiri_unhide_project', {
     title: 'Unhide Kiri project',
@@ -97,7 +89,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
     inputSchema: {
       id: z.string().trim().min(1).describe('Project id.'),
     },
-  }, async ({ id }) => toolResult(await withContext(await run(control.unhideProject(id)))))
+  }, async ({ id }) => toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.unhideProject(id)))))
 
   server.registerTool('kiri_delete_project', {
     title: 'Delete Kiri project metadata',
@@ -106,7 +98,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
       id: z.string().trim().min(1).describe('Project id.'),
     },
     annotations: { destructiveHint: true },
-  }, async ({ id }) => toolResult(await withContext(await run(control.deleteProject(id)))))
+  }, async ({ id }) => toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.deleteProject(id)))))
 
   server.registerTool('kiri_list_sessions', {
     title: 'List Kiri sessions',
@@ -117,7 +109,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
     },
     annotations: { readOnlyHint: true },
   }, async ({ projectId, includeArchived }) =>
-    toolResult(await run(control.listSessions({ projectId, includeArchived: includeArchived ?? false }))))
+    toolResult(await mcpRuntime.run(control.listSessions({ projectId, includeArchived: includeArchived ?? false }))))
 
   server.registerTool('kiri_start_session', {
     title: 'Start Kiri session',
@@ -130,11 +122,11 @@ export function createKiriMcpServer(control: KiriControlApi) {
       title: z.string().trim().min(1).optional().describe('Session title.'),
       thinkingLevel: thinkingSchema.describe('Thinking level. Defaults to medium.'),
     },
-  }, async (input) => toolResult(await withContext(await run(control.startSession({
+  }, async (input) => toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.startSession({
     ...input,
-    runtime: input.runtime as RuntimeKind | undefined,
-    interfaceMode: (input.interfaceMode as SessionInterfaceMode | undefined) ?? 'gui',
-    thinkingLevel: (input.thinkingLevel as ThinkingLevel | undefined) ?? 'medium',
+    runtime: input.runtime,
+    interfaceMode: input.interfaceMode ?? 'gui',
+    thinkingLevel: input.thinkingLevel ?? 'medium',
   })))))
 
   server.registerTool('kiri_rename_session', {
@@ -145,8 +137,8 @@ export function createKiriMcpServer(control: KiriControlApi) {
       title: z.string().trim().min(1).max(160).describe('New session title.'),
     },
   }, async ({ agentId, title }) => {
-    const sessionId = agentId ?? await selectedSessionId(context)
-    return toolResult(await withContext(await run(control.renameSession({ agentId: sessionId, title }))))
+    const sessionId = agentId ?? await mcpRuntime.selectedSessionId()
+    return toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.renameSession({ agentId: sessionId, title }))))
   })
 
   server.registerTool('kiri_delete_session', {
@@ -156,7 +148,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
       agentId: z.string().trim().min(1).describe('Agent/session id.'),
     },
     annotations: { destructiveHint: true },
-  }, async ({ agentId }) => toolResult(await withContext(await run(control.deleteSession(agentId)))))
+  }, async ({ agentId }) => toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.deleteSession(agentId)))))
 
   server.registerTool('kiri_restore_session', {
     title: 'Restore Kiri session',
@@ -164,7 +156,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
     inputSchema: {
       agentId: z.string().trim().min(1).describe('Agent/session id.'),
     },
-  }, async ({ agentId }) => toolResult(await withContext(await run(control.restoreSession({ agentId })))))
+  }, async ({ agentId }) => toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.restoreSession({ agentId })))))
 
   server.registerTool('kiri_resume_session', {
     title: 'Resume Kiri session',
@@ -172,14 +164,14 @@ export function createKiriMcpServer(control: KiriControlApi) {
     inputSchema: {
       agentId: z.string().trim().min(1).describe('Agent/session id.'),
     },
-  }, async ({ agentId }) => toolResult(await withContext(await run(control.restoreSession({ agentId })))))
+  }, async ({ agentId }) => toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.restoreSession({ agentId })))))
 
   server.registerTool('kiri_list_scratchpad', {
     title: 'List Kiri scratchpad',
     description: 'List scratchpad blocks.',
     inputSchema: optionalProjectIdSchema,
     annotations: { readOnlyHint: true },
-  }, async ({ projectId }) => toolResult(await run(control.listScratchpad({ projectId }))))
+  }, async ({ projectId }) => toolResult(await mcpRuntime.run(control.listScratchpad({ projectId }))))
 
   server.registerTool('kiri_add_scratchpad', {
     title: 'Add Kiri scratchpad block',
@@ -189,10 +181,10 @@ export function createKiriMcpServer(control: KiriControlApi) {
       body: z.string().trim().min(1).max(4000).describe('Scratchpad body.'),
     },
   }, async ({ projectId, body }) => {
-    const contextValue = await context()
+    const contextValue = await mcpRuntime.context()
     const selectedProjectId = projectId ?? contextValue.selectedProject?.id
     if (!selectedProjectId) throw new Error('No selected project available')
-    return toolResult(await withContext(await run(control.addScratchpad({
+    return toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.addScratchpad({
       projectId: selectedProjectId,
       body,
     }))))
@@ -205,7 +197,7 @@ export function createKiriMcpServer(control: KiriControlApi) {
       id: z.string().trim().min(1).describe('Scratchpad block id.'),
     },
     annotations: { destructiveHint: true },
-  }, async ({ id }) => toolResult(await withContext(await run(control.deleteScratchpad(id)))))
+  }, async ({ id }) => toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.deleteScratchpad(id)))))
 
   server.registerTool('kiri_trigger_scratchpad', {
     title: 'Trigger Kiri scratchpad block',
@@ -220,17 +212,17 @@ export function createKiriMcpServer(control: KiriControlApi) {
       thinkingLevel: thinkingSchema.describe('Thinking level. Defaults to medium.'),
     },
   }, async (input) => {
-    const contextValue = await context()
+    const contextValue = await mcpRuntime.context()
     const projectId = input.projectId ?? contextValue.selectedProject?.id
     if (!projectId) throw new Error('No selected project available')
-    return toolResult(await withContext(await run(control.triggerScratchpad({
+    return toolResult(await mcpRuntime.withContext(await mcpRuntime.run(control.triggerScratchpad({
       id: input.id,
       projectId,
-      runtime: input.runtime as RuntimeKind | undefined,
-      interfaceMode: (input.interfaceMode as SessionInterfaceMode | undefined) ?? 'gui',
+      runtime: input.runtime,
+      interfaceMode: input.interfaceMode ?? 'gui',
       model: input.model,
       title: input.title,
-      thinkingLevel: (input.thinkingLevel as ThinkingLevel | undefined) ?? 'medium',
+      thinkingLevel: input.thinkingLevel ?? 'medium',
     }))))
   })
 
@@ -255,13 +247,6 @@ function objectContent(value: unknown) {
     return value as Record<string, unknown>
   }
   return { result: value }
-}
-
-async function selectedSessionId(context: () => Promise<{ selectedSession: { id: string } | null }>) {
-  const contextValue = await context()
-  const agentId = contextValue.selectedSession?.id
-  if (!agentId) throw new Error('No selected session available')
-  return agentId
 }
 
 function describeCapabilities(filter?: string) {
