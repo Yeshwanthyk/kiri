@@ -51,7 +51,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/diff-refresh.ts` | use-case | terminal diff refresh service command | migrating | required | Typed injectable diff refresh service added; review/verification pending. |
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | migrating | required | Typed injectable git diff service added; review/verification pending. |
 | `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | migrating | required | Typed injectable config service added; review/verification pending. |
-| `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | migrating | required | Effect facade now shares delete-session cleanup sequencing; broader injected DB/runtime/config dependencies remain. |
+| `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | migrating | required | Effect facade now has injectable dependencies and shared cleanup/trigger seams; final leaf service composition remains. |
 | `src/server/kiri-mcp.ts` | transport | `transport/mcp.ts` over `KiriControl` app layer | not-started | required | Keep MCP output parity. |
 | `src/server/pi-jsonl.ts` | projection | `db/projections/pi-jsonl.ts` plus file reader service | not-started | required | Split pure JSONL projection from file IO. |
 | `src/server/pi-rpc.ts` | runtime-adapter | `runtime/pi/rpc-adapter.ts` scoped process adapter | migrating | required | Prompt completion waiters now cancel on stop; full scoped process/listener lifetime remains. |
@@ -163,6 +163,29 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: Sagan found no blockers. Notes: `workspace.ts` is now transport-only enough though repetitive; only non-Error throw values are now surfaced as `WorkspaceServiceError`; representative snapshot/fork/terminal/scratchpad/error tests cover the main sequencing paths.
 - Findings fixed: initial typecheck caught `chooseProjectDirectory` widening from `string` to `string | null`; restored string contract. Focused eslint caught unused schema imports and async test stubs without awaits; removed unused imports and switched stubs to `Promise.resolve`/`Promise.reject`.
 - Residual risk: service dependencies are still compatibility functions rather than leaf Effect services, so this is orchestration extraction, not the final app-layer composition.
+
+### src/server/kiri-control.ts dependency injection
+
+- Status: migrating; final status waits for Kiri control to consume shared DB/settings/workspace/runtime services directly instead of compatibility exports.
+- Target seam: injectable `KiriControlDependencies` for CLI/MCP control operations while preserving the existing `KiriControl.layer`.
+- Behavior preserved: context projection, model listing, project/session/scratchpad summaries, cleanup-backed project/session delete, restore/rename/start, and scratchpad trigger return shapes are wired to the same live functions.
+- Dependencies moved: direct calls inside `makeKiriControl` now go through a dependency record; live wiring still uses the existing DB/settings/runtime-cleanup/scratchpad-trigger compatibility exports.
+- Baseline tests before migration: CLI and MCP tests covered live KiriControl behavior.
+- Tests added/updated: `tests/server/kiri-control-service.test.ts` covers context/model construction from injected state, delete cleanup routing through injected dependencies, and scratchpad trigger routing through the shared trigger path.
+- Post-migration parity tests: focused service, CLI, and MCP tests passed.
+- Perf/memory impact: no query/payload changes; this makes cleanup/trigger sequencing testable without live runtime state and prepares KiriControl for leaf service replacement.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec eslint src/server/kiri-control.ts tests/server/kiri-control-service.test.ts --max-warnings=0` - passed
+  - `pnpm exec vitest run tests/server/kiri-control-service.test.ts tests/server/kiri-control-cli.test.ts tests/server/kiri-mcp.test.ts` - passed, 3 files / 8 tests
+  - `pnpm effect:audit` - passed, 44 tracked/server files
+  - `pnpm kiricli models list --json` - passed and returned configured Pi/Codex/Claude model choices
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `pnpm test -- --runInBand` - passed, 51 files / 218 tests including `tests/server/perf-gates.test.ts`
+- Review subagent summary: Sagan found no blockers. Suggested failure-shape tests were added; second pass found no blockers.
+- Findings fixed: typecheck caught the test fixture using stale agent-cell fields; corrected the fixture to match the current contract. Review suggested direct sync/async error-shape coverage; added tests for injected project-list failure and scratchpad-trigger failure.
+- Residual risk: error normalization remains the existing `KiriControlError` wrapper, so non-Error throws are still converted to string messages at the Effect facade boundary.
 
 ### src/server/pi-retained-state.ts, src/server/pi-runtime.ts, src/server/pi-rpc.ts, and project runtime cleanup
 

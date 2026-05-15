@@ -3,6 +3,7 @@ import type {
   AddProjectInput,
   AddScratchpadBlockInput,
   AgentCell,
+  KiriSettings,
   ScratchpadBlock,
   RestoreSessionInput,
   RuntimeKind,
@@ -132,21 +133,69 @@ export class KiriControl extends Context.Tag('@kiri/KiriControl')<
   KiriControl,
   KiriControlApi
 >() {
-  static readonly layer = Layer.sync(KiriControl, makeKiriControl)
+  static readonly layer = Layer.sync(KiriControl, () => makeKiriControl(liveKiriControlDependencies))
 }
 
-function makeKiriControl(): KiriControlApi {
+export type KiriControlDependencies = {
+  readonly getWorkspaceSnapshot: () => WorkspaceSnapshot
+  readonly getSettings: () => KiriSettings
+  readonly listProjectSummaries: (includeHidden?: boolean) => readonly ProjectSummary[]
+  readonly addProjectSummary: (input: AddProjectInput) => ProjectSummary
+  readonly hideProjectSummary: (id: string) => ProjectSummary
+  readonly unhideProjectSummary: (id: string) => ProjectSummary
+  readonly deleteProjectSummary: (id: string) => ProjectSummary
+  readonly listSessionSummaries: (input?: {
+    readonly projectId?: string
+    readonly includeArchived?: boolean
+  }) => readonly SessionSummary[]
+  readonly startSessionSummary: (input: StartSessionInput) => SessionSummary
+  readonly renameSessionSummary: (input: {
+    readonly agentId: string
+    readonly title: string
+  }) => SessionSummary
+  readonly deleteSessionSummary: (input: { readonly agentId: string }) => SessionSummary
+  readonly restoreSessionSummary: (input: RestoreSessionInput) => SessionSummary
+  readonly listScratchpadBlocks: (input?: {
+    readonly projectId?: string
+  }) => readonly ScratchpadBlock[]
+  readonly addScratchpadBlockSummary: (input: AddScratchpadBlockInput) => ScratchpadBlock
+  readonly deleteScratchpadBlockSummary: (id: string) => ScratchpadBlock
+  readonly triggerScratchpadSession: (input: TriggerScratchpadInput) => Promise<TriggerScratchpadResult>
+}
+
+const liveKiriControlDependencies: KiriControlDependencies = {
+  getWorkspaceSnapshot,
+  getSettings,
+  listProjectSummaries,
+  addProjectSummary,
+  hideProjectSummary,
+  unhideProjectSummary,
+  deleteProjectSummary: deleteProjectSummaryWithRuntimeCleanup,
+  listSessionSummaries,
+  startSessionSummary,
+  renameSessionSummary,
+  deleteSessionSummary: deleteSessionSummaryWithRuntimeCleanup,
+  restoreSessionSummary,
+  listScratchpadBlocks,
+  addScratchpadBlockSummary,
+  deleteScratchpadBlockSummary,
+  triggerScratchpadSession,
+}
+
+export function makeKiriControl(
+  dependencies: KiriControlDependencies = liveKiriControlDependencies,
+): KiriControlApi {
   const snapshot = Effect.fn('KiriControl.snapshot')(function* () {
-    return yield* fromSync(getWorkspaceSnapshot)
+    return yield* fromSync(dependencies.getWorkspaceSnapshot)
   })
 
   const getContext = Effect.fn('KiriControl.getContext')(function* () {
-    return yield* fromSync(() => contextFromSnapshot(getWorkspaceSnapshot()))
+    return yield* fromSync(() => contextFromSnapshot(dependencies.getWorkspaceSnapshot()))
   })
 
   const listModels = Effect.fn('KiriControl.listModels')(function* (runtime?: RuntimeKind) {
     return yield* fromSync(() => {
-      const settings = getSettings()
+      const settings = dependencies.getSettings()
       const runtimes = runtime ? [runtime] : (Object.keys(settings.runtimes) as RuntimeKind[])
       return runtimes.flatMap((runtimeName) => {
         const runtimeSettings = settings.runtimes[runtimeName]
@@ -161,67 +210,67 @@ function makeKiriControl(): KiriControlApi {
   })
 
   const listProjects = Effect.fn('KiriControl.listProjects')(function* (includeHidden: boolean = false) {
-    return yield* fromSync(() => listProjectSummaries(includeHidden))
+    return yield* fromSync(() => dependencies.listProjectSummaries(includeHidden))
   })
 
   const addProjectEffect = Effect.fn('KiriControl.addProject')(function* (input: AddProjectInput) {
-    return yield* fromSync(() => addProjectSummary(input))
+    return yield* fromSync(() => dependencies.addProjectSummary(input))
   })
 
   const hideProjectEffect = Effect.fn('KiriControl.hideProject')(function* (id: string) {
-    return yield* fromSync(() => hideProjectSummary(id))
+    return yield* fromSync(() => dependencies.hideProjectSummary(id))
   })
 
   const unhideProjectEffect = Effect.fn('KiriControl.unhideProject')(function* (id: string) {
-    return yield* fromSync(() => unhideProjectSummary(id))
+    return yield* fromSync(() => dependencies.unhideProjectSummary(id))
   })
 
   const deleteProjectEffect = Effect.fn('KiriControl.deleteProject')(function* (id: string) {
-    return yield* fromSync(() => deleteProjectSummaryWithRuntimeCleanup(id))
+    return yield* fromSync(() => dependencies.deleteProjectSummary(id))
   })
 
   const listSessions = Effect.fn('KiriControl.listSessions')(
     function* (input: { readonly projectId?: string; readonly includeArchived?: boolean } = {}) {
-      return yield* fromSync(() => listSessionSummaries(input))
+      return yield* fromSync(() => dependencies.listSessionSummaries(input))
     },
   )
 
   const startSessionEffect = Effect.fn('KiriControl.startSession')(function* (input: StartSessionInput) {
-    return yield* fromSync(() => startSessionSummary(input))
+    return yield* fromSync(() => dependencies.startSessionSummary(input))
   })
 
   const renameSessionEffect = Effect.fn('KiriControl.renameSession')(
     function* (input: { readonly agentId: string; readonly title: string }) {
-      return yield* fromSync(() => renameSessionSummary(input))
+      return yield* fromSync(() => dependencies.renameSessionSummary(input))
     },
   )
 
   const deleteSessionEffect = Effect.fn('KiriControl.deleteSession')(function* (agentId: string) {
-    return yield* fromSync(() => deleteSessionSummaryWithRuntimeCleanup({ agentId }))
+    return yield* fromSync(() => dependencies.deleteSessionSummary({ agentId }))
   })
 
   const restoreSessionEffect = Effect.fn('KiriControl.restoreSession')(function* (input: RestoreSessionInput) {
-    return yield* fromSync(() => restoreSessionSummary(input))
+    return yield* fromSync(() => dependencies.restoreSessionSummary(input))
   })
 
   const listScratchpad = Effect.fn('KiriControl.listScratchpad')(
     function* (input: { readonly projectId?: string } = {}) {
-      return yield* fromSync(() => listScratchpadBlocks(input))
+      return yield* fromSync(() => dependencies.listScratchpadBlocks(input))
     },
   )
 
   const addScratchpad = Effect.fn('KiriControl.addScratchpad')(function* (input: AddScratchpadBlockInput) {
-    return yield* fromSync(() => addScratchpadBlockSummary(input))
+    return yield* fromSync(() => dependencies.addScratchpadBlockSummary(input))
   })
 
   const deleteScratchpad = Effect.fn('KiriControl.deleteScratchpad')(function* (id: string) {
-    return yield* fromSync(() => deleteScratchpadBlockSummary(id))
+    return yield* fromSync(() => dependencies.deleteScratchpadBlockSummary(id))
   })
 
   const triggerScratchpad = Effect.fn('KiriControl.triggerScratchpad')(
     function* (input: TriggerScratchpadInput) {
       return yield* Effect.tryPromise({
-        try: () => triggerScratchpadSession(input),
+        try: () => dependencies.triggerScratchpadSession(input),
         catch: normalizeError,
       })
     },
