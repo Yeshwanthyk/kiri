@@ -1,10 +1,14 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { Effect } from 'effect'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { makeRuntimeBinariesService, RuntimeBinaryError } from '~/server/runtime-binaries'
 import {
   buildTerminalProcessLaunch,
   claudeTerminalSessionId,
+  makeTerminalLaunchService,
+  TerminalLaunchError,
   type TerminalAgentLaunchConfig,
 } from '~/server/terminal-launch'
 
@@ -160,5 +164,128 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.env.NO_COLOR).toBeUndefined()
     expect(launch.env.NODE_DISABLE_COLORS).toBeUndefined()
     expect(launch.env.FORCE_COLOR).toBe('3')
+  })
+
+  it('builds terminal launches through injected service dependencies', async () => {
+    const env = {
+      PATH: '/bin',
+      KIRI_CLAUDE_BIN: '/injected/claude',
+      KIRI_CLAUDE_HOME: '/injected/claude-home',
+      KIRI_MCP_BIN: '/injected/kiri-mcp',
+      ANTHROPIC_API_KEY: 'outer-token',
+    }
+    const service = makeTerminalLaunchService({
+      runtimeBinaries: makeRuntimeBinariesService({
+        getEnv: () => env,
+        getHomeDir: () => '/injected/home',
+        exists: () => false,
+      }),
+      getEnv: () => env,
+      getHomeDir: () => '/injected/home',
+      exists: () => false,
+      getProcessCwd: () => '/repo',
+      getExecPath: () => '/node',
+      getResourcesPath: () => undefined,
+    })
+
+    const launch = await Effect.runPromise(service.buildProcessLaunch({
+      config: launchConfig('claude'),
+      mode: 'runtime',
+      shell,
+    }))
+
+    expect(launch.command).toBe('/injected/claude')
+    expect(launch.env.HOME).toBe('/injected/claude-home')
+    expect(launch.env.ANTHROPIC_API_KEY).toBeUndefined()
+    expect(launch.args).toContain(JSON.stringify({
+      mcpServers: {
+        kiri: { type: 'stdio', command: '/injected/kiri-mcp' },
+      },
+    }))
+  })
+
+  it('preserves Codex, Pi, and shell launch behavior through the injected service', async () => {
+    const env = {
+      PATH: '/bin',
+      KIRI_CODEX_BIN: '/injected/codex',
+      KIRI_CODEX_HOME: '/injected/codex-home',
+      KIRI_PI_BIN: '/injected/pi',
+    }
+    const service = makeTerminalLaunchService({
+      runtimeBinaries: makeRuntimeBinariesService({
+        getEnv: () => env,
+        getHomeDir: () => '/injected/home',
+        exists: () => false,
+      }),
+      getEnv: () => env,
+      getHomeDir: () => '/injected/home',
+      exists: () => false,
+      getProcessCwd: () => '/repo',
+      getExecPath: () => '/node',
+      getResourcesPath: () => undefined,
+    })
+
+    const codex = await Effect.runPromise(service.buildProcessLaunch({
+      config: launchConfig('codex'),
+      mode: 'runtime',
+      shell,
+    }))
+    const pi = await Effect.runPromise(service.buildProcessLaunch({
+      config: launchConfig('pi'),
+      mode: 'runtime',
+      shell,
+    }))
+    const shellLaunch = await Effect.runPromise(service.buildProcessLaunch({
+      config: launchConfig('claude'),
+      mode: 'shell',
+      shell,
+    }))
+
+    expect(codex.command).toBe('/injected/codex')
+    expect(codex.args).toEqual([
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--model',
+      'test-model',
+    ])
+    expect(codex.env.CODEX_HOME).toBe('/injected/codex-home')
+    expect(pi.command).toBe('/injected/pi')
+    expect(pi.args).toEqual([
+      '--session-dir',
+      '/tmp/kiri-session',
+      '--session',
+      'session.jsonl',
+      '--model',
+      'test-model',
+    ])
+    expect(shellLaunch.command).toBe('/bin/zsh')
+    expect(shellLaunch.args).toEqual(['-l', '-i'])
+    expect(shellLaunch.env.KIRI_AGENT_ID).toBeUndefined()
+    expect(shellLaunch.env.KIRI_PROJECT_CWD).toBe('/tmp/project')
+  })
+
+  it('wraps injected runtime binary failures as terminal launch errors', async () => {
+    const service = makeTerminalLaunchService({
+      runtimeBinaries: {
+        resolveExecutable: () => Effect.fail(new RuntimeBinaryError({
+          message: 'binary lookup failed',
+        })),
+        processEnv: () => Effect.succeed({}),
+      },
+      getEnv: () => ({}),
+      getHomeDir: () => '/home',
+      exists: () => false,
+      getProcessCwd: () => '/repo',
+      getExecPath: () => '/node',
+      getResourcesPath: () => undefined,
+    })
+
+    const error = await Effect.runPromise(service.buildProcessLaunch({
+      config: launchConfig('codex'),
+      mode: 'runtime',
+      shell,
+    }).pipe(Effect.flip))
+
+    expect(error).toBeInstanceOf(TerminalLaunchError)
+    expect(error.message).toBe('binary lookup failed')
   })
 })

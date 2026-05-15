@@ -63,7 +63,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/runtime.ts` | use-case | runtime registry-backed command surface | migrating | required | Runtime command service now dispatches through `RuntimeRegistry`; review/verification pending. |
 | `src/server/scratchpad-trigger.ts` | use-case | scratchpad/workspace service method | not-started | required | Shared semantics are good; move behind shared service. |
 | `src/server/settings.ts` | config | `config/settings-service.ts` with typed config errors | migrating | required | Typed injectable settings service added; review/verification pending. |
-| `src/server/terminal-launch.ts` | process-adapter | `terminal/launch-resolver.ts` | not-started | required | Command construction and resume detection seam. |
+| `src/server/terminal-launch.ts` | process-adapter | terminal launch resolver service | migrating | required | Typed injectable terminal launch service added; review/verification pending. |
 | `src/server/terminal-server.ts` | runtime-adapter | `terminal/registry.ts` scoped websocket/PTY registry | not-started | required | Singleton terminal sessions and idle timers need scoped cleanup. |
 | `src/server/workspace.ts` | transport | `transport/workspace-functions.ts` over `WorkspaceService` | not-started | required | Server functions should become parse/run/respond only. |
 
@@ -89,6 +89,28 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/terminal-launch.ts
+
+- Status: migrating; final status waits for `terminal-server.ts` to consume the service instead of compatibility sync exports.
+- Target seam: typed injectable `TerminalLaunchService` over terminal command construction, env assembly, runtime binary lookup, MCP command resolution, and Claude resume detection.
+- Behavior preserved: `buildTerminalProcessLaunch` remains a synchronous compatibility export; Claude, Codex, Pi, and shell launch arguments/env behavior are covered by existing tests.
+- Dependencies moved: process env, home dir, filesystem existence, process cwd, exec path, resources path, and runtime binary resolution can now be injected.
+- Baseline tests before migration: `tests/server/terminal-launch.test.ts` covered Claude/Codex/Pi/shell launch args, env metadata, Claude deterministic session ids, resume detection, and color env cleanup.
+- Tests added/updated: terminal launch tests now cover injected service dependencies for Claude, Codex, Pi, and shell launches plus typed runtime-binary failure wrapping through `TerminalLaunchError`.
+- Post-migration parity tests: focused terminal-launch/runtime-binaries tests passed.
+- Perf/memory impact: no retained state added; launch construction remains on-demand and only performs existence checks for Claude/MCP resolution.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/terminal-launch.test.ts tests/server/runtime-binaries.test.ts` - passed, 2 files / 17 tests
+  - `pnpm exec eslint src/server/terminal-launch.ts tests/server/terminal-launch.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 38 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `git diff --check` - passed
+- Review subagent summary: Boyle found no blockers; first pass noted only residual injected-service coverage shape, second pass confirmed direct Codex/Pi/shell service coverage resolves it.
+- Findings fixed: added direct injected-service parity coverage for Codex, Pi, and shell launches after review feedback.
+- Residual risk: `terminal-server.ts` still calls the compatibility export until the terminal registry/service phase.
 
 ### src/server/directory-picker.ts and src/server/workspace.ts directory picker
 

@@ -3,7 +3,11 @@ import type { RuntimeKind, TerminalMode } from '~/lib/contracts'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { resolveRuntimeExecutable, runtimeProcessEnv } from './runtime-binaries'
+import { Context, Data, Effect, Either, Layer } from 'effect'
+import {
+  RuntimeBinariesService,
+  type RuntimeBinariesApi,
+} from './runtime-binaries'
 
 export type TerminalAgentLaunchConfig = {
   id: string
@@ -24,33 +28,123 @@ export type TerminalProcessLaunch = {
   label: string
 }
 
+export class TerminalLaunchError extends Data.TaggedError('TerminalLaunchError')<{
+  readonly message: string
+  readonly cause?: unknown
+}> {}
+
+export type TerminalLaunchServiceApi = {
+  readonly buildProcessLaunch: (input: {
+    readonly config: TerminalAgentLaunchConfig
+    readonly mode: TerminalMode
+    readonly shell: { readonly command: string; readonly args: string[] }
+  }) => Effect.Effect<TerminalProcessLaunch, TerminalLaunchError>
+}
+
+export class TerminalLaunchService extends Context.Tag('@kiri/TerminalLaunch')<
+  TerminalLaunchService,
+  TerminalLaunchServiceApi
+>() {
+  static readonly layer = Layer.effect(
+    TerminalLaunchService,
+    Effect.gen(function* () {
+      const runtimeBinaries = yield* RuntimeBinariesService
+      return TerminalLaunchService.of(makeTerminalLaunchService({ runtimeBinaries }))
+    }),
+  )
+}
+
+type TerminalLaunchContext = {
+  readonly env: NodeJS.ProcessEnv
+  readonly homeDir: string
+  readonly exists: (path: string) => boolean
+  readonly processCwd: string
+  readonly execPath: string
+  readonly resourcesPath?: string
+  readonly runtimeBinaries: RuntimeBinariesApi
+}
+
+export function makeTerminalLaunchService(input: {
+  readonly runtimeBinaries: RuntimeBinariesApi
+  readonly getEnv?: () => NodeJS.ProcessEnv
+  readonly getHomeDir?: () => string
+  readonly exists?: (path: string) => boolean
+  readonly getProcessCwd?: () => string
+  readonly getExecPath?: () => string
+  readonly getResourcesPath?: () => string | undefined
+}): TerminalLaunchServiceApi {
+  const context = (): TerminalLaunchContext => ({
+    env: input.getEnv?.() ?? process.env,
+    homeDir: input.getHomeDir?.() ?? homedir(),
+    exists: input.exists ?? existsSync,
+    processCwd: input.getProcessCwd?.() ?? process.cwd(),
+    execPath: input.getExecPath?.() ?? process.execPath,
+    resourcesPath: input.getResourcesPath?.()
+      ?? stringValue((process as NodeJS.Process & { resourcesPath?: string }).resourcesPath),
+    runtimeBinaries: input.runtimeBinaries,
+  })
+
+  return {
+    buildProcessLaunch: Effect.fn('TerminalLaunch.buildProcessLaunch')(function* (request) {
+      return yield* buildTerminalProcessLaunchEffect(
+        request.config,
+        request.mode,
+        request.shell,
+        context(),
+      ).pipe(
+        Effect.mapError((error) => error instanceof TerminalLaunchError
+          ? error
+          : new TerminalLaunchError({
+            message: error instanceof Error ? error.message : 'Terminal launch resolution failed',
+            cause: error,
+          })),
+      )
+    }),
+  }
+}
+
 export function buildTerminalProcessLaunch(
   config: TerminalAgentLaunchConfig,
   mode: TerminalMode,
   shell: { command: string; args: string[] },
 ): TerminalProcessLaunch {
-  if (mode === 'shell') {
-    return {
-      command: shell.command,
-      args: shell.args,
-      cwd: config.cwd,
-      env: shellTerminalEnv(config.cwd),
-      label: 'shell',
-    }
-  }
-
-  if (config.runtime === 'claude') return claudeLaunch(config)
-  if (config.runtime === 'codex') return codexLaunch(config)
-  return piLaunch(config)
+  return runTerminalLaunch(Effect.gen(function* () {
+    const service = yield* TerminalLaunchService
+    return yield* service.buildProcessLaunch({ config, mode, shell })
+  }))
 }
 
-function claudeLaunch(config: TerminalAgentLaunchConfig): TerminalProcessLaunch {
+function buildTerminalProcessLaunchEffect(
+  config: TerminalAgentLaunchConfig,
+  mode: TerminalMode,
+  shell: { readonly command: string; readonly args: readonly string[] },
+  context: TerminalLaunchContext,
+) {
+  return Effect.gen(function* () {
+    if (mode === 'shell') {
+      return {
+        command: shell.command,
+        args: [...shell.args],
+        cwd: config.cwd,
+        env: yield* shellTerminalEnv(config.cwd, context),
+        label: 'shell',
+      }
+    }
+
+    if (config.runtime === 'claude') return yield* claudeLaunch(config, context)
+    if (config.runtime === 'codex') return yield* codexLaunch(config, context)
+    return yield* piLaunch(config, context)
+  })
+}
+
+function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
+  return Effect.gen(function* () {
   const state = objectState(config.runtimeStateJson)
-  const homePath = process.env.KIRI_CLAUDE_HOME ?? stringValue(state.homePath)
+  const homePath = context.env.KIRI_CLAUDE_HOME ?? stringValue(state.homePath)
   const args = [
     '--dangerously-skip-permissions',
     '--mcp-config',
-    buildKiriMcpConfigJson(),
+    yield* buildKiriMcpConfigJson(context),
     '--append-system-prompt',
     claudeKiriTerminalPrompt(config.id),
   ]
@@ -61,16 +155,16 @@ function claudeLaunch(config: TerminalAgentLaunchConfig): TerminalProcessLaunch 
     args.push('--resume', resume)
   } else {
     sessionId = claudeTerminalSessionId(config.id, state)
-    if (claudeSessionExists(config.cwd, sessionId, homePath)) {
+    if (claudeSessionExists(config.cwd, sessionId, homePath, context)) {
       args.push('--resume', sessionId)
     } else {
       args.push('--session-id', sessionId)
     }
   }
 
-  const env = baseTerminalEnv(config)
+  const env = yield* baseTerminalEnv(config, context)
   if (sessionId) env.KIRI_CLAUDE_SESSION_ID = sessionId
-  if (process.env.KIRI_CLAUDE_USE_EXTERNAL_API_KEY !== '1') {
+  if (context.env.KIRI_CLAUDE_USE_EXTERNAL_API_KEY !== '1') {
     delete env.ANTHROPIC_API_KEY
     delete env.ANTHROPIC_AUTH_TOKEN
     delete env.ANTHROPIC_OAUTH_TOKEN
@@ -78,40 +172,44 @@ function claudeLaunch(config: TerminalAgentLaunchConfig): TerminalProcessLaunch 
   if (homePath) env.HOME = homePath
 
   return {
-    command: resolveRuntimeExecutable('claude', process.env.KIRI_CLAUDE_BIN ?? stringValue(state.binaryPath)),
+    command: yield* resolveExecutable(context, 'claude', context.env.KIRI_CLAUDE_BIN ?? stringValue(state.binaryPath)),
     args,
     cwd: config.cwd,
     env,
     label: 'claude',
   }
-}
-
-function buildKiriMcpConfigJson() {
-  return JSON.stringify({
-    mcpServers: {
-      kiri: buildKiriMcpServerConfig(),
-    },
   })
 }
 
-function buildKiriMcpServerConfig() {
-  const override = process.env.KIRI_MCP_BIN?.trim()
+function buildKiriMcpConfigJson(context: TerminalLaunchContext) {
+  return Effect.gen(function* () {
+  return JSON.stringify({
+    mcpServers: {
+      kiri: yield* buildKiriMcpServerConfig(context),
+    },
+  })
+  })
+}
+
+function buildKiriMcpServerConfig(context: TerminalLaunchContext) {
+  return Effect.gen(function* () {
+  const override = context.env.KIRI_MCP_BIN?.trim()
   if (override) return { type: 'stdio', command: override }
 
-  const resourcesPath = stringValue((process as NodeJS.Process & { resourcesPath?: string }).resourcesPath)
-  const packagedBin = resourcesPath ? join(resourcesPath, 'bin', 'kiri-mcp') : undefined
-  if (packagedBin && existsSync(packagedBin)) return { type: 'stdio', command: packagedBin }
+  const packagedBin = context.resourcesPath ? join(context.resourcesPath, 'bin', 'kiri-mcp') : undefined
+  if (packagedBin && context.exists(packagedBin)) return { type: 'stdio', command: packagedBin }
 
-  const builtCli = resolve(process.cwd(), 'dist/cli/kirictl.mjs')
-  if (existsSync(builtCli)) {
-    return { type: 'stdio', command: process.execPath, args: [builtCli, 'mcp'] }
+  const builtCli = resolve(context.processCwd, 'dist/cli/kirictl.mjs')
+  if (context.exists(builtCli)) {
+    return { type: 'stdio', command: context.execPath, args: [builtCli, 'mcp'] }
   }
 
   return {
     type: 'stdio',
-    command: resolveRuntimeExecutable('pnpm'),
-    args: ['exec', 'tsx', resolve(process.cwd(), 'src/cli/kirictl.ts'), 'mcp'],
+    command: yield* resolveExecutable(context, 'pnpm'),
+    args: ['exec', 'tsx', resolve(context.processCwd, 'src/cli/kirictl.ts'), 'mcp'],
   }
+  })
 }
 
 function claudeKiriTerminalPrompt(agentId: string) {
@@ -141,45 +239,63 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
-function claudeSessionExists(cwd: string, sessionId: string, homePath: string | undefined) {
-  const claudeHome = join(homePath ?? homedir(), '.claude')
+function claudeSessionExists(
+  cwd: string,
+  sessionId: string,
+  homePath: string | undefined,
+  context: TerminalLaunchContext,
+) {
+  const claudeHome = join(homePath ?? context.homeDir, '.claude')
   const projectDir = join(claudeHome, 'projects', claudeProjectKey(cwd))
-  return existsSync(join(projectDir, `${sessionId}.jsonl`))
-    || existsSync(join(projectDir, sessionId))
+  return context.exists(join(projectDir, `${sessionId}.jsonl`))
+    || context.exists(join(projectDir, sessionId))
 }
 
 function claudeProjectKey(cwd: string) {
   return resolve(cwd).replace(/[\\/]/g, '-')
 }
 
-function codexLaunch(config: TerminalAgentLaunchConfig): TerminalProcessLaunch {
+function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
+  return Effect.gen(function* () {
   const args = ['--dangerously-bypass-approvals-and-sandbox']
   if (config.model) args.push('--model', config.model)
-  const env = baseTerminalEnv(config, process.env.KIRI_CODEX_HOME ? { CODEX_HOME: process.env.KIRI_CODEX_HOME } : undefined)
+  const env = yield* baseTerminalEnv(
+    config,
+    context,
+    context.env.KIRI_CODEX_HOME ? { CODEX_HOME: context.env.KIRI_CODEX_HOME } : undefined,
+  )
   return {
-    command: resolveRuntimeExecutable('codex', process.env.KIRI_CODEX_BIN),
+    command: yield* resolveExecutable(context, 'codex', context.env.KIRI_CODEX_BIN),
     args,
     cwd: config.cwd,
     env,
     label: 'codex',
   }
+  })
 }
 
-function piLaunch(config: TerminalAgentLaunchConfig): TerminalProcessLaunch {
+function piLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
+  return Effect.gen(function* () {
   const args = ['--session-dir', config.sessionDir]
   if (config.sessionFile) args.push('--session', config.sessionFile)
   if (config.model) args.push('--model', config.model)
   return {
-    command: resolveRuntimeExecutable('pi', process.env.KIRI_PI_BIN),
+    command: yield* resolveExecutable(context, 'pi', context.env.KIRI_PI_BIN),
     args,
     cwd: config.cwd,
-    env: baseTerminalEnv(config),
+    env: yield* baseTerminalEnv(config, context),
     label: 'pi',
   }
+  })
 }
 
-function baseTerminalEnv(config: TerminalAgentLaunchConfig, extra?: NodeJS.ProcessEnv) {
-  const env = runtimeProcessEnv({
+function baseTerminalEnv(
+  config: TerminalAgentLaunchConfig,
+  context: TerminalLaunchContext,
+  extra?: NodeJS.ProcessEnv,
+) {
+  return Effect.gen(function* () {
+  const env = yield* context.runtimeBinaries.processEnv({
     ...extra,
     ...commonTerminalEnv(),
     KIRI_AGENT_ID: config.id,
@@ -192,16 +308,19 @@ function baseTerminalEnv(config: TerminalAgentLaunchConfig, extra?: NodeJS.Proce
   delete env.NO_COLOR
   delete env.NODE_DISABLE_COLORS
   return env
+  })
 }
 
-function shellTerminalEnv(cwd: string) {
-  const env = runtimeProcessEnv({
+function shellTerminalEnv(cwd: string, context: TerminalLaunchContext) {
+  return Effect.gen(function* () {
+  const env = yield* context.runtimeBinaries.processEnv({
     ...commonTerminalEnv(),
     KIRI_PROJECT_CWD: cwd,
   })
   delete env.NO_COLOR
   delete env.NODE_DISABLE_COLORS
   return env
+  })
 }
 
 function commonTerminalEnv() {
@@ -228,4 +347,27 @@ function objectState(value: string | null | undefined) {
 
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function resolveExecutable(
+  context: TerminalLaunchContext,
+  command: string,
+  configuredPath?: string,
+) {
+  return context.runtimeBinaries.resolveExecutable({ command, configuredPath })
+}
+
+function runTerminalLaunch<A>(
+  effect: Effect.Effect<A, TerminalLaunchError, TerminalLaunchService>,
+) {
+  const result = Effect.runSync(
+    effect.pipe(
+      Effect.provide(TerminalLaunchService.layer.pipe(
+        Layer.provide(RuntimeBinariesService.layer),
+      )),
+      Effect.either,
+    ),
+  )
+  if (Either.isRight(result)) return result.right
+  throw result.left
 }
