@@ -38,6 +38,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/projects.ts` | repository | Project repository over DB connection/transaction helpers | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/runtime-state.ts` | repository | Agent launch/runtime state/status/context usage repository | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/scratchpad.ts` | repository | Scratchpad block repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
+| `src/server/db/session-operations.ts` | repository | Session reset/fork/persisted-Pi hydration operations over DB and session files | migrating | required | Extracted from `db.ts`; direct reset/fork/hydration tests added and review passed; final status waits for DB/config/filesystem service boundary. |
 | `src/server/db/sessions.ts` | repository | Session summary and lifecycle repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
 | `src/server/db/timeline-format.ts` | pure | Timeline event id/tone/display derivation helpers | explicit-non-migration | not-required | Pure formatting/normalization module shared by readers and writers. |
@@ -286,6 +287,22 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: Hypatia reported no blockers and no edits; verified focused snapshot test, runtime-state plus snapshot test, effect audit, typecheck, and diff check.
 - Findings fixed: none yet.
 - Residual risk: final workspace-service extraction still needs to move snapshot assembly behind a higher-level Effect service and remove direct settings/preferences calls from the facade.
+
+### src/server/db/session-operations.ts
+
+- Status: extracted; final migration status remains `migrating|required` until session operations sit behind DB, config, and filesystem service boundaries.
+- Target seam: reset, forked Pi session creation, persisted Pi session hydration, safe Pi JSONL projection, and session-file discovery/copy operations.
+- Behavior preserved: reset still clears messages, events, tasks, diffs, context usage, status, session file, and thread preview; fork still validates Pi-only sources, copies cloned JSONL into the runtime session directory, hydrates messages/context, and titles the fork; persisted Pi hydration still skips deleted slots and creates missing session agents from JSONL projections.
+- Dependencies moved: reset cleanup SQL, fork session SQL/file copy, persisted-session discovery, deleted-slot filtering, JSONL projection safety wrapper, and persisted agent creation moved out of `src/server/db.ts`.
+- Baseline tests before migration: task progress reset harness, runtime lifecycle tests, Pi JSONL projection tests, session repository tests.
+- Tests added/updated: `tests/server/db-session-operations.test.ts` covers reset cleanup, fork-copy projection hydration, and persisted Pi hydration with deleted-slot skipping.
+- Post-migration parity tests: focused session operation test passed; broader runtime/session tests run before commit.
+- Perf/memory impact: no query-shape change; extraction only.
+- Verification commands and results:
+  - `pnpm exec vitest run tests/server/db-session-operations.test.ts` - passed, 3 tests
+- Review subagent summary: Hegel reported no blockers and no edits; verified diff check, typecheck, focused session-operation tests, DB repository test pack, reset harness, lint, effect audit, and build.
+- Findings fixed: none yet.
+- Residual risk: this module still performs direct filesystem IO; final service phase should inject a filesystem/session-file service before marking migrated.
 
 ### src/server/db/sessions.ts
 

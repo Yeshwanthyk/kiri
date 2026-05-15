@@ -56,6 +56,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed timeline write repository extraction. Added direct DB persistence tests for Pi live turns, JSONL projection/task/context writes, and diff replacement. Review passed; typecheck, lint, effect audit, build, focused tests, and standalone perf gate passed.
 - 2026-05-15: Started workspace snapshot projection extraction with `src/server/db/workspace-snapshot.ts` owning visible/hidden projects, archived sessions, context usage, pending questions, selected ids, and scratchpad passthrough.
 - 2026-05-15: Completed workspace snapshot projection extraction. Added direct snapshot projection coverage; review passed; typecheck, lint, effect audit, diff check, focused projection/runtime tests, and perf gate passed.
+- 2026-05-15: Started session operations extraction with `src/server/db/session-operations.ts` owning reset cleanup, forked Pi session copy/hydration, persisted Pi session discovery, deleted-slot filtering, and safe JSONL projection.
+- 2026-05-15: Completed session operations extraction. Added direct reset/fork/hydration tests; review passed; typecheck, lint, effect audit, build, reset harness, and focused DB/runtime tests passed.
 
 ## Remaining Knip Findings
 
