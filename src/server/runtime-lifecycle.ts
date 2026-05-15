@@ -1,17 +1,13 @@
 import type { AgentStatus, AgentTask, RuntimeKind, ThinkingLevel, TimelineEventTone } from '~/lib/contracts'
-import { Cause, Context, Data, Effect, Exit, Layer, Option } from 'effect'
-import {
-  appendUserMessage,
-  clearRuntimeContextUsage,
+import { Cause, Data, Effect, Exit, Layer, Option } from 'effect'
+import type {
   recordRuntimeContextUsage,
   recordRuntimeMessage,
   recordRuntimeTimelineEvent,
-  replaceAgentTasks,
-  replaceAgentDiffArtifacts,
-  setAgentRuntimeState,
-  setAgentStatus,
 } from './db'
 import type { RuntimeDiffArtifact } from './git-diff'
+import { RuntimeProjector } from './runtime-projection'
+export { RuntimeProjector, runtimeStateWithoutUndefined } from './runtime-projection'
 
 export type RuntimeProjectionEvent =
   | {
@@ -96,71 +92,6 @@ export class RuntimeLifecycleError extends Data.TaggedError('RuntimeLifecycleErr
   readonly cause?: unknown
 }> {}
 
-const liveProjector: RuntimeLifecycleProjection = {
-  project: (event) => Effect.sync(() => {
-    if (event.type === 'status') {
-      setAgentStatus(event.agentId, event.status)
-      return
-    }
-    if (event.type === 'userMessage') {
-      appendUserMessage({ agentId: event.agentId, text: event.text })
-      return
-    }
-    if (event.type === 'runtimeMessage') {
-      recordRuntimeMessage({
-        agentId: event.agentId,
-        id: event.id,
-        role: event.role,
-        text: event.text,
-        timestamp: event.timestamp,
-      })
-      return
-    }
-    if (event.type === 'timelineEvent') {
-      recordRuntimeTimelineEvent(event.value)
-      return
-    }
-    if (event.type === 'contextUsage') {
-      recordRuntimeContextUsage(event.value)
-      return
-    }
-    if (event.type === 'clearContextUsage') {
-      clearRuntimeContextUsage(event.agentId)
-      return
-    }
-    if (event.type === 'diffsUpdated') {
-      replaceAgentDiffArtifacts({
-        agentId: event.agentId,
-        diffs: event.diffs,
-      })
-      return
-    }
-    if (event.type === 'tasksUpdated') {
-      replaceAgentTasks({
-        agentId: event.agentId,
-        source: event.source,
-        tasks: event.tasks,
-        updatedAt: event.updatedAt,
-      })
-      return
-    }
-    if (event.type === 'runtimeState') {
-      setAgentRuntimeState(event.agentId, runtimeStateWithoutUndefined(event.state))
-      return
-    }
-    if (event.type === 'fileOperationStarted' || event.type === 'fileOperationCompleted') {
-      recordRuntimeTimelineEvent(fileOperationTimelineEvent(event))
-    }
-  }),
-}
-
-export class RuntimeProjector extends Context.Tag('@kiri/RuntimeProjector')<
-  RuntimeProjector,
-  RuntimeLifecycleProjection
->() {
-  static readonly liveLayer = Layer.succeed(RuntimeProjector, liveProjector)
-}
-
 export function inMemoryRuntimeProjectorLayer(events: RuntimeProjectionEvent[] = []) {
   const projector: InMemoryRuntimeProjector = {
     events,
@@ -194,12 +125,6 @@ export function nextThinkingLevel(current: ThinkingLevel | null) {
   const levels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
   const index = current ? levels.indexOf(current) : -1
   return levels[(index + 1) % levels.length]
-}
-
-export function runtimeStateWithoutUndefined<T extends Record<string, unknown>>(state: T) {
-  return Object.fromEntries(
-    Object.entries(state).filter(([, value]) => value !== undefined),
-  )
 }
 
 export function setRuntimeState(
@@ -394,8 +319,12 @@ export async function runRuntimeLifecyclePromise<A>(
   if (Exit.isSuccess(exit)) return exit.value
   const failure = Option.getOrUndefined(Cause.failureOption(exit.cause))
   if (failure instanceof RuntimeLifecycleError && failure.message === 'Runtime turn failed') {
+    // Preserve provider rejection identity at the public Promise boundary.
+    // eslint-disable-next-line @typescript-eslint/only-throw-error
     throw failure.cause ?? failure
   }
+  // Preserve non-Error Effect failures for compatibility with the previous boundary.
+  // eslint-disable-next-line @typescript-eslint/only-throw-error
   if (failure) throw failure
   throw Cause.squash(exit.cause)
 }
@@ -407,8 +336,12 @@ export function runRuntimeLifecycleSync<A>(
   if (Exit.isSuccess(exit)) return exit.value
   const failure = Option.getOrUndefined(Cause.failureOption(exit.cause))
   if (failure instanceof RuntimeLifecycleError && failure.message === 'Runtime turn failed') {
+    // Preserve provider rejection identity at the public sync boundary.
+    // eslint-disable-next-line @typescript-eslint/only-throw-error
     throw failure.cause ?? failure
   }
+  // Preserve non-Error Effect failures for compatibility with the previous boundary.
+  // eslint-disable-next-line @typescript-eslint/only-throw-error
   if (failure) throw failure
   throw Cause.squash(exit.cause)
 }
@@ -416,25 +349,10 @@ export function runRuntimeLifecycleSync<A>(
 function runtimeErrorDetail(error: unknown): string {
   if (error instanceof RuntimeLifecycleError) {
     if (error.cause instanceof Error) return error.cause.message
+    // Preserve legacy timeline detail formatting for non-Error causes.
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
     if (error.cause !== undefined) return String(error.cause)
   }
+  // Preserve legacy timeline detail formatting for non-Error failures.
   return error instanceof Error ? error.message : String(error)
-}
-
-function fileOperationTimelineEvent(
-  event: Extract<RuntimeProjectionEvent, {
-    type: 'fileOperationStarted' | 'fileOperationCompleted'
-  }>,
-): Parameters<typeof recordRuntimeTimelineEvent>[0] {
-  const status = event.type === 'fileOperationStarted' ? 'started' : event.status
-  const path = event.path ? ` ${event.path}` : ''
-  const label = `${event.toolName} ${status}`
-  return {
-    agentId: event.agentId,
-    kind: event.type,
-    tone: event.type === 'fileOperationCompleted' && event.status === 'failed' ? 'error' : 'tool',
-    label,
-    detail: event.summary ?? `${event.toolName}${path}`,
-    payload: event,
-  }
 }

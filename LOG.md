@@ -85,6 +85,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Started Pi retained-state extraction. Moved Pi adapter/key/queue/generation maps behind `pi-retained-state.ts` and added generation-aware queued prompt invalidation on reset.
 - 2026-05-15: Continued Pi retained-state hardening from review. Fixed stale queued prompts after delete/replacement, gated active Pi writes after reset, cancelled Pi prompt completion waiters on stop, and routed project delete through runtime cleanup.
 - 2026-05-15: Completed Pi retained-state/RPC cleanup phase. Final review found no blockers; typecheck, lint, effect audit, build, focused CLI/MCP/runtime tests, full test suite, and perf gate passed.
+- 2026-05-15: Started runtime projection split. Moved DB-backed live runtime projection out of `runtime-lifecycle.ts` into `runtime-projection.ts` while preserving the `RuntimeProjector` export and lifecycle API.
+- 2026-05-15: Completed runtime projection split. Review caught and fixed event type drift and non-Error boundary drift; focused runtime lifecycle checks passed.
 
 ## Remaining Knip Findings
 

@@ -62,7 +62,8 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/runtime-binaries.ts` | process-adapter | `integrations/runtime-binaries.ts` resolver service | migrating | required | Typed injectable runtime binary service added; review/verification pending. |
 | `src/server/runtime-cleanup.ts` | use-case | runtime cleanup use-case for session/project delete retained-state cleanup | migrating | required | Added during Pi retained-state review to close project-delete leak path. |
 | `src/server/runtime-file-operations.ts` | pure | pure runtime file-operation classifier | explicit-non-migration | not-required | Keep pure unless telemetry/resource dependencies are added. |
-| `src/server/runtime-lifecycle.ts` | use-case | `runtime/lifecycle.ts` and `runtime/projection.ts` | not-started | required | Best current Effect shape; live projector should depend on repositories. |
+| `src/server/runtime-lifecycle.ts` | use-case | runtime lifecycle orchestration over injected `RuntimeProjector` | migrating | required | DB-backed live projector extracted; lifecycle now owns orchestration only. |
+| `src/server/runtime-projection.ts` | projection | DB-backed runtime projector layer | migrating | required | Extracted from `runtime-lifecycle.ts`; review/verification pending. |
 | `src/server/runtime.ts` | use-case | runtime registry-backed command surface | migrating | required | Runtime command service now dispatches through `RuntimeRegistry`; review/verification pending. |
 | `src/server/scratchpad-trigger.ts` | use-case | scratchpad/workspace service method | not-started | required | Shared semantics are good; move behind shared service. |
 | `src/server/settings.ts` | config | `config/settings-service.ts` with typed config errors | migrating | required | Typed injectable settings service added; review/verification pending. |
@@ -93,6 +94,30 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/runtime-lifecycle.ts and src/server/runtime-projection.ts
+
+- Status: migrating; final status waits for runtime projectors to depend on repository services instead of compatibility DB exports.
+- Target seam: pure runtime lifecycle orchestration over an injectable `RuntimeProjector`, with DB-backed projection isolated in `runtime-projection.ts`.
+- Behavior preserved: `RuntimeProjector`, `projectRuntimeEvent`, `runAgentTurnLifecycle`, `captureRuntimeDiffs`, `setRuntimeState`, sync/async boundary helpers, and `runtimeStateWithoutUndefined` keep their public import path through `runtime-lifecycle.ts`.
+- Dependencies moved: direct DB write imports for status, user messages, runtime messages, timeline events, context usage, task replacement, diff replacement, and runtime state moved out of `runtime-lifecycle.ts` into `runtime-projection.ts`.
+- Baseline tests before migration: runtime lifecycle tests covered queue behavior, lifecycle status transitions, layer replacement, stale generation suppression, runtime state filtering, file-operation projection, diff capture swallowing, and promise/sync error boundaries.
+- Tests added/updated: no new tests yet; existing focused runtime lifecycle coverage was used as the parity harness for the extraction.
+- Post-migration parity tests: focused runtime lifecycle/runtime cleanup tests passed.
+- Perf/memory impact: no retained state added; extraction reduces lifecycle coupling and leaves projection behavior layer-replaceable for later repository-backed tests.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/runtime-lifecycle.test.ts tests/server/runtime-cleanup.test.ts` - passed, 2 files / 17 tests
+  - `pnpm exec vitest run tests/server/runtime-lifecycle.test.ts tests/server/runtime-cleanup.test.ts tests/server/runtime-commands.test.ts` - passed, 3 files / 21 tests
+  - `pnpm exec eslint src/server/runtime-lifecycle.ts src/server/runtime-projection.ts tests/server/runtime-lifecycle.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 43 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `pnpm test -- --runInBand` - passed, 49 files / 203 tests including `tests/server/perf-gates.test.ts`
+  - `git diff --check` - passed
+- Review subagent summary: Dalton caught exported event type drift and non-Error boundary behavior drift. Pasteur second pass found no blockers after fixes.
+- Findings fixed: restored public event payload parity through type-only DB writer parameter references, preserved legacy non-Error throw identity/string formatting with explicit lint suppressions, and added regression coverage for non-Error runtime failures.
+- Residual risk: live projection still calls DB compatibility exports directly until DB repository services are promoted into projector dependencies.
 
 ### src/server/pi-retained-state.ts, src/server/pi-runtime.ts, src/server/pi-rpc.ts, and project runtime cleanup
 

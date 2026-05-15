@@ -173,6 +173,42 @@ describe('runtime lifecycle', () => {
       yield* enqueueAgentTurn('agent-1', queues, () => Promise.resolve())
     }))
 
+  it.effect('preserves non-Error failures and legacy timeline detail formatting', () =>
+    Effect.gen(function* () {
+      const { calls, layer } = projection()
+      const objectFailure = { reason: 'plain object' }
+
+      const promiseResult = yield* Effect.promise(() => runRuntimeLifecyclePromise(
+        runAgentTurnLifecycle({
+          agentId: 'agent-1',
+          displayText: 'hello',
+          errorEvent: { kind: 'runtime_error', label: 'Runtime error' },
+          // Deliberately pin legacy non-Error rejection behavior.
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+          run: () => Promise.reject('raw rejection'),
+        }).pipe(Effect.provide(layer)),
+      ).then(
+        () => 'resolved' as const,
+        (error: unknown) => error,
+      ))
+
+      const objectResult = yield* Effect.exit(runAgentTurnLifecycle({
+        agentId: 'agent-2',
+        displayText: 'again',
+        errorEvent: { kind: 'runtime_error', label: 'Runtime error' },
+        projection: projection().fake,
+        // Deliberately pin legacy non-Error rejection behavior.
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+        run: () => Promise.reject(objectFailure),
+      }))
+
+      expect(promiseResult).toBe('raw rejection')
+      expect(Exit.isFailure(objectResult)).toBe(true)
+      expect(calls.find((call) => call.type === 'timeline')?.value).toMatchObject({
+        detail: 'raw rejection',
+      })
+    }))
+
   it('preserves original runtime turn errors at the sync boundary', () => {
     const turnError = new Error('sync provider exploded')
 
