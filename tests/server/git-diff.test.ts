@@ -2,8 +2,15 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { collectGitDiffArtifacts } from '../../src/server/git-diff'
+import { describe, expect, it } from '@effect/vitest'
+import { Effect } from 'effect'
+import {
+  GitDiffError,
+  GitDiffService,
+  collectGitDiffArtifacts,
+  diffArtifactsFromPatch,
+  makeGitDiffService,
+} from '../../src/server/git-diff'
 
 describe('git diff capture', () => {
   it('only captures dirty files from the requested worktree', () => {
@@ -26,6 +33,97 @@ describe('git diff capture', () => {
     expect(paths).toContain('tracked.ts')
     expect(paths).toContain('new.ts')
   })
+
+  it.effect('captures diffs through the Effect service layer', () =>
+    Effect.gen(function* () {
+      const service = yield* GitDiffService
+      const repo = initRepo()
+
+      writeFileSync(join(repo, 'tracked.ts'), 'export const value = 3\n')
+
+      const paths = (yield* service.collectArtifacts(repo)).map((diff) => diff.path)
+
+      expect(paths).toContain('tracked.ts')
+    }).pipe(Effect.provide(GitDiffService.layer)),
+  )
+
+  it.effect('bounds untracked diff collection by remaining budget', () =>
+    Effect.gen(function* () {
+      const times = [1000, 2600, 3800, 4200]
+      const calls: Array<{ args: ReadonlyArray<string>; timeout: number }> = []
+      const service = makeGitDiffService({
+        now: () => times.shift() ?? 4200,
+        runGit: (_cwd, args, timeout) => {
+          calls.push({ args, timeout })
+          if (args[0] === 'rev-parse') return 'true\n'
+          if (args[0] === 'status') return '?? one.ts\0?? two.ts\0?? three.ts\0'
+          if (args.includes('one.ts')) {
+            return 'diff --git a/one.ts b/one.ts\nnew file mode 100644\n'
+          }
+          if (args.includes('two.ts')) {
+            return 'diff --git a/two.ts b/two.ts\nnew file mode 100644\n'
+          }
+          return ''
+        },
+      })
+
+      const artifacts = yield* service.collectArtifacts('/repo')
+
+      expect(artifacts.map((artifact) => artifact.path)).toEqual(['one.ts', 'two.ts'])
+      expect(calls.filter((call) => call.args[0] === 'diff' && call.args.includes('/dev/null')))
+        .toEqual([
+          expect.objectContaining({ timeout: 500 }),
+          expect.objectContaining({ timeout: 200 }),
+        ])
+    }),
+  )
+
+  it.effect('skips ignored diff paths from injected git output', () =>
+    Effect.gen(function* () {
+      const service = makeGitDiffService({
+        runGit: (_cwd, args) => {
+          if (args[0] === 'rev-parse') return 'true\n'
+          if (args[0] === 'status') return ''
+          return [
+            'diff --git a/dist/app.js b/dist/app.js\n--- a/dist/app.js\n+++ b/dist/app.js',
+            'diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts',
+          ].join('\n')
+        },
+      })
+
+      const artifacts = yield* service.collectArtifacts('/repo')
+
+      expect(artifacts.map((artifact) => artifact.path)).toEqual(['src/app.ts'])
+    }),
+  )
+
+  it.effect('matches the pure patch parser through the Effect service', () =>
+    Effect.gen(function* () {
+      const service = makeGitDiffService()
+      const patch = 'diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts'
+
+      const artifacts = yield* service.artifactsFromPatch(patch)
+
+      expect(artifacts).toEqual(diffArtifactsFromPatch(patch))
+    }),
+  )
+
+  it.effect('wraps injected git runner failures in typed errors', () =>
+    Effect.gen(function* () {
+      const service = makeGitDiffService({
+        runGit: (_cwd, args) => {
+          if (args[0] === 'rev-parse') return 'true\n'
+          throw new Error('git status exploded')
+        },
+      })
+
+      const error = yield* service.collectArtifacts('/repo').pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(GitDiffError)
+      expect(error.cwd).toBe('/repo')
+      expect(error.message).toBe('git status exploded')
+    }),
+  )
 })
 
 function initRepo() {

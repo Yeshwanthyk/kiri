@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
+import { Context, Data, Effect, Layer } from 'effect'
 
 const GIT_COMMAND_TIMEOUT_MS = 3000
 const UNTRACKED_DIFF_BUDGET_MS = 3000
@@ -11,15 +12,70 @@ export type RuntimeDiffArtifact = {
   patch: string
 }
 
+export class GitDiffError extends Data.TaggedError('GitDiffError')<{
+  readonly message: string
+  readonly cwd: string
+  readonly cause?: unknown
+}> {}
+
+export type GitCommandRunner = (
+  cwd: string,
+  args: ReadonlyArray<string>,
+  timeout: number,
+) => string
+
+export type GitDiffServiceApi = {
+  readonly collectArtifacts: (cwd: string) => Effect.Effect<RuntimeDiffArtifact[], GitDiffError>
+  readonly artifactsFromPatch: (patch: string) => Effect.Effect<RuntimeDiffArtifact[]>
+}
+
+export class GitDiffService extends Context.Tag('@kiri/GitDiff')<
+  GitDiffService,
+  GitDiffServiceApi
+>() {
+  static readonly layer = Layer.succeed(
+    GitDiffService,
+    GitDiffService.of(makeGitDiffService()),
+  )
+}
+
+export function makeGitDiffService(input: {
+  readonly runGit?: GitCommandRunner
+  readonly now?: () => number
+} = {}): GitDiffServiceApi {
+  const runGitCommand = input.runGit ?? runGit
+  const now = input.now ?? Date.now
+  return {
+    collectArtifacts: (cwd) => Effect.try({
+      try: () => collectGitDiffArtifactsWith({ cwd, runGit: runGitCommand, now }),
+      catch: (error) => new GitDiffError({
+        message: error instanceof Error ? error.message : 'Failed to collect git diffs',
+        cwd,
+        cause: error,
+      }),
+    }),
+    artifactsFromPatch: (patch) => Effect.sync(() => diffArtifactsFromPatch(patch)),
+  }
+}
+
 export function collectGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] {
-  if (!isGitWorkTree(cwd)) return []
+  return collectGitDiffArtifactsWith({ cwd, runGit, now: Date.now })
+}
+
+function collectGitDiffArtifactsWith(input: {
+  readonly cwd: string
+  readonly runGit: GitCommandRunner
+  readonly now: () => number
+}): RuntimeDiffArtifact[] {
+  const { cwd, runGit: runGitCommand, now } = input
+  if (!isGitWorkTree(cwd, runGitCommand)) return []
   const untrackedPatches: string[] = []
-  const untrackedDeadline = Date.now() + UNTRACKED_DIFF_BUDGET_MS
-  for (const path of untrackedFiles(cwd)) {
-    const remainingMs = untrackedDeadline - Date.now()
+  const untrackedDeadline = now() + UNTRACKED_DIFF_BUDGET_MS
+  for (const path of untrackedFiles(cwd, runGitCommand)) {
+    const remainingMs = untrackedDeadline - now()
     if (remainingMs <= 0) break
     untrackedPatches.push(
-      ...splitGitPatch(runGitAllowExit(cwd, [
+      ...splitGitPatch(runGitAllowExit(runGitCommand, cwd, [
         'diff',
         '--no-ext-diff',
         '--no-index',
@@ -31,7 +87,7 @@ export function collectGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] {
     )
   }
   const patches = [
-    ...splitGitPatch(runGitAllowExit(cwd, [
+    ...splitGitPatch(runGitAllowExit(runGitCommand, cwd, [
       'diff',
       '--no-ext-diff',
       '--src-prefix=a/',
@@ -65,21 +121,22 @@ export function diffArtifactsFromPatch(patch: string): RuntimeDiffArtifact[] {
   })
 }
 
-function isGitWorkTree(cwd: string) {
+function isGitWorkTree(cwd: string, runGitCommand: GitCommandRunner) {
   try {
-    return runGit(cwd, ['rev-parse', '--is-inside-work-tree']).trim() === 'true'
+    return runGitCommand(cwd, ['rev-parse', '--is-inside-work-tree'], GIT_COMMAND_TIMEOUT_MS)
+      .trim() === 'true'
   } catch {
     return false
   }
 }
 
-function untrackedFiles(cwd: string) {
-  const records = runGit(cwd, [
+function untrackedFiles(cwd: string, runGitCommand: GitCommandRunner) {
+  const records = runGitCommand(cwd, [
     'status',
     '--porcelain=v1',
     '-z',
     '--untracked-files=all',
-  ]).split('\0')
+  ], GIT_COMMAND_TIMEOUT_MS).split('\0')
   const paths: string[] = []
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index]
@@ -127,7 +184,7 @@ function cleanDiffPath(path: string) {
     .trim()
 }
 
-function runGit(cwd: string, args: string[], timeout = GIT_COMMAND_TIMEOUT_MS) {
+function runGit(cwd: string, args: ReadonlyArray<string>, timeout = GIT_COMMAND_TIMEOUT_MS) {
   return execFileSync('git', args, {
     cwd,
     encoding: 'utf8',
@@ -137,9 +194,14 @@ function runGit(cwd: string, args: string[], timeout = GIT_COMMAND_TIMEOUT_MS) {
   })
 }
 
-function runGitAllowExit(cwd: string, args: string[], timeout?: number) {
+function runGitAllowExit(
+  runGitCommand: GitCommandRunner,
+  cwd: string,
+  args: ReadonlyArray<string>,
+  timeout?: number,
+) {
   try {
-    return runGit(cwd, args, timeout)
+    return runGitCommand(cwd, args, timeout ?? GIT_COMMAND_TIMEOUT_MS)
   } catch (error) {
     const output = (error as { stdout?: Buffer | string }).stdout
     if (Buffer.isBuffer(output)) return output.toString('utf8')

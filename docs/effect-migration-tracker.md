@@ -47,7 +47,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
 | `src/server/db/workspace-snapshot.ts` | projection | Workspace snapshot projection over DB connection and provided settings/preferences | migrating | required | Extracted from `db.ts`; direct snapshot test added and review passed; final status waits for workspace service boundary. |
 | `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
-| `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | not-started | required | Direct `git` subprocess boundary. |
+| `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | migrating | required | Typed injectable git diff service added; review/verification pending. |
 | `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | migrating | required | Typed injectable config service added; review/verification pending. |
 | `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | not-started | required | Good Effect facade; needs injected DB/runtime/terminal/config dependencies. |
 | `src/server/kiri-mcp.ts` | transport | `transport/mcp.ts` over `KiriControl` app layer | not-started | required | Keep MCP output parity. |
@@ -88,6 +88,28 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/git-diff.ts
+
+- Status: migrating; final status waits for runtime projection/diff refresh callers to consume the service instead of compatibility sync exports.
+- Target seam: typed injectable `GitDiffService` with git command runner and clock injection.
+- Behavior preserved: `collectGitDiffArtifacts` still returns an empty list outside git worktrees, captures tracked and untracked patches, skips runtime/build directories, preserves untracked total budget and per-command timeout, and keeps `diffArtifactsFromPatch` as a pure parser.
+- Dependencies moved: `git` subprocess calls and clock reads can now be injected in tests.
+- Baseline tests before migration: existing real-git worktree capture tests and runtime lifecycle diff projection tests.
+- Tests added/updated: `tests/server/git-diff.test.ts` now covers service-layer collection, injected untracked budget timeout reduction, skipped diff paths from injected git output, service parser parity, and typed runner-failure wrapping.
+- Post-migration parity tests: focused git-diff/runtime-lifecycle/runtime-binaries tests passed.
+- Perf/memory impact: no retained state added; budget behavior is now directly testable and still bounds untracked diff work.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/git-diff.test.ts tests/server/runtime-lifecycle.test.ts tests/server/runtime-binaries.test.ts` - passed, 3 files / 27 tests
+  - `pnpm exec eslint src/server/git-diff.ts tests/server/git-diff.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 37 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `git diff --check` - passed
+- Review subagent summary: Planck found no code blockers; first pass requested service parser parity and typed failure wrapping coverage, second pass found no blockers.
+- Findings fixed: focused test initially only proved early untracked-budget stop; changed the fake clock to prove reduced remaining timeout on the second untracked diff. Added service parser parity and typed `GitDiffError` failure-path tests from review feedback.
+- Residual risk: callers still use compatibility sync exports until runtime projection and diff-refresh service phases.
 
 ### src/server/runtime-binaries.ts
 
