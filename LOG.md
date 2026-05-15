@@ -99,7 +99,7 @@ Every file in migration scope should end in one of two clear states. Migration s
 - [ ] Keep current `src/server/db.ts` exports stable while extracting implementation.
 - [ ] Create DB connection and transaction layer.
 - [ ] Move migrations into a dedicated module.
-- [ ] Move row schemas/parsers into a dedicated schema module.
+- [x] Move row schemas/parsers into a dedicated schema module.
 - [ ] Extract project/session/scratchpad/runtime-state/thread repositories.
 - [ ] Extract workspace snapshot and agent detail projections.
 - [ ] Add repository parity tests using seeded DB fixtures.

@@ -41,6 +41,25 @@ import {
   timelineEventToneSchema,
   workspaceSnapshotSchema,
 } from '~/lib/contracts'
+import {
+  agentDbRowSchema,
+  agentDetailDbRowSchema,
+  agentLaunchConfigSchema,
+  agentTaskDbRowSchema,
+  archivedSessionDbRowSchema,
+  contextUsageDbRowSchema,
+  deletedSessionDbRowSchema,
+  diffDbRowSchema,
+  idDbRowSchema,
+  messageDbRowSchema,
+  persistedSessionDbRowSchema,
+  projectDbRowSchema,
+  projectIdDbRowSchema,
+  projectSummaryDbRowSchema,
+  scratchpadBlockDbRowSchema,
+  sessionSummaryDbRowSchema,
+  timelineEventDbRowSchema,
+} from './db/schema'
 import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
@@ -63,151 +82,6 @@ export class KiriDbService extends Context.Tag('@kiri/KiriDb')<
     }),
   )
 }
-
-const projectDbRowSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  cwd: z.string(),
-  position: z.number().int().nonnegative(),
-  hiddenAt: z.string().nullable(),
-})
-
-const agentDbRowSchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  slot: z.string(),
-  title: z.string(),
-  runtime: runtimeKindSchema,
-  interfaceMode: sessionInterfaceModeSchema.default('gui'),
-  model: z.string(),
-  status: agentStatusSchema,
-  sessionDir: z.string(),
-  sessionFile: z.string().nullable(),
-  position: z.number().int().nonnegative(),
-  preview: z.string().nullable(),
-  messageCount: z.number().int().nonnegative().nullable(),
-  updatedAt: z.string().nullable(),
-  diffCount: z.number().int().nonnegative(),
-  threadId: z.string().nullable(),
-  archivedAt: z.string().nullable(),
-})
-
-const agentDetailDbRowSchema = agentDbRowSchema.extend({
-  cwd: z.string(),
-})
-
-const archivedSessionDbRowSchema = agentDbRowSchema.extend({
-  projectName: z.string(),
-  archivedAt: z.string(),
-})
-
-const projectSummaryDbRowSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  cwd: z.string(),
-  hiddenAt: z.string().nullable(),
-  sessionCount: z.number().int().nonnegative(),
-})
-
-const sessionSummaryDbRowSchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  projectName: z.string(),
-  title: z.string(),
-  runtime: runtimeKindSchema,
-  interfaceMode: sessionInterfaceModeSchema.default('gui'),
-  model: z.string(),
-  status: agentStatusSchema,
-  preview: z.string().nullable(),
-  messageCount: z.number().int().nonnegative().nullable(),
-  updatedAt: z.string().nullable(),
-  archivedAt: z.string().nullable(),
-})
-
-const messageDbRowSchema = z.object({
-  id: z.string(),
-  agentId: z.string(),
-  role: messageRoleSchema,
-  text: z.string(),
-  timestamp: z.string(),
-})
-
-const timelineEventDbRowSchema = z.object({
-  id: z.string(),
-  agentId: z.string(),
-  kind: z.string(),
-  tone: timelineEventToneSchema,
-  label: z.string(),
-  detail: z.string().nullable(),
-  timestamp: z.string(),
-  payloadJson: z.string(),
-})
-
-const agentTaskDbRowSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  status: agentTaskSchema.shape.status,
-  source: runtimeKindSchema,
-  updatedAt: z.string(),
-  position: z.number().int().nonnegative(),
-})
-
-const diffDbRowSchema = z.object({
-  id: z.string(),
-  agentId: z.string(),
-  title: z.string(),
-  path: z.string(),
-  patch: z.string(),
-  updatedAt: z.string(),
-})
-
-const contextUsageDbRowSchema = z.object({
-  agentId: z.string(),
-  usedTokens: z.number().int().nonnegative(),
-  windowTokens: z.number().int().positive().nullable(),
-  updatedAt: z.string(),
-  sessionFile: z.string().nullable(),
-})
-
-const scratchpadBlockDbRowSchema = z.object({
-  id: z.string(),
-  projectId: z.string().nullable(),
-  projectName: z.string().nullable(),
-  body: z.string(),
-  createdAt: z.string(),
-  triggeredAt: z.string().nullable(),
-  triggeredAgentId: z.string().nullable(),
-})
-
-const agentLaunchConfigSchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  runtime: runtimeKindSchema,
-  sessionDir: z.string(),
-  sessionFile: z.string().nullable(),
-  model: z.string(),
-  cwd: z.string(),
-  runtimeStateJson: z.string().nullable().default(null),
-})
-
-const idDbRowSchema = z.object({
-  id: z.string(),
-})
-
-const projectIdDbRowSchema = z.object({
-  id: z.string(),
-})
-
-const persistedSessionDbRowSchema = z.object({
-  id: z.string(),
-  slot: z.string(),
-  sessionDir: z.string(),
-  sessionFile: z.string().nullable(),
-})
-
-const deletedSessionDbRowSchema = z.object({
-  slot: z.string(),
-})
 
 export function getDb() {
   if (db) return db

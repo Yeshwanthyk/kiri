@@ -32,6 +32,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | not-started | required | Already uses Effect well; needs scoped lifecycle and smaller protocol/process modules. |
 | `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | not-started | required | Main Codex retained-state and stale-turn risk. |
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | not-started | required | Highest priority split; preserve compatibility exports until callers move. |
+| `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
 | `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | not-started | required | Direct `git` subprocess boundary. |
 | `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | not-started | required | Thin service exists; move env parsing into typed config service. |
@@ -96,6 +97,24 @@ Copy this section under `## Migration Records` for each file or inseparable file
   - script final pass: no blockers; Map/Set guardrail fixed for exported and typed top-level declarations.
 - Findings fixed: tightened migration scope, exact verification requirements, review artifact requirements, tracker review semantics, `db.ts` initial status, audit row duplicate checks, migrated-row record checks, missing-file handling, file extension coverage, and non-brittle test assertions.
 - Residual risk: Markdown table parsing remains intentionally simple; avoid `|` in tracker cells.
+
+### src/server/db/schema.ts
+
+- Status: completed
+- Target seam: pure DB row schema/parser module for later repositories and projections
+- Behavior preserved: moved existing row schema definitions out of `src/server/db.ts` without changing parser shapes or callers.
+- Dependencies moved: `zod` row schemas now live in `src/server/db/schema.ts`; `src/server/db.ts` imports them.
+- Baseline tests before migration: existing DB, detail, perf, scratchpad, CLI, and MCP harness tests.
+- Tests added/updated: tracker row added; no new behavior test needed for pure extraction.
+- Post-migration parity tests: focused DB/perf/scratchpad/CLI/MCP tests remained green.
+- Perf/memory impact: none expected; pure module split only.
+- Verification commands and results:
+  - `pnpm effect:audit` - passed, 24 tracked files and 24 server files.
+  - `pnpm typecheck` - passed.
+  - `pnpm test -- --runInBand tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts tests/server/task-progress-db.test.ts tests/server/scratchpad-trigger.test.ts tests/server/effect-migration-audit.test.ts` - passed, 30 files and 125 tests.
+- Review subagent summary: no blockers; confirmed safe pure extraction, no circular dependency, valid tracker row. Non-blocking unused import nit fixed.
+- Findings fixed: restored required contract-schema imports in `db.ts` after focused tests caught the missing imports; removed unused imports from `schema.ts`.
+- Residual risk: none known for this pure extraction.
 
 ## Audit Command
 
