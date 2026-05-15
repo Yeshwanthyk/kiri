@@ -46,6 +46,7 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Perf run result: 6,000 stored timeline rows -> 500 returned rows; 80 stored diffs -> 50 returned diffs; detail payload 1,079,099 bytes; snapshot 2.72ms; detail 90.53ms standalone / 252.13ms under parallel test load; RSS delta 44.34MB under 64MB budget.
 - 2026-05-15: Added detailed interactive HTML explainer at `docs/kiri-perf-memory-explainer.html`.
 - 2026-05-15: Extracted DB migrations into `src/server/db/migrations.ts` and added a legacy pi-only schema fixture to prove runtime constraint widening and foreign-key repair.
+- 2026-05-15: Started DB connection/transaction split with `src/server/db/connection.ts` owning SQLite open/configure/migrate and `src/server/db/transaction.ts` owning transaction bracketing.
 
 ## Remaining Knip Findings
 

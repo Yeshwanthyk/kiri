@@ -32,8 +32,10 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | not-started | required | Already uses Effect well; needs scoped lifecycle and smaller protocol/process modules. |
 | `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | not-started | required | Main Codex retained-state and stale-turn risk. |
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | not-started | required | Highest priority split; preserve compatibility exports until callers move. |
+| `src/server/db/connection.ts` | repository | DB open/configure/migrate boundary | migrating | required | Owns SQLite handle creation; review/verification pending. |
 | `src/server/db/migrations.ts` | repository | DB schema creation and migration helpers | migrating | required | Extracted and reviewed; final status waits for DB connection/transaction service boundary. |
 | `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
+| `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
 | `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | not-started | required | Direct `git` subprocess boundary. |
 | `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | not-started | required | Thin service exists; move env parsing into typed config service. |
@@ -138,6 +140,26 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: initial review found one process blocker that the new migrations file was untracked for the slice commit; no schema/order regressions were found. The reviewer recommended adding a legacy-schema fixture; that test was added.
 - Findings fixed: added `tests/server/db-migrations.test.ts` for legacy runtime-check widening, row preservation, foreign-key repair, and `PRAGMA foreign_key_check`.
 - Residual risk: migrations still receive a raw SQLite handle until the next DB connection/transaction service slice moves execution behind the service boundary.
+
+### src/server/db/connection.ts and src/server/db/transaction.ts
+
+- Status: extracted; final migration status remains `migrating|required` until repositories use the connection and transaction seams consistently.
+- Target seam: DB open/configure/migrate boundary plus synchronous transaction bracketing helper.
+- Behavior preserved: `getDb()` still returns a memoized `DatabaseSync`, applies the same PRAGMAs, runs migrations before seeded-data cleanup, and preserves current public DB exports.
+- Dependencies moved: SQLite handle creation, DB directory creation, PRAGMA setup, migration invocation, and one transaction bracketing path moved out of the compatibility facade.
+- Baseline tests before migration: existing DB, detail, perf, scratchpad, CLI, MCP, and runtime harness tests.
+- Tests added/updated: `tests/server/db-connection.test.ts` covers DB path creation, migrated schema, PRAGMA configuration, commit, and rollback; `tests/types/db-transaction-types.ts` pins async transaction callbacks as a type error.
+- Post-migration parity tests: focused DB/perf/scratchpad/CLI/MCP tests remained green after the connection split.
+- Perf/memory impact: none expected; module split and helper extraction only.
+- Verification commands and results:
+  - `pnpm effect:audit` - passed, 27 tracked files and 27 server files.
+  - `pnpm exec vitest run tests/server/db-connection.test.ts tests/server/db-migrations.test.ts` - passed, 2 files and 3 tests.
+  - `pnpm typecheck` - passed.
+  - `pnpm test -- --runInBand tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts tests/server/task-progress-db.test.ts tests/server/scratchpad-trigger.test.ts tests/server/effect-migration-audit.test.ts tests/server/db-connection.test.ts tests/server/db-migrations.test.ts` - passed, 32 files and 128 tests.
+  - `pnpm lint` - passed.
+- Review subagent summary: no blockers; reviewer confirmed `getDb()` ordering, connection extraction, and first `withTransaction` use. Notes about async use and PRAGMA coverage were fixed.
+- Findings fixed: made `withTransaction` a synchronous-only typed helper and added a typecheck fixture for async callbacks; expanded connection tests to assert `busy_timeout` and `journal_mode`.
+- Residual risk: most `src/server/db.ts` transaction blocks still use direct `BEGIN`/`COMMIT`/`ROLLBACK` until the repository extraction replaces them; `withTransaction` is an internal typed helper, so untyped/cast async misuse can still escape at runtime.
 
 ## Audit Command
 

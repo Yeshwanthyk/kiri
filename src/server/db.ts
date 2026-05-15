@@ -5,7 +5,7 @@ import {
   readdirSync,
 } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { Context, Effect, Layer } from 'effect'
 import { z } from 'zod'
@@ -60,7 +60,8 @@ import {
   sessionSummaryDbRowSchema,
   timelineEventDbRowSchema,
 } from './db/schema'
-import { migrate } from './db/migrations'
+import { openKiriDatabase } from './db/connection'
+import { withTransaction } from './db/transaction'
 import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
@@ -87,13 +88,7 @@ export class KiriDbService extends Context.Tag('@kiri/KiriDb')<
 export function getDb() {
   if (db) return db
   const config = getKiriConfig()
-  const dbPath = config.dbPath
-  mkdirSync(dirname(dbPath), { recursive: true })
-  db = new DatabaseSync(dbPath)
-  db.exec('PRAGMA busy_timeout = 5000')
-  db.exec('PRAGMA journal_mode = WAL')
-  db.exec('PRAGMA foreign_keys = ON')
-  migrate(db)
+  db = openKiriDatabase(config.dbPath)
   normalizeSeededModels(db)
   removeLegacySeedProject(db)
   return db
@@ -586,14 +581,9 @@ function insertProject(input: AddProjectInput) {
     INSERT INTO projects (id, name, cwd, position)
     VALUES (?, ?, ?, ?)
   `)
-  database.exec('BEGIN')
-  try {
+  withTransaction(database, () => {
     insertProject.run(id, name, cwd, nextPosition.position)
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
+  })
 
   return id
 }
