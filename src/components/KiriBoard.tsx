@@ -114,6 +114,8 @@ const workspacePollMaxDurationMs = 120_000
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const migrationAttemptedRef = React.useRef(false)
+  const boardPaneRef = React.useRef<HTMLElement | null>(null)
+  const previousSelectedProjectIdRef = React.useRef<string | null>(null)
   const [workspace, setWorkspace] = React.useState(snapshot)
   const [activeProjectId, setActiveProjectId] = React.useState<string>(snapshot.selected.projectId)
   const [agentByProject, setAgentByProject] = React.useState<Record<string, string>>(() =>
@@ -134,6 +136,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [deleteInFlight, setDeleteInFlight] = React.useState(false)
   const [pendingProjectDelete, setPendingProjectDelete] = React.useState<ProjectRow | null>(null)
   const [projectDeleteInFlight, setProjectDeleteInFlight] = React.useState(false)
+  const [projectVisibilityPendingId, setProjectVisibilityPendingId] = React.useState<string | null>(null)
   const [keymap, setKeymap] = React.useState<KeymapSettings>(snapshot.preferences.keymap)
   const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(snapshot.preferences.theme)
   const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(
@@ -276,6 +279,30 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   React.useEffect(() => {
     applyChatTypography(document.documentElement, chatTypography)
   }, [chatTypography])
+
+  React.useEffect(() => {
+    const previousProjectId = previousSelectedProjectIdRef.current
+    previousSelectedProjectIdRef.current = selection.projectId
+    if (!previousProjectId || previousProjectId === selection.projectId) return
+
+    const pane = boardPaneRef.current
+    if (!pane || !selection.projectId) return
+    const target = pane.querySelector<HTMLElement>('[data-project-selected="true"]')
+    if (!target) return
+
+    const paneRect = pane.getBoundingClientRect()
+    const targetRect = target.getBoundingClientRect()
+    const edgePadding = 18
+    const delta =
+      targetRect.top < paneRect.top + edgePadding
+        ? targetRect.top - paneRect.top - edgePadding
+        : targetRect.bottom > paneRect.bottom - edgePadding
+          ? targetRect.bottom - paneRect.bottom + edgePadding
+          : 0
+    if (Math.abs(delta) > 8) {
+      pane.scrollBy({ top: delta, behavior: 'auto' })
+    }
+  }, [selection.projectId])
 
   React.useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -425,17 +452,27 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   async function handleHideProject(projectId: string) {
-    const next = await hideProject({ data: { id: projectId } })
-    setWorkspace(next)
-    forgetProject(projectId)
-    if (selection.projectId === projectId) setActiveProjectId(next.selected.projectId)
+    setProjectVisibilityPendingId(projectId)
+    try {
+      const next = await hideProject({ data: { id: projectId } })
+      setWorkspace(next)
+      forgetProject(projectId)
+      if (selection.projectId === projectId) setActiveProjectId(next.selected.projectId)
+    } finally {
+      setProjectVisibilityPendingId((current) => current === projectId ? null : current)
+    }
   }
 
   async function handleUnhideProject(projectId: string) {
-    const next = await unhideProject({ data: { id: projectId } })
-    setWorkspace(next)
-    const project = next.projects.find((item) => item.id === projectId)
-    if (project) selectProject(project.id)
+    setProjectVisibilityPendingId(projectId)
+    try {
+      const next = await unhideProject({ data: { id: projectId } })
+      setWorkspace(next)
+      const project = next.projects.find((item) => item.id === projectId)
+      if (project) selectProject(project.id)
+    } finally {
+      setProjectVisibilityPendingId((current) => current === projectId ? null : current)
+    }
   }
 
   async function handleReorderProjects(projectIds: string[]) {
@@ -1091,6 +1128,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       ) : null}
 
       <section
+        ref={boardPaneRef}
         className="board-pane"
         aria-label="Projects and agents"
         data-hydrated={hydrated ? 'true' : 'false'}
@@ -1127,7 +1165,11 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           </div>
         </header>
 
-        <div className="board-grid" data-has-selection={selection.projectId ? 'true' : 'false'}>
+        <div
+          className="board-grid"
+          data-has-selection={selection.projectId ? 'true' : 'false'}
+          data-testid="board-grid"
+        >
           {workspace.projects.map((project) => (
             <ProjectLane
               key={project.id}
@@ -1135,12 +1177,22 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
               selectedAgentId={selection.agentId}
               selectedProjectId={selection.projectId}
               startSessionKey={keymap.startSession}
+              hideDisabled={workspace.projects.length <= 1 || projectVisibilityPendingId === project.id}
+              onHide={() => void handleHideProject(project.id)}
               onSelect={(agentId) => {
                 selectAgent(project.id, agentId)
               }}
             />
           ))}
         </div>
+
+        {workspace.hiddenProjects.length > 0 ? (
+          <HiddenProjectDock
+            projects={workspace.hiddenProjects}
+            pendingProjectId={projectVisibilityPendingId}
+            onUnhide={(projectId) => void handleUnhideProject(projectId)}
+          />
+        ) : null}
       </section>
 
       <SelectedAgentPane
@@ -1173,6 +1225,40 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onTriggerBlock={handleTriggerBlock}
       />
     </main>
+  )
+}
+
+function HiddenProjectDock({
+  projects,
+  pendingProjectId,
+  onUnhide,
+}: {
+  projects: ProjectRow[]
+  pendingProjectId: string | null
+  onUnhide: (projectId: string) => void
+}) {
+  return (
+    <section className="hidden-project-dock" aria-label="Hidden projects" data-testid="hidden-project-shelf">
+      <div className="hidden-project-dock-head">
+        <span>Hidden</span>
+        <small>{projects.length}</small>
+      </div>
+      <div className="hidden-project-chips">
+        {projects.map((project) => (
+          <button
+            key={project.id}
+            type="button"
+            className="hidden-project-chip"
+            disabled={pendingProjectId === project.id}
+            onClick={() => onUnhide(project.id)}
+            aria-label={`Restore ${project.name}`}
+            title={`Restore ${project.name}`}
+          >
+            <span>{project.name}</span>
+          </button>
+        ))}
+      </div>
+    </section>
   )
 }
 

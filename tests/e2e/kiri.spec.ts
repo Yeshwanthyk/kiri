@@ -294,7 +294,7 @@ test('command menu starts, switches, and ends sessions', async ({ page }, testIn
   await expect(page.getByTestId('selected-agent')).toHaveText(secondTitle)
 })
 
-test('projects panel adds, hides, and unhides projects', async ({ page }, testInfo) => {
+test('projects panel adds, hides, and unhides projects', async ({ page, isMobile }, testInfo) => {
   const id = `e2e-${testInfo.project.name}`
   const name = `E2E ${testInfo.project.name}`
 
@@ -320,16 +320,26 @@ test('projects panel adds, hides, and unhides projects', async ({ page }, testIn
   await page.getByRole('button', { name: 'Projects' }).click()
   await expect(page.locator('[data-testid="project-settings-list"] .project-settings-row').first()).toContainText(name)
 
-  await page.getByRole('button', { name: `Hide ${name}` }).click()
+  await page.getByTestId('project-settings-list').getByRole('button', { name: `Hide ${name}` }).click()
   await expect(page.getByTestId('project-settings-list')).not.toContainText(name)
   await expect(page.getByTestId('hidden-project-list')).toContainText(name)
   await page.getByRole('button', { name: 'Close projects' }).click()
-  await expect(page.getByTestId('board-pane')).not.toContainText(name)
+  await expect(page.getByTestId('board-grid')).not.toContainText(name)
 
-  await page.keyboard.press('Control+K')
-  await page.getByTestId('command-search').fill(`unhide ${name}`)
-  await page.keyboard.press('Enter')
-  await expect(page.getByTestId('board-pane')).toContainText(name)
+  if (isMobile) {
+    await page.keyboard.press('Control+K')
+    await page.getByTestId('command-search').fill(`unhide ${name}`)
+    await page.keyboard.press('Enter')
+  } else {
+    await expect(page.getByTestId('hidden-project-shelf')).toContainText(name)
+    await page.getByRole('button', { name: `Restore ${name}` }).click()
+    await expect(page.getByTestId('board-grid')).toContainText(name)
+
+    await page.getByTestId('board-pane').getByRole('button', { name: `Hide ${name}` }).click()
+    await expect(page.getByTestId('hidden-project-shelf')).toContainText(name)
+    await page.getByRole('button', { name: `Restore ${name}` }).click()
+  }
+  await expect(page.getByTestId('board-grid')).toContainText(name)
 
   await page.keyboard.press('Control+K')
   await page.getByTestId('command-search').fill(`remove ${name}`)

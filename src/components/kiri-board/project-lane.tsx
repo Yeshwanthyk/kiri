@@ -9,13 +9,17 @@ export function ProjectLane({
   selectedProjectId,
   selectedAgentId,
   onSelect,
+  onHide,
   startSessionKey,
+  hideDisabled,
 }: {
   project: ProjectRow
   selectedProjectId: string
   selectedAgentId: string
   onSelect: (agentId: string) => void
+  onHide: () => void
   startSessionKey: string
+  hideDisabled: boolean
 }) {
   const isProjectSelected = project.id === selectedProjectId
   const railRef = React.useRef<HTMLDivElement | null>(null)
@@ -80,6 +84,8 @@ export function ProjectLane({
     <section
       className={`project-lane ${isEmpty ? 'empty' : ''} ${isProjectSelected ? 'selected' : ''}`}
       aria-label={project.name}
+      data-project-id={project.id}
+      data-project-selected={isProjectSelected ? 'true' : undefined}
     >
       <div className="project-label">
         <strong>{project.name}</strong>
@@ -90,6 +96,16 @@ export function ProjectLane({
         {runningCount > 0 ? (
           <span className="lane-running">{runningCount} running</span>
         ) : null}
+        <button
+          type="button"
+          className="project-lane-hide"
+          disabled={hideDisabled}
+          onClick={onHide}
+          aria-label={`Hide ${project.name}`}
+          title={`Hide ${project.name}`}
+        >
+          hide
+        </button>
       </div>
 
       {isEmpty ? (

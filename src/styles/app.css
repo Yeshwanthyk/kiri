@@ -84,7 +84,11 @@ button {
   max-height: 100vh;
   overflow: auto;
   padding: 18px 20px 22px;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.board-pane::-webkit-scrollbar {
+  display: none;
 }
 
 .topbar {
@@ -136,6 +140,99 @@ button {
   color: var(--ink);
   background: var(--panel);
   box-shadow: inset 0 0 0 1px var(--line-subtle);
+}
+
+.hidden-project-dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  display: grid;
+  gap: 7px;
+  margin-top: 28px;
+  padding: 12px 0 2px;
+  border-top: 1px solid var(--line-subtle);
+  background: linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--paper) 0%, transparent),
+    var(--paper) 18px
+  );
+}
+
+.hidden-project-dock-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.hidden-project-dock-head > span {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hidden-project-dock-head > small {
+  color: color-mix(in oklab, var(--muted) 70%, transparent);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hidden-project-chip:focus-visible,
+.project-lane-hide:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hidden-project-chips {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hidden-project-chip {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 118px;
+  min-height: 28px;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition-property: transform, border-color, background-color, color;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+.hidden-project-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hidden-project-chip:hover {
+  border-color: var(--accent-muted);
+  background: color-mix(in oklab, var(--panel) 80%, var(--accent-soft));
+  color: var(--ink);
+}
+
+.hidden-project-chip:active {
+  transform: scale(0.96);
+}
+
+.hidden-project-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .mobile-topbar {
@@ -2425,12 +2522,13 @@ h1 {
 }
 
 .project-label {
+  position: relative;
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
-  padding: 0 4px 0;
+  padding: 0 44px 0 4px;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -2471,6 +2569,45 @@ h1 {
   border-radius: 50%;
   background: var(--accent);
   animation: kiri-rail-pulse 1.8s cubic-bezier(0.2, 0, 0, 1) infinite;
+}
+
+.project-lane-hide {
+  position: absolute;
+  top: -6px;
+  right: 4px;
+  min-height: 24px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: color-mix(in oklab, var(--muted) 64%, transparent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+  opacity: 0;
+  transition-property: transform, background-color, color, opacity;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+.project-lane:hover .project-lane-hide,
+.project-lane:focus-within .project-lane-hide {
+  opacity: 1;
+}
+
+.project-lane-hide:hover {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.project-lane-hide:active {
+  transform: scale(0.96);
+}
+
+.project-lane-hide:disabled {
+  cursor: not-allowed;
+  opacity: 0.28;
 }
 
 .lane-rail-wrap {
@@ -2631,8 +2768,10 @@ h1 {
 
 @media (prefers-reduced-motion: reduce) {
   .agent-cell,
+  .hidden-project-chip,
   .lane-pips,
-  .lane-pip {
+  .lane-pip,
+  .project-lane-hide {
     transition: none;
   }
   .agent-row .agent-cell.selected {
