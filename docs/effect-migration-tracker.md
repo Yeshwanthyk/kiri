@@ -35,6 +35,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/connection.ts` | repository | DB open/configure/migrate boundary | migrating | required | Owns SQLite handle creation; review/verification pending. |
 | `src/server/db/migrations.ts` | repository | DB schema creation and migration helpers | migrating | required | Extracted and reviewed; final status waits for DB connection/transaction service boundary. |
 | `src/server/db/projects.ts` | repository | Project repository over DB connection/transaction helpers | migrating | required | Extracted from `db.ts`; review/verification pending. |
+| `src/server/db/scratchpad.ts` | repository | Scratchpad block repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
 | `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
 | `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
@@ -180,6 +181,25 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: no blockers in initial or second-pass review; reviewer confirmed project behavior parity and the expanded test coverage. Residual wrapper/rollback injection coverage gaps were non-blocking.
 - Findings fixed: expanded direct project repository tests for session counts, duplicate/stale reorder ids, missing-id behavior, and old hide-last-visible-before-existence ordering.
 - Residual risk: public `db.ts` project wrapper functions are covered through CLI/MCP flows rather than direct wrapper assertions; delete/reorder rollback failure injection is not yet modeled.
+
+### src/server/db/scratchpad.ts
+
+- Status: extracted; final migration status remains `migrating|required` until repositories sit behind the DB service boundary.
+- Target seam: scratchpad block repository over `DatabaseSync`.
+- Behavior preserved: scratchpad list filtering/order, add body trimming, project validation, delete, get, and trigger marker persistence retain previous SQL semantics.
+- Dependencies moved: scratchpad block SQL and row parsing moved out of `src/server/db.ts`.
+- Baseline tests before migration: existing scratchpad trigger harness, CLI scratchpad tests, MCP scratchpad tests, and workspace mutation smoke through the broad server suite.
+- Tests added/updated: `tests/server/db-scratchpad.test.ts` covers list/add/get/delete, project filtering, trigger marker updates, missing project/body/id validation, missing triggered-agent FK failure, and `ON DELETE SET NULL` for project/session references.
+- Post-migration parity tests: scratchpad trigger, CLI, and MCP flows remained green after extraction.
+- Perf/memory impact: none expected; SQL was moved without changing query shape.
+- Verification commands and results:
+  - `pnpm effect:audit` - passed, 29 tracked files and 29 server files.
+  - `pnpm exec vitest run tests/server/db-scratchpad.test.ts tests/server/scratchpad-trigger.test.ts tests/server/kiri-control-cli.test.ts tests/server/kiri-mcp.test.ts` - passed, 4 files and 6 tests.
+  - `pnpm typecheck` - passed.
+  - `pnpm lint` - passed.
+- Review subagent summary: no blockers in initial or second-pass review; reviewer confirmed SQL, trim behavior, error strings, ordering, FK semantics, and no import cycle.
+- Findings fixed: added direct FK semantics coverage for missing triggered agent and `ON DELETE SET NULL` on agent/project deletion.
+- Residual risk: marking a nonexistent block remains a no-op, matching previous behavior and left unchanged.
 
 ## Audit Command
 

@@ -55,7 +55,6 @@ import {
   persistedSessionDbRowSchema,
   projectDbRowSchema,
   projectIdDbRowSchema,
-  scratchpadBlockDbRowSchema,
   sessionSummaryDbRowSchema,
   timelineEventDbRowSchema,
 } from './db/schema'
@@ -69,6 +68,13 @@ import {
   requireProjectSummary,
   unhideProjectRow,
 } from './db/projects'
+import {
+  deleteScratchpadBlockRow,
+  getScratchpadBlock as getScratchpadBlockFromDb,
+  insertScratchpadBlock,
+  listScratchpadBlocks as listScratchpadBlocksFromDb,
+  markScratchpadBlockTriggered as markScratchpadBlockTriggeredInDb,
+} from './db/scratchpad'
 import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
@@ -860,116 +866,40 @@ export function unhideProjectSummary(id: string) {
 export function listScratchpadBlocks(input: {
   readonly projectId?: string
 } = {}): ScratchpadBlock[] {
-  const projectId = input.projectId?.trim() || null
-  return getDb()
-    .prepare(
-      `
-        SELECT
-          s.id,
-          s.project_id AS projectId,
-          p.name AS projectName,
-          s.body,
-          s.created_at AS createdAt,
-          s.triggered_at AS triggeredAt,
-          s.triggered_agent_id AS triggeredAgentId
-        FROM scratchpad_blocks s
-        LEFT JOIN projects p ON p.id = s.project_id
-        WHERE (? IS NULL OR s.project_id = ?)
-        ORDER BY s.created_at DESC
-      `,
-    )
-    .all(projectId, projectId)
-    .map((row) => scratchpadBlockDbRowSchema.parse(row))
+  return listScratchpadBlocksFromDb(getDb(), input)
 }
 
 export function addScratchpadBlock(input: AddScratchpadBlockInput) {
-  insertScratchpadBlock(input)
+  insertScratchpadBlock(getDb(), input)
   return getWorkspaceSnapshot()
 }
 
 export function addScratchpadBlockSummary(input: AddScratchpadBlockInput) {
-  const id = insertScratchpadBlock(input)
-  const block = getScratchpadBlock(id)
+  const database = getDb()
+  const id = insertScratchpadBlock(database, input)
+  const block = getScratchpadBlockFromDb(database, id)
   if (!block) throw new Error(`Scratchpad block not found: ${id}`)
   return block
 }
 
-function insertScratchpadBlock(input: AddScratchpadBlockInput) {
-  const body = input.body.trim()
-  if (!body) throw new Error('Block body is required')
-  const projectId = input.projectId?.trim() || null
-  const database = getDb()
-  if (projectId) {
-    const project = database
-      .prepare('SELECT id FROM projects WHERE id = ?')
-      .get(projectId)
-    if (!project) throw new Error(`Project not found: ${projectId}`)
-  }
-  const id = `block-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-  const createdAt = new Date().toISOString()
-  database
-    .prepare(
-      `
-        INSERT INTO scratchpad_blocks (id, project_id, body, created_at)
-        VALUES (?, ?, ?, ?)
-      `,
-    )
-    .run(id, projectId, body, createdAt)
-  return id
-}
-
 export function deleteScratchpadBlock(id: string) {
-  deleteScratchpadBlockRow(id)
+  deleteScratchpadBlockRow(getDb(), id)
   return getWorkspaceSnapshot()
 }
 
 export function deleteScratchpadBlockSummary(id: string) {
   const block = getScratchpadBlock(id)
   if (!block) throw new Error(`Scratchpad block not found: ${id}`)
-  deleteScratchpadBlockRow(id)
+  deleteScratchpadBlockRow(getDb(), id)
   return block
 }
 
-function deleteScratchpadBlockRow(id: string) {
-  const blockId = id.trim()
-  if (!blockId) throw new Error('Block id is required')
-  getDb().prepare('DELETE FROM scratchpad_blocks WHERE id = ?').run(blockId)
-}
-
 export function markScratchpadBlockTriggered(blockId: string, agentId: string) {
-  const id = blockId.trim()
-  if (!id) throw new Error('Block id is required')
-  getDb()
-    .prepare(
-      `
-        UPDATE scratchpad_blocks
-        SET triggered_at = ?, triggered_agent_id = ?
-        WHERE id = ?
-      `,
-    )
-    .run(new Date().toISOString(), agentId, id)
+  markScratchpadBlockTriggeredInDb(getDb(), blockId, agentId)
 }
 
 export function getScratchpadBlock(id: string) {
-  const row = getDb()
-    .prepare(
-      `
-        SELECT
-          s.id,
-          s.project_id AS projectId,
-          p.name AS projectName,
-          s.body,
-          s.created_at AS createdAt,
-          s.triggered_at AS triggeredAt,
-          s.triggered_agent_id AS triggeredAgentId
-        FROM scratchpad_blocks s
-        LEFT JOIN projects p ON p.id = s.project_id
-        WHERE s.id = ?
-      `,
-    )
-    .get(id.trim())
-  if (!row) return undefined
-  return scratchpadBlockDbRowSchema.parse(row)
+  return getScratchpadBlockFromDb(getDb(), id)
 }
 
 export function startSessionAndGetId(input: StartSessionInput) {

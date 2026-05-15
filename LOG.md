@@ -48,6 +48,7 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Extracted DB migrations into `src/server/db/migrations.ts` and added a legacy pi-only schema fixture to prove runtime constraint widening and foreign-key repair.
 - 2026-05-15: Started DB connection/transaction split with `src/server/db/connection.ts` owning SQLite open/configure/migrate and `src/server/db/transaction.ts` owning transaction bracketing.
 - 2026-05-15: Started project repository extraction with `src/server/db/projects.ts` owning project summaries, create/delete, hide/unhide, and visible reorder persistence.
+- 2026-05-15: Started scratchpad repository extraction with `src/server/db/scratchpad.ts` owning block list/add/delete/get/trigger persistence.
 
 ## Remaining Knip Findings
 
