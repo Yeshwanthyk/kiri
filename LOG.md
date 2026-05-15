@@ -60,6 +60,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed session operations extraction. Added direct reset/fork/hydration tests; review passed; typecheck, lint, effect audit, build, reset harness, and focused DB/runtime tests passed.
 - 2026-05-15: Started DB bootstrap extraction with `src/server/db/bootstrap.ts` owning stale seeded Pi model normalization and legacy empty project cleanup.
 - 2026-05-15: Completed DB bootstrap extraction. Added direct startup repair tests; review passed; typecheck, lint, effect audit, diff check, and focused DB/effect-layer tests passed.
+- 2026-05-15: Started runtime command service migration with `RuntimeCommands` dispatching through `RuntimeRegistry` instead of direct adapter singleton indexing.
+- 2026-05-15: Completed runtime command service migration. Added typed `RuntimeCommandError`, injected command-service tests, public async rejection harness, and runtime parity tests; review passed after fixing FiberFailure unwrapping and capability typing; typecheck, focused eslint, lint, effect audit, build, diff check, and runtime tests passed.
 
 ## Remaining Knip Findings
 

@@ -59,7 +59,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/runtime-binaries.ts` | process-adapter | `integrations/runtime-binaries.ts` resolver service | not-started | required | Direct PATH/executable resolution. |
 | `src/server/runtime-file-operations.ts` | pure | pure runtime file-operation classifier | explicit-non-migration | not-required | Keep pure unless telemetry/resource dependencies are added. |
 | `src/server/runtime-lifecycle.ts` | use-case | `runtime/lifecycle.ts` and `runtime/projection.ts` | not-started | required | Best current Effect shape; live projector should depend on repositories. |
-| `src/server/runtime.ts` | use-case | runtime registry-backed command surface | not-started | required | Replace direct adapter dispatch with service calls. |
+| `src/server/runtime.ts` | use-case | runtime registry-backed command surface | migrating | required | Runtime command service now dispatches through `RuntimeRegistry`; review/verification pending. |
 | `src/server/scratchpad-trigger.ts` | use-case | scratchpad/workspace service method | not-started | required | Shared semantics are good; move behind shared service. |
 | `src/server/settings.ts` | config | `config/settings-service.ts` with typed config errors | not-started | required | Thin service exists; direct file read remains. |
 | `src/server/terminal-launch.ts` | process-adapter | `terminal/launch-resolver.ts` | not-started | required | Command construction and resume detection seam. |
@@ -321,6 +321,28 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: Hegel reported no blockers and no edits; verified diff check, typecheck, focused session-operation tests, DB repository test pack, reset harness, lint, effect audit, and build.
 - Findings fixed: none yet.
 - Residual risk: this module still performs direct filesystem IO; final service phase should inject a filesystem/session-file service before marking migrated.
+
+### src/server/runtime.ts
+
+- Status: migrating; final status waits for workspace/control callers to depend on the service surface directly instead of only the compatibility async exports.
+- Target seam: `RuntimeCommands` Effect service over `RuntimeRegistry` and launch-config lookup.
+- Behavior preserved: public async exports `promptAgent`, `steerAgent`, `interruptAgent`, thinking-level, reset, fork, review, and answer-question keep the same call signatures and still reject unsupported runtime capabilities with the existing user-facing messages.
+- Dependencies moved: direct `runtimeAdapters` indexing moved behind `RuntimeRegistry`; adapter promise rejections are now wrapped in typed `RuntimeCommandError`.
+- Baseline tests before migration: provider runtime registry tests, runtime lifecycle tests, workspace mutation coverage.
+- Tests added/updated: `tests/server/runtime-commands.test.ts` covers injected registry dispatch, unsupported capability errors, adapter rejection wrapping, and public async export rejection shape through `tests/harness/runtime-command-public-harness.ts`.
+- Post-migration parity tests: focused runtime command tests passed; broader runtime tests passed before commit.
+- Perf/memory impact: no retained state added; runtime dispatch now uses a memoized layer constant.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec eslint src/server/runtime.ts tests/server/runtime-commands.test.ts tests/harness/runtime-command-public-harness.ts --max-warnings=0` - passed
+  - `pnpm exec vitest run tests/server/runtime-commands.test.ts tests/server/provider-runtime.test.ts tests/server/runtime-lifecycle.test.ts tests/server/runtime-retention.test.ts` - passed, 4 files / 24 tests
+  - `pnpm effect:audit` - passed, 37 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `git diff --check` - passed
+- Review subagent summary: Laplace found no code blockers after fixes; only stale tracker test count, corrected here.
+- Findings fixed: typecheck caught an untyped `Effect.tryPromise` catch; replaced it with `RuntimeCommandError`. Review caught public async exports throwing Effect FiberFailure instead of normal typed errors; `runRuntimeCommand` now unwraps `Effect.either`. Focused eslint caught an unnecessary assertion in capability lookup; removed it. Re-review caught stale tracker count; corrected it.
+- Residual risk: `RuntimeCommands.layer` still calls the legacy `getAgentLaunchConfig` compatibility export; a later workspace/control service phase should inject a DB/session service for launch config lookup.
 
 ### src/server/db/sessions.ts
 
