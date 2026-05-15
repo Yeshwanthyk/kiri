@@ -52,6 +52,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Started session repository extraction with `src/server/db/sessions.ts` owning session list/start/archive/restore/rename persistence.
 - 2026-05-15: Started runtime-state repository extraction with `src/server/db/runtime-state.ts` owning launch config, runtime JSON, status, context usage, pending question, and thinking-level reads.
 - 2026-05-15: Started paged agent-detail extraction with `src/server/db/agent-detail.ts` and shared pure timeline formatting in `src/server/db/timeline-format.ts`.
+- 2026-05-15: Started timeline write repository extraction with `src/server/db/timeline-writes.ts` owning message/event/task/diff writes and thread summary updates.
+- 2026-05-15: Completed timeline write repository extraction. Added direct DB persistence tests for Pi live turns, JSONL projection/task/context writes, and diff replacement. Review passed; typecheck, lint, effect audit, build, focused tests, and standalone perf gate passed.
 
 ## Remaining Knip Findings
 

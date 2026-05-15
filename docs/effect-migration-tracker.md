@@ -41,6 +41,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/sessions.ts` | repository | Session summary and lifecycle repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
 | `src/server/db/timeline-format.ts` | pure | Timeline event id/tone/display derivation helpers | explicit-non-migration | not-required | Pure formatting/normalization module shared by readers and writers. |
+| `src/server/db/timeline-writes.ts` | repository | Timeline/message/task/diff write repository over DB connection | migrating | required | Extracted from `db.ts`; direct live/projection/diff persistence tests added and review passed; final status waits for DB service boundary. |
 | `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
 | `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | not-started | required | Direct `git` subprocess boundary. |
@@ -87,7 +88,7 @@ Copy this section under `## Migration Records` for each file or inseparable file
 
 ### Phase 1 guardrails
 
-- Status: completed
+- Status: extracted; final migration status remains `migrating|required` until repositories sit behind the DB service boundary.
 - Target seam: tracker and audit guardrails before migrations
 - Behavior preserved: no runtime behavior changed
 - Dependencies moved: none
@@ -244,6 +245,30 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: no blockers; reviewer confirmed SQL parity, timeline display parity, paging caps, and direct perf harness output at 500 timeline rows, 50 diffs, 89.79ms detail time, 44.44 MB RSS delta.
 - Findings fixed: restored `agentDetailDbRowSchema` import used by workspace snapshots after first verification caught the over-removal.
 - Residual risk: message/event/task writers still live in `src/server/db.ts`; they are the next repository extraction boundary.
+
+### src/server/db/timeline-writes.ts
+
+- Status: completed
+- Target seam: repository module for message, timeline event, task, Pi projection, context usage, and diff write persistence over an injected DB connection.
+- Behavior preserved: `src/server/db.ts` compatibility exports still expose the same public write functions while delegating to the repository. Pi projection hydration still replaces transient prompt rows, preserves JSONL message ids, updates tasks/context usage, and falls back to live RPC messages when no JSONL projection is available.
+- Dependencies moved: message id hashing, Pi live-turn filtering, projection hydration, task replacement, diff artifact replacement, thread summary updates, and info/runtime/Pi timeline event inserts moved from `src/server/db.ts`.
+- Baseline tests before migration: runtime lifecycle, agent detail history, perf gates, Pi JSONL projection, runtime state, task-progress DB tests.
+- Tests added/updated: `tests/server/db-timeline-writes.test.ts` covers Pi live-turn persistence, JSONL projection replacement with task/context usage writes, and diff replacement semantics.
+- Post-migration parity tests: focused repository tests and existing runtime/detail/perf tests passed.
+- Perf/memory impact: no payload growth. Standalone perf harness after extraction returned 500 timeline rows and 50 diffs with 54.67MB RSS delta under the 64MB budget.
+- Verification commands and results:
+  - `pnpm exec vitest run tests/server/db-timeline-writes.test.ts` - passed, 3 tests
+  - `pnpm typecheck` - passed
+  - `pnpm effect:audit` - passed, 34 tracked/server files
+  - `pnpm exec vitest run tests/server/db-timeline-writes.test.ts tests/server/runtime-lifecycle.test.ts tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts tests/server/pi-jsonl.test.ts tests/server/db-runtime-state.test.ts tests/server/task-progress-db.test.ts` - parallel perf RSS exceeded by 3.59MB, rerun isolated below passed; other 24 tests passed
+  - `pnpm exec vitest run tests/server/perf-gates.test.ts` - passed
+  - `pnpm exec tsx tests/perf/run-perf.ts` - passed, RSS delta 54.67MB
+  - `pnpm lint` - passed
+  - `git diff --check` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+- Review subagent summary: first reviewer reported no blockers and identified missing direct persistence coverage; tests were added. Ramanujan reported no blocking findings and no edits; verified focused timeline-write test, typecheck, lint, and diff check.
+- Findings fixed: added direct persistence regression tests after the first reviewer identified missing coverage for Pi live/projection writes and diff replacement.
+- Residual risk: no direct test yet for low-level timeline event id collisions; covered through existing runtime lifecycle flow tests and unchanged event id helper.
 
 ### src/server/db/sessions.ts
 
