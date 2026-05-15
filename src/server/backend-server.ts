@@ -2,8 +2,7 @@ import { serve } from 'srvx/node'
 import type { ServerRequest } from 'srvx'
 import type { KiriConfig } from './kiri-config'
 import { getKiriConfig } from './kiri-config'
-import { getDb } from './db'
-import { getSettings } from './settings'
+import { checkBackendReadiness } from './backend-readiness'
 
 export const kiriEnvironmentPath = '/.well-known/kiri/environment'
 
@@ -51,7 +50,7 @@ export function createKiriFetchHandler(
   } = {},
 ): FetchHandler {
   const config = options.config ?? getKiriConfig()
-  const readiness = options.readiness ?? checkBackendReadiness
+  const readiness: ReadinessCheck = options.readiness ?? checkBackendReadiness
   return async (request) => {
     const url = new URL(request.url)
     if (url.pathname === kiriEnvironmentPath) {
@@ -80,11 +79,6 @@ export function createKiriFetchHandler(
     }
     return appFetch(request)
   }
-}
-
-function checkBackendReadiness() {
-  getSettings()
-  getDb()
 }
 
 export function environmentInfo(config: KiriConfig): KiriBackendInfo {

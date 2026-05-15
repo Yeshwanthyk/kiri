@@ -28,7 +28,8 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 
 | File | Classification | Target Seam | Status | Review Gate | Notes |
 |---|---|---|---|---|---|
-| `src/server/backend-server.ts` | transport | `app/readiness` entrypoint over app layer | not-started | required | Readiness should probe layer dependencies, not direct DB state. |
+| `src/server/backend-readiness.ts` | use-case | readiness service over settings and DB dependencies | migrating | required | Extracted from `backend-server.ts`; review/verification pending. |
+| `src/server/backend-server.ts` | transport | `app/readiness` entrypoint over app layer | migrating | required | Readiness probe moved behind injectable service; transport behavior preserved. |
 | `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | not-started | required | Already uses Effect well; needs scoped lifecycle and smaller protocol/process modules. |
 | `src/server/codex-retained-state.ts` | runtime-adapter | Codex retained-state registry for adapters, listeners, threads, turns, queues, generations, and diff-turn guards | migrating | required | Extracted from `codex-runtime.ts`; review/verification pending. |
 | `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | migrating | required | Retained-state maps extracted; runtime service/projection/attachment splits remain. |
@@ -234,6 +235,29 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: no blockers; confirmed session-operation parity, pure/file import direction, compatibility `Error` unwrapping, and no scoped import cycle. Optional projection-failure test gap was fixed.
 - Findings fixed: focused lint caught unsafe parser member access in `pi-jsonl.ts`; replaced ad hoc member reads with explicit record narrowing and typed unknown arrays. The migration audit parser also skipped rows whose notes contained `File`; narrowed header skipping to the actual first-cell header and reran the audit.
 - Residual risk: compatibility `projectPiSessionFile` still runs synchronously to preserve DB/session-operation behavior; final app composition can provide async/scoped filesystem access if needed.
+
+### src/server/backend-server.ts and src/server/backend-readiness.ts
+
+- Status: migrating; final status waits for app composition to provide readiness as a long-lived layer rather than a compatibility function.
+- Target seam: HTTP environment transport delegates readiness to `BackendReadinessService`, which owns settings and DB probes through injected dependencies.
+- Behavior preserved: `/.well-known/kiri/environment` response shape, `cache-control: no-store`, 503 error JSON, app fetch delegation, and `startKiriBackend` srvx lifecycle remain unchanged.
+- Dependencies moved: direct `getSettings()` and `getDb()` calls moved out of `backend-server.ts` into `backend-readiness.ts`.
+- Baseline tests before migration: `tests/server/backend-server.test.ts` covered environment metadata, delegation, readiness failure, and srvx start/close.
+- Tests added/updated: `tests/server/backend-readiness.test.ts` covers probe ordering, typed failure wrapping, and compatibility `Error` shape.
+- Post-migration parity tests: focused readiness and backend-server tests passed.
+- Perf/memory impact: no runtime payload changes; readiness probes now have a small injectable boundary and can be tested without opening live global state.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm lint` - passed
+  - `pnpm exec eslint src/server/backend-readiness.ts src/server/backend-server.ts tests/server/backend-readiness.test.ts tests/server/backend-server.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 46 tracked / 46 server files
+  - `pnpm exec vitest run tests/server/backend-readiness.test.ts tests/server/backend-server.test.ts` - passed, 2 files / 9 tests
+  - `pnpm build` - passed, existing Vite large chunk warning only
+  - `pnpm test -- --runInBand` - passed, 54 files / 229 tests
+  - `git diff --check` - passed
+- Review subagent summary: initial review found one blocker: async injected readiness probes were type-accepted but `Effect.try` treated rejected promises as success. Fixed by using `Effect.tryPromise`, awaiting both probes, making the compatibility readiness export async, and adding async rejection/openDb failure coverage. Follow-up review cleared the blocker.
+- Findings fixed: focused eslint caught `await` inference against a sync default readiness function; annotated the selected readiness callback as `ReadinessCheck`. Review caught false-ready async probe behavior; service now handles sync and async probes consistently.
+- Residual risk: live readiness still uses the compatibility function per request; final app-layer composition can provide and reuse `BackendReadinessService.layer`.
 
 ### src/server/pi-retained-state.ts, src/server/pi-runtime.ts, src/server/pi-rpc.ts, and project runtime cleanup
 

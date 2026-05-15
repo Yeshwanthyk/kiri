@@ -97,6 +97,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed scratchpad trigger service extraction. Review found no blockers; focused service tests, compatibility harness, workspace/KiriControl service tests, CLI/MCP parity, typecheck, eslint, and effect audit passed.
 - 2026-05-15: Started Pi JSONL file boundary split. Moved session-file reads into `pi-jsonl-file.ts` while keeping `pi-jsonl.ts` as pure projection logic.
 - 2026-05-15: Pi JSONL review pass completed with no blockers. Added injected projection-failure coverage, fixed the migration audit parser so note text containing `File` no longer hides tracker rows, and verified focused parser/file/session/task tests plus full typecheck/lint/audit/build/test/diff gates.
+- 2026-05-15: Started backend readiness boundary split. Added `BackendReadinessService` over injected settings/DB probes and kept `backend-server.ts` as the HTTP transport wrapper.
+- 2026-05-15: Completed backend readiness boundary split. Review caught async probe false-ready behavior; fixed with `Effect.tryPromise`, added async rejection/openDb failure coverage, and verified full typecheck/lint/audit/build/test/diff gates.
 
 ## Remaining Knip Findings
 
