@@ -46,7 +46,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/timeline-writes.ts` | repository | Timeline/message/task/diff write repository over DB connection | migrating | required | Extracted from `db.ts`; direct live/projection/diff persistence tests added and review passed; final status waits for DB service boundary. |
 | `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
 | `src/server/db/workspace-snapshot.ts` | projection | Workspace snapshot projection over DB connection and provided settings/preferences | migrating | required | Extracted from `db.ts`; direct snapshot test added and review passed; final status waits for workspace service boundary. |
-| `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
+| `src/server/diff-refresh.ts` | use-case | terminal diff refresh service command | migrating | required | Typed injectable diff refresh service added; review/verification pending. |
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | migrating | required | Typed injectable git diff service added; review/verification pending. |
 | `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | migrating | required | Typed injectable config service added; review/verification pending. |
 | `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | not-started | required | Good Effect facade; needs injected DB/runtime/terminal/config dependencies. |
@@ -88,6 +88,28 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/diff-refresh.ts
+
+- Status: migrating; final status waits for workspace transport to consume shared workspace services instead of compatibility sync exports.
+- Target seam: typed injectable `DiffRefreshService` orchestrating terminal-only validation, launch config lookup, `GitDiffService` capture, diff replacement, and workspace snapshot return.
+- Behavior preserved: `refreshTerminalSessionDiffs(agentId)` remains a synchronous compatibility export, still rejects non-terminal sessions with the same message, replaces the agent diff artifacts, and returns the latest workspace snapshot.
+- Dependencies moved: git diff capture is now injected through `GitDiffService`; detail/config/diff-write/snapshot operations can be injected in focused tests.
+- Baseline tests before migration: workspace mutation path and git diff/runtime lifecycle focused tests.
+- Tests added/updated: `tests/server/diff-refresh.test.ts` covers public sync export wiring through a real temp git repo harness, injected terminal refresh, non-terminal rejection before git work, and typed git failure wrapping with the requested agent id.
+- Post-migration parity tests: focused diff-refresh/git-diff/runtime-lifecycle tests passed.
+- Perf/memory impact: no retained state added; non-terminal sessions now prove they do not start git collection, and git collection remains bounded by `GitDiffService`.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/diff-refresh.test.ts tests/server/git-diff.test.ts tests/server/runtime-lifecycle.test.ts` - passed, 3 files / 25 tests
+  - `pnpm exec eslint src/server/diff-refresh.ts tests/server/diff-refresh.test.ts tests/harness/diff-refresh-public-harness.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 37 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `git diff --check` - passed
+- Review subagent summary: Herschel found no blockers; first pass requested public sync export coverage, second pass confirmed it and suggested adding a child-process timeout to the harness test.
+- Findings fixed: typecheck caught readonly diff-array mismatch with the compatibility DB writer; narrowed the service dependency to a mutable array to match the public writer contract. Added public export harness coverage from review feedback, then added a 10s child-process timeout from second-pass review feedback.
+- Residual risk: DB reads/writes and workspace snapshot compatibility exports remain live dependencies until workspace and DB service phases complete.
 
 ### src/server/git-diff.ts
 

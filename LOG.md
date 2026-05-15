@@ -70,6 +70,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed runtime binary resolver hardening. Review passed after tightening desktop fallback precedence and PATH de-duplication tests; focused runtime binary and terminal launch checks passed.
 - 2026-05-15: Started git diff service hardening. Added typed injectable `GitDiffService` with git runner and clock injection while preserving sync diff collector/parser exports.
 - 2026-05-15: Completed git diff service hardening. Review passed after adding service parser parity and typed runner-failure coverage; focused git-diff/runtime lifecycle/runtime binary checks passed.
+- 2026-05-15: Started terminal diff refresh service hardening. Added typed injectable `DiffRefreshService` around terminal-only validation, git diff capture, diff replacement, and workspace snapshot return while preserving the sync export.
+- 2026-05-15: Completed terminal diff refresh service hardening. Review passed after adding live public-export harness coverage and a child-process timeout; focused diff-refresh/git-diff/runtime lifecycle checks passed.
 
 ## Remaining Knip Findings
 
