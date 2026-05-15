@@ -34,7 +34,6 @@ import {
   addScratchpadBlock,
   deleteScratchpadBlock,
   deleteSession,
-  deleteProject,
   renameSession,
   reorderProjects,
   restoreSession,
@@ -56,6 +55,7 @@ import {
   steerAgent,
 } from './runtime'
 import { forgetProviderRuntimeAgent } from './provider-runtime'
+import { deleteProjectWithRuntimeCleanup } from './runtime-cleanup'
 import { triggerScratchpadSession } from './scratchpad-trigger'
 import { closeAgentRuntimeTerminal, ensureTerminalServer } from './terminal-server'
 import {
@@ -81,7 +81,7 @@ export const addProjectMutation = createServerFn({ method: 'POST' })
 
 export const deleteProjectMutation = createServerFn({ method: 'POST' })
   .inputValidator(deleteProjectInputSchema)
-  .handler(async ({ data }) => deleteProject(data.id))
+  .handler(async ({ data }) => deleteProjectWithRuntimeCleanup(data.id))
 
 export const hideProjectMutation = createServerFn({ method: 'POST' })
   .inputValidator(hideProjectInputSchema)

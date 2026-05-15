@@ -11,6 +11,11 @@ type PendingRequest = {
   timeout: ReturnType<typeof setTimeout>
 }
 
+type PendingPromptCompletion = {
+  reject: (error: Error) => void
+  cleanup: () => void
+}
+
 const piRpcMessageSchema = z.object({
   role: z.string(),
   content: z.unknown(),
@@ -52,6 +57,7 @@ export class PiRpcProcessAdapter {
   private stopping = new Set<ChildProcessWithoutNullStreams>()
   private requestId = 0
   private pending = new Map<string, PendingRequest>()
+  private promptCompletions = new Set<PendingPromptCompletion>()
   private events = new Set<(event: PiRpcEvent) => void>()
   private stderr = ''
 
@@ -122,7 +128,7 @@ export class PiRpcProcessAdapter {
 
       child.stderr.on('data', (chunk) => {
         if (this.child !== child || this.stopping.has(child)) return
-        this.stderr += chunk.toString()
+        this.stderr += chunkToString(chunk)
         this.stderr = this.stderr.slice(-8000)
       })
 
@@ -206,7 +212,10 @@ export class PiRpcProcessAdapter {
         cleanup = () => {
           clearTimeout(timeout)
           stopListening()
+          this.promptCompletions.delete(waiter)
         }
+        const waiter: PendingPromptCompletion = { reject, cleanup }
+        this.promptCompletions.add(waiter)
       })
 
       yield* this.promptEffect(message).pipe(
@@ -320,7 +329,7 @@ export class PiRpcProcessAdapter {
     let buffer = ''
 
     child.stdout.on('data', (chunk) => {
-      buffer += decoder.write(chunk)
+      buffer += decodeStdoutChunk(decoder, chunk)
       let index = buffer.search(/\n/)
       while (index !== -1) {
         const line = buffer.slice(0, index).replace(/\r$/, '')
@@ -364,7 +373,28 @@ export class PiRpcProcessAdapter {
       pending.reject(error)
     }
     this.pending.clear()
+    this.rejectPromptCompletions(error)
   }
+
+  private rejectPromptCompletions(error: Error) {
+    for (const completion of this.promptCompletions) {
+      completion.cleanup()
+      completion.reject(error)
+    }
+    this.promptCompletions.clear()
+  }
+}
+
+function chunkToString(chunk: unknown) {
+  if (typeof chunk === 'string') return chunk
+  if (chunk instanceof Uint8Array) return Buffer.from(chunk).toString()
+  return String(chunk)
+}
+
+function decodeStdoutChunk(decoder: StringDecoder, chunk: unknown) {
+  if (typeof chunk === 'string') return chunk
+  if (chunk instanceof Uint8Array) return decoder.write(Buffer.from(chunk))
+  return String(chunk)
 }
 
 async function runPiRpcPromise<A>(

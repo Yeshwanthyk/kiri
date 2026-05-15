@@ -54,11 +54,13 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | not-started | required | Good Effect facade; needs injected DB/runtime/terminal/config dependencies. |
 | `src/server/kiri-mcp.ts` | transport | `transport/mcp.ts` over `KiriControl` app layer | not-started | required | Keep MCP output parity. |
 | `src/server/pi-jsonl.ts` | projection | `db/projections/pi-jsonl.ts` plus file reader service | not-started | required | Split pure JSONL projection from file IO. |
-| `src/server/pi-rpc.ts` | runtime-adapter | `runtime/pi/rpc-adapter.ts` scoped process adapter | not-started | required | Already Effect-aware; needs scoped process/listener lifetime. |
-| `src/server/pi-runtime.ts` | runtime-adapter | `runtime/pi/{runtime-service,retained-state,attachments}.ts` | not-started | required | Main Pi retained-state and cleanup risk. |
+| `src/server/pi-rpc.ts` | runtime-adapter | `runtime/pi/rpc-adapter.ts` scoped process adapter | migrating | required | Prompt completion waiters now cancel on stop; full scoped process/listener lifetime remains. |
+| `src/server/pi-retained-state.ts` | runtime-adapter | Pi retained-state registry for adapters, launch keys, queues, and reset generations | migrating | required | Extracted from `pi-runtime.ts`; review/verification pending. |
+| `src/server/pi-runtime.ts` | runtime-adapter | `runtime/pi/{runtime-service,retained-state,attachments}.ts` | migrating | required | Retained-state maps extracted; runtime service and attachment split remain. |
 | `src/server/preferences.ts` | config | `config/preferences-service.ts` with atomic file and in-memory adapters | migrating | required | Typed injectable preferences service added; review/verification pending. |
 | `src/server/provider-runtime.ts` | use-case | runtime registry with injected command and cleanup adapters | migrating | required | Cleanup now routes through typed registry; review/verification pending. |
 | `src/server/runtime-binaries.ts` | process-adapter | `integrations/runtime-binaries.ts` resolver service | migrating | required | Typed injectable runtime binary service added; review/verification pending. |
+| `src/server/runtime-cleanup.ts` | use-case | runtime cleanup use-case for session/project delete retained-state cleanup | migrating | required | Added during Pi retained-state review to close project-delete leak path. |
 | `src/server/runtime-file-operations.ts` | pure | pure runtime file-operation classifier | explicit-non-migration | not-required | Keep pure unless telemetry/resource dependencies are added. |
 | `src/server/runtime-lifecycle.ts` | use-case | `runtime/lifecycle.ts` and `runtime/projection.ts` | not-started | required | Best current Effect shape; live projector should depend on repositories. |
 | `src/server/runtime.ts` | use-case | runtime registry-backed command surface | migrating | required | Runtime command service now dispatches through `RuntimeRegistry`; review/verification pending. |
@@ -91,6 +93,30 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/pi-retained-state.ts, src/server/pi-runtime.ts, src/server/pi-rpc.ts, and project runtime cleanup
+
+- Status: migrating; final status waits for Pi runtime use-cases, attachment handling, and process adapter lifecycle to move behind scoped services.
+- Target seam: Pi retained-state registry for adapter ownership, launch identity keys, per-agent queues, reset generation guards, prompt completion cancellation, and delete cleanup use-cases.
+- Behavior preserved: public Pi runtime functions, compatibility cleanup export, adapter reuse/replacement by launch identity, immediate steer/interrupt target registration, reset/fork cleanup, project/session delete cleanup, and retained-state stats remain wired through compatibility exports.
+- Dependencies moved: module-global Pi retained maps moved into `pi-retained-state.ts`; `pi-runtime.ts` now delegates adapter lookup/replacement, queue ownership, stats, and cleanup through the registry. Project delete cleanup moved behind `runtime-cleanup.ts`.
+- Baseline tests before migration: runtime retention tests covered idempotent Pi cleanup.
+- Tests added/updated: `tests/server/pi-retained-state.test.ts` covers adapter reuse, adapter replacement with old adapter stop and generation invalidation, full forget cleanup, generation-preserving reset cleanup, delete/recreate generation invalidation, and test cleanup. `tests/server/pi-rpc.test.ts` covers prompt completion waiter cancellation on stop after prompt submission. `tests/server/runtime-cleanup.test.ts` covers project delete cleanup order and validation-failure safety.
+- Post-migration parity tests: focused Pi retained-state/RPC/runtime-cleanup/runtime-retention/provider-runtime tests passed.
+- Perf/memory impact: retained Pi runtime state is isolated and directly unit-tested; reset/delete/adapter replacement now invalidate queued prompts that have not started yet; active stopped Pi prompt waiters are rejected immediately instead of waiting for timeout; project delete now cleans retained runtime and terminal state for all deleted sessions.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/runtime-cleanup.test.ts tests/server/pi-rpc.test.ts tests/server/pi-retained-state.test.ts tests/server/runtime-retention.test.ts tests/server/provider-runtime.test.ts` - passed, 5 files / 20 tests
+  - `pnpm exec eslint src/server/runtime-cleanup.ts src/server/pi-rpc.ts src/server/pi-retained-state.ts src/server/pi-runtime.ts tests/server/runtime-cleanup.test.ts tests/server/pi-rpc.test.ts tests/server/pi-retained-state.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 42 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `pnpm exec vitest run tests/server/runtime-cleanup.test.ts tests/server/pi-rpc.test.ts tests/server/pi-retained-state.test.ts tests/server/runtime-retention.test.ts tests/server/provider-runtime.test.ts tests/server/kiri-control-cli.test.ts tests/server/kiri-mcp.test.ts` - passed, 7 files / 23 tests
+  - `pnpm test -- --runInBand` - passed, 49 files / 202 tests including `tests/server/perf-gates.test.ts`
+  - `git diff --check` - passed
+- Review subagent summary: McClintock found queued prompts could survive delete because missing generation compared as current; Schrodinger found adapter replacement could also let stale queued prompts survive; Hubble found active prompt waiters could remain alive until timeout; Gauss found project delete cascaded sessions without runtime cleanup; Wegener found no remaining blockers after fixes.
+- Findings fixed: generation tokens are now monotonic and missing generations are stale; reset/delete/replacement invalidate queued prompts; active Pi writes/events/diffs/status are generation-gated; `PiRpcProcessAdapter.stop()` rejects prompt completion waiters; project delete captures sessions, deletes only after DB validation succeeds, then cleans runtimes/terminals.
+- Residual risk: full scoped Pi process lifecycle remains in the Pi runtime service phase; direct lint on all of `workspace.ts` still reports pre-existing server-function `require-await` noise, while the repo lint gate does not include that file.
 
 ### src/server/codex-retained-state.ts and src/server/codex-runtime.ts retained state
 

@@ -3,6 +3,7 @@ import { extname, join } from 'node:path'
 import { Effect } from 'effect'
 import type { SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import { PiRpcProcessAdapter, PiRpcProcessError } from './pi-rpc'
+import { makePiRetainedState } from './pi-retained-state'
 import {
   fileOperationFromPiEvent,
   fileOperationStatusFromEvent,
@@ -31,9 +32,7 @@ import {
 } from './runtime-lifecycle'
 import { getRuntimeSettings } from './settings'
 
-const adapters = new Map<string, PiRpcProcessAdapter>()
-const adapterKeys = new Map<string, string>()
-const queues = new Map<string, Promise<void>>()
+const retainedState = makePiRetainedState()
 
 export async function promptPiAgent(input: {
   agentId: string
@@ -47,9 +46,11 @@ export async function promptPiAgent(input: {
   // Register the live adapter before the queued turn starts so immediate steer/interrupt
   // requests from the composer can find the process target.
   getOrCreatePiAdapter(config)
-  await runRuntimeLifecyclePromise(enqueueAgentTurn(config.id, queues, () =>
-    promptPiAgentNow(config, promptWithSavedImages(config.id, input.text, input.images ?? [])),
-  ))
+  const generation = retainedState.generation(config.id)
+  await runRuntimeLifecyclePromise(enqueueAgentTurn(config.id, retainedState.queues, () => {
+    if (!retainedState.isCurrentGeneration(config.id, generation)) return Promise.resolve()
+    return promptPiAgentNow(config, promptWithSavedImages(config.id, input.text, input.images ?? []), generation)
+  }))
 }
 
 export async function steerPiAgent(input: {
@@ -82,8 +83,9 @@ export async function forkPiSession(input: { agentId: string }) {
 async function promptPiAgentNow(
   config: ReturnType<typeof getAgentLaunchConfig>,
   text: string,
+  generation: number,
 ) {
-  await runRuntimeLifecyclePromise(promptPiAgentNowEffect(config, text))
+  await runRuntimeLifecyclePromise(promptPiAgentNowEffect(config, text, generation))
 }
 
 function steerPiAgentEffect(input: {
@@ -145,7 +147,8 @@ function resetPiSessionEffect(input: { agentId: string }) {
     const config = yield* Effect.sync(() => getAgentLaunchConfig(input.agentId))
     yield* requirePiRuntime(config, 'agents do not support /new yet')
     yield* Effect.sync(() => {
-      stopAdapter(config.id)
+      retainedState.bumpGeneration(config.id)
+      stopAdapter(config.id, { keepGeneration: true })
       archivePiSessionFiles(config.sessionDir)
       resetSession(config.id)
     })
@@ -181,9 +184,11 @@ function forkPiSessionEffect(input: { agentId: string }) {
 function promptPiAgentNowEffect(
   config: ReturnType<typeof getAgentLaunchConfig>,
   text: string,
+  generation: number,
 ) {
   return Effect.gen(function* () {
     yield* requirePiRuntime(config, 'can be configured, but only Pi can run chat today')
+    if (!retainedState.isCurrentGeneration(config.id, generation)) return
     const adapter = yield* Effect.sync(() => getOrCreatePiAdapter(config))
     yield* Effect.sync(() => {
       appendUserMessage({ agentId: config.id, text })
@@ -197,6 +202,7 @@ function promptPiAgentNowEffect(
       if (thinkingLevel) yield* piRpcEffect(adapter.setThinkingLevelEffect(thinkingLevel))
       stopRecordingEvents = adapter.onEvent((event) => {
         try {
+          if (!retainedState.isCurrentGeneration(config.id, generation)) return
           recordPiTimelineEvent({ agentId: config.id, event })
           recordPiFileOperationEvent(config.id, config.cwd, event)
         } catch {
@@ -209,6 +215,7 @@ function promptPiAgentNowEffect(
       const turnCompletedAt = Date.now()
       const after = yield* piRpcEffect(adapter.getStateEffect())
       yield* Effect.sync(() => {
+        if (!retainedState.isCurrentGeneration(config.id, generation)) return
         recordPiMessages({
           agentId: config.id,
           promptText: text,
@@ -218,11 +225,15 @@ function promptPiAgentNowEffect(
           sessionFile: after.sessionFile ?? before.sessionFile,
         })
       })
-      yield* captureRuntimeDiffs(config.id, () => collectGitDiffArtifacts(config.cwd))
+      if (retainedState.isCurrentGeneration(config.id, generation)) {
+        yield* captureRuntimeDiffs(config.id, () => collectGitDiffArtifacts(config.cwd))
+      }
     }).pipe(
       Effect.ensuring(Effect.sync(() => {
         stopRecordingEvents?.()
-        setAgentStatus(config.id, 'idle')
+        if (retainedState.isCurrentGeneration(config.id, generation)) {
+          setAgentStatus(config.id, 'idle')
+        }
       })),
     )
   })
@@ -258,7 +269,7 @@ async function waitForLivePiAdapter(config: ReturnType<typeof getAgentLaunchConf
 }
 
 async function waitForLivePiAdapterAttempt(agentId: string, attemptsRemaining: number): Promise<PiRpcProcessAdapter> {
-  const adapter = adapters.get(agentId)
+  const adapter = retainedState.getAdapter(agentId)
   if (adapter) return adapter
   if (attemptsRemaining <= 0) {
     throw new Error('This session is not currently running in this kiri server process')
@@ -308,12 +319,11 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function stopAdapter(agentId: string) {
-  const adapter = adapters.get(agentId)
-  adapter?.stop()
-  adapters.delete(agentId)
-  adapterKeys.delete(agentId)
-  queues.delete(agentId)
+function stopAdapter(
+  agentId: string,
+  options: { readonly keepGeneration?: boolean } = {},
+) {
+  retainedState.forgetAgent(agentId, options)
 }
 
 export function forgetPiRuntimeAgent(agentId: string) {
@@ -321,11 +331,7 @@ export function forgetPiRuntimeAgent(agentId: string) {
 }
 
 export function piRuntimeRetainedStateStats() {
-  return {
-    adapters: adapters.size,
-    adapterKeys: adapterKeys.size,
-    queues: queues.size,
-  }
+  return retainedState.stats()
 }
 
 function archivePiSessionFiles(sessionDir: string) {
@@ -342,7 +348,6 @@ function archivePiSessionFiles(sessionDir: string) {
 }
 
 function getOrCreatePiAdapter(config: ReturnType<typeof getAgentLaunchConfig>) {
-  let adapter = adapters.get(config.id)
   const settings = getRuntimeSettings(config.runtime)
   const adapterKey = JSON.stringify({
     cwd: config.cwd,
@@ -351,25 +356,14 @@ function getOrCreatePiAdapter(config: ReturnType<typeof getAgentLaunchConfig>) {
     model: config.model,
     models: settings.models,
   })
-  if (adapter && adapterKeys.get(config.id) !== adapterKey) {
-    adapter.stop()
-    adapters.delete(config.id)
-    adapterKeys.delete(config.id)
-    adapter = undefined
-  }
-
-  if (!adapter) {
-    adapter = new PiRpcProcessAdapter({
+  return retainedState.getOrCreateAdapter(config.id, adapterKey, () =>
+    new PiRpcProcessAdapter({
       cwd: config.cwd,
       sessionDir: config.sessionDir,
       sessionFile: config.sessionFile ?? undefined,
       model: config.model,
       models: settings.models,
-    })
-    adapters.set(config.id, adapter)
-    adapterKeys.set(config.id, adapterKey)
-  }
-  return adapter
+    }))
 }
 
 function promptWithSavedImages(agentId: string, text: string, images: SendMessageImage[]) {

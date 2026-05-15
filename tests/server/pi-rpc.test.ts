@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Cause, Effect, Exit, Option } from 'effect'
 import { PiRpcProcessAdapter, PiRpcProcessError } from '../../src/server/pi-rpc'
 
@@ -39,4 +39,52 @@ describe('PiRpcProcessAdapter', () => {
 
     expect((rpc as unknown as { events: Set<unknown> }).events.size).toBe(0)
   })
+
+  it('rejects prompt completion waiters when the process stops after prompt submission', async () => {
+    const rpc = adapter()
+    const child = {
+      stdin: {
+        write: vi.fn((_command: string, callback: (error?: Error) => void) => {
+          callback()
+        }),
+      },
+      kill: vi.fn(),
+    }
+    const unsafeRpc = rpc as unknown as {
+      child: unknown
+      pending: Map<string, unknown>
+      events: Set<unknown>
+      promptCompletions: Set<unknown>
+      handleLine: (child: unknown, line: string) => void
+    }
+    unsafeRpc.child = child
+
+    const exitPromise = Effect.runPromiseExit(rpc.promptAndWaitEffect('hello'))
+    await waitFor(() => unsafeRpc.pending.size === 1)
+
+    unsafeRpc.handleLine(child, JSON.stringify({
+      type: 'response',
+      id: 'kiri-1',
+      success: true,
+      data: {},
+    }))
+    await waitFor(() => unsafeRpc.promptCompletions.size === 1)
+
+    rpc.stop()
+    const exit = await exitPromise
+    const error = failure(exit)
+
+    expect(error.cause).toBeInstanceOf(Error)
+    expect(error.cause).toMatchObject({ message: 'Pi RPC process stopped' })
+    expect(unsafeRpc.events.size).toBe(0)
+    expect(unsafeRpc.promptCompletions.size).toBe(0)
+  })
 })
+
+async function waitFor(predicate: () => boolean) {
+  for (let index = 0; index < 20; index += 1) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error('Timed out waiting for test condition')
+}

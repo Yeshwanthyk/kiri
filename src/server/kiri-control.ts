@@ -14,7 +14,6 @@ import type {
 import {
   addScratchpadBlockSummary,
   addProjectSummary,
-  deleteProjectSummary,
   deleteScratchpadBlockSummary,
   deleteSessionSummary,
   getWorkspaceSnapshot,
@@ -31,6 +30,7 @@ import { triggerScratchpadSession } from './scratchpad-trigger'
 import { getSettings } from './settings'
 import { closeAgentRuntimeTerminal } from './terminal-server'
 import { forgetProviderRuntimeAgent } from './provider-runtime'
+import { deleteProjectSummaryWithRuntimeCleanup } from './runtime-cleanup'
 
 type ModelChoice = {
   readonly runtime: RuntimeKind
@@ -177,7 +177,7 @@ function makeKiriControl(): KiriControlApi {
   })
 
   const deleteProjectEffect = Effect.fn('KiriControl.deleteProject')(function* (id: string) {
-    return yield* fromSync(() => deleteProjectSummary(id))
+    return yield* fromSync(() => deleteProjectSummaryWithRuntimeCleanup(id))
   })
 
   const listSessions = Effect.fn('KiriControl.listSessions')(

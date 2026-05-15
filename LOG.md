@@ -82,6 +82,9 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed runtime registry cleanup hardening. Review found no blockers; focused provider-runtime/runtime-command/runtime-retention checks passed.
 - 2026-05-15: Started Codex retained-state extraction. Moved Codex adapter/listener/thread/turn/queue/generation/diff-turn maps behind `codex-retained-state.ts` while preserving runtime compatibility exports.
 - 2026-05-15: Completed Codex retained-state extraction. Review caught and fixed queued-turn reset invalidation, stale-thread alias ownership, and immediate turn-id retention; focused Codex retained-state/runtime retention checks passed.
+- 2026-05-15: Started Pi retained-state extraction. Moved Pi adapter/key/queue/generation maps behind `pi-retained-state.ts` and added generation-aware queued prompt invalidation on reset.
+- 2026-05-15: Continued Pi retained-state hardening from review. Fixed stale queued prompts after delete/replacement, gated active Pi writes after reset, cancelled Pi prompt completion waiters on stop, and routed project delete through runtime cleanup.
+- 2026-05-15: Completed Pi retained-state/RPC cleanup phase. Final review found no blockers; typecheck, lint, effect audit, build, focused CLI/MCP/runtime tests, full test suite, and perf gate passed.
 
 ## Remaining Knip Findings
 
