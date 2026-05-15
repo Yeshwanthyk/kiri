@@ -32,6 +32,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | not-started | required | Already uses Effect well; needs scoped lifecycle and smaller protocol/process modules. |
 | `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | not-started | required | Main Codex retained-state and stale-turn risk. |
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | not-started | required | Highest priority split; preserve compatibility exports until callers move. |
+| `src/server/db/agent-detail.ts` | repository | Paged agent detail reader for timeline, diffs, tasks, and context usage | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/connection.ts` | repository | DB open/configure/migrate boundary | migrating | required | Owns SQLite handle creation; review/verification pending. |
 | `src/server/db/migrations.ts` | repository | DB schema creation and migration helpers | migrating | required | Extracted and reviewed; final status waits for DB connection/transaction service boundary. |
 | `src/server/db/projects.ts` | repository | Project repository over DB connection/transaction helpers | migrating | required | Extracted from `db.ts`; review/verification pending. |
@@ -39,6 +40,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/scratchpad.ts` | repository | Scratchpad block repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/sessions.ts` | repository | Session summary and lifecycle repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
+| `src/server/db/timeline-format.ts` | pure | Timeline event id/tone/display derivation helpers | explicit-non-migration | not-required | Pure formatting/normalization module shared by readers and writers. |
 | `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
 | `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | not-started | required | Direct `git` subprocess boundary. |
@@ -221,6 +223,27 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: no blockers in initial or second-pass review; reviewer confirmed SQL/error parity and public wrapper preservation.
 - Findings fixed: added direct context usage fallback, over-window cap, and missing-window coverage.
 - Residual risk: runtime-state repository is still synchronous over `DatabaseSync`; Effect service wrapping lands in a later phase.
+
+### src/server/db/agent-detail.ts + src/server/db/timeline-format.ts
+
+- Status: extracted; `agent-detail.ts` final migration status remains `migrating|required`; `timeline-format.ts` is `explicit-non-migration|not-required` because it is pure formatting/normalization.
+- Target seam: paged agent detail reader plus pure timeline event display/id/tone helpers.
+- Behavior preserved: agent detail lookup, context usage read, active-thread selection, paged message/event union ordering, timeline item parsing, diff limit, task ordering, event label/detail derivation, event id derivation, tone inference, and timestamp normalization retain previous semantics.
+- Dependencies moved: paged detail SQL, diff reader, task reader, timeline row parser, and pure event formatting helpers moved out of `src/server/db.ts`.
+- Baseline tests before migration: agent detail history harness, perf gates, runtime lifecycle tests, and broad server suite.
+- Tests added/updated: no new test files; existing history and perf harnesses directly cover the moved hot path.
+- Post-migration parity tests: history harness still returned 500 timeline rows, 125 messages, 375 events, and 50 diff cap; perf harness remained within payload, latency, and memory budgets.
+- Perf/memory impact: no query-shape change; extraction keeps bounded detail hydration and detail JSON under budget. One combined run missed RSS by 0.02 MB, then focused and review harness reruns passed with RSS delta down to 44.44 MB.
+- Verification commands and results:
+  - `pnpm effect:audit` - passed, 33 tracked files and 33 server files.
+  - `pnpm exec vitest run tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts tests/server/runtime-lifecycle.test.ts tests/server/db-runtime-state.test.ts` - passed after rerunning the perf gate for RSS noise.
+  - `pnpm exec vitest run tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts` - passed.
+  - `pnpm typecheck` - passed.
+  - `pnpm lint` - passed.
+  - `pnpm build` - passed with existing Vite chunk-size warning.
+- Review subagent summary: no blockers; reviewer confirmed SQL parity, timeline display parity, paging caps, and direct perf harness output at 500 timeline rows, 50 diffs, 89.79ms detail time, 44.44 MB RSS delta.
+- Findings fixed: restored `agentDetailDbRowSchema` import used by workspace snapshots after first verification caught the over-removal.
+- Residual risk: message/event/task writers still live in `src/server/db.ts`; they are the next repository extraction boundary.
 
 ### src/server/db/sessions.ts
 

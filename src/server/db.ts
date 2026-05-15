@@ -8,7 +8,6 @@ import { createHash } from 'node:crypto'
 import { basename, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { Context, Effect, Layer } from 'effect'
-import { z } from 'zod'
 import type {
   AddProjectInput,
   AddScratchpadBlockInput,
@@ -33,24 +32,20 @@ import {
   runtimeKindSchema,
   sessionInterfaceModeForRuntime,
   sessionInterfaceModeSchema,
-  timelineEventToneSchema,
   workspaceSnapshotSchema,
 } from '~/lib/contracts'
 import {
   agentDbRowSchema,
   agentDetailDbRowSchema,
-  agentTaskDbRowSchema,
   archivedSessionDbRowSchema,
   contextUsageDbRowSchema,
   deletedSessionDbRowSchema,
-  diffDbRowSchema,
   idDbRowSchema,
-  messageDbRowSchema,
   persistedSessionDbRowSchema,
   projectDbRowSchema,
   projectIdDbRowSchema,
-  timelineEventDbRowSchema,
 } from './db/schema'
+import { readAgentDetail } from './db/agent-detail'
 import { openKiriDatabase } from './db/connection'
 import {
   deleteProjectRow,
@@ -89,6 +84,11 @@ import {
   setAgentStatus as setAgentStatusInDb,
   upsertAgentContextUsage,
 } from './db/runtime-state'
+import {
+  eventId,
+  normalizeUnixTimestamp,
+  piEventToTimelineEvent,
+} from './db/timeline-format'
 import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
@@ -285,119 +285,12 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
   const agentId = input.agentId.trim()
   const limit = Math.max(1, Math.min(input.limit ?? 500, 500))
   const settings = getSettings()
-  const agent = database
-    .prepare(
-      `
-        SELECT
-          a.id,
-          a.project_id AS projectId,
-          p.cwd,
-          a.slot,
-          a.title,
-          a.runtime,
-          a.interface_mode AS interfaceMode,
-          a.model,
-          a.status,
-          a.session_dir AS sessionDir,
-          a.session_file AS sessionFile,
-          a.position,
-          a.archived_at AS archivedAt,
-          t.id AS threadId,
-          t.preview,
-          t.message_count AS messageCount,
-          t.updated_at AS updatedAt,
-          (
-            SELECT COUNT(*)
-            FROM diff_artifacts d
-            WHERE d.agent_id = a.id
-          ) AS diffCount
-        FROM agent_slots a
-        INNER JOIN projects p ON p.id = a.project_id
-        LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
-        WHERE a.id = ?
-      `,
-    )
-    .get(agentId)
-  const parsedAgent = agentDetailDbRowSchema.parse(agent)
-  const usage = database
-    .prepare(
-      `
-        SELECT
-          agent_id AS agentId,
-          used_tokens AS usedTokens,
-          window_tokens AS windowTokens,
-          updated_at AS updatedAt,
-          session_file AS sessionFile
-        FROM agent_context_usage
-        WHERE agent_id = ?
-      `,
-    )
-    .get(agentId)
-  const activeThread = database
-    .prepare(
-      `
-        SELECT id
-        FROM threads
-        WHERE active = 1 AND agent_id = ?
-      `,
-    )
-    .get(agentId)
-  const activeThreadId = idDbRowSchema.parse(activeThread).id
-  const timelineRows = database
-    .prepare(
-      `
-        SELECT
-          kind,
-          id,
-          role,
-          text,
-          event_kind AS eventKind,
-          tone,
-          label,
-          detail,
-          path,
-          timestamp,
-          payload_json AS payloadJson
-        FROM (
-          SELECT
-            'message' AS kind,
-            m.id,
-            m.role,
-            m.text,
-            NULL AS event_kind,
-            NULL AS tone,
-            NULL AS label,
-            NULL AS detail,
-            NULL AS path,
-            m.timestamp,
-            NULL AS payload_json
-          FROM messages m
-          WHERE m.thread_id = ?
-          UNION ALL
-          SELECT
-            'event' AS kind,
-            e.id,
-            NULL AS role,
-            NULL AS text,
-            e.kind AS event_kind,
-            e.tone,
-            e.label,
-            e.detail,
-            json_extract(e.payload_json, '$.path') AS path,
-            e.timestamp,
-            e.payload_json
-          FROM timeline_events e
-          WHERE e.thread_id = ?
-        )
-        ORDER BY timestamp DESC, id DESC
-        LIMIT ?
-      `,
-    )
-    .all(activeThreadId, activeThreadId, limit)
-    .reverse()
-  const timeline = timelineRows.map((row) => timelineItemFromDetailRow(row, agentId))
-  const diffs = readDiffs(database, agentId, agentDetailDiffLimit)
-  const tasks = readAgentTasks(database, agentId)
+  const detail = readAgentDetail(database, {
+    agentId,
+    limit,
+    diffLimit: agentDetailDiffLimit,
+  })
+  const parsedAgent = detail.agent
 
   return agentDetailSchema.parse({
     id: parsedAgent.id,
@@ -412,20 +305,20 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
     sessionFile: parsedAgent.sessionFile,
     preview: parsedAgent.preview ?? 'No messages yet',
     messageCount: parsedAgent.messageCount ?? 0,
-    diffCount: diffs.length,
+    diffCount: detail.diffs.length,
     contextUsage: readContextUsage(
       parsedAgent,
       settings,
-      usage ? contextUsageDbRowSchema.parse(usage) : undefined,
+      detail.contextUsage,
     ),
     pendingQuestion: readPendingQuestion(database, parsedAgent.id),
     updatedAt: parsedAgent.updatedAt ?? new Date(0).toISOString(),
     isSession: parsedAgent.slot.startsWith('session-'),
-    messages: timeline.flatMap((item) => item.type === 'message' ? [item.message] : []),
-    timelineEvents: timeline.flatMap((item) => item.type === 'event' ? [item.event] : []),
-    timeline,
-    diffs: diffs.map(({ agentId: _agentId, ...diff }) => diff),
-    tasks,
+    messages: detail.timeline.flatMap((item) => item.type === 'message' ? [item.message] : []),
+    timelineEvents: detail.timeline.flatMap((item) => item.type === 'event' ? [item.event] : []),
+    timeline: detail.timeline,
+    diffs: detail.diffs.map(({ agentId: _agentId, ...diff }) => diff),
+    tasks: detail.tasks,
   })
 }
 
@@ -1145,21 +1038,6 @@ export function replaceAgentDiffArtifacts(input: {
   }
 }
 
-function readDiffs(database: DatabaseSync, agentId: string, limit?: number) {
-  return database
-    .prepare(
-      `
-        SELECT id, agent_id AS agentId, title, path, patch, updated_at AS updatedAt
-        FROM diff_artifacts
-        WHERE agent_id = ?
-        ORDER BY updated_at DESC
-        ${limit === undefined ? '' : 'LIMIT ?'}
-      `,
-    )
-    .all(...(limit === undefined ? [agentId] : [agentId, limit]))
-    .map((row) => diffDbRowSchema.parse(row))
-}
-
 function runtimeSessionDir(runtime: string, projectId: string, slot: string) {
   return runtimeSessionDirPath(getKiriConfig(), runtime, projectId, slot)
 }
@@ -1391,36 +1269,6 @@ function replaceAgentTasksForThread(
   })
 }
 
-function readAgentTasks(database: DatabaseSync, agentId: string): AgentTask[] {
-  return database
-    .prepare(
-      `
-        SELECT
-          task_id AS id,
-          title,
-          status,
-          source,
-          tasks.updated_at AS updatedAt,
-          position
-        FROM agent_tasks tasks
-        INNER JOIN threads t ON t.id = tasks.thread_id
-        WHERE t.active = 1 AND t.agent_id = ?
-        ORDER BY tasks.position ASC, tasks.task_id ASC
-      `,
-    )
-    .all(agentId)
-    .map((row) => {
-      const parsed = agentTaskDbRowSchema.parse(row)
-      return agentTaskSchema.parse({
-        id: parsed.id,
-        title: parsed.title,
-        status: parsed.status,
-        source: parsed.source,
-        updatedAt: parsed.updatedAt,
-      })
-    })
-}
-
 function latestPiSessionFile(sessionDir: string) {
   if (!existsSync(sessionDir)) return undefined
   return readdirSync(sessionDir, { withFileTypes: true })
@@ -1496,142 +1344,6 @@ function normalizeSeededModels(database: DatabaseSync) {
   }
 }
 
-function timelineEventFromDbRow(row: z.infer<typeof timelineEventDbRowSchema>) {
-  const payload = parseEventPayload(row.payloadJson)
-  const derived = payload && !row.kind.startsWith('fileOperation')
-    ? piEventDisplayFields(payload, row.kind)
-    : undefined
-  const path = eventPath(payload)
-  return {
-    id: row.id,
-    agentId: row.agentId,
-    kind: row.kind,
-    tone: row.tone,
-    label: derived?.label ?? row.label,
-    detail: derived?.detail ?? row.detail,
-    ...(path ? { path } : {}),
-    timestamp: row.timestamp,
-  }
-}
-
-function eventPath(payload: Record<string, unknown> | null | undefined) {
-  if (!payload) return undefined
-  const path = stringField(payload, 'path')
-  return path?.trim() || undefined
-}
-
-function piEventToTimelineEvent(agentId: string, event: PiRpcEvent) {
-  const kind = event.type.trim()
-  if (!kind || kind === 'agent_end') return null
-
-  const display = piEventDisplayFields(event, kind)
-  const timestamp = numberField(event, 'timestamp')
-  const createdAt = stringField(event, 'createdAt') ?? stringField(event, 'timestamp')
-
-  return {
-    id: eventId(agentId, event),
-    kind,
-    tone: eventTone(event),
-    label: display.label,
-    detail: display.detail,
-    timestamp: timestamp !== undefined
-      ? new Date(normalizeUnixTimestamp(timestamp)).toISOString()
-      : parseTimestamp(createdAt) ?? new Date().toISOString(),
-  }
-}
-
-function piEventDisplayFields(event: Record<string, unknown>, kind: string) {
-  const toolName = stringField(event, 'toolName')
-  const args = recordField(event, 'args')
-  const command = args ? stringField(args, 'command') : undefined
-  const label = toolName === 'bash'
-    ? 'Ran command'
-    : toolName ??
-      stringField(event, 'label') ??
-      stringField(event, 'title') ??
-      stringField(event, 'message') ??
-      formatEventKind(kind)
-  const detail = command ??
-    stringField(event, 'detail') ??
-    stringField(event, 'command') ??
-    stringField(event, 'rawCommand') ??
-    stringField(event, 'error')
-  return { label, detail: detail ?? null }
-}
-
-function parseEventPayload(value: string) {
-  try {
-    const parsed: unknown = JSON.parse(value)
-    return parsed && typeof parsed === 'object'
-      ? parsed as Record<string, unknown>
-      : undefined
-  } catch {
-    return undefined
-  }
-}
-
-function eventId(agentId: string, event: PiRpcEvent) {
-  const stableId = stringField(event, 'id') ??
-    stringField(event, 'eventId') ??
-    stringField(event, 'toolCallId') ??
-    stringField(event, 'requestId')
-  if (stableId) return `pi-event-${agentId}-${event.type}-${stableId}`
-  const hash = createHash('sha256')
-    .update(JSON.stringify(event))
-    .digest('hex')
-    .slice(0, 16)
-  return `pi-event-${agentId}-${event.type}-${hash}`
-}
-
-function eventTone(event: PiRpcEvent): TimelineEventTone {
-  const explicitTone = stringField(event, 'tone')
-  if (explicitTone && timelineEventToneSchema.safeParse(explicitTone).success) {
-    return explicitTone as TimelineEventTone
-  }
-
-  const type = event.type.toLowerCase()
-  if (type.includes('error') || type.includes('failed')) return 'error'
-  if (type.includes('tool') || type.includes('bash') || type.includes('exec')) {
-    return 'tool'
-  }
-  if (type.includes('think') || type.includes('plan')) return 'thinking'
-  return 'info'
-}
-
-function stringField(record: Record<string, unknown>, key: string) {
-  const value = record[key]
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined
-}
-
-function numberField(record: Record<string, unknown>, key: string) {
-  const value = record[key]
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function recordField(record: Record<string, unknown>, key: string) {
-  const value = record[key]
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined
-}
-
-function normalizeUnixTimestamp(value: number) {
-  return value < 1_000_000_000_000 ? value * 1000 : value
-}
-
-function parseTimestamp(value: string | undefined) {
-  if (!value) return undefined
-  const parsed = Date.parse(value)
-  return Number.isNaN(parsed) ? undefined : new Date(parsed).toISOString()
-}
-
-function formatEventKind(kind: string) {
-  return kind
-    .replace(/[_:.-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
 function groupBy<T, K extends string>(
   items: T[],
   getKey: (item: T) => K,
@@ -1647,101 +1359,6 @@ function groupBy<T, K extends string>(
     }
   }
   return groups
-}
-
-function mergeTimeline(
-  messages: Array<{
-    id: string
-    role: MessageRole
-    text: string
-    timestamp: string
-  }>,
-  events: Array<{
-    id: string
-    kind: string
-    tone: TimelineEventTone
-    label: string
-    detail: string | null
-    timestamp: string
-  }>,
-) {
-  return [
-    ...messages.map((message) => ({
-      type: 'message' as const,
-      id: `message:${message.id}`,
-      timestamp: message.timestamp,
-      message,
-    })),
-    ...events.map((event) => ({
-      type: 'event' as const,
-      id: `event:${event.id}`,
-      timestamp: event.timestamp,
-      event,
-    })),
-  ].sort(compareTimelineItems)
-}
-
-function timelineItemFromDetailRow(row: unknown, agentId: string) {
-  const parsed = z.object({
-    kind: z.enum(['message', 'event']),
-    id: z.string(),
-    role: messageRoleSchema.nullable(),
-    text: z.string().nullable(),
-    eventKind: z.string().nullable(),
-    tone: timelineEventToneSchema.nullable(),
-    label: z.string().nullable(),
-    detail: z.string().nullable(),
-    path: z.string().nullable(),
-    timestamp: z.string(),
-    payloadJson: z.string().nullable(),
-  }).parse(row)
-
-  if (parsed.kind === 'message') {
-    const message = messageDbRowSchema.parse({
-      id: parsed.id,
-      agentId,
-      role: parsed.role,
-      text: parsed.text,
-      timestamp: parsed.timestamp,
-    })
-    const { agentId: _agentId, ...value } = message
-    return {
-      type: 'message' as const,
-      id: `message:${value.id}`,
-      timestamp: value.timestamp,
-      message: value,
-    }
-  }
-
-  const event = timelineEventFromDbRow(timelineEventDbRowSchema.parse({
-    id: parsed.id,
-    agentId,
-    kind: parsed.eventKind,
-    tone: parsed.tone,
-    label: parsed.label,
-    detail: parsed.detail,
-    timestamp: parsed.timestamp,
-    payloadJson: parsed.path
-      ? JSON.stringify({ ...safeJson(parsed.payloadJson), path: parsed.path })
-      : parsed.payloadJson,
-  }))
-  const { agentId: _agentId, ...value } = event
-  return {
-    type: 'event' as const,
-    id: `event:${value.id}`,
-    timestamp: value.timestamp,
-    event: value,
-  }
-}
-
-function safeJson(value: string | null) {
-  if (!value) return {}
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
-  } catch {
-    return {}
-  }
 }
 
 function piMessageTimestamp(input: {
@@ -1766,15 +1383,6 @@ function piMessageTimestamp(input: {
   }
 
   return input.turnStartedAt + input.index
-}
-
-function compareTimelineItems(
-  left: { timestamp: string; id: string },
-  right: { timestamp: string; id: string },
-) {
-  const byTimestamp = left.timestamp.localeCompare(right.timestamp)
-  if (byTimestamp !== 0) return byTimestamp
-  return left.id.localeCompare(right.id)
 }
 
 function normalizeDetailLimit(value: number | undefined) {
