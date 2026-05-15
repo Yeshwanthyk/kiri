@@ -32,6 +32,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | not-started | required | Already uses Effect well; needs scoped lifecycle and smaller protocol/process modules. |
 | `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | not-started | required | Main Codex retained-state and stale-turn risk. |
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | not-started | required | Highest priority split; preserve compatibility exports until callers move. |
+| `src/server/db/migrations.ts` | repository | DB schema creation and migration helpers | migrating | required | Extracted and reviewed; final status waits for DB connection/transaction service boundary. |
 | `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
 | `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
 | `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | not-started | required | Direct `git` subprocess boundary. |
@@ -115,6 +116,28 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: no blockers; confirmed safe pure extraction, no circular dependency, valid tracker row. Non-blocking unused import nit fixed.
 - Findings fixed: restored required contract-schema imports in `db.ts` after focused tests caught the missing imports; removed unused imports from `schema.ts`.
 - Residual risk: none known for this pure extraction.
+
+### src/server/db/migrations.ts
+
+- Status: extracted; final migration status remains `migrating|required` until the DB connection/transaction service boundary owns migration execution.
+- Target seam: DB schema creation and legacy migration helpers isolated from the compatibility facade.
+- Behavior preserved: copied existing migration SQL, migration order, indexes, constraints, and cleanup calls from `src/server/db.ts` without changing public DB exports.
+- Dependencies moved: schema/migration SQL and legacy repair helpers moved from `src/server/db.ts` to `src/server/db/migrations.ts`.
+- Baseline tests before migration: existing DB, detail, perf, scratchpad, CLI, MCP, and runtime harness tests.
+- Tests added/updated: `tests/server/db-migrations.test.ts` covers the legacy `CHECK (runtime = 'pi')` migration and renamed foreign-key repair path.
+- Post-migration parity tests: focused DB/perf/scratchpad/CLI/MCP tests remained green after extraction.
+- Perf/memory impact: none expected; module split only.
+- Verification commands and results:
+  - `pnpm effect:audit` - passed, 25 tracked files and 25 server files.
+  - `pnpm typecheck` - passed.
+  - `pnpm test -- --runInBand tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts tests/server/task-progress-db.test.ts tests/server/scratchpad-trigger.test.ts tests/server/effect-migration-audit.test.ts` - passed, 30 files and 125 tests.
+  - `pnpm test -- --runInBand tests/server/db-migrations.test.ts` - passed, 31 files and 126 tests.
+  - `pnpm exec vitest run tests/server/db-migrations.test.ts` - passed, 1 file and 1 test.
+  - `pnpm lint` - passed.
+  - `pnpm build` - passed; existing Vite chunk-size warning remains.
+- Review subagent summary: initial review found one process blocker that the new migrations file was untracked for the slice commit; no schema/order regressions were found. The reviewer recommended adding a legacy-schema fixture; that test was added.
+- Findings fixed: added `tests/server/db-migrations.test.ts` for legacy runtime-check widening, row preservation, foreign-key repair, and `PRAGMA foreign_key_check`.
+- Residual risk: migrations still receive a raw SQLite handle until the next DB connection/transaction service slice moves execution behind the service boundary.
 
 ## Audit Command
 

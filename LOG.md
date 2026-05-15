@@ -45,6 +45,7 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Moved Knip config to `knip.jsonc` and made `shiki` an explicit dependency for `src/lib/code-highlighter.ts`.
 - 2026-05-15: Perf run result: 6,000 stored timeline rows -> 500 returned rows; 80 stored diffs -> 50 returned diffs; detail payload 1,079,099 bytes; snapshot 2.72ms; detail 90.53ms standalone / 252.13ms under parallel test load; RSS delta 44.34MB under 64MB budget.
 - 2026-05-15: Added detailed interactive HTML explainer at `docs/kiri-perf-memory-explainer.html`.
+- 2026-05-15: Extracted DB migrations into `src/server/db/migrations.ts` and added a legacy pi-only schema fixture to prove runtime constraint widening and foreign-key repair.
 
 ## Remaining Knip Findings
 
@@ -98,8 +99,9 @@ Every file in migration scope should end in one of two clear states. Migration s
 
 - [ ] Keep current `src/server/db.ts` exports stable while extracting implementation.
 - [ ] Create DB connection and transaction layer.
-- [ ] Move migrations into a dedicated module.
+- [x] Move migrations into a dedicated module.
 - [x] Move row schemas/parsers into a dedicated schema module.
+- [x] Add legacy schema migration parity tests for runtime-check widening and renamed foreign-key repair.
 - [ ] Extract project/session/scratchpad/runtime-state/thread repositories.
 - [ ] Extract workspace snapshot and agent detail projections.
 - [ ] Add repository parity tests using seeded DB fixtures.
