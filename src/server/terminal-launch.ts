@@ -257,8 +257,13 @@ function claudeProjectKey(cwd: string) {
 
 function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
   return Effect.gen(function* () {
-  const args = ['--dangerously-bypass-approvals-and-sandbox']
+  const state = objectState(config.runtimeStateJson)
+  const resume = stringValue(state.resume) ?? stringValue(state.codexSessionId)
+  const args = resume
+    ? ['resume', '--dangerously-bypass-approvals-and-sandbox']
+    : ['--dangerously-bypass-approvals-and-sandbox']
   if (config.model) args.push('--model', config.model)
+  if (resume) args.push(resume)
   const env = yield* baseTerminalEnv(
     config,
     context,

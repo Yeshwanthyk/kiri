@@ -32,6 +32,10 @@ test.beforeEach(async ({ page }, testInfo) => {
     force: true,
     recursive: true,
   })
+  rmSync(resolve(projectRoot, '.kiri', 'codex-home'), {
+    force: true,
+    recursive: true,
+  })
   const database = new DatabaseSync(testDbPath)
   resetE2eDatabase(database)
   if (testInfo.title !== 'empty workspace starts with an add-project path') {
@@ -623,6 +627,59 @@ test('terminal interface sessions render the agent runtime in chat and shell in 
   await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
 })
 
+test('codex terminal interface resumes after the PTY exits and keeps diffs available', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop terminal interface flow')
+  const title = `Codex Terminal Resume ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title, 'codex', 'low', 'terminal')
+
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  await expect(page.getByTestId('terminal-panel')).toContainText('Agent terminal')
+  await expect(page.getByTestId('terminal-transcript')).toContainText('mode:fresh')
+  const freshTranscript = await page.getByTestId('terminal-transcript').textContent()
+  const sessionId = freshTranscript?.match(/session:(fake-session-[^\s]+)/)?.[1]
+  if (!sessionId) throw new Error('Fake Codex terminal session id was not rendered')
+
+  let terminalInput = page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+  await terminalInput.click()
+  await page.keyboard.type('remember alpha')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`remembered:alpha:session:${sessionId}`)
+  await expect
+    .poll(async () => readAgentRuntimeState(title)?.codexSessionId)
+    .toBe(sessionId)
+
+  await page.keyboard.type('exit')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText('bye session:')
+
+  await page.getByTestId('tab-terminal').click()
+  await expect(page.getByTestId('terminal-panel')).toContainText('Shell terminal')
+  await page.getByTestId('tab-chat').click()
+  await expect(page.getByTestId('terminal-transcript')).toContainText('mode:resume')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`session:${sessionId}`)
+
+  terminalInput = page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+  await terminalInput.click()
+  await page.keyboard.type('state')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`state:alpha:session:${sessionId}:mode:resume`)
+
+  writeFileSync(fileOperationFixturePath, 'codex terminal diff\n')
+  await page.getByTestId('tab-diffs').click()
+  await expect
+    .poll(async () => diffPathsForSessionTitle(title).includes('src/kiri-file-operation-e2e.tmp'))
+    .toBe(true)
+  await expect(page.getByTestId('diff-panel')).toContainText('Changed files')
+})
+
 test('selected agent detail loads chat, diffs, and local drafts', async ({ page, isMobile }) => {
   test.skip(isMobile, 'desktop selected-agent detail flow')
   const detailAgentId = 'agent-detail-e2e'
@@ -868,6 +925,19 @@ function diffPathsForSessionTitle(title: string) {
       `)
       .all(title)
       .map((row) => (row as { path: string }).path)
+  } finally {
+    database.close()
+  }
+}
+
+function readAgentRuntimeState(title: string) {
+  const database = new DatabaseSync(testDbPath)
+  try {
+    const row = database
+      .prepare('SELECT runtime_state_json AS runtimeStateJson FROM agent_slots WHERE title = ?')
+      .get(title) as { runtimeStateJson: string | null } | undefined
+    if (!row?.runtimeStateJson) return null
+    return JSON.parse(row.runtimeStateJson) as Record<string, unknown>
   } finally {
     database.close()
   }

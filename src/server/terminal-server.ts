@@ -6,6 +6,7 @@ import { parse } from 'node:url'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import * as pty from 'node-pty'
 import { terminalModeSchema, type TerminalMode } from '~/lib/contracts'
+import { rememberCodexTerminalSession } from './codex-cli-sessions'
 import { getAgentLaunchConfig } from './db'
 import { buildTerminalProcessLaunch, type TerminalAgentLaunchConfig } from './terminal-launch'
 import { makeTerminalRegistry, type TerminalRegistrySession } from './terminal-registry'
@@ -132,6 +133,8 @@ async function getOrCreateTerminalSession(
 
   const launch = buildTerminalProcessLaunch(config, mode, defaultShell())
   await cleanupStaleClaudeSession(launch)
+  const launchedAtMs = Date.now()
+  const launchToken = `${launchedAtMs}:${randomBytes(8).toString('hex')}`
   const proc = pty.spawn(launch.command, launch.args, {
     name: 'xterm-256color',
     cols,
@@ -147,6 +150,14 @@ async function getOrCreateTerminalSession(
     proc,
     initialBuffer: `\r\n[kiri terminal: ${launch.label} @ ${config.cwd}]\r\n`,
   })
+  if (mode === 'runtime' && launch.label === 'codex') {
+    void rememberCodexTerminalSession(config, launch.env, {
+      launchedAtMs,
+      launchToken,
+    }).catch((error) => {
+      console.error('Failed to remember Codex terminal session', error)
+    })
+  }
 
   proc.onData((data) => {
     terminalRegistry.append(session, data)

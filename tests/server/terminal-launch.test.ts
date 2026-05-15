@@ -127,6 +127,42 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.env.KIRI_MODEL).toBe('test-model')
   })
 
+  it('resumes Codex when runtime state carries a Codex session id', () => {
+    vi.stubEnv('KIRI_CODEX_BIN', '/tmp/bin/codex')
+
+    const launch = buildTerminalProcessLaunch({
+      ...launchConfig('codex'),
+      runtimeStateJson: JSON.stringify({ codexSessionId: 'codex-session-id' }),
+    }, 'runtime', shell)
+
+    expect(launch.command).toBe('/tmp/bin/codex')
+    expect(launch.args).toEqual([
+      'resume',
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--model',
+      'test-model',
+      'codex-session-id',
+    ])
+  })
+
+  it('prefers an explicit Codex resume state over the discovered session id', () => {
+    const launch = buildTerminalProcessLaunch({
+      ...launchConfig('codex'),
+      runtimeStateJson: JSON.stringify({
+        resume: 'explicit-codex-session',
+        codexSessionId: 'discovered-codex-session',
+      }),
+    }, 'runtime', shell)
+
+    expect(launch.args).toEqual([
+      'resume',
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--model',
+      'test-model',
+      'explicit-codex-session',
+    ])
+  })
+
   it('launches Pi against the Kiri session directory', () => {
     vi.stubEnv('KIRI_PI_BIN', '/tmp/bin/pi')
 
