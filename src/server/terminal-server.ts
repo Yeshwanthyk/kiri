@@ -8,6 +8,7 @@ import * as pty from 'node-pty'
 import { terminalModeSchema, type TerminalMode } from '~/lib/contracts'
 import { getAgentLaunchConfig } from './db'
 import { buildTerminalProcessLaunch, type TerminalAgentLaunchConfig } from './terminal-launch'
+import { makeTerminalRegistry, type TerminalRegistrySession } from './terminal-registry'
 
 type TerminalServerInfo = {
   host: string
@@ -27,27 +28,19 @@ type TerminalClientMessage =
       rows: number
     }
 
-type TerminalSession = {
-  key: string
-  cwd: string
-  mode: TerminalMode
-  label: string
-  proc: pty.IPty
-  sockets: Set<WebSocket>
-  buffer: string
-  idleTimer: ReturnType<typeof setTimeout> | null
-  exited: boolean
-}
-
 let terminalServer: TerminalServerInfo | null = null
 let httpServer: Server | null = null
 let terminalServerPromise: Promise<TerminalServerInfo> | null = null
-const terminalSessions = new Map<string, TerminalSession>()
 
 const terminalPath = '/terminal'
 const terminalToken = randomBytes(32).toString('base64url')
 const maxReplayBytes = 32_000
 const idleKillMs = 5 * 60 * 1000
+const terminalRegistry = makeTerminalRegistry({
+  maxReplayBytes,
+  idleKillMs,
+  socketOpenState: WebSocket.OPEN,
+})
 
 export function ensureTerminalServer(): Promise<TerminalServerInfo> {
   if (terminalServer) return Promise.resolve(terminalServer)
@@ -57,8 +50,7 @@ export function ensureTerminalServer(): Promise<TerminalServerInfo> {
 }
 
 export function closeAgentRuntimeTerminal(agentId: string) {
-  const session = terminalSessions.get(`${agentId}:runtime`)
-  if (session) killTerminalSession(session)
+  terminalRegistry.closeAgentRuntime(agentId)
 }
 
 async function startTerminalServer(): Promise<TerminalServerInfo> {
@@ -80,51 +72,48 @@ async function startTerminalServer(): Promise<TerminalServerInfo> {
 }
 
 async function handleTerminalConnection(socket: WebSocket, request: IncomingMessage) {
-    const query = parse(request.url ?? '', true).query
-    if (query.token !== terminalToken) {
-      closeWithReason(socket, 'Invalid terminal token')
+  const query = parse(request.url ?? '', true).query
+  if (query.token !== terminalToken) {
+    closeWithReason(socket, 'Invalid terminal token')
+    return
+  }
+
+  const agentId = query.agentId
+  if (typeof agentId !== 'string' || agentId.trim() === '') {
+    closeWithReason(socket, 'Missing agent id')
+    return
+  }
+
+  let session: TerminalRegistrySession
+  try {
+    const config = getAgentLaunchConfig(agentId)
+    const mode = parseTerminalMode(query.mode)
+    const cols = positiveInt(query.cols, 100)
+    const rows = positiveInt(query.rows, 30)
+    session = await getOrCreateTerminalSession(config, mode, cols, rows)
+    attachTerminalSocket(session, socket)
+  } catch (error) {
+    closeWithReason(socket, error instanceof Error ? error.message : String(error))
+    return
+  }
+
+  socket.on('message', (raw) => {
+    const message = parseClientMessage(raw)
+    if (!message) return
+    if (message.type === 'input') {
+      session.proc.write(message.data)
       return
     }
+    session.proc.resize(message.cols, message.rows)
+  })
 
-    const agentId = query.agentId
-    if (typeof agentId !== 'string' || agentId.trim() === '') {
-      closeWithReason(socket, 'Missing agent id')
-      return
-    }
-
-    let session: TerminalSession
-    try {
-      const config = getAgentLaunchConfig(agentId)
-      const mode = parseTerminalMode(query.mode)
-      const cols = positiveInt(query.cols, 100)
-      const rows = positiveInt(query.rows, 30)
-      session = await getOrCreateTerminalSession(config, mode, cols, rows)
-      attachTerminalSocket(session, socket)
-    } catch (error) {
-      closeWithReason(socket, error instanceof Error ? error.message : String(error))
-      return
-    }
-
-    socket.on('message', (raw) => {
-      const message = parseClientMessage(raw)
-      if (!message) return
-      if (message.type === 'input') {
-        session.proc.write(message.data)
-        return
-      }
-      session.proc.resize(message.cols, message.rows)
-    })
-
-    socket.on('close', () => {
-      detachTerminalSocket(session, socket)
-    })
+  socket.on('close', () => {
+    detachTerminalSocket(session, socket)
+  })
 }
 
-function closeTerminalServerForTests() {
-  for (const session of Array.from(terminalSessions.values())) {
-    killTerminalSession(session)
-  }
-  terminalSessions.clear()
+export function closeTerminalServerForTests() {
+  terminalRegistry.closeAll()
   httpServer?.close()
   httpServer = null
   terminalServer = null
@@ -137,15 +126,9 @@ async function getOrCreateTerminalSession(
   cols: number,
   rows: number,
 ) {
-  const key = terminalSessionKey(config, mode)
-  const existing = terminalSessions.get(key)
-  if (existing && existing.cwd === config.cwd) {
-    existing.proc.resize(cols, rows)
-    return existing
-  }
-  if (existing) {
-    killTerminalSession(existing)
-  }
+  const key = terminalRegistry.sessionKey(config, mode)
+  const existing = terminalRegistry.getReusable(config, mode, cols, rows)
+  if (existing) return existing
 
   const launch = buildTerminalProcessLaunch(config, mode, defaultShell())
   await cleanupStaleClaudeSession(launch)
@@ -156,78 +139,33 @@ async function getOrCreateTerminalSession(
     cwd: launch.cwd,
     env: launch.env,
   })
-  const session: TerminalSession = {
+  const session = terminalRegistry.register({
     key,
     cwd: config.cwd,
     mode,
     label: launch.label,
     proc,
-    sockets: new Set(),
-    buffer: `\r\n[kiri terminal: ${launch.label} @ ${config.cwd}]\r\n`,
-    idleTimer: null,
-    exited: false,
-  }
-  terminalSessions.set(key, session)
+    initialBuffer: `\r\n[kiri terminal: ${launch.label} @ ${config.cwd}]\r\n`,
+  })
 
   proc.onData((data) => {
-    appendTerminalBuffer(session, data)
-    broadcastTerminalData(session, data)
+    terminalRegistry.append(session, data)
+    terminalRegistry.broadcast(session, data)
   })
   proc.onExit(({ exitCode, signal }) => {
-    session.exited = true
-    if (session.idleTimer) {
-      clearTimeout(session.idleTimer)
-      session.idleTimer = null
-    }
     const message = `\r\n[kiri terminal exited: ${exitCode}${signal ? ` ${signal}` : ''}]\r\n`
-    appendTerminalBuffer(session, message)
-    broadcastTerminalData(session, message)
-    for (const socket of session.sockets) {
-      socket.close()
-    }
-    terminalSessions.delete(key)
+    terminalRegistry.exit(session, message)
   })
 
   return session
 }
 
-function attachTerminalSocket(session: TerminalSession, socket: WebSocket) {
-  if (session.idleTimer) {
-    clearTimeout(session.idleTimer)
-    session.idleTimer = null
-  }
-  session.sockets.add(socket)
-  if (session.buffer) socket.send(session.buffer)
+function attachTerminalSocket(session: TerminalRegistrySession, socket: WebSocket) {
+  terminalRegistry.attach(session, socket)
 }
 
-function detachTerminalSocket(session: TerminalSession, socket: WebSocket) {
-  session.sockets.delete(socket)
-  if (session.exited) return
-  if (session.sockets.size > 0 || session.idleTimer) return
-  session.idleTimer = setTimeout(() => {
-    if (session.sockets.size === 0) killTerminalSession(session)
-  }, idleKillMs)
-}
-
-function killTerminalSession(session: TerminalSession) {
-  if (session.exited) return
-  session.exited = true
-  if (session.idleTimer) {
-    clearTimeout(session.idleTimer)
-    session.idleTimer = null
-  }
-  terminalSessions.delete(session.key)
-  session.proc.kill()
-}
-
-function appendTerminalBuffer(session: TerminalSession, data: string) {
-  session.buffer = `${session.buffer}${data}`.slice(-maxReplayBytes)
-}
-
-function broadcastTerminalData(session: TerminalSession, data: string) {
-  for (const socket of session.sockets) {
-    if (socket.readyState === WebSocket.OPEN) socket.send(data)
-  }
+function detachTerminalSocket(session: TerminalRegistrySession, socket: WebSocket) {
+  terminalRegistry.detach(session, socket)
 }
 
 function listen(server: Server, port: number, host: string) {
@@ -285,12 +223,6 @@ function defaultShell() {
 
 function parseTerminalMode(value: unknown): TerminalMode {
   return terminalModeSchema.catch('shell').parse(value)
-}
-
-function terminalSessionKey(config: TerminalAgentLaunchConfig, mode: TerminalMode) {
-  return mode === 'shell'
-    ? `${config.projectId}:shell`
-    : `${config.id}:runtime`
 }
 
 async function cleanupStaleClaudeSession(launch: ReturnType<typeof buildTerminalProcessLaunch>) {

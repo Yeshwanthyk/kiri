@@ -64,7 +64,8 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/scratchpad-trigger.ts` | use-case | scratchpad/workspace service method | not-started | required | Shared semantics are good; move behind shared service. |
 | `src/server/settings.ts` | config | `config/settings-service.ts` with typed config errors | migrating | required | Typed injectable settings service added; review/verification pending. |
 | `src/server/terminal-launch.ts` | process-adapter | terminal launch resolver service | migrating | required | Typed injectable terminal launch service added; review/verification pending. |
-| `src/server/terminal-server.ts` | runtime-adapter | `terminal/registry.ts` scoped websocket/PTY registry | not-started | required | Singleton terminal sessions and idle timers need scoped cleanup. |
+| `src/server/terminal-registry.ts` | runtime-adapter | terminal session registry for PTY/socket state | migrating | required | Extracted from `terminal-server.ts`; review/verification pending. |
+| `src/server/terminal-server.ts` | runtime-adapter | scoped websocket/PTY service over terminal registry | migrating | required | Terminal session registry extracted; final service boundary pending. |
 | `src/server/workspace.ts` | transport | `transport/workspace-functions.ts` over `WorkspaceService` | not-started | required | Server functions should become parse/run/respond only. |
 
 ## Per-File Record Template
@@ -89,6 +90,28 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/terminal-registry.ts and src/server/terminal-server.ts
+
+- Status: migrating; final status waits for websocket/PTY server startup to move behind a scoped terminal service.
+- Target seam: terminal session registry for session keys, reusable session lookup, socket attach/detach, idle cleanup, replay buffer caps, broadcast, exit handling, runtime-session close, and close-all cleanup.
+- Behavior preserved: `ensureTerminalServer`, terminal websocket handling, PTY spawn, shell/runtime keying, replay buffer cap, idle kill, close-on-exit, and `closeAgentRuntimeTerminal` behavior remain wired through compatibility server functions.
+- Dependencies moved: mutable terminal session map and timer cleanup logic moved out of `terminal-server.ts` into `terminal-registry.ts` with injectable timers and socket open-state.
+- Baseline tests before migration: terminal e2e coverage for switching tabs, shell persistence, terminal-interface runtime/shell split, plus terminal launch unit tests.
+- Tests added/updated: `tests/server/terminal-registry.test.ts` covers shell/runtime keying, cwd reuse and stale-session kill, stale-exit replacement ownership, replay buffer cap, open-socket broadcast, idle kill cancellation on reattach, close-agent-runtime idle cleanup, late-exit ownership safety, and close-all cleanup.
+- Post-migration parity tests: focused terminal-registry/terminal-launch tests passed.
+- Perf/memory impact: retained terminal sessions remain bounded by explicit key map and idle timers; buffer cap is now directly unit-tested.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/terminal-registry.test.ts tests/server/terminal-launch.test.ts` - passed, 2 files / 17 tests
+  - `pnpm exec eslint src/server/terminal-registry.ts src/server/terminal-server.ts tests/server/terminal-registry.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 39 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `git diff --check` - passed
+- Review subagent summary: Tesla found and verified one blocker: stale PTY exit could delete a live replacement with the same key. Second pass found no blockers after ownership checks and added coverage; terminal e2e persistence smoke passed in review.
+- Findings fixed: typecheck caught that the registry proc contract needed `write` for websocket input; added it. Focused lint caught an unused internal test helper, so `closeTerminalServerForTests` is now an explicit export for future terminal tests. Review caught stale-exit replacement ownership; fixed by deleting only when `sessions.get(session.key) === session` and added replacement/reattach/close cleanup tests.
+- Residual risk: server startup, websocket handshake, PTY spawn, stale Claude process cleanup, and actual browser terminal flows remain covered by e2e rather than fast unit tests until the terminal service phase.
 
 ### src/server/terminal-launch.ts
 

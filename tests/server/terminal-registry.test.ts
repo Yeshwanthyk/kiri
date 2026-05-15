@@ -1,0 +1,233 @@
+import { describe, expect, it, vi } from 'vitest'
+import { makeTerminalRegistry } from '../../src/server/terminal-registry'
+
+function proc() {
+  return {
+    resize: vi.fn(),
+    write: vi.fn(),
+    kill: vi.fn(),
+  }
+}
+
+function socket(openState = 1) {
+  return {
+    readyState: openState,
+    send: vi.fn(),
+    close: vi.fn(),
+  }
+}
+
+function createRegistry() {
+  const timers: Array<() => void> = []
+  return {
+    timers,
+    registry: makeTerminalRegistry({
+      maxReplayBytes: 12,
+      idleKillMs: 100,
+      socketOpenState: 1,
+      timers: {
+        setTimeout: (callback) => {
+          timers.push(callback)
+          return timers.length as unknown as ReturnType<typeof setTimeout>
+        },
+        clearTimeout: () => undefined,
+      },
+    }),
+  }
+}
+
+describe('terminal registry', () => {
+  it('keys shell sessions by project and runtime sessions by agent', () => {
+    const { registry } = createRegistry()
+    const config = {
+      id: 'agent-1',
+      projectId: 'project-1',
+      runtime: 'codex' as const,
+      cwd: '/repo',
+    }
+
+    expect(registry.sessionKey(config, 'shell')).toBe('project-1:shell')
+    expect(registry.sessionKey(config, 'runtime')).toBe('agent-1:runtime')
+  })
+
+  it('reuses matching cwd sessions and kills stale cwd sessions', () => {
+    const { registry } = createRegistry()
+    const firstProc = proc()
+    const session = registry.register({
+      key: 'agent-1:runtime',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: firstProc,
+      initialBuffer: '',
+    })
+    const config = {
+      id: 'agent-1',
+      projectId: 'project-1',
+      runtime: 'codex' as const,
+      cwd: '/repo',
+    }
+
+    expect(registry.getReusable(config, 'runtime', 120, 40)).toBe(session)
+    expect(firstProc.resize).toHaveBeenCalledWith(120, 40)
+
+    expect(registry.getReusable({ ...config, cwd: '/other' }, 'runtime', 80, 24)).toBeNull()
+    expect(firstProc.kill).toHaveBeenCalledTimes(1)
+    expect(registry.sessions.has('agent-1:runtime')).toBe(false)
+  })
+
+  it('does not let stale process exit unregister a replacement session with the same key', () => {
+    const { registry } = createRegistry()
+    const oldProc = proc()
+    const oldSession = registry.register({
+      key: 'agent-1:runtime',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: oldProc,
+      initialBuffer: '',
+    })
+    const config = {
+      id: 'agent-1',
+      projectId: 'project-1',
+      runtime: 'codex' as const,
+      cwd: '/other',
+    }
+
+    expect(registry.getReusable(config, 'runtime', 80, 24)).toBeNull()
+    const replacement = registry.register({
+      key: 'agent-1:runtime',
+      cwd: '/other',
+      mode: 'runtime',
+      label: 'codex',
+      proc: proc(),
+      initialBuffer: '',
+    })
+    registry.exit(oldSession, 'old exit')
+
+    expect(registry.sessions.get('agent-1:runtime')).toBe(replacement)
+  })
+
+  it('caps replay buffer and broadcasts only to open sockets', () => {
+    const { registry } = createRegistry()
+    const session = registry.register({
+      key: 'agent-1:runtime',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: proc(),
+      initialBuffer: 'hello',
+    })
+    const open = socket(1)
+    const closed = socket(3)
+    registry.attach(session, open)
+    registry.attach(session, closed)
+
+    registry.append(session, '-0123456789abcdef')
+    registry.broadcast(session, 'next')
+
+    expect(session.buffer).toBe('456789abcdef')
+    expect(open.send).toHaveBeenCalledWith('hello')
+    expect(open.send).toHaveBeenCalledWith('next')
+    expect(closed.send).toHaveBeenCalledWith('hello')
+    expect(closed.send).not.toHaveBeenCalledWith('next')
+  })
+
+  it('kills idle sessions after the last socket detaches and cancels idle kill on reattach', () => {
+    const timers: Array<() => void> = []
+    const activeTimers = new Set<ReturnType<typeof setTimeout>>()
+    const registry = makeTerminalRegistry({
+      maxReplayBytes: 12,
+      idleKillMs: 100,
+      socketOpenState: 1,
+      timers: {
+        setTimeout: (callback) => {
+          const timer = (timers.length + 1) as unknown as ReturnType<typeof setTimeout>
+          activeTimers.add(timer)
+          timers.push(() => {
+            if (activeTimers.has(timer)) callback()
+          })
+          return timer
+        },
+        clearTimeout: (timer) => {
+          clearTimeout(timer)
+          activeTimers.delete(timer)
+        },
+      },
+    })
+    const fakeProc = proc()
+    const session = registry.register({
+      key: 'agent-1:runtime',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: fakeProc,
+      initialBuffer: '',
+    })
+    const first = socket()
+
+    registry.attach(session, first)
+    registry.detach(session, first)
+    expect(timers).toHaveLength(1)
+
+    registry.attach(session, first)
+    expect(activeTimers.size).toBe(0)
+    expect(session.idleTimer).toBeNull()
+    registry.detach(session, first)
+    expect(timers).toHaveLength(2)
+
+    timers[0]?.()
+    expect(fakeProc.kill).not.toHaveBeenCalled()
+    timers[0]?.()
+    expect(fakeProc.kill).not.toHaveBeenCalled()
+    timers[1]?.()
+    expect(fakeProc.kill).toHaveBeenCalledTimes(1)
+    expect(registry.sessions.has(session.key)).toBe(false)
+  })
+
+  it('closeAgentRuntime and closeAll cleanup sessions without touching shell-only keys accidentally', () => {
+    const clearTimeout = vi.fn()
+    const timer = 1 as unknown as ReturnType<typeof setTimeout>
+    const registry = makeTerminalRegistry({
+      maxReplayBytes: 12,
+      idleKillMs: 100,
+      socketOpenState: 1,
+      timers: {
+        setTimeout: () => timer,
+        clearTimeout,
+      },
+    })
+    const runtimeProc = proc()
+    const shellProc = proc()
+    const runtimeSession = registry.register({
+      key: 'agent-1:runtime',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: runtimeProc,
+      initialBuffer: '',
+    })
+    registry.register({
+      key: 'project-1:shell',
+      cwd: '/repo',
+      mode: 'shell',
+      label: 'shell',
+      proc: shellProc,
+      initialBuffer: '',
+    })
+    runtimeSession.idleTimer = timer
+
+    registry.closeAgentRuntime('agent-1')
+    expect(runtimeProc.kill).toHaveBeenCalledTimes(1)
+    expect(clearTimeout).toHaveBeenCalledTimes(1)
+    expect(runtimeSession.idleTimer).toBeNull()
+    expect(shellProc.kill).not.toHaveBeenCalled()
+
+    registry.exit(runtimeSession, 'late runtime exit')
+    expect(registry.sessions.has('project-1:shell')).toBe(true)
+
+    registry.closeAll()
+    expect(shellProc.kill).toHaveBeenCalledTimes(1)
+    expect(registry.sessions.size).toBe(0)
+  })
+})

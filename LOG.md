@@ -76,6 +76,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed project directory picker hardening. Review found no issues; focused directory-picker and host-capability tests passed.
 - 2026-05-15: Started terminal launch resolver hardening. Added typed injectable `TerminalLaunchService` for terminal command construction with env/filesystem/process/runtime-binary injection while preserving `buildTerminalProcessLaunch`.
 - 2026-05-15: Completed terminal launch resolver hardening. Review passed after adding direct injected-service coverage for Claude/Codex/Pi/shell launch parity; focused terminal launch/runtime binary checks passed.
+- 2026-05-15: Started terminal registry extraction. Moved retained terminal session map mechanics, replay buffer cap, idle cleanup, broadcast, exit, and close-all behavior into `terminal-registry.ts` with focused cleanup tests.
+- 2026-05-15: Completed terminal registry extraction. Review caught and fixed stale PTY exit deleting replacement sessions; focused registry/launch checks and terminal persistence e2e smoke passed.
 
 ## Remaining Knip Findings
 
