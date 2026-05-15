@@ -35,6 +35,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/connection.ts` | repository | DB open/configure/migrate boundary | migrating | required | Owns SQLite handle creation; review/verification pending. |
 | `src/server/db/migrations.ts` | repository | DB schema creation and migration helpers | migrating | required | Extracted and reviewed; final status waits for DB connection/transaction service boundary. |
 | `src/server/db/projects.ts` | repository | Project repository over DB connection/transaction helpers | migrating | required | Extracted from `db.ts`; review/verification pending. |
+| `src/server/db/runtime-state.ts` | repository | Agent launch/runtime state/status/context usage repository | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/scratchpad.ts` | repository | Scratchpad block repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/sessions.ts` | repository | Session summary and lifecycle repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
@@ -201,6 +202,25 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: no blockers in initial or second-pass review; reviewer confirmed SQL, trim behavior, error strings, ordering, FK semantics, and no import cycle.
 - Findings fixed: added direct FK semantics coverage for missing triggered agent and `ON DELETE SET NULL` on agent/project deletion.
 - Residual risk: marking a nonexistent block remains a no-op, matching previous behavior and left unchanged.
+
+### src/server/db/runtime-state.ts
+
+- Status: extracted; final migration status remains `migrating|required` until repositories sit behind the DB/runtime service boundary.
+- Target seam: agent runtime-state repository over `DatabaseSync`.
+- Behavior preserved: active launch config lookup, runtime JSON parse/fallback, status validation, context usage upsert/clear/math, pending question parsing, and thinking-level lookup retain previous semantics.
+- Dependencies moved: launch config SQL, runtime state/status mutations, context usage persistence/math, pending question read, and thinking-level read moved out of `src/server/db.ts`.
+- Baseline tests before migration: runtime lifecycle, provider runtime, terminal launch, CLI/MCP flows, and broad server suite.
+- Tests added/updated: `tests/server/db-runtime-state.test.ts` covers launch config, archived lookup hiding, runtime JSON valid/invalid/clear, status validation, context usage no-op/upsert/preserve/fallback/cap/null-window math, pending question parsing, and thinking-level reads.
+- Post-migration parity tests: runtime lifecycle, provider runtime, and terminal launch tests remained green after extraction.
+- Perf/memory impact: none expected; SQL and context math were moved without changing query shape.
+- Verification commands and results:
+  - `pnpm effect:audit` - passed, 31 tracked files and 31 server files.
+  - `pnpm exec vitest run tests/server/db-runtime-state.test.ts tests/server/runtime-lifecycle.test.ts tests/server/provider-runtime.test.ts tests/server/terminal-launch.test.ts` - passed, 4 files and 27 tests.
+  - `pnpm typecheck` - passed.
+  - `pnpm lint` - passed.
+- Review subagent summary: no blockers in initial or second-pass review; reviewer confirmed SQL/error parity and public wrapper preservation.
+- Findings fixed: added direct context usage fallback, over-window cap, and missing-window coverage.
+- Residual risk: runtime-state repository is still synchronous over `DatabaseSync`; Effect service wrapping lands in a later phase.
 
 ### src/server/db/sessions.ts
 

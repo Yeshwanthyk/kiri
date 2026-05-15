@@ -12,10 +12,9 @@ import { z } from 'zod'
 import type {
   AddProjectInput,
   AddScratchpadBlockInput,
-  AgentTask,
   AgentStatus,
+  AgentTask,
   AgentDetail,
-  ContextUsage,
   DiffArtifact,
   DeleteSessionInput,
   RestoreSessionInput,
@@ -23,28 +22,23 @@ import type {
   StartSessionInput,
   MessageRole,
   ReorderProjectsInput,
-  ThinkingLevel,
   TimelineEventTone,
   BoardMessage,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import {
   agentTaskSchema,
-  agentStatusSchema,
   agentDetailSchema,
   messageRoleSchema,
-  pendingQuestionSchema,
   runtimeKindSchema,
   sessionInterfaceModeForRuntime,
   sessionInterfaceModeSchema,
-  thinkingLevelSchema,
   timelineEventToneSchema,
   workspaceSnapshotSchema,
 } from '~/lib/contracts'
 import {
   agentDbRowSchema,
   agentDetailDbRowSchema,
-  agentLaunchConfigSchema,
   agentTaskDbRowSchema,
   archivedSessionDbRowSchema,
   contextUsageDbRowSchema,
@@ -83,6 +77,18 @@ import {
   requireSessionSummary,
   restoreSessionRow as restoreSessionRowFromDb,
 } from './db/sessions'
+import {
+  clearAgentContextUsage,
+  clearAgentRuntimeState as clearAgentRuntimeStateInDb,
+  getAgentLaunchConfig as getAgentLaunchConfigFromDb,
+  getAgentRuntimeState as getAgentRuntimeStateFromDb,
+  getAgentThinkingLevel as getAgentThinkingLevelFromDb,
+  readContextUsage,
+  readPendingQuestion,
+  setAgentRuntimeState as setAgentRuntimeStateInDb,
+  setAgentStatus as setAgentStatusInDb,
+  upsertAgentContextUsage,
+} from './db/runtime-state'
 import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
@@ -210,7 +216,7 @@ export function getWorkspaceSnapshot(): WorkspaceSnapshot {
           settings,
           contextUsageByAgent.get(agent.id),
         ),
-        pendingQuestion: readPendingQuestion(agent.id),
+        pendingQuestion: readPendingQuestion(database, agent.id),
         updatedAt: agent.updatedAt ?? new Date(0).toISOString(),
         isSession: agent.slot.startsWith('session-'),
         messages: [],
@@ -412,7 +418,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
       settings,
       usage ? contextUsageDbRowSchema.parse(usage) : undefined,
     ),
-    pendingQuestion: readPendingQuestion(parsedAgent.id),
+    pendingQuestion: readPendingQuestion(database, parsedAgent.id),
     updatedAt: parsedAgent.updatedAt ?? new Date(0).toISOString(),
     isSession: parsedAgent.slot.startsWith('session-'),
     messages: timeline.flatMap((item) => item.type === 'message' ? [item.message] : []),
@@ -729,59 +735,23 @@ export function startSessionAndGetId(input: StartSessionInput) {
 }
 
 export function getAgentLaunchConfig(agentId: string) {
-  const row = getDb()
-    .prepare(
-      `
-        SELECT
-          a.id,
-          a.project_id AS projectId,
-          a.runtime,
-          a.session_dir AS sessionDir,
-          a.session_file AS sessionFile,
-          a.model,
-          a.runtime_state_json AS runtimeStateJson,
-          p.cwd
-        FROM agent_slots a
-        INNER JOIN projects p ON p.id = a.project_id
-        WHERE a.id = ?
-          AND a.archived_at IS NULL
-      `,
-    )
-    .get(agentId)
-  if (!row) throw new Error(`Agent not found: ${agentId}`)
-  return agentLaunchConfigSchema.parse(row)
+  return getAgentLaunchConfigFromDb(getDb(), agentId)
 }
 
 export function getAgentRuntimeState(agentId: string) {
-  const row = getDb()
-    .prepare('SELECT runtime_state_json AS runtimeStateJson FROM agent_slots WHERE id = ?')
-    .get(agentId) as { runtimeStateJson: string | null } | undefined
-  if (!row?.runtimeStateJson) return {}
-  try {
-    const parsed = JSON.parse(row.runtimeStateJson)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {}
-  } catch {
-    return {}
-  }
+  return getAgentRuntimeStateFromDb(getDb(), agentId)
 }
 
 export function setAgentRuntimeState(agentId: string, state: Record<string, unknown>) {
-  getDb()
-    .prepare('UPDATE agent_slots SET runtime_state_json = ? WHERE id = ?')
-    .run(JSON.stringify(state), agentId)
+  setAgentRuntimeStateInDb(getDb(), agentId, state)
 }
 
 export function clearAgentRuntimeState(agentId: string) {
-  getDb()
-    .prepare('UPDATE agent_slots SET runtime_state_json = NULL WHERE id = ?')
-    .run(agentId)
+  clearAgentRuntimeStateInDb(getDb(), agentId)
 }
 
 export function setAgentStatus(agentId: string, status: AgentStatus) {
-  const parsed = agentStatusSchema.parse(status)
-  getDb().prepare('UPDATE agent_slots SET status = ? WHERE id = ?').run(parsed, agentId)
+  setAgentStatusInDb(getDb(), agentId, status)
 }
 
 export function appendUserMessage(input: { agentId: string; text: string }) {
@@ -931,7 +901,7 @@ export function recordRuntimeContextUsage(input: {
 }
 
 export function clearRuntimeContextUsage(agentId: string) {
-  getDb().prepare('DELETE FROM agent_context_usage WHERE agent_id = ?').run(agentId)
+  clearAgentContextUsage(getDb(), agentId)
 }
 
 export function recordPiMessages(input: {
@@ -1086,21 +1056,8 @@ export function recordAgentInfoEvent(input: {
   insertAgentInfoEvent(getDb(), { ...input, timestamp: new Date().toISOString() })
 }
 
-export function getAgentThinkingLevel(agentId: string): ThinkingLevel | null {
-  const row = getDb()
-    .prepare(
-      `
-        SELECT e.detail
-        FROM timeline_events e
-        INNER JOIN threads t ON t.id = e.thread_id
-        WHERE t.agent_id = ? AND t.active = 1 AND e.kind = 'thinking_level'
-        ORDER BY e.timestamp DESC, e.id DESC
-        LIMIT 1
-      `,
-    )
-    .get(agentId) as { detail: string | null } | undefined
-  const parsed = thinkingLevelSchema.safeParse(row?.detail)
-  return parsed.success ? parsed.data : null
+export function getAgentThinkingLevel(agentId: string) {
+  return getAgentThinkingLevelFromDb(getDb(), agentId)
 }
 
 function insertAgentInfoEvent(
@@ -1462,65 +1419,6 @@ function readAgentTasks(database: DatabaseSync, agentId: string): AgentTask[] {
         updatedAt: parsed.updatedAt,
       })
     })
-}
-
-function upsertAgentContextUsage(
-  database: DatabaseSync,
-  input: {
-    agentId: string
-    usedTokens: number | undefined
-    windowTokens?: number | undefined
-    sessionFile?: string
-    updatedAt?: string
-  },
-) {
-  if (input.usedTokens === undefined) return
-  database
-    .prepare(
-      `
-        INSERT INTO agent_context_usage (
-          agent_id, used_tokens, window_tokens, updated_at, session_file
-        )
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(agent_id) DO UPDATE SET
-          used_tokens = excluded.used_tokens,
-          window_tokens = COALESCE(excluded.window_tokens, agent_context_usage.window_tokens),
-          updated_at = excluded.updated_at,
-          session_file = excluded.session_file
-      `,
-    )
-    .run(
-      input.agentId,
-      input.usedTokens,
-      input.windowTokens ?? null,
-      input.updatedAt ?? new Date().toISOString(),
-      input.sessionFile ?? null,
-    )
-}
-
-function readContextUsage(
-  agent: z.infer<typeof agentDbRowSchema>,
-  settings: ReturnType<typeof getSettings>,
-  persistedUsage: z.infer<typeof contextUsageDbRowSchema> | undefined,
-): ContextUsage | null {
-  if (!persistedUsage) return null
-
-  const windowTokens =
-    persistedUsage.windowTokens ?? settings.runtimes[agent.runtime].contextWindows?.[agent.model]
-  if (!windowTokens) return null
-
-  const usedTokens = persistedUsage.usedTokens
-  return {
-    usedTokens,
-    remainingTokens: Math.max(windowTokens - usedTokens, 0),
-    windowTokens,
-    usedPercent: Math.min((usedTokens / windowTokens) * 100, 100),
-  }
-}
-
-function readPendingQuestion(agentId: string) {
-  const parsed = pendingQuestionSchema.safeParse(getAgentRuntimeState(agentId).pendingQuestion)
-  return parsed.success ? parsed.data : null
 }
 
 function latestPiSessionFile(sessionDir: string) {

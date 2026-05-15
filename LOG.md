@@ -50,6 +50,7 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Started project repository extraction with `src/server/db/projects.ts` owning project summaries, create/delete, hide/unhide, and visible reorder persistence.
 - 2026-05-15: Started scratchpad repository extraction with `src/server/db/scratchpad.ts` owning block list/add/delete/get/trigger persistence.
 - 2026-05-15: Started session repository extraction with `src/server/db/sessions.ts` owning session list/start/archive/restore/rename persistence.
+- 2026-05-15: Started runtime-state repository extraction with `src/server/db/runtime-state.ts` owning launch config, runtime JSON, status, context usage, pending question, and thinking-level reads.
 
 ## Remaining Knip Findings
 
