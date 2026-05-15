@@ -89,6 +89,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed runtime projection split. Review caught and fixed event type drift and non-Error boundary drift; focused runtime lifecycle checks passed.
 - 2026-05-15: Started workspace/control delete-session cleanup unification. Moved duplicated retained-runtime and terminal cleanup sequencing into `runtime-cleanup.ts`.
 - 2026-05-15: Completed workspace/control delete-session cleanup unification. Review found no blockers; follow-up tests pin active-only workspace lookup, include-archived Kiri-control lookup, workspace helper result parity, and cleanup-failure behavior.
+- 2026-05-15: Started workspace service extraction. Added `WorkspaceService` as the UI-facing use-case seam and reduced `workspace.ts` to schema/transport delegation through the service.
+- 2026-05-15: Completed workspace service extraction. Review found no blockers; focused service tests, CLI/MCP parity, scratchpad trigger, diff refresh, typecheck, lint, and effect audit passed before full verification.
 
 ## Remaining Knip Findings
 

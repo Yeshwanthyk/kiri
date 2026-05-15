@@ -29,196 +29,124 @@ import {
   triggerScratchpadBlockInputSchema,
   unhideProjectInputSchema,
 } from '~/lib/contracts'
-import {
-  addProject,
-  addScratchpadBlock,
-  deleteScratchpadBlock,
-  renameSession,
-  reorderProjects,
-  restoreSession,
-  getAgentDetail,
-  getAgentLaunchConfig,
-  getWorkspaceSnapshot,
-  hideProject,
-  startSession,
-  unhideProject,
-} from './db'
-import {
-  forkAgentSession,
-  answerAgentQuestion,
-  interruptAgent,
-  promptAgent,
-  resetAgentSession,
-  reviewAgentSession,
-  setAgentThinkingLevel,
-  steerAgent,
-} from './runtime'
-import {
-  deleteProjectWithRuntimeCleanup,
-  deleteSessionWithRuntimeCleanup,
-} from './runtime-cleanup'
-import { triggerScratchpadSession } from './scratchpad-trigger'
-import { ensureTerminalServer } from './terminal-server'
-import {
-  setAgentByProjectPreference,
-  setChatTypographyPreference,
-  setKeymapPreference,
-  setThemePreference,
-} from './preferences'
-import { refreshTerminalSessionDiffs } from './diff-refresh'
-import { chooseProjectDirectory } from './directory-picker'
+import { runWorkspaceServiceMethod } from './workspace-service'
 
 export const fetchWorkspaceSnapshot = createServerFn({ method: 'GET' }).handler(
-  async () => getWorkspaceSnapshot(),
+  async () => runWorkspaceServiceMethod((workspace) => workspace.snapshot()),
 )
 
 const fetchAgentDetail = createServerFn({ method: 'GET' })
   .inputValidator(agentDetailInputSchema)
-  .handler(async ({ data }) => getAgentDetail(data))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.agentDetail(data)))
 
 export const addProjectMutation = createServerFn({ method: 'POST' })
   .inputValidator(addProjectInputSchema)
-  .handler(async ({ data }) => addProject(data))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.addProject(data)))
 
 export const deleteProjectMutation = createServerFn({ method: 'POST' })
   .inputValidator(deleteProjectInputSchema)
-  .handler(async ({ data }) => deleteProjectWithRuntimeCleanup(data.id))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.deleteProject(data)))
 
 export const hideProjectMutation = createServerFn({ method: 'POST' })
   .inputValidator(hideProjectInputSchema)
-  .handler(async ({ data }) => hideProject(data.id))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.hideProject(data)))
 
 export const reorderProjectsMutation = createServerFn({ method: 'POST' })
   .inputValidator(reorderProjectsInputSchema)
-  .handler(async ({ data }) => reorderProjects(data))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.reorderProjects(data)))
 
 export const unhideProjectMutation = createServerFn({ method: 'POST' })
   .inputValidator(unhideProjectInputSchema)
-  .handler(async ({ data }) => unhideProject(data.id))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.unhideProject(data)))
 
 export const chooseProjectDirectoryMutation = createServerFn({ method: 'POST' })
-  .handler(async () => chooseProjectDirectory())
+  .handler(async () => runWorkspaceServiceMethod((workspace) => workspace.chooseProjectDirectory()))
 
 export const deleteSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(deleteSessionInputSchema)
-  .handler(async ({ data }) => deleteSessionWithRuntimeCleanup(data))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.deleteSession(data)))
 
 export const restoreSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(restoreSessionInputSchema)
-  .handler(async ({ data }) => restoreSession(data))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.restoreSession(data)))
 
 export const renameSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(renameSessionInputSchema)
-  .handler(async ({ data }) => renameSession(data))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.renameSession(data)))
 
 export const sendMessageMutation = createServerFn({ method: 'POST' })
   .inputValidator(sendMessageInputSchema)
-  .handler(async ({ data }) => {
-    await promptAgent(data)
-    return getWorkspaceSnapshot()
-  })
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.sendMessage(data)))
 
 export const steerMessageMutation = createServerFn({ method: 'POST' })
   .inputValidator(steerMessageInputSchema)
-  .handler(async ({ data }) => {
-    await steerAgent(data)
-    return getWorkspaceSnapshot()
-  })
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.steerMessage(data)))
 
 export const interruptMessageMutation = createServerFn({ method: 'POST' })
   .inputValidator(interruptMessageInputSchema)
-  .handler(async ({ data }) => {
-    await interruptAgent(data)
-    return getWorkspaceSnapshot()
-  })
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.interruptMessage(data)))
 
 export const setThinkingLevelMutation = createServerFn({ method: 'POST' })
   .inputValidator(setThinkingLevelInputSchema)
-  .handler(async ({ data }) => {
-    await setAgentThinkingLevel(data)
-    return getWorkspaceSnapshot()
-  })
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.setThinkingLevel(data)))
 
 export const setThemePreferenceMutation = createServerFn({ method: 'POST' })
   .inputValidator(setThemePreferenceInputSchema)
-  .handler(async ({ data }) => setThemePreference(data))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.setThemePreference(data)))
 
 export const setKeymapPreferenceMutation = createServerFn({ method: 'POST' })
   .inputValidator(setKeymapPreferenceInputSchema)
-  .handler(async ({ data }) => setKeymapPreference(data))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.setKeymapPreference(data)))
 
 export const setChatTypographyPreferenceMutation = createServerFn({ method: 'POST' })
   .inputValidator(setChatTypographyPreferenceInputSchema)
-  .handler(async ({ data }) => setChatTypographyPreference(data))
+  .handler(async ({ data }) =>
+    runWorkspaceServiceMethod((workspace) => workspace.setChatTypographyPreference(data)))
 
 export const setAgentByProjectPreferenceMutation = createServerFn({ method: 'POST' })
   .inputValidator(setAgentByProjectPreferenceInputSchema)
-  .handler(async ({ data }) => setAgentByProjectPreference(data))
+  .handler(async ({ data }) =>
+    runWorkspaceServiceMethod((workspace) => workspace.setAgentByProjectPreference(data)))
 
 export const resetSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(resetSessionInputSchema)
-  .handler(async ({ data }) => {
-    await resetAgentSession(data)
-    return getWorkspaceSnapshot()
-  })
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.resetSession(data)))
 
 export const forkSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(forkSessionInputSchema)
-  .handler(async ({ data }) => {
-    const agentId = await forkAgentSession(data)
-    return { agentId, snapshot: getWorkspaceSnapshot() }
-  })
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.forkSession(data)))
 
 export const reviewSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(reviewSessionInputSchema)
-  .handler(async ({ data }) => {
-    await reviewAgentSession(data)
-    return getWorkspaceSnapshot()
-  })
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.reviewSession(data)))
 
 export const answerQuestionMutation = createServerFn({ method: 'POST' })
   .inputValidator(answerQuestionInputSchema)
-  .handler(async ({ data }) => {
-    await answerAgentQuestion(data)
-    return getWorkspaceSnapshot()
-  })
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.answerQuestion(data)))
 
 export const terminalConfigQuery = createServerFn({ method: 'GET' })
   .inputValidator(terminalConfigInputSchema)
-  .handler(async ({ data }) => {
-    const config = getAgentLaunchConfig(data.agentId)
-    const server = await ensureTerminalServer()
-    return {
-      ...server,
-      mode: data.mode,
-      runtime: config.runtime,
-      model: config.model,
-    }
-  })
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.terminalConfig(data)))
 
 export const refreshTerminalDiffsMutation = createServerFn({ method: 'POST' })
   .inputValidator(refreshTerminalDiffsInputSchema)
-  .handler(async ({ data }) => refreshTerminalSessionDiffs(data.agentId))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.refreshTerminalDiffs(data)))
 
 export const startSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(startSessionInputSchema)
-  .handler(async ({ data }) => startSession(data))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.startSession(data)))
 
 export const addScratchpadBlockMutation = createServerFn({ method: 'POST' })
   .inputValidator(addScratchpadBlockInputSchema)
-  .handler(async ({ data }) => addScratchpadBlock(data))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.addScratchpadBlock(data)))
 
 export const deleteScratchpadBlockMutation = createServerFn({ method: 'POST' })
   .inputValidator(deleteScratchpadBlockInputSchema)
-  .handler(async ({ data }) => deleteScratchpadBlock(data.id))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.deleteScratchpadBlock(data)))
 
 export const triggerScratchpadBlockMutation = createServerFn({ method: 'POST' })
   .inputValidator(triggerScratchpadBlockInputSchema)
-  .handler(async ({ data }) => {
-    const { agentId } = await triggerScratchpadSession(data)
-    const snapshot = getWorkspaceSnapshot()
-    return { agentId, snapshot }
-  })
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.triggerScratchpadBlock(data)))
 
 export const workspaceQueryOptions = () =>
   queryOptions({

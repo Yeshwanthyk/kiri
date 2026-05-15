@@ -70,7 +70,8 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/terminal-launch.ts` | process-adapter | terminal launch resolver service | migrating | required | Typed injectable terminal launch service added; review/verification pending. |
 | `src/server/terminal-registry.ts` | runtime-adapter | terminal session registry for PTY/socket state | migrating | required | Extracted from `terminal-server.ts`; review/verification pending. |
 | `src/server/terminal-server.ts` | runtime-adapter | scoped websocket/PTY service over terminal registry | migrating | required | Terminal session registry extracted; final service boundary pending. |
-| `src/server/workspace.ts` | transport | `transport/workspace-functions.ts` over `WorkspaceService` | migrating | required | Delete-session handler now delegates shared cleanup use-case; broader server functions still need transport-only reduction. |
+| `src/server/workspace-service.ts` | use-case | shared workspace service over DB/runtime/preference/terminal use-cases | migrating | required | First service slice added; workspace transport delegates to it while dependency leaf services remain compatibility exports. |
+| `src/server/workspace.ts` | transport | `transport/workspace-functions.ts` over `WorkspaceService` | migrating | required | Server functions now delegate through `WorkspaceService`; final transport split/file move remains. |
 
 ## Per-File Record Template
 
@@ -138,6 +139,30 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: Sagan found no blockers. Follow-up notes led to preserving workspace active-only lookup, adding workspace helper coverage, and pinning cleanup-failure behavior; second pass found no blockers.
 - Findings fixed: split active-session lookup for workspace from include-archived lookup for Kiri control; added coverage for the workspace helper and cleanup failure after DB archive success.
 - Residual risk: cleanup still surfaces retained-state cleanup failures after the DB archive has succeeded, matching the existing fail-fast behavior; a later scoped finalizer phase can intentionally switch this to best-effort cleanup with explicit logging.
+
+### src/server/workspace-service.ts and src/server/workspace.ts transport delegation
+
+- Status: migrating; final status waits for DB/runtime/preference/terminal dependencies to be injected as Effect services instead of compatibility function dependencies, and for `workspace.ts` to move into a transport directory.
+- Target seam: `WorkspaceService` owns UI-facing workspace use-cases while `workspace.ts` handles TanStack server function schemas and response wiring.
+- Behavior preserved: exported server functions, query options, workspace snapshots after runtime actions, fork/trigger return shapes, preference mutation returns, terminal config merge shape, project/session/scratchpad mutation outputs, and agent detail query behavior remain unchanged.
+- Dependencies moved: direct DB/runtime/preference/directory-picker/diff-refresh/terminal/scratchpad-trigger imports moved out of `workspace.ts` into `workspace-service.ts` behind an injectable dependency record and Effect service tag.
+- Baseline tests before migration: CLI/MCP tests, runtime command tests, scratchpad trigger tests, terminal config flow through component typecheck, and full server suite covered existing behavior.
+- Tests added/updated: `tests/server/workspace-service.test.ts` covers post-runtime snapshots, fork result shape, terminal config merge, scratchpad trigger result shape, and typed error wrapping with original cause preservation.
+- Post-migration parity tests: focused workspace service/runtime cleanup tests passed; CLI/MCP/scratchpad/diff-refresh parity tests passed.
+- Perf/memory impact: no payload/query changes; workspace handlers now have one orchestrator seam for future no-overlap polling, snapshot budgeting, and runtime cleanup assertions.
+- Verification commands and results:
+  - `effect-solutions show services-and-layers testing basics error-handling` - reviewed before writing Effect service code
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/workspace-service.test.ts tests/server/runtime-cleanup.test.ts` - passed, 2 files / 12 tests
+  - `pnpm exec eslint src/server/workspace-service.ts tests/server/workspace-service.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 44 tracked/server files
+  - `pnpm exec vitest run tests/server/workspace-service.test.ts tests/server/kiri-control-cli.test.ts tests/server/kiri-mcp.test.ts tests/server/scratchpad-trigger.test.ts tests/server/diff-refresh.test.ts` - passed, 5 files / 13 tests
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `pnpm test -- --runInBand` - passed, 50 files / 213 tests including `tests/server/perf-gates.test.ts`
+- Review subagent summary: Sagan found no blockers. Notes: `workspace.ts` is now transport-only enough though repetitive; only non-Error throw values are now surfaced as `WorkspaceServiceError`; representative snapshot/fork/terminal/scratchpad/error tests cover the main sequencing paths.
+- Findings fixed: initial typecheck caught `chooseProjectDirectory` widening from `string` to `string | null`; restored string contract. Focused eslint caught unused schema imports and async test stubs without awaits; removed unused imports and switched stubs to `Promise.resolve`/`Promise.reject`.
+- Residual risk: service dependencies are still compatibility functions rather than leaf Effect services, so this is orchestration extraction, not the final app-layer composition.
 
 ### src/server/pi-retained-state.ts, src/server/pi-runtime.ts, src/server/pi-rpc.ts, and project runtime cleanup
 
