@@ -66,8 +66,6 @@ import {
 } from './db/runtime-state'
 import {
   appendUserMessageRow,
-  ensureThreadForAgent,
-  hydrateProjectionMessages,
   recordAgentInfoEventRow,
   recordPiLiveMessages,
   recordPiProjectionMessages,
@@ -86,13 +84,12 @@ import {
 } from './db/session-operations'
 import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
-import { getKiriConfig, runtimeSessionDirPath } from './kiri-config'
+import { getKiriConfig, runtimeSessionDirPath, type KiriConfig } from './kiri-config'
 import { getUiPreferences } from './preferences'
-
-let db: DatabaseSync | undefined
 
 export type KiriDbApi = {
   readonly get: Effect.Effect<DatabaseSync>
+  readonly close: Effect.Effect<boolean>
 }
 
 export class KiriDbService extends Context.Tag('@kiri/KiriDb')<
@@ -100,22 +97,64 @@ export class KiriDbService extends Context.Tag('@kiri/KiriDb')<
   KiriDbApi
 >() {
   static readonly layer = Layer.sync(KiriDbService, () =>
-    KiriDbService.of({
-      get: Effect.sync(() => getDb()),
-    }),
+    KiriDbService.of(makeKiriDbService()),
   )
 }
 
+export type KiriDbDependencies = {
+  readonly getConfig: () => Pick<KiriConfig, 'dbPath'>
+  readonly openDatabase: (dbPath: string) => DatabaseSync
+  readonly getPiRuntimeSettings: () => {
+    readonly models: readonly string[]
+    readonly defaultModel: string
+  }
+  readonly bootstrap: (
+    database: DatabaseSync,
+    input: {
+      readonly piModels: readonly string[]
+      readonly defaultPiModel: string
+    },
+  ) => void
+}
+
+const liveKiriDb = makeKiriDbService()
+
+export function makeKiriDbService(
+  dependencies: KiriDbDependencies = {
+    getConfig: getKiriConfig,
+    openDatabase: openKiriDatabase,
+    getPiRuntimeSettings: () => getRuntimeSettings('pi'),
+    bootstrap: applyDatabaseBootstraps,
+  },
+): KiriDbApi {
+  let database: DatabaseSync | undefined
+  return {
+    get: Effect.sync(() => {
+      if (database) return database
+      const config = dependencies.getConfig()
+      database = dependencies.openDatabase(config.dbPath)
+      const piSettings = dependencies.getPiRuntimeSettings()
+      dependencies.bootstrap(database, {
+        piModels: piSettings.models,
+        defaultPiModel: piSettings.defaultModel,
+      })
+      return database
+    }),
+    close: Effect.sync(() => {
+      if (!database) return false
+      database.close()
+      database = undefined
+      return true
+    }),
+  }
+}
+
 export function getDb() {
-  if (db) return db
-  const config = getKiriConfig()
-  db = openKiriDatabase(config.dbPath)
-  const piSettings = getRuntimeSettings('pi')
-  applyDatabaseBootstraps(db, {
-    piModels: piSettings.models,
-    defaultPiModel: piSettings.defaultModel,
-  })
-  return db
+  return Effect.runSync(liveKiriDb.get)
+}
+
+export function closeKiriDb() {
+  return Effect.runSync(liveKiriDb.close)
 }
 
 export function getWorkspaceSnapshot() {
@@ -168,7 +207,13 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
     messages: detail.timeline.flatMap((item) => item.type === 'message' ? [item.message] : []),
     timelineEvents: detail.timeline.flatMap((item) => item.type === 'event' ? [item.event] : []),
     timeline: detail.timeline,
-    diffs: detail.diffs.map(({ agentId: _agentId, ...diff }) => diff),
+    diffs: detail.diffs.map((diff) => ({
+      id: diff.id,
+      title: diff.title,
+      path: diff.path,
+      patch: diff.patch,
+      updatedAt: diff.updatedAt,
+    })),
     tasks: detail.tasks,
   })
 }
@@ -196,7 +241,7 @@ export function addProjectSummary(input: AddProjectInput) {
 }
 
 export function startSession(input: StartSessionInput) {
-  const id = insertSession(input)
+  insertSession(input)
   return getWorkspaceSnapshot()
 }
 

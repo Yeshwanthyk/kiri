@@ -33,7 +33,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | not-started | required | Already uses Effect well; needs scoped lifecycle and smaller protocol/process modules. |
 | `src/server/codex-retained-state.ts` | runtime-adapter | Codex retained-state registry for adapters, listeners, threads, turns, queues, generations, and diff-turn guards | migrating | required | Extracted from `codex-runtime.ts`; review/verification pending. |
 | `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | migrating | required | Retained-state maps extracted; runtime service/projection/attachment splits remain. |
-| `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | not-started | required | Highest priority split; preserve compatibility exports until callers move. |
+| `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | migrating | required | Compatibility facade now uses explicit `KiriDbService` cache/close seam over extracted repositories. |
 | `src/server/db/agent-detail.ts` | repository | Paged agent detail reader for timeline, diffs, tasks, and context usage | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/bootstrap.ts` | repository | Startup DB data repair and seed cleanup boundary | migrating | required | Extracted from `db.ts`; direct bootstrap tests added and review passed; final status waits for DB/settings service boundary. |
 | `src/server/db/connection.ts` | repository | DB open/configure/migrate boundary | migrating | required | Owns SQLite handle creation; review/verification pending. |
@@ -282,6 +282,30 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: no blockers; confirmed runtime lift preserves helper behavior, tool payload/schema behavior, enum defaults, and selected-session/context behavior. Suggested MCP-level fallback/context coverage was added after review, and follow-up review confirmed those assertions are meaningful and not brittle.
 - Findings fixed: focused typecheck caught a `runtime` name collision between the MCP helper and the `runtime` tool argument; renamed the helper to `mcpRuntime`. Focused eslint removed stale manual enum casts after schema inference carried the correct types.
 - Residual risk: `kiri-mcp.ts` still owns all tool registration; a future split can move tool definitions into smaller grouped modules once parity tests cover each group.
+
+### src/server/db.ts
+
+- Status: migrating; `db.ts` remains the public compatibility facade while callers move to smaller repositories/services.
+- Target seam: explicit `KiriDbService` owns open/bootstrap/cache/close lifecycle; extracted repositories and projections own concrete DB behavior.
+- Behavior preserved: `getDb()` still returns a cached migrated `DatabaseSync`, all existing facade exports keep their names and sync behavior, and workspace/detail/session hydration paths still delegate to extracted repository modules.
+- Dependencies moved: the module-global `db` variable was replaced by a live `KiriDbService` instance. The service accepts injected config/open/bootstrap/runtime-settings dependencies for tests and exposes `close` through `closeKiriDb()`.
+- Baseline tests before migration: DB connection, effect layer, session-operation, and perf gate tests covered open/migration/layer/detail behavior.
+- Tests added/updated: `tests/server/db-service.test.ts` covers cache reuse, bootstrap inputs, explicit close, idempotent close, and reopen after close.
+- Post-migration parity tests: focused DB service/connection/effect-layer/session-operation/perf tests passed.
+- Perf/memory impact: the live DB connection now has an explicit close/reset seam, reducing retained native SQLite handles in long-running tests, desktop shutdown, and future app-layer finalizers.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm lint` - passed
+  - `pnpm exec eslint src/server/db.ts tests/server/db-service.test.ts tests/server/db-connection.test.ts tests/server/effect-layers.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 47 tracked / 47 server files
+  - `pnpm exec vitest run tests/server/db-service.test.ts tests/server/db-connection.test.ts tests/server/effect-layers.test.ts tests/server/db-session-operations.test.ts tests/server/perf-gates.test.ts` - passed, 5 files / 8 tests
+  - `pnpm exec vitest run tests/server/db-timeline-writes.test.ts tests/server/db-workspace-snapshot.test.ts tests/server/diff-refresh.test.ts` - passed, 3 files / 8 tests
+  - `pnpm build` - passed, existing Vite large chunk warning only
+  - `pnpm test -- --runInBand` - passed, 56 files / 233 tests
+  - `git diff --check` - passed
+- Review subagent summary: no blockers; confirmed cache/bootstrap behavior, sync facade compatibility, explicit diff mapping, and `startSession` behavior. Noted expected residual caveat that `KiriDbService.layer` instances and the legacy facade can still open separate handles until app composition moves to a scoped shared layer.
+- Findings fixed: focused eslint surfaced old unused facade imports and locals once `db.ts` entered strict targeted lint; removed stale imports, avoided an unused session id in `startSession`, and mapped diff rows explicitly instead of destructuring away `agentId`.
+- Residual risk: most facade exports still synchronously call `getDb()` for compatibility; final migration should push callers to repository/service layers and use `closeKiriDb()` from app shutdown/test harnesses.
 
 ### src/server/pi-retained-state.ts, src/server/pi-runtime.ts, src/server/pi-rpc.ts, and project runtime cleanup
 

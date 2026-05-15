@@ -102,6 +102,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Started Kiri MCP runtime split. Moved Effect execution, context refresh, and selected-session fallback helpers into `KiriMcpRuntimeService` while preserving MCP tool registration and CLI parity behavior.
 - 2026-05-15: Kiri MCP runtime review found no blockers. Added MCP-level coverage for default selected-session rename, selected-project scratchpad fallback, and mutation context refresh.
 - 2026-05-15: Completed Kiri MCP runtime split. Follow-up review approved the fallback/context assertions; full typecheck/lint/audit/build/test/diff gates passed.
+- 2026-05-15: Started `db.ts` compatibility facade cleanup. Replaced the module-global database handle with an explicit `KiriDbService` cache/close seam and added focused DB lifecycle coverage.
+- 2026-05-15: Completed `db.ts` compatibility facade cleanup. Review found no blockers and called out the expected separate layer/facade handle caveat; full typecheck/lint/audit/build/test/diff gates passed.
 
 ## Remaining Knip Findings
 
