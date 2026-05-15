@@ -106,11 +106,13 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed `db.ts` compatibility facade cleanup. Review found no blockers and called out the expected separate layer/facade handle caveat; full typecheck/lint/audit/build/test/diff gates passed.
 - 2026-05-15: Started Codex app-server protocol split. Moved pure JSON-RPC/Codex schemas and protocol parsers into `codex-app-protocol.ts` while preserving adapter exports for existing callers.
 - 2026-05-15: Completed Codex app-server protocol split. Review found no blockers; typecheck, lint, effect audit, build, focused Codex protocol/adapter tests, full test suite, and diff check passed.
+- 2026-05-15: Final review flagged history access beyond the default 500-row page as a no-regression risk. Added agent-detail `offset` paging metadata, a selected-agent "Load older history" path, and merge tests so default hydration stays bounded while older chat history remains reachable.
+- 2026-05-15: Older-history second-pass review found no blockers after preserving `timelinePage` through detail merge and dropping stale in-flight older-page responses on agent/revision changes. Final gates passed: typecheck, targeted eslint, lint, effect audit, perf harness, build, 57-file/238-test unit suite, focused Playwright smokes, Knip triage, HTML script parse, and diff check.
 
 ## Remaining Knip Findings
 
 - Unused dependency candidates retained for now instead of removing features blindly: `@tanstack/react-query-devtools`, `@tanstack/react-router-devtools`, `fast-check`, `pure-rand`, `redaxios`, `tailwind-merge`.
-- Unused exported API candidates retained as public/internal contract surface until a separate API-pruning pass: storage helpers, contract symbols, UI preference constants, `createKiriMcpServer`, and `makeRuntimeRegistry`.
+- Unused exported API candidates retained as public/internal contract surface until a separate API-pruning pass: `KiriBoard` compatibility re-export, storage helpers, contract symbols, UI preference constants, service tags, `createKiriMcpServer`, and runtime cleanup/projection helpers.
 
 # Kiri Effect Migration Goal
 
@@ -140,7 +142,7 @@ Every file in migration scope should end in one of two clear states. Migration s
 - [ ] Settings, preferences, runtime binary resolution, git diff capture, osascript directory selection, and filesystem/process IO are behind service seams.
 - [ ] Oversized modules are split only after tests pin behavior, with `db.ts`, `codex-runtime.ts`, `pi-runtime.ts`, `workspace.ts`, `KiriBoard.tsx`, `chat-panel.tsx`, and `dialogs.tsx` treated as the main locality risks.
 - [ ] Existing perf budgets remain enforced for snapshot hydration, agent detail hydration, payload size, returned timeline rows, returned diffs, and RSS delta.
-- [ ] New migration harnesses prove old/new parity before each implementation flip.
+- [x] New migration harnesses prove old/new parity before each implementation flip.
 - [ ] UI, CLI, MCP, terminal, scratchpad, runtime, and project/session flows keep passing focused smoke coverage.
 - [ ] Final state is documented in a detailed interactive HTML explainer.
 
@@ -166,6 +168,7 @@ Every file in migration scope should end in one of two clear states. Migration s
 - [ ] Extract workspace snapshot and agent detail projections.
 - [ ] Add repository parity tests using seeded DB fixtures.
 - [ ] Verify detail paging and perf gates remain unchanged.
+- [x] Add offset paging for older detail history so the 500-row default page is not a feature-removal boundary.
 - [ ] Run review subagents after each extracted DB module: connection, transaction, migrations, schema, each repository, each projection, and final compatibility facade.
 
 ### Phase 3: Config And File IO
@@ -216,12 +219,12 @@ Every file in migration scope should end in one of two clear states. Migration s
 
 ### Phase 8: Final Verification And Explainer
 
-- [ ] Run typecheck, lint, unit tests, perf gates, migration audit, and focused Playwright smokes.
-- [ ] Run Knip and explicitly triage remaining findings.
-- [ ] Update `docs/effect-migration-audit.md` with final decisions and actual migrated shape.
-- [ ] Create a detailed interactive HTML explainer showing final layers, file ownership, flows, harnesses, and remaining risks.
-- [ ] Commit the migration in logical blocks by phase.
-- [ ] Run final review subagents over the full branch diff before declaring the goal complete.
+- [x] Run typecheck, lint, unit tests, perf gates, migration audit, and focused Playwright smokes.
+- [x] Run Knip and explicitly triage remaining findings.
+- [x] Update `docs/effect-migration-audit.md` with final decisions and actual migrated shape.
+- [x] Create a detailed interactive HTML explainer showing final layers, file ownership, flows, harnesses, and remaining risks.
+- [x] Commit the migration in logical blocks by phase.
+- [x] Run final review subagents over the full branch diff before declaring the goal complete.
 
 ## Required Verification Per Phase
 

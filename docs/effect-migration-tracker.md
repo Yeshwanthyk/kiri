@@ -736,22 +736,25 @@ Copy this section under `## Migration Records` for each file or inseparable file
 
 - Status: extracted; `agent-detail.ts` final migration status remains `migrating|required`; `timeline-format.ts` is `explicit-non-migration|not-required` because it is pure formatting/normalization.
 - Target seam: paged agent detail reader plus pure timeline event display/id/tone helpers.
-- Behavior preserved: agent detail lookup, context usage read, active-thread selection, paged message/event union ordering, timeline item parsing, diff limit, task ordering, event label/detail derivation, event id derivation, tone inference, and timestamp normalization retain previous semantics.
+- Behavior preserved: agent detail lookup, context usage read, active-thread selection, paged message/event union ordering, older-page offset access, timeline item parsing, diff limit, task ordering, event label/detail derivation, event id derivation, tone inference, and timestamp normalization retain previous semantics.
 - Dependencies moved: paged detail SQL, diff reader, task reader, timeline row parser, and pure event formatting helpers moved out of `src/server/db.ts`.
 - Baseline tests before migration: agent detail history harness, perf gates, runtime lifecycle tests, and broad server suite.
-- Tests added/updated: no new test files; existing history and perf harnesses directly cover the moved hot path.
-- Post-migration parity tests: history harness still returned 500 timeline rows, 125 messages, 375 events, and 50 diff cap; perf harness remained within payload, latency, and memory budgets.
+- Tests added/updated: history harness now verifies the latest 500-row page, page metadata, and an older offset page; detail merge tests verify older pages prepend in chronological order.
+- Post-migration parity tests: history harness still returned 500 latest timeline rows, 125 messages, 375 events, and 50 diff cap; the older offset page returned the previous 500 rows from `message-370` through `message-494`; perf harness remained within payload, latency, and memory budgets.
 - Perf/memory impact: no query-shape change; extraction keeps bounded detail hydration and detail JSON under budget. One combined run missed RSS by 0.02 MB, then focused and review harness reruns passed with RSS delta down to 44.44 MB.
 - Verification commands and results:
   - `pnpm effect:audit` - passed, 33 tracked files and 33 server files.
   - `pnpm exec vitest run tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts tests/server/runtime-lifecycle.test.ts tests/server/db-runtime-state.test.ts` - passed after rerunning the perf gate for RSS noise.
   - `pnpm exec vitest run tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts` - passed.
+  - `pnpm exec vitest run tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts tests/kiri-board/detail-merge.test.ts` - passed after adding older-page access.
+  - `pnpm exec eslint src/server/db.ts src/server/db/agent-detail.ts src/server/workspace.ts src/components/kiri-board/agent-detail.ts src/components/kiri-board/selected-agent-pane.tsx src/components/kiri-board/chat-panel.tsx tests/server/agent-detail-history.test.ts tests/kiri-board/detail-merge.test.ts --max-warnings=0` - passed after adding older-page access.
+  - `pnpm exec tsx tests/perf/run-perf.ts` - passed after older-page access, detail 89.57ms and RSS delta 43.09MB.
   - `pnpm typecheck` - passed.
   - `pnpm lint` - passed.
   - `pnpm build` - passed with existing Vite chunk-size warning.
-- Review subagent summary: no blockers; reviewer confirmed SQL parity, timeline display parity, paging caps, and direct perf harness output at 500 timeline rows, 50 diffs, 89.79ms detail time, 44.44 MB RSS delta.
-- Findings fixed: restored `agentDetailDbRowSchema` import used by workspace snapshots after first verification caught the over-removal.
-- Residual risk: message/event/task writers still live in `src/server/db.ts`; they are the next repository extraction boundary.
+- Review subagent summary: no blockers; reviewer confirmed SQL parity, timeline display parity, paging caps, and direct perf harness output at 500 timeline rows, 50 diffs, 89.79ms detail time, 44.44 MB RSS delta. Final older-history follow-up review found no blockers after preserving `timelinePage` through detail merge and dropping stale older-page responses on agent/revision changes.
+- Findings fixed: restored `agentDetailDbRowSchema` import used by workspace snapshots after first verification caught the over-removal; final branch review then flagged older history access as a no-regression risk, so `offset` paging and UI load-older merging were added.
+- Residual risk: message/event/task writers still live in `src/server/db.ts`; they are the next repository extraction boundary. User-triggered older-history expansion can mount more than the default 500 rows, but the initial detail hydration path remains capped and measured by the perf harness.
 
 ### src/server/db/timeline-writes.ts
 

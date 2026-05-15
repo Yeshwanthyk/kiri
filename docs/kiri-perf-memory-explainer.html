@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kiri Perf And Memory Explainer</title>
+  <title>Kiri Perf, Memory, And Effect Migration Explainer</title>
   <style>
     :root {
       color-scheme: light;
@@ -126,6 +126,7 @@
       padding: 18px;
     }
     .half { grid-column: span 6; }
+    .quarter { grid-column: span 3; }
     .third { grid-column: span 4; }
     .two-third { grid-column: span 8; }
     .label {
@@ -258,7 +259,7 @@
       padding: 1px 4px;
     }
     @media (max-width: 860px) {
-      .half, .third, .two-third { grid-column: span 12; }
+      .half, .third, .quarter, .two-third { grid-column: span 12; }
       .scenario { grid-template-columns: 1fr; }
     }
   </style>
@@ -266,11 +267,11 @@
 <body>
   <main class="page">
     <div class="running-head">
-      <span>Kiri Performance And Memory</span>
+      <span>Kiri Performance, Memory, And Effect</span>
       <span>Branch kyendamuri/perf-improvements</span>
     </div>
-    <h1>Kiri Perf And Memory</h1>
-    <p class="dek">This explainer maps the completed performance work: detail paging, scratchpad trigger consistency, testable Effect layers, bounded runtime retention, polling/render budgets, Knip hygiene, and the harnesses that keep those changes measurable.</p>
+    <h1>Kiri Perf + Effect</h1>
+    <p class="dek">This explainer maps the completed branch: bounded detail hydration with older-page access, scratchpad trigger consistency, testable Effect service boundaries, runtime cleanup seams, protocol splits, migration guardrails, Knip hygiene, and the verification gates that keep the work regression-resistant.</p>
     <div class="rule" aria-hidden="true"></div>
     <div class="toolbar" role="radiogroup" aria-label="Theme">
       <span class="label">Theme</span>
@@ -280,26 +281,33 @@
     </div>
 
     <section class="grid" aria-label="Budget summary">
-      <article class="panel third">
+      <article class="panel quarter">
         <span class="label">Detail rows</span>
         <div class="metric"><span>Stored timeline</span><strong>6,000</strong></div>
         <div class="metric"><span>Returned timeline</span><strong>500</strong></div>
         <div class="meter" aria-label="Returned timeline fraction" style="--value:8.33%"><span></span></div>
         <p class="cite">Source: <a href="../tests/perf/run-perf.ts">tests/perf/run-perf.ts:12</a>, <a href="../LOG.md">LOG.md:43</a></p>
       </article>
-      <article class="panel third">
+      <article class="panel quarter">
         <span class="label">Diff rows</span>
         <div class="metric"><span>Stored diffs</span><strong>80</strong></div>
         <div class="metric"><span>Returned diffs</span><strong>50</strong></div>
         <div class="meter" aria-label="Returned diff fraction" style="--value:62.5%"><span></span></div>
         <p class="cite">Source: <a href="../src/server/db.ts">src/server/db.ts:383</a>, <a href="../tests/perf/run-perf.ts">tests/perf/run-perf.ts:40</a></p>
       </article>
-      <article class="panel third">
+      <article class="panel quarter">
         <span class="label">Observed run</span>
         <div class="metric"><span>Detail payload</span><strong>1.08 MB</strong></div>
-        <div class="metric"><span>RSS delta</span><strong>44.34 MB</strong></div>
-        <div class="metric"><span>Detail latency</span><strong>90.53 ms</strong></div>
-        <p class="cite">Source: <a href="../LOG.md">LOG.md:43</a></p>
+        <div class="metric"><span>RSS delta</span><strong>43.09 MB</strong></div>
+        <div class="metric"><span>Detail latency</span><strong>89.57 ms</strong></div>
+        <p class="cite">Source: <a href="../tests/perf/run-perf.ts">tests/perf/run-perf.ts:18</a>, final run 2026-05-15.</p>
+      </article>
+      <article class="panel quarter">
+        <span class="label">Migration audit</span>
+        <div class="metric"><span>Tracked server files</span><strong>48</strong></div>
+        <div class="metric"><span>Migrating</span><strong>43</strong></div>
+        <div class="metric"><span>Pure/non-migration</span><strong>5</strong></div>
+        <p class="cite">Source: <a href="../scripts/effect-migration-audit.mjs">scripts/effect-migration-audit.mjs</a>, final `pnpm effect:audit`.</p>
       </article>
     </section>
 
@@ -307,7 +315,9 @@
       <button class="tab" role="tab" aria-selected="true" data-tab="flow">Flow</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="paging">Paging</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="runtime">Runtime</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="effect">Effect</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="harness">Harness</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="verification">Verification</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="knip">Knip</button>
     </nav>
 
@@ -326,11 +336,11 @@
               <text class="svg-label" x="48" y="68">Board UI</text>
               <text class="svg-small" x="48" y="84">poll + render budgets</text>
               <rect class="node" x="292" y="36" width="180" height="58"></rect>
-              <text class="svg-label" x="312" y="68">Server functions</text>
-              <text class="svg-small" x="312" y="84">workspace + detail</text>
+              <text class="svg-label" x="312" y="68">Workspace service</text>
+              <text class="svg-small" x="312" y="84">transport thinned</text>
               <rect class="node" x="572" y="36" width="150" height="58"></rect>
-              <text class="svg-label" x="596" y="68">SQLite</text>
-              <text class="svg-small" x="596" y="84">bounded query</text>
+              <text class="svg-label" x="596" y="68">DB repos</text>
+              <text class="svg-small" x="596" y="84">bounded reads</text>
               <path class="edge" d="M 190 65 L 292 65"></path>
               <path class="edge" d="M 472 65 L 572 65"></path>
               <rect class="node-muted" x="30" y="160" width="160" height="58"></rect>
@@ -340,7 +350,7 @@
               <text class="svg-label" x="312" y="192">triggerScratchpad</text>
               <text class="svg-small" x="312" y="208">session + prompt</text>
               <rect class="node-muted" x="572" y="160" width="150" height="58"></rect>
-              <text class="svg-label" x="596" y="192">Runtime</text>
+              <text class="svg-label" x="596" y="192">Registry</text>
               <text class="svg-small" x="596" y="208">cleanup hooks</text>
               <path class="edge" d="M 190 189 L 292 189"></path>
               <path class="edge" d="M 472 189 L 572 189"></path>
@@ -353,9 +363,11 @@
         </article>
         <article class="panel third">
           <span class="label">Invariant checks</span>
-          <p><code>limit</code> is no longer decorative. It clamps the server detail response to latest timeline rows before parsing into messages and events.</p>
-          <p><code>triggerScratchpadSession</code> is the single path for UI and control-plane triggers.</p>
-          <p>Runtime retained maps now have explicit cleanup calls and a bounded Codex diff-turn guard.</p>
+          <p><code>limit</code> is no longer decorative. It clamps the default server detail response to latest timeline rows before parsing into messages and events.</p>
+          <p><code>offset</code> keeps older chat history reachable through explicit page fetches, so the perf budget does not remove the history feature.</p>
+          <p><code>triggerScratchpadSession</code> is the single path for UI, CLI, and MCP triggers.</p>
+          <p>Runtime retained maps now have explicit cleanup calls, bounded Codex diff-turn state, and reset/delete cleanup tests.</p>
+          <p>The Effect migration tracker reports every server file as either migrating or explicit non-migration; no server file remains unclassified.</p>
         </article>
       </div>
     </section>
@@ -365,6 +377,7 @@
         <article class="panel half">
           <span class="label">Detail query contract</span>
           <p>The detail path now reads from the active thread, unions messages with timeline events, orders newest-first in SQL, applies <code>LIMIT ?</code>, then reverses back to chronological order for rendering.</p>
+          <p>Older pages use the same query with <code>OFFSET ?</code>; page metadata tells the UI whether to show "Load older history".</p>
           <p class="cite">Source: <a href="../src/server/db.ts">src/server/db.ts:385</a>, <a href="../src/server/db.ts">src/server/db.ts:449</a>, <a href="../src/server/db.ts">src/server/db.ts:495</a></p>
         </article>
         <article class="panel half">
@@ -390,6 +403,26 @@
       </div>
     </section>
 
+    <section id="effect" class="tab-panel">
+      <div class="grid">
+        <article class="panel">
+          <span class="label">Actual migrated shape</span>
+          <table class="table">
+            <thead>
+              <tr><th>Boundary</th><th>What changed</th><th>Why it matters</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>DB</td><td><code>db/connection</code>, migrations, row schemas, repositories, projections, paged detail reader, and <code>KiriDbService</code>.</td><td>Hot paths and startup repairs are testable without treating <code>db.ts</code> as one giant unit.</td></tr>
+              <tr><td>Config</td><td>Settings, preferences, Kiri config, runtime binary resolution, directory picker, terminal launch, and git diff now have typed service seams.</td><td>Tests can inject file/process behavior instead of mutating user state or environment.</td></tr>
+              <tr><td>Runtime</td><td>Runtime command service, registry cleanup seam, retained-state modules, projection layer, Pi JSONL file reader, Kiri MCP runtime, and Codex protocol module.</td><td>Leak-prone maps and protocol parsing have narrower ownership and direct cleanup tests.</td></tr>
+              <tr><td>Control</td><td>Workspace service, Kiri control dependency injection, scratchpad trigger service, backend readiness service, and MCP runtime context handling.</td><td>UI, CLI, MCP, and backend readiness now share behavior through use-case seams rather than copied control logic.</td></tr>
+            </tbody>
+          </table>
+          <p class="cite">Source: <a href="../docs/effect-migration-tracker.md">docs/effect-migration-tracker.md</a>, <a href="../LOG.md">LOG.md</a>.</p>
+        </article>
+      </div>
+    </section>
+
     <section id="harness" class="tab-panel">
       <div class="grid">
         <article class="panel">
@@ -398,6 +431,34 @@
             <div class="scenario-list" id="scenario-list"></div>
             <div class="timeline" id="scenario-detail"></div>
           </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="verification" class="tab-panel">
+      <div class="grid">
+        <article class="panel two-third">
+          <span class="label">Final gates</span>
+          <table class="table">
+            <thead>
+              <tr><th>Gate</th><th>Result</th><th>Coverage</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>pnpm typecheck</code></td><td>Passed</td><td>Whole TypeScript project.</td></tr>
+              <tr><td><code>pnpm lint</code></td><td>Passed</td><td>Configured server/test lint surface.</td></tr>
+              <tr><td><code>pnpm effect:audit</code></td><td>Passed</td><td>48 tracked server files, 43 migrating, 5 explicit non-migration, 0 not-started.</td></tr>
+              <tr><td><code>pnpm exec tsx tests/perf/run-perf.ts</code></td><td>Passed</td><td>6,000 timeline rows, 80 diffs, 500 returned rows, 50 returned diffs, 43.09 MB RSS delta.</td></tr>
+              <tr><td><code>agent-detail-history + detail-merge</code></td><td>Passed</td><td>Latest page, older offset page, and chronological prepend behavior.</td></tr>
+              <tr><td><code>pnpm build</code></td><td>Passed</td><td>Client and SSR production build; existing Vite large-chunk warning remains.</td></tr>
+              <tr><td><code>pnpm test -- --runInBand</code></td><td>Passed</td><td>57 files, 238 tests.</td></tr>
+              <tr><td><code>pnpm exec playwright test --project=chromium -g ...</code></td><td>Passed</td><td>Codex app-server, terminal persistence, selected detail hydration: 3 tests.</td></tr>
+            </tbody>
+          </table>
+        </article>
+        <article class="panel third">
+          <span class="label">Review posture</span>
+          <p>Each meaningful migration chunk was reviewed before the next phase. Blockers found during the branch were fixed in-place: async readiness probes, stale PTY replacement deletion, stale Pi writes after reset, runtime command FiberFailure wrapping, public compatibility export gaps, and stale older-history page merging.</p>
+          <p class="cite">Source: <a href="../docs/effect-migration-tracker.md">docs/effect-migration-tracker.md</a>, review summaries per migration record.</p>
         </article>
       </div>
     </section>
@@ -413,10 +474,12 @@
             <tbody>
               <tr><td><code>shiki</code></td><td>Added explicit dependency.</td><td>The highlighter imports Shiki directly.</td></tr>
               <tr><td>Devtools / property deps</td><td>Retained and logged.</td><td>Removing dependencies was treated as separate pruning work to avoid feature churn.</td></tr>
-              <tr><td>Exported contract symbols</td><td>Retained and logged.</td><td>Contract and helper exports may be public/internal API surface.</td></tr>
+              <tr><td>Public harness files</td><td>Retained.</td><td>Knip sees subprocess harnesses as unused because tests execute them through child-process commands.</td></tr>
+              <tr><td>New protocol exports</td><td>Retained.</td><td>Compatibility and future adapter tests need stable protocol types while call sites migrate.</td></tr>
+              <tr><td>Exported service tags</td><td>Retained.</td><td>Tags are migration seams for app-layer composition and test providers.</td></tr>
             </tbody>
           </table>
-          <p class="cite">Source: <a href="../knip.jsonc">knip.jsonc</a>, <a href="../LOG.md">LOG.md:45</a></p>
+          <p class="cite">Source: <a href="../knip.jsonc">knip.jsonc</a>, final `pnpm dlx knip --no-exit-code --reporter compact`.</p>
         </article>
       </div>
     </section>
@@ -431,7 +494,8 @@
           ["Input", "A detail request asks for an agent with limit 500."],
           ["SQL", "Messages and events are unioned, ordered newest first, and limited in SQLite."],
           ["Parse", "Rows are converted back into chronological timeline items."],
-          ["Budget", "The perf harness proves 6,000 stored rows return as 500 rows."]
+          ["Budget", "The perf harness proves 6,000 stored rows return as 500 rows."],
+          ["Older", "The UI can request offset 500 to prepend the previous page."]
         ]
       },
       {
@@ -452,6 +516,26 @@
           ["Codex", "Thread maps, turn maps, queues, and diff guards are pruned for that agent."],
           ["Pi", "Adapter, adapter key, and queue maps are cleared through the same provider cleanup call."],
           ["Gate", "Retention tests assert map counts return to zero."]
+        ]
+      },
+      {
+        id: "effect",
+        title: "Effect service migration",
+        steps: [
+          ["Classify", "Every server file is tracked as migrating or explicit non-migration."],
+          ["Extract", "One responsibility moves at a time behind a service, repository, projection, or pure protocol module."],
+          ["Review", "A review subagent checks the exact chunk before the next phase."],
+          ["Audit", "The audit command fails if a server file is missing from the tracker."]
+        ]
+      },
+      {
+        id: "protocol",
+        title: "Codex protocol split",
+        steps: [
+          ["Parse", "JSON-RPC response and server-message parsing moved into a pure protocol module."],
+          ["Compat", "The adapter re-exports protocol symbols so existing runtime imports keep working."],
+          ["Test", "Protocol tests cover response parsing, error details, request/notification parsing, and param decoding."],
+          ["Adapter", "Socket and process lifecycle code stayed untouched in this chunk."]
         ]
       }
     ];

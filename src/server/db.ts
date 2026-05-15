@@ -169,15 +169,17 @@ export function getWorkspaceSnapshot() {
 
 const agentDetailDiffLimit = 50
 
-export function getAgentDetail(input: { agentId: string; limit?: number }): AgentDetail {
+export function getAgentDetail(input: { agentId: string; limit?: number; offset?: number }): AgentDetail {
   const database = getDb()
   hydratePersistedPiSessions(database)
   const agentId = input.agentId.trim()
   const limit = Math.max(1, Math.min(input.limit ?? 500, 500))
+  const offset = Math.max(0, Math.min(input.offset ?? 0, 100_000))
   const settings = getSettings()
   const detail = readAgentDetail(database, {
     agentId,
     limit,
+    offset,
     diffLimit: agentDetailDiffLimit,
   })
   const parsedAgent = detail.agent
@@ -207,6 +209,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
     messages: detail.timeline.flatMap((item) => item.type === 'message' ? [item.message] : []),
     timelineEvents: detail.timeline.flatMap((item) => item.type === 'event' ? [item.event] : []),
     timeline: detail.timeline,
+    timelinePage: detail.timelinePage,
     diffs: detail.diffs.map((diff) => ({
       id: diff.id,
       title: diff.title,

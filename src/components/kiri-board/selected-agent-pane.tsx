@@ -15,16 +15,23 @@ import type {
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import { thinkingLevelSchema } from '~/lib/contracts'
-import { agentDetailQueryOptions } from '~/server/workspace'
+import { agentDetailQueryOptions, fetchAgentDetail } from '~/server/workspace'
 import type { ThemeMode } from '~/theme/kiri-themes'
 import { errorMessage, formatKeyShort, formatThinkingLevel } from './format'
 import { ScratchpadHeader, ScratchpadPanel } from './scratchpad'
 import { ChatPanel } from './chat-panel'
 import { DiffPanel } from './diff-panel'
 import { TerminalPanel } from './terminal-panel'
-import { mergeAgentDetail } from './agent-detail'
+import { mergeAgentDetail, prependAgentDetailPages } from './agent-detail'
 import type { RefreshAgentDetail, SidebarTab } from './board-types'
 import type { KeymapSettings } from './navigation'
+
+type OlderDetailPage = {
+  readonly agentId: string
+  readonly revision: string
+  readonly offset: number
+  readonly page: AgentCell
+}
 
 export function SelectedAgentPane({
   selectedProject,
@@ -112,7 +119,26 @@ export function SelectedAgentPane({
     ...agentDetailQueryOptions(selectedAgent?.id ?? '', 500, revision),
     placeholderData: keepPreviousData,
   })
-  const agent = mergeAgentDetail(selectedAgent, detailQuery.data)
+  const [olderDetailPages, setOlderDetailPages] = React.useState<OlderDetailPage[]>([])
+  const [olderHistoryPending, setOlderHistoryPending] = React.useState(false)
+  const detailBasisRef = React.useRef<{ agentId: string; revision: string } | null>(null)
+  React.useEffect(() => {
+    setOlderDetailPages([])
+  }, [selectedAgent?.id, revision])
+  React.useEffect(() => {
+    detailBasisRef.current = selectedAgent ? { agentId: selectedAgent.id, revision } : null
+  }, [selectedAgent, revision])
+  const latestAgent = mergeAgentDetail(selectedAgent, detailQuery.data)
+  const olderPagesForAgent = React.useMemo(
+    () =>
+      olderDetailPages
+        .filter((item) =>
+          item.agentId === selectedAgent?.id && item.revision === revision,
+        )
+        .map((item) => item.page),
+    [olderDetailPages, revision, selectedAgent?.id],
+  )
+  const agent = prependAgentDetailPages(latestAgent, olderPagesForAgent)
   const chatUsesTerminal = agent?.interfaceMode === 'terminal'
   const visibleTerminalMode = agent && tab === 'terminal'
     ? 'shell'
@@ -123,6 +149,51 @@ export function SelectedAgentPane({
     if (!selectedAgent) return
     await detailQuery.refetch()
   }, [detailQuery, selectedAgent])
+  const loadOlderHistory = React.useCallback(async () => {
+    if (!agent || olderHistoryPending) return
+    const requestBasis = detailBasisRef.current
+    if (!requestBasis) return
+    const requestOffset = agent.timeline.length
+    setOlderHistoryPending(true)
+    try {
+      const page = await fetchAgentDetail({
+        data: {
+          agentId: agent.id,
+          limit: 500,
+          offset: requestOffset,
+        },
+      })
+      const currentBasis = detailBasisRef.current
+      if (
+        !currentBasis ||
+        currentBasis.agentId !== requestBasis.agentId ||
+        currentBasis.revision !== requestBasis.revision
+      ) {
+        return
+      }
+      setOlderDetailPages((current) => {
+        const offset = page.timelinePage?.offset ?? requestOffset
+        if (current.some((item) =>
+          item.agentId === requestBasis.agentId &&
+          item.revision === requestBasis.revision &&
+          item.offset === offset,
+        )) {
+          return current
+        }
+        return [
+          ...current,
+          {
+            agentId: requestBasis.agentId,
+            revision: requestBasis.revision,
+            offset,
+            page,
+          },
+        ]
+      })
+    } finally {
+      setOlderHistoryPending(false)
+    }
+  }, [agent, olderHistoryPending])
   const previousDiffRefreshRef = React.useRef<{
     tab: SidebarTab | null
     agentId: string | null
@@ -235,6 +306,10 @@ export function SelectedAgentPane({
           onReviewSession={onReviewSession}
           onAnswerQuestion={onAnswerQuestion}
           onDetailRefresh={refreshDetail}
+          hasOlderHistory={agent.timelinePage?.hasMore ?? false}
+          olderHistoryLoaded={olderPagesForAgent.length > 0}
+          olderHistoryPending={olderHistoryPending}
+          onLoadOlderHistory={loadOlderHistory}
         />
       ) : agent && tab === 'diffs' ? (
         <DiffPanel

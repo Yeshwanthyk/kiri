@@ -20,6 +20,12 @@ const harnessOutputSchema = z.object({
   messages: z.number(),
   events: z.number(),
   timeline: z.number(),
+  totalTimelineRows: z.number(),
+  hasMore: z.boolean(),
+  olderMessages: z.number(),
+  olderTimeline: z.number(),
+  olderFirstMessageId: z.string(),
+  olderLastMessageId: z.string(),
   firstMessageId: z.string(),
   lastMessageId: z.string(),
 })
@@ -39,6 +45,7 @@ try {
   seedHistory(database)
 
   const detail = getAgentDetail({ agentId, limit: requestedLimit })
+  const olderDetail = getAgentDetail({ agentId, limit: requestedLimit, offset: detail.timeline.length })
   const messageItems = detail.timeline.filter((item) => item.type === 'message')
   const eventItems = detail.timeline.filter((item) => item.type === 'event')
 
@@ -58,11 +65,20 @@ try {
   if (detail.timeline.length !== requestedLimit) {
     throw new Error(`Expected ${requestedLimit} timeline rows, got ${detail.timeline.length}`)
   }
+  if (!detail.timelinePage?.hasMore || detail.timelinePage.total !== totalRows * (eventsPerMessage + 1)) {
+    throw new Error('Expected first detail page to expose older history metadata')
+  }
   if (detail.messages[0]?.id !== 'message-495') {
     throw new Error(`Expected oldest returned message-495, got ${detail.messages[0]?.id ?? 'none'}`)
   }
   if (detail.messages.at(-1)?.id !== 'message-619') {
     throw new Error(`Expected newest returned message-619, got ${detail.messages.at(-1)?.id ?? 'none'}`)
+  }
+  if (olderDetail.messages[0]?.id !== 'message-370') {
+    throw new Error(`Expected older page to start at message-370, got ${olderDetail.messages[0]?.id ?? 'none'}`)
+  }
+  if (olderDetail.messages.at(-1)?.id !== 'message-494') {
+    throw new Error(`Expected older page to end at message-494, got ${olderDetail.messages.at(-1)?.id ?? 'none'}`)
   }
 
   const rows = deriveAgentTimelineRows(detail, repoRoot)
@@ -78,12 +94,19 @@ try {
       'agent-detail-returns-latest-page',
       'agent-detail-keeps-events-inside-returned-page',
       'agent-detail-derives-message-arrays-from-page',
+      'agent-detail-supports-older-offset-page',
       'unmatched-diff-appears-in-work-row',
     ],
     requestedLimit,
     messages: detail.messages.length,
     events: eventItems.length,
     timeline: detail.timeline.length,
+    totalTimelineRows: detail.timelinePage?.total ?? 0,
+    hasMore: detail.timelinePage?.hasMore ?? false,
+    olderMessages: olderDetail.messages.length,
+    olderTimeline: olderDetail.timeline.length,
+    olderFirstMessageId: olderDetail.messages[0]?.id ?? '',
+    olderLastMessageId: olderDetail.messages.at(-1)?.id ?? '',
     firstMessageId: detail.messages[0]?.id ?? '',
     lastMessageId: detail.messages.at(-1)?.id ?? '',
   })

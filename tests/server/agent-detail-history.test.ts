@@ -9,6 +9,12 @@ const harnessOutputSchema = z.object({
   messages: z.number(),
   events: z.number(),
   timeline: z.number(),
+  totalTimelineRows: z.number(),
+  hasMore: z.boolean(),
+  olderMessages: z.number(),
+  olderTimeline: z.number(),
+  olderFirstMessageId: z.string(),
+  olderLastMessageId: z.string(),
   firstMessageId: z.string(),
   lastMessageId: z.string(),
 })
@@ -31,6 +37,12 @@ describe('agent detail history harness', () => {
       messages: 125,
       events: 375,
       timeline: 500,
+      totalTimelineRows: 2480,
+      hasMore: true,
+      olderMessages: 125,
+      olderTimeline: 500,
+      olderFirstMessageId: 'message-370',
+      olderLastMessageId: 'message-494',
       firstMessageId: 'message-495',
       lastMessageId: 'message-619',
     })
@@ -39,6 +51,7 @@ describe('agent detail history harness', () => {
       'agent-detail-returns-latest-page',
       'agent-detail-keeps-events-inside-returned-page',
       'agent-detail-derives-message-arrays-from-page',
+      'agent-detail-supports-older-offset-page',
       'unmatched-diff-appears-in-work-row',
     ]))
   }, 20_000)

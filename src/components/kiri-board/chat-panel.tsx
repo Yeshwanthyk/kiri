@@ -32,6 +32,10 @@ export function ChatPanel({
   onReviewSession,
   onAnswerQuestion,
   onDetailRefresh,
+  hasOlderHistory = false,
+  olderHistoryLoaded = false,
+  olderHistoryPending = false,
+  onLoadOlderHistory,
 }: {
   agent: AgentCell
   cwd: string
@@ -50,6 +54,10 @@ export function ChatPanel({
     answers: Record<string, string | string[]>,
   ) => Promise<void>
   onDetailRefresh: RefreshAgentDetail
+  hasOlderHistory?: boolean
+  olderHistoryLoaded?: boolean
+  olderHistoryPending?: boolean
+  onLoadOlderHistory?: () => Promise<void>
 }) {
   const [pending, setPending] = React.useState(false)
   const [pendingPrompt, setPendingPrompt] = React.useState<
@@ -103,8 +111,11 @@ export function ChatPanel({
     [cwd, timelineAgent],
   )
   const rows = React.useMemo(
-    () => allRows.length > maxMountedTimelineRows ? allRows.slice(-maxMountedTimelineRows) : allRows,
-    [allRows],
+    () =>
+      !olderHistoryLoaded && allRows.length > maxMountedTimelineRows
+        ? allRows.slice(-maxMountedTimelineRows)
+        : allRows,
+    [allRows, olderHistoryLoaded],
   )
   const messageListRef = React.useRef<HTMLDivElement | null>(null)
   const timelineContentVersion = React.useMemo(() => timelineRowsContentVersion(rows), [rows])
@@ -357,6 +368,17 @@ export function ChatPanel({
           themeMode={themeMode}
           listRef={messageListRef}
           selectedMessageId={selectedMessageId}
+          hasOlderHistory={hasOlderHistory}
+          olderHistoryPending={olderHistoryPending}
+          onLoadOlderHistory={async () => {
+            if (!onLoadOlderHistory) return
+            setError(null)
+            try {
+              await onLoadOlderHistory()
+            } catch (cause) {
+              setError(errorMessage(cause))
+            }
+          }}
         />
         {hasNewContent ? (
           <button
@@ -487,7 +509,7 @@ function ChatComposer({
   }
 
   return (
-    <form className="composer" onSubmit={submit}>
+    <form className="composer" onSubmit={(event) => void submit(event)}>
       <div className="composer-fields">
         <textarea
           ref={textareaRef}
@@ -569,15 +591,27 @@ const MessageTimeline = React.memo(function MessageTimeline({
   themeMode,
   listRef,
   selectedMessageId,
+  hasOlderHistory,
+  olderHistoryPending,
+  onLoadOlderHistory,
 }: {
   rows: AgentTimelineRow[]
   themeMode: ThemeMode
   listRef: React.RefObject<HTMLDivElement | null>
   selectedMessageId: string | null
+  hasOlderHistory: boolean
+  olderHistoryPending: boolean
+  onLoadOlderHistory: () => Promise<void>
 }) {
   if (rows.length === 0) {
     return (
       <div className="message-list" ref={listRef}>
+        {hasOlderHistory ? (
+          <LoadOlderHistoryButton
+            pending={olderHistoryPending}
+            onLoad={onLoadOlderHistory}
+          />
+        ) : null}
         <div className="empty-panel">No messages yet.</div>
       </div>
     )
@@ -587,6 +621,12 @@ const MessageTimeline = React.memo(function MessageTimeline({
 
   return (
     <div className="message-list" ref={listRef}>
+      {hasOlderHistory ? (
+        <LoadOlderHistoryButton
+          pending={olderHistoryPending}
+          onLoad={onLoadOlderHistory}
+        />
+      ) : null}
       {rows.map((row) => {
         if (row.kind === 'work') {
           return (
@@ -612,6 +652,25 @@ const MessageTimeline = React.memo(function MessageTimeline({
     </div>
   )
 })
+
+function LoadOlderHistoryButton({
+  pending,
+  onLoad,
+}: {
+  pending: boolean
+  onLoad: () => Promise<void>
+}) {
+  return (
+    <button
+      type="button"
+      className="load-older-history"
+      disabled={pending}
+      onClick={() => void onLoad()}
+    >
+      {pending ? 'Loading history...' : 'Load older history'}
+    </button>
+  )
+}
 
 function computeHiddenTimestamps(rows: AgentTimelineRow[]): Set<string> {
   const hidden = new Set<string>()
@@ -667,7 +726,11 @@ function PendingQuestionPanel({
   }
 
   return (
-    <form className="pending-question-panel" onSubmit={submit} data-testid="pending-question">
+    <form
+      className="pending-question-panel"
+      onSubmit={(event) => void submit(event)}
+      data-testid="pending-question"
+    >
       <div className="pending-question-head">
         <strong>Claude needs input</strong>
       </div>
@@ -1274,7 +1337,7 @@ function CopyTextButton({ text, label }: { text: string; label: string }) {
   }
 
   return (
-    <button type="button" className="copy-message" onClick={copy} aria-label={label}>
+    <button type="button" className="copy-message" onClick={() => void copy()} aria-label={label}>
       {copied ? <Check size={13} /> : <Copy size={13} />}
     </button>
   )

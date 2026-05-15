@@ -134,6 +134,14 @@ export const agentTaskSchema = z.object({
 })
 export type AgentTask = z.infer<typeof agentTaskSchema>
 
+const agentDetailPageSchema = z.object({
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  returned: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  hasMore: z.boolean(),
+})
+
 const agentCellSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -155,6 +163,7 @@ const agentCellSchema = z.object({
   messages: z.array(boardMessageSchema),
   timelineEvents: z.array(timelineEventSchema).default([]),
   timeline: z.array(boardTimelineItemSchema).default([]),
+  timelinePage: agentDetailPageSchema.optional(),
   diffs: z.array(diffArtifactSchema),
   tasks: z.array(agentTaskSchema).default([]),
 })
@@ -179,6 +188,7 @@ export type ArchivedSessionSummary = z.infer<typeof archivedSessionSummarySchema
 export const agentDetailInputSchema = z.object({
   agentId: z.string().trim().min(1),
   limit: z.number().int().positive().max(500).default(500),
+  offset: z.number().int().nonnegative().max(100_000).default(0),
 })
 type AgentDetailInput = z.infer<typeof agentDetailInputSchema>
 

@@ -35,7 +35,7 @@ export const fetchWorkspaceSnapshot = createServerFn({ method: 'GET' }).handler(
   async () => runWorkspaceServiceMethod((workspace) => workspace.snapshot()),
 )
 
-const fetchAgentDetail = createServerFn({ method: 'GET' })
+export const fetchAgentDetail = createServerFn({ method: 'GET' })
   .inputValidator(agentDetailInputSchema)
   .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.agentDetail(data)))
 
@@ -154,9 +154,9 @@ export const workspaceQueryOptions = () =>
     queryFn: () => fetchWorkspaceSnapshot(),
   })
 
-export const agentDetailQueryOptions = (agentId: string, limit = 500, revision = '') =>
+export const agentDetailQueryOptions = (agentId: string, limit = 500, revision = '', offset = 0) =>
   queryOptions({
-    queryKey: ['agent-detail', agentId, limit, revision],
-    queryFn: () => fetchAgentDetail({ data: { agentId, limit } }),
+    queryKey: ['agent-detail', agentId, limit, offset, revision],
+    queryFn: () => fetchAgentDetail({ data: { agentId, limit, offset } }),
     enabled: agentId.length > 0,
   })

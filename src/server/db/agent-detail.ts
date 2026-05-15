@@ -19,6 +19,7 @@ import { timelineEventFromDbRow } from './timeline-format'
 type ReadAgentDetailInput = {
   readonly agentId: string
   readonly limit: number
+  readonly offset: number
   readonly diffLimit: number
 }
 
@@ -82,6 +83,22 @@ export function readAgentDetail(database: DatabaseSync, input: ReadAgentDetailIn
     )
     .get(agentId)
   const activeThreadId = idDbRowSchema.parse(activeThread).id
+  const totalTimelineRows = z.object({ total: z.number() }).parse(database
+    .prepare(
+      `
+        SELECT COUNT(*) AS total
+        FROM (
+          SELECT m.id
+          FROM messages m
+          WHERE m.thread_id = ?
+          UNION ALL
+          SELECT e.id
+          FROM timeline_events e
+          WHERE e.thread_id = ?
+        )
+      `,
+    )
+    .get(activeThreadId, activeThreadId)).total
   const timelineRows = database
     .prepare(
       `
@@ -130,9 +147,10 @@ export function readAgentDetail(database: DatabaseSync, input: ReadAgentDetailIn
         )
         ORDER BY timestamp DESC, id DESC
         LIMIT ?
+        OFFSET ?
       `,
     )
-    .all(activeThreadId, activeThreadId, input.limit)
+    .all(activeThreadId, activeThreadId, input.limit, input.offset)
     .reverse()
   const timeline = timelineRows.map((row) => timelineItemFromDetailRow(row, agentId))
 
@@ -140,6 +158,13 @@ export function readAgentDetail(database: DatabaseSync, input: ReadAgentDetailIn
     agent: parsedAgent,
     contextUsage: usage ? contextUsageDbRowSchema.parse(usage) : undefined,
     timeline,
+    timelinePage: {
+      limit: input.limit,
+      offset: input.offset,
+      returned: timeline.length,
+      total: totalTimelineRows,
+      hasMore: input.offset + timeline.length < totalTimelineRows,
+    },
     diffs: readDiffs(database, agentId, input.diffLimit),
     tasks: readAgentTasks(database, agentId),
   }
@@ -213,7 +238,12 @@ function timelineItemFromDetailRow(row: unknown, agentId: string) {
       text: parsed.text,
       timestamp: parsed.timestamp,
     })
-    const { agentId: _agentId, ...value } = message
+    const value = {
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      timestamp: message.timestamp,
+    }
     return {
       type: 'message' as const,
       id: `message:${value.id}`,
@@ -234,7 +264,15 @@ function timelineItemFromDetailRow(row: unknown, agentId: string) {
       ? JSON.stringify({ ...safeJson(parsed.payloadJson), path: parsed.path })
       : parsed.payloadJson,
   }))
-  const { agentId: _agentId, ...value } = event
+  const value = {
+    id: event.id,
+    kind: event.kind,
+    tone: event.tone,
+    label: event.label,
+    detail: event.detail,
+    ...(event.path ? { path: event.path } : {}),
+    timestamp: event.timestamp,
+  }
   return {
     type: 'event' as const,
     id: `event:${value.id}`,
