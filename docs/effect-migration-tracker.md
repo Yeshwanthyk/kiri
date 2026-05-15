@@ -34,6 +34,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | not-started | required | Highest priority split; preserve compatibility exports until callers move. |
 | `src/server/db/connection.ts` | repository | DB open/configure/migrate boundary | migrating | required | Owns SQLite handle creation; review/verification pending. |
 | `src/server/db/migrations.ts` | repository | DB schema creation and migration helpers | migrating | required | Extracted and reviewed; final status waits for DB connection/transaction service boundary. |
+| `src/server/db/projects.ts` | repository | Project repository over DB connection/transaction helpers | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
 | `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
 | `src/server/diff-refresh.ts` | use-case | runtime/workspace service command | not-started | required | Should use runtime projection/repository services. |
@@ -160,6 +161,25 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: no blockers; reviewer confirmed `getDb()` ordering, connection extraction, and first `withTransaction` use. Notes about async use and PRAGMA coverage were fixed.
 - Findings fixed: made `withTransaction` a synchronous-only typed helper and added a typecheck fixture for async callbacks; expanded connection tests to assert `busy_timeout` and `journal_mode`.
 - Residual risk: most `src/server/db.ts` transaction blocks still use direct `BEGIN`/`COMMIT`/`ROLLBACK` until the repository extraction replaces them; `withTransaction` is an internal typed helper, so untyped/cast async misuse can still escape at runtime.
+
+### src/server/db/projects.ts
+
+- Status: extracted; final migration status remains `migrating|required` until all repositories sit behind the DB service boundary.
+- Target seam: project repository over `DatabaseSync` plus shared transaction helper.
+- Behavior preserved: project summaries, create validation, delete position compaction, visible reorder, hide/unhide, hidden filtering, and active-session counts retain the previous SQL semantics.
+- Dependencies moved: project summary parsing, project CRUD SQL, visible-order SQL, project slug validation, and project transaction bracketing moved out of `src/server/db.ts`.
+- Baseline tests before migration: existing CLI/MCP project management tests and full DB/perf/scratchpad harnesses.
+- Tests added/updated: `tests/server/db-projects.test.ts` covers project create/list/summary, active vs archived session counts, hide/unhide filtering, visible reorder with hidden tail preservation, delete compaction, invalid slug/cwd, duplicate and stale reorder ids, missing ids, and last-project/last-visible guards.
+- Post-migration parity tests: CLI and MCP project flows remained green after extraction.
+- Perf/memory impact: none expected; SQL was moved without changing query shape.
+- Verification commands and results:
+  - `pnpm effect:audit` - passed, 28 tracked files and 28 server files.
+  - `pnpm exec vitest run tests/server/db-projects.test.ts tests/server/kiri-control-cli.test.ts tests/server/kiri-mcp.test.ts` - passed, 3 files and 5 tests.
+  - `pnpm typecheck` - passed.
+  - `pnpm lint` - passed.
+- Review subagent summary: no blockers in initial or second-pass review; reviewer confirmed project behavior parity and the expanded test coverage. Residual wrapper/rollback injection coverage gaps were non-blocking.
+- Findings fixed: expanded direct project repository tests for session counts, duplicate/stale reorder ids, missing-id behavior, and old hide-last-visible-before-existence ordering.
+- Residual risk: public `db.ts` project wrapper functions are covered through CLI/MCP flows rather than direct wrapper assertions; delete/reorder rollback failure injection is not yet modeled.
 
 ## Audit Command
 

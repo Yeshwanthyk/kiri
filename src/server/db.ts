@@ -55,13 +55,20 @@ import {
   persistedSessionDbRowSchema,
   projectDbRowSchema,
   projectIdDbRowSchema,
-  projectSummaryDbRowSchema,
   scratchpadBlockDbRowSchema,
   sessionSummaryDbRowSchema,
   timelineEventDbRowSchema,
 } from './db/schema'
 import { openKiriDatabase } from './db/connection'
-import { withTransaction } from './db/transaction'
+import {
+  deleteProjectRow,
+  hideProjectRow,
+  insertProject,
+  listProjectSummaries as listProjectSummariesFromDb,
+  reorderVisibleProjectRows,
+  requireProjectSummary,
+  unhideProjectRow,
+} from './db/projects'
 import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { projectPiSessionFile, type PiSessionProjection } from './pi-jsonl'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
@@ -403,52 +410,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number }): Agen
 }
 
 export function listProjectSummaries(includeHidden = false) {
-  return getDb()
-    .prepare(
-      `
-        SELECT
-          p.id,
-          p.name,
-          p.cwd,
-          p.hidden_at AS hiddenAt,
-          (
-            SELECT COUNT(*)
-            FROM agent_slots a
-            WHERE a.project_id = p.id
-              AND a.archived_at IS NULL
-          ) AS sessionCount
-        FROM projects p
-        ${includeHidden ? '' : 'WHERE p.hidden_at IS NULL'}
-        ORDER BY p.position ASC, p.id ASC
-      `,
-    )
-    .all()
-    .map(projectSummaryFromDbRow)
-}
-
-function requireProjectSummary(id: string, includeHidden = false) {
-  const project = getDb()
-    .prepare(
-      `
-        SELECT
-          p.id,
-          p.name,
-          p.cwd,
-          p.hidden_at AS hiddenAt,
-          (
-            SELECT COUNT(*)
-            FROM agent_slots a
-            WHERE a.project_id = p.id
-              AND a.archived_at IS NULL
-          ) AS sessionCount
-        FROM projects p
-        WHERE p.id = ?
-          AND (? = 1 OR p.hidden_at IS NULL)
-      `,
-    )
-    .get(id, includeHidden ? 1 : 0)
-  if (!project) throw new Error(`Project not found: ${id}`)
-  return projectSummaryFromDbRow(project)
+  return listProjectSummariesFromDb(getDb(), includeHidden)
 }
 
 export function listSessionSummaries(input: {
@@ -520,17 +482,6 @@ function requireSessionSummary(agentId: string, includeArchived = false) {
   return sessionSummaryFromDbRow(session)
 }
 
-function projectSummaryFromDbRow(row: unknown) {
-  const parsed = projectSummaryDbRowSchema.parse(row)
-  return {
-    id: parsed.id,
-    name: parsed.name,
-    cwd: parsed.cwd,
-    hidden: parsed.hiddenAt !== null,
-    sessionCount: parsed.sessionCount,
-  }
-}
-
 function sessionSummaryFromDbRow(row: unknown) {
   const parsed = sessionSummaryDbRowSchema.parse(row)
   return {
@@ -550,42 +501,14 @@ function sessionSummaryFromDbRow(row: unknown) {
 }
 
 export function addProject(input: AddProjectInput) {
-  insertProject(input)
+  insertProject(getDb(), input)
   return getWorkspaceSnapshot()
 }
 
 export function addProjectSummary(input: AddProjectInput) {
-  const id = insertProject(input)
-  return requireProjectSummary(id, true)
-}
-
-function insertProject(input: AddProjectInput) {
   const database = getDb()
-  const id = input.id?.trim() || slugify(input.name)
-  const name = input.name.trim()
-  const cwd = input.cwd.trim()
-
-  if (!name) throw new Error('Project name is required')
-  if (!cwd) throw new Error('Project cwd is required')
-  if (!existsSync(cwd)) throw new Error(`Project cwd does not exist: ${cwd}`)
-
-  const existing = database
-    .prepare('SELECT id FROM projects WHERE id = ?')
-    .get(id)
-  if (existing) throw new Error(`Project already exists: ${id}`)
-
-  const nextPosition = database
-    .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM projects')
-    .get() as { position: number }
-  const insertProject = database.prepare(`
-    INSERT INTO projects (id, name, cwd, position)
-    VALUES (?, ?, ?, ?)
-  `)
-  withTransaction(database, () => {
-    insertProject.run(id, name, cwd, nextPosition.position)
-  })
-
-  return id
+  const id = insertProject(database, input)
+  return requireProjectSummary(database, id, true)
 }
 
 export function startSession(input: StartSessionInput) {
@@ -896,150 +819,42 @@ export function createForkedSession(input: {
 }
 
 export function deleteProject(id: string) {
-  deleteProjectRow(id)
+  deleteProjectRow(getDb(), id)
   return getWorkspaceSnapshot()
 }
 
 export function deleteProjectSummary(id: string) {
-  const project = requireProjectSummary(id, true)
-  deleteProjectRow(id)
+  const database = getDb()
+  const project = requireProjectSummary(database, id, true)
+  deleteProjectRow(database, id)
   return project
 }
 
-function deleteProjectRow(id: string) {
-  const database = getDb()
-  const projectId = id.trim()
-  if (!projectId) throw new Error('Project id is required')
-
-  const count = database
-    .prepare('SELECT COUNT(*) AS count FROM projects')
-    .get() as { count: number }
-  if (count.count <= 1) throw new Error('Cannot delete the last project')
-
-  const existing = database
-    .prepare('SELECT id FROM projects WHERE id = ?')
-    .get(projectId)
-  if (!existing) throw new Error(`Project not found: ${projectId}`)
-
-  database.exec('BEGIN')
-  try {
-    database.prepare('DELETE FROM projects WHERE id = ?').run(projectId)
-    const rows = database
-      .prepare('SELECT id FROM projects ORDER BY position ASC, id ASC')
-      .all()
-      .map((row) => idDbRowSchema.parse(row))
-    const update = database.prepare('UPDATE projects SET position = ? WHERE id = ?')
-    for (const [position, row] of rows.entries()) {
-      update.run(position, row.id)
-    }
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
-}
-
 export function hideProject(id: string) {
-  hideProjectRow(id)
+  hideProjectRow(getDb(), id)
   return getWorkspaceSnapshot()
 }
 
 export function reorderProjects(input: ReorderProjectsInput) {
-  reorderVisibleProjectRows(input.ids)
+  reorderVisibleProjectRows(getDb(), input.ids)
   return getWorkspaceSnapshot()
 }
 
-function reorderVisibleProjectRows(ids: readonly string[]) {
-  const database = getDb()
-  const projectIds = ids.map((id) => id.trim())
-  const uniqueIds = new Set(projectIds)
-  if (uniqueIds.size !== projectIds.length) {
-    throw new Error('Project order contains duplicates')
-  }
-
-  const visibleRows = database
-    .prepare('SELECT id FROM projects WHERE hidden_at IS NULL ORDER BY position ASC, id ASC')
-    .all()
-    .map((row) => idDbRowSchema.parse(row))
-  const visibleIds = new Set(visibleRows.map((row) => row.id))
-  const hasEveryVisibleProject =
-    visibleIds.size === projectIds.length && projectIds.every((id) => visibleIds.has(id))
-  if (!hasEveryVisibleProject) {
-    throw new Error('Project order is stale; reopen projects and try again')
-  }
-
-  const hiddenRows = database
-    .prepare('SELECT id FROM projects WHERE hidden_at IS NOT NULL ORDER BY position ASC, id ASC')
-    .all()
-    .map((row) => idDbRowSchema.parse(row))
-  const update = database.prepare('UPDATE projects SET position = ? WHERE id = ?')
-
-  database.exec('BEGIN')
-  try {
-    let position = 0
-    for (const id of projectIds) {
-      update.run(position, id)
-      position += 1
-    }
-    for (const row of hiddenRows) {
-      update.run(position, row.id)
-      position += 1
-    }
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
-}
-
 export function hideProjectSummary(id: string) {
-  const projectId = hideProjectRow(id)
-  return requireProjectSummary(projectId, true)
-}
-
-function hideProjectRow(id: string) {
   const database = getDb()
-  const projectId = id.trim()
-  if (!projectId) throw new Error('Project id is required')
-
-  const visibleCount = database
-    .prepare('SELECT COUNT(*) AS count FROM projects WHERE hidden_at IS NULL')
-    .get() as { count: number }
-  if (visibleCount.count <= 1) throw new Error('Cannot hide the last visible project')
-
-  const existing = database
-    .prepare('SELECT id FROM projects WHERE id = ?')
-    .get(projectId)
-  if (!existing) throw new Error(`Project not found: ${projectId}`)
-
-  database
-    .prepare('UPDATE projects SET hidden_at = ? WHERE id = ?')
-    .run(new Date().toISOString(), projectId)
-  return projectId
+  const projectId = hideProjectRow(database, id)
+  return requireProjectSummary(database, projectId, true)
 }
 
 export function unhideProject(id: string) {
-  unhideProjectRow(id)
+  unhideProjectRow(getDb(), id)
   return getWorkspaceSnapshot()
 }
 
 export function unhideProjectSummary(id: string) {
-  const projectId = unhideProjectRow(id)
-  return requireProjectSummary(projectId, true)
-}
-
-function unhideProjectRow(id: string) {
   const database = getDb()
-  const projectId = id.trim()
-  if (!projectId) throw new Error('Project id is required')
-
-  const existing = database
-    .prepare('SELECT id FROM projects WHERE id = ?')
-    .get(projectId)
-  if (!existing) throw new Error(`Project not found: ${projectId}`)
-
-  database.prepare('UPDATE projects SET hidden_at = NULL WHERE id = ?').run(projectId)
-  return projectId
+  const projectId = unhideProjectRow(database, id)
+  return requireProjectSummary(database, projectId, true)
 }
 
 export function listScratchpadBlocks(input: {
@@ -2333,16 +2148,6 @@ function removeLegacySeedProject(database: DatabaseSync) {
         WHERE project_id = 'kiri'
       )
   `)
-}
-
-function slugify(value: string) {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  if (!slug) throw new Error('Project name must contain at least one ASCII letter or digit')
-  return slug
 }
 
 function normalizePiRole(role: string): MessageRole | null {

@@ -47,6 +47,7 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Added detailed interactive HTML explainer at `docs/kiri-perf-memory-explainer.html`.
 - 2026-05-15: Extracted DB migrations into `src/server/db/migrations.ts` and added a legacy pi-only schema fixture to prove runtime constraint widening and foreign-key repair.
 - 2026-05-15: Started DB connection/transaction split with `src/server/db/connection.ts` owning SQLite open/configure/migrate and `src/server/db/transaction.ts` owning transaction bracketing.
+- 2026-05-15: Started project repository extraction with `src/server/db/projects.ts` owning project summaries, create/delete, hide/unhide, and visible reorder persistence.
 
 ## Remaining Knip Findings
 
