@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kiri Perf And Memory Explainer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: oklch(97.5% 0.012 80);
+      --bg-alt: oklch(94% 0.018 80);
+      --surface: oklch(99% 0.008 80);
+      --surface-elev: oklch(96% 0.018 80);
+      --border: oklch(78% 0.020 270);
+      --border-strong: oklch(50% 0.030 270);
+      --ink: oklch(20% 0.015 270);
+      --ink-dim: oklch(42% 0.012 270);
+      --ink-faint: oklch(60% 0.010 270);
+      --accent: oklch(50% 0.220 263);
+      --accent-tint: oklch(85% 0.080 263);
+      --accent-bg: oklch(95.5% 0.045 263);
+      --bad: oklch(45% 0.140 25);
+      --ok: oklch(48% 0.125 150);
+      --warn: oklch(60% 0.120 80);
+      --mono: "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace;
+      --serif: "Source Serif 4", "Georgia", serif;
+      --display: "Courier New", var(--mono);
+    }
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --bg: oklch(15% 0.025 263);
+      --bg-alt: oklch(18% 0.030 263);
+      --surface: oklch(20% 0.028 263);
+      --surface-elev: oklch(25% 0.032 263);
+      --border: oklch(34% 0.050 263);
+      --border-strong: oklch(56% 0.080 263);
+      --ink: oklch(94% 0.010 80);
+      --ink-dim: oklch(76% 0.018 80);
+      --ink-faint: oklch(62% 0.020 80);
+      --accent: oklch(70% 0.180 263);
+      --accent-tint: oklch(40% 0.120 263);
+      --accent-bg: oklch(28% 0.080 263);
+      --bad: oklch(68% 0.130 25);
+      --ok: oklch(72% 0.120 150);
+      --warn: oklch(78% 0.110 80);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--serif);
+      line-height: 1.58;
+    }
+    button { font: inherit; }
+    .page {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 56px 28px 80px;
+    }
+    .running-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 28px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--ink-dim);
+    }
+    h1 {
+      margin: 0;
+      color: var(--accent);
+      font-family: var(--display);
+      font-size: clamp(42px, 8vw, 72px);
+      line-height: .95;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .dek {
+      max-width: 76ch;
+      margin: 22px 0 28px;
+      font-size: 19px;
+      color: var(--ink-dim);
+    }
+    .rule {
+      height: 14px;
+      margin: 28px 0;
+      border: 1px solid var(--border);
+      background: var(--accent-bg);
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin: 18px 0 32px;
+      font-family: var(--mono);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    .toolbar button,
+    .tab {
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      color: var(--ink);
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+    .toolbar button[aria-pressed="true"],
+    .tab[aria-selected="true"] {
+      background: var(--accent-bg);
+      color: var(--accent);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 18px;
+      margin: 24px 0;
+    }
+    .panel {
+      grid-column: span 12;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      padding: 18px;
+    }
+    .half { grid-column: span 6; }
+    .third { grid-column: span 4; }
+    .two-third { grid-column: span 8; }
+    .label {
+      display: block;
+      margin-bottom: 8px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    h2, h3 {
+      margin: 0 0 12px;
+      font-family: var(--display);
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+    h2 { font-size: 28px; color: var(--accent); }
+    h3 { font-size: 18px; color: var(--ink); }
+    p { margin: 0 0 12px; max-width: 78ch; }
+    .metric {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .metric strong { font-size: 18px; color: var(--accent); }
+    .meter {
+      height: 10px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-alt);
+      margin-top: 8px;
+    }
+    .meter span {
+      display: block;
+      height: 100%;
+      background: var(--accent);
+      width: var(--value);
+    }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 20px 0 0;
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .diagram {
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      padding: 18px;
+      overflow-x: auto;
+    }
+    svg { max-width: 100%; height: auto; }
+    .node { fill: var(--accent-bg); stroke: var(--accent); stroke-width: 1.5; }
+    .node-muted { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1.5; }
+    .edge { stroke: var(--accent); stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+    .edge-muted { stroke: var(--ink-faint); stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; marker-end: url(#arrow); }
+    .svg-label { fill: var(--ink); font-family: monospace; font-size: 12px; }
+    .svg-small { fill: var(--ink-dim); font-family: monospace; font-size: 10px; }
+    .scenario {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 18px;
+    }
+    .scenario-list {
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+    .scenario-list button {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--ink);
+      padding: 10px;
+      text-align: left;
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .scenario-list button.active {
+      border-color: var(--accent);
+      background: var(--accent-bg);
+      color: var(--accent);
+    }
+    .timeline {
+      display: grid;
+      gap: 10px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .step {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 12px;
+      border-left: 2px solid var(--accent);
+      padding-left: 12px;
+    }
+    .cite {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-dim);
+    }
+    .cite a { color: var(--accent); }
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .table th,
+    .table td {
+      border: 1px solid var(--border);
+      padding: 9px;
+      vertical-align: top;
+    }
+    .table th {
+      color: var(--accent);
+      text-transform: uppercase;
+      text-align: left;
+      background: var(--accent-bg);
+    }
+    code {
+      font-family: var(--mono);
+      background: var(--accent-bg);
+      color: var(--accent);
+      padding: 1px 4px;
+    }
+    @media (max-width: 860px) {
+      .half, .third, .two-third { grid-column: span 12; }
+      .scenario { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="running-head">
+      <span>Kiri Performance And Memory</span>
+      <span>Branch kyendamuri/perf-improvements</span>
+    </div>
+    <h1>Kiri Perf And Memory</h1>
+    <p class="dek">This explainer maps the completed performance work: detail paging, scratchpad trigger consistency, testable Effect layers, bounded runtime retention, polling/render budgets, Knip hygiene, and the harnesses that keep those changes measurable.</p>
+    <div class="rule" aria-hidden="true"></div>
+    <div class="toolbar" role="radiogroup" aria-label="Theme">
+      <span class="label">Theme</span>
+      <button data-theme-set="auto" aria-pressed="true">auto</button>
+      <button data-theme-set="light" aria-pressed="false">light</button>
+      <button data-theme-set="dark" aria-pressed="false">dark</button>
+    </div>
+
+    <section class="grid" aria-label="Budget summary">
+      <article class="panel third">
+        <span class="label">Detail rows</span>
+        <div class="metric"><span>Stored timeline</span><strong>6,000</strong></div>
+        <div class="metric"><span>Returned timeline</span><strong>500</strong></div>
+        <div class="meter" aria-label="Returned timeline fraction" style="--value:8.33%"><span></span></div>
+        <p class="cite">Source: <a href="../tests/perf/run-perf.ts">tests/perf/run-perf.ts:12</a>, <a href="../LOG.md">LOG.md:43</a></p>
+      </article>
+      <article class="panel third">
+        <span class="label">Diff rows</span>
+        <div class="metric"><span>Stored diffs</span><strong>80</strong></div>
+        <div class="metric"><span>Returned diffs</span><strong>50</strong></div>
+        <div class="meter" aria-label="Returned diff fraction" style="--value:62.5%"><span></span></div>
+        <p class="cite">Source: <a href="../src/server/db.ts">src/server/db.ts:383</a>, <a href="../tests/perf/run-perf.ts">tests/perf/run-perf.ts:40</a></p>
+      </article>
+      <article class="panel third">
+        <span class="label">Observed run</span>
+        <div class="metric"><span>Detail payload</span><strong>1.08 MB</strong></div>
+        <div class="metric"><span>RSS delta</span><strong>44.34 MB</strong></div>
+        <div class="metric"><span>Detail latency</span><strong>90.53 ms</strong></div>
+        <p class="cite">Source: <a href="../LOG.md">LOG.md:43</a></p>
+      </article>
+    </section>
+
+    <nav class="tabs" aria-label="Explainer sections">
+      <button class="tab" role="tab" aria-selected="true" data-tab="flow">Flow</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="paging">Paging</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="runtime">Runtime</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="harness">Harness</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="knip">Knip</button>
+    </nav>
+
+    <section id="flow" class="tab-panel active">
+      <div class="grid">
+        <article class="panel two-third">
+          <span class="label">Architecture after the changes</span>
+          <div class="diagram">
+            <svg viewBox="0 0 760 360" role="img" aria-label="Kiri data flow diagram">
+              <defs>
+                <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"></path>
+                </marker>
+              </defs>
+              <rect class="node" x="30" y="36" width="160" height="58"></rect>
+              <text class="svg-label" x="48" y="68">Board UI</text>
+              <text class="svg-small" x="48" y="84">poll + render budgets</text>
+              <rect class="node" x="292" y="36" width="180" height="58"></rect>
+              <text class="svg-label" x="312" y="68">Server functions</text>
+              <text class="svg-small" x="312" y="84">workspace + detail</text>
+              <rect class="node" x="572" y="36" width="150" height="58"></rect>
+              <text class="svg-label" x="596" y="68">SQLite</text>
+              <text class="svg-small" x="596" y="84">bounded query</text>
+              <path class="edge" d="M 190 65 L 292 65"></path>
+              <path class="edge" d="M 472 65 L 572 65"></path>
+              <rect class="node-muted" x="30" y="160" width="160" height="58"></rect>
+              <text class="svg-label" x="48" y="192">CLI / MCP</text>
+              <text class="svg-small" x="48" y="208">same scratch path</text>
+              <rect class="node" x="292" y="160" width="180" height="58"></rect>
+              <text class="svg-label" x="312" y="192">triggerScratchpad</text>
+              <text class="svg-small" x="312" y="208">session + prompt</text>
+              <rect class="node-muted" x="572" y="160" width="150" height="58"></rect>
+              <text class="svg-label" x="596" y="192">Runtime</text>
+              <text class="svg-small" x="596" y="208">cleanup hooks</text>
+              <path class="edge" d="M 190 189 L 292 189"></path>
+              <path class="edge" d="M 472 189 L 572 189"></path>
+              <rect class="node" x="292" y="276" width="180" height="52"></rect>
+              <text class="svg-label" x="314" y="306">Perf harnesses</text>
+              <path class="edge-muted" d="M 382 218 L 382 276"></path>
+              <path class="edge-muted" d="M 648 218 C 648 260 472 250 472 300"></path>
+            </svg>
+          </div>
+        </article>
+        <article class="panel third">
+          <span class="label">Invariant checks</span>
+          <p><code>limit</code> is no longer decorative. It clamps the server detail response to latest timeline rows before parsing into messages and events.</p>
+          <p><code>triggerScratchpadSession</code> is the single path for UI and control-plane triggers.</p>
+          <p>Runtime retained maps now have explicit cleanup calls and a bounded Codex diff-turn guard.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="paging" class="tab-panel">
+      <div class="grid">
+        <article class="panel half">
+          <span class="label">Detail query contract</span>
+          <p>The detail path now reads from the active thread, unions messages with timeline events, orders newest-first in SQL, applies <code>LIMIT ?</code>, then reverses back to chronological order for rendering.</p>
+          <p class="cite">Source: <a href="../src/server/db.ts">src/server/db.ts:385</a>, <a href="../src/server/db.ts">src/server/db.ts:449</a>, <a href="../src/server/db.ts">src/server/db.ts:495</a></p>
+        </article>
+        <article class="panel half">
+          <span class="label">Shape preservation</span>
+          <p>The response still returns <code>messages</code>, <code>timelineEvents</code>, and <code>timeline</code>; those arrays are now derived from the returned page, so the client receives coherent data instead of a full historical transcript.</p>
+          <p class="cite">Source: <a href="../src/server/db.ts">src/server/db.ts:2619</a></p>
+        </article>
+      </div>
+    </section>
+
+    <section id="runtime" class="tab-panel">
+      <div class="grid">
+        <article class="panel half">
+          <span class="label">Retained state</span>
+          <p>Codex runtime state is still process-local, but per-agent maps are cleaned on reset/delete, old thread bindings are pruned when a new thread is remembered, and diff-turn dedupe keys cap at 1,000.</p>
+          <p class="cite">Source: <a href="../src/server/codex-runtime.ts">src/server/codex-runtime.ts:52</a>, <a href="../src/server/codex-runtime.ts">src/server/codex-runtime.ts:759</a>, <a href="../src/server/codex-runtime.ts">src/server/codex-runtime.ts:791</a></p>
+        </article>
+        <article class="panel half">
+          <span class="label">Service layers</span>
+          <p>DB, settings, and runtime registry now have Effect service layers without forcing a broad rewrite. Existing direct functions remain available, while harnesses can wire services in isolation.</p>
+          <p class="cite">Source: <a href="../src/server/db.ts">src/server/db.ts:52</a>, <a href="../src/server/settings.ts">src/server/settings.ts:7</a>, <a href="../src/server/provider-runtime.ts">src/server/provider-runtime.ts:52</a></p>
+        </article>
+      </div>
+    </section>
+
+    <section id="harness" class="tab-panel">
+      <div class="grid">
+        <article class="panel">
+          <span class="label">Scenario simulator</span>
+          <div class="scenario">
+            <div class="scenario-list" id="scenario-list"></div>
+            <div class="timeline" id="scenario-detail"></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="knip" class="tab-panel">
+      <div class="grid">
+        <article class="panel">
+          <span class="label">Knip triage</span>
+          <table class="table">
+            <thead>
+              <tr><th>Finding</th><th>Action</th><th>Reason</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>shiki</code></td><td>Added explicit dependency.</td><td>The highlighter imports Shiki directly.</td></tr>
+              <tr><td>Devtools / property deps</td><td>Retained and logged.</td><td>Removing dependencies was treated as separate pruning work to avoid feature churn.</td></tr>
+              <tr><td>Exported contract symbols</td><td>Retained and logged.</td><td>Contract and helper exports may be public/internal API surface.</td></tr>
+            </tbody>
+          </table>
+          <p class="cite">Source: <a href="../knip.jsonc">knip.jsonc</a>, <a href="../LOG.md">LOG.md:45</a></p>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const scenarios = [
+      {
+        id: "detail",
+        title: "Large detail fetch",
+        steps: [
+          ["Input", "A detail request asks for an agent with limit 500."],
+          ["SQL", "Messages and events are unioned, ordered newest first, and limited in SQLite."],
+          ["Parse", "Rows are converted back into chronological timeline items."],
+          ["Budget", "The perf harness proves 6,000 stored rows return as 500 rows."]
+        ]
+      },
+      {
+        id: "scratchpad",
+        title: "Scratchpad trigger",
+        steps: [
+          ["Input", "UI, CLI, and MCP call the same trigger helper."],
+          ["Session", "The helper creates a session and marks the block with the new agent id."],
+          ["Prompt", "Terminal sessions do not enqueue chat; GUI sessions enqueue the block body."],
+          ["Cleanup", "If prompt enqueue rejects, the created session is archived."]
+        ]
+      },
+      {
+        id: "runtime",
+        title: "Runtime cleanup",
+        steps: [
+          ["Input", "A session is reset or archived."],
+          ["Codex", "Thread maps, turn maps, queues, and diff guards are pruned for that agent."],
+          ["Pi", "Adapter, adapter key, and queue maps are cleared through the same provider cleanup call."],
+          ["Gate", "Retention tests assert map counts return to zero."]
+        ]
+      }
+    ];
+
+    const themeKey = "kiri-perf-memory-explainer-theme";
+    const themeButtons = Array.from(document.querySelectorAll("[data-theme-set]"));
+    function applyTheme(value) {
+      const next = value || localStorage.getItem(themeKey) || "auto";
+      document.documentElement.dataset.theme = next === "auto" ? "" : next;
+      themeButtons.forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.themeSet === next));
+      });
+      localStorage.setItem(themeKey, next);
+    }
+    themeButtons.forEach((button) => {
+      button.addEventListener("click", () => applyTheme(button.dataset.themeSet));
+    });
+    applyTheme();
+
+    const tabs = Array.from(document.querySelectorAll("[data-tab]"));
+    const panels = Array.from(document.querySelectorAll(".tab-panel"));
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        tabs.forEach((item) => item.setAttribute("aria-selected", String(item === tab)));
+        panels.forEach((panel) => panel.classList.toggle("active", panel.id === tab.dataset.tab));
+      });
+    });
+
+    const scenarioList = document.querySelector("#scenario-list");
+    const scenarioDetail = document.querySelector("#scenario-detail");
+    function renderScenario(id) {
+      const scenario = scenarios.find((item) => item.id === id) || scenarios[0];
+      scenarioList.innerHTML = scenarios.map((item) =>
+        `<button type="button" class="${item.id === scenario.id ? "active" : ""}" data-scenario="${item.id}">${item.title}</button>`
+      ).join("");
+      scenarioDetail.innerHTML = scenario.steps.map(([label, body]) =>
+        `<div class="step"><strong>${label}</strong><span>${body}</span></div>`
+      ).join("");
+      Array.from(scenarioList.querySelectorAll("[data-scenario]")).forEach((button) => {
+        button.addEventListener("click", () => renderScenario(button.dataset.scenario));
+      });
+    }
+    renderScenario("detail");
+  </script>
+</body>
+</html>

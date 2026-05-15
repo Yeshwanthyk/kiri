@@ -1,0 +1,13 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "entry": [
+    "src/desktop/preload.cjs",
+    "scripts/kiri-projects.mjs",
+    "tests/harness/task-progress-db-harness.ts",
+    "tests/harness/effect-layers.ts",
+    "tests/harness/kiri-agent-cli-harness.ts",
+    "tests/harness/kiri-agent-detail-history-harness.ts",
+    "tests/harness/scratchpad-trigger-harness.ts",
+    "tests/perf/run-perf.ts"
+  ]
+}
