@@ -65,7 +65,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/runtime-lifecycle.ts` | use-case | runtime lifecycle orchestration over injected `RuntimeProjector` | migrating | required | DB-backed live projector extracted; lifecycle now owns orchestration only. |
 | `src/server/runtime-projection.ts` | projection | DB-backed runtime projector layer | migrating | required | Extracted from `runtime-lifecycle.ts`; review/verification pending. |
 | `src/server/runtime.ts` | use-case | runtime registry-backed command surface | migrating | required | Runtime command service now dispatches through `RuntimeRegistry`; review/verification pending. |
-| `src/server/scratchpad-trigger.ts` | use-case | scratchpad/workspace service method | not-started | required | Shared semantics are good; move behind shared service. |
+| `src/server/scratchpad-trigger.ts` | use-case | scratchpad trigger service method | migrating | required | Effect service and injectable dependencies added; compatibility export preserved. |
 | `src/server/settings.ts` | config | `config/settings-service.ts` with typed config errors | migrating | required | Typed injectable settings service added; review/verification pending. |
 | `src/server/terminal-launch.ts` | process-adapter | terminal launch resolver service | migrating | required | Typed injectable terminal launch service added; review/verification pending. |
 | `src/server/terminal-registry.ts` | runtime-adapter | terminal session registry for PTY/socket state | migrating | required | Extracted from `terminal-server.ts`; review/verification pending. |
@@ -186,6 +186,29 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: Sagan found no blockers. Suggested failure-shape tests were added; second pass found no blockers.
 - Findings fixed: typecheck caught the test fixture using stale agent-cell fields; corrected the fixture to match the current contract. Review suggested direct sync/async error-shape coverage; added tests for injected project-list failure and scratchpad-trigger failure.
 - Residual risk: error normalization remains the existing `KiriControlError` wrapper, so non-Error throws are still converted to string messages at the Effect facade boundary.
+
+### src/server/scratchpad-trigger.ts service extraction
+
+- Status: migrating; final status waits for DB/session/runtime command dependencies to be leaf Effect services instead of compatibility functions.
+- Target seam: `ScratchpadTriggerService` owns scratchpad block lookup, session creation, trigger marking, optional GUI prompt enqueue, prompt-failure cleanup, and session summary return.
+- Behavior preserved: `triggerScratchpadSession(input, prompt?)` compatibility export remains; terminal sessions do not enqueue prompts; GUI prompt enqueue failures asynchronously archive the created session and report the prompt failure; missing blocks fail before session creation.
+- Dependencies moved: DB reads/writes, session start/delete/list, prompt enqueue, and prompt-failure reporting are now behind `ScratchpadTriggerDependencies`.
+- Baseline tests before migration: `tests/harness/scratchpad-trigger-harness.ts` covered terminal no-prompt and GUI failed-prompt archive behavior through the public compatibility export.
+- Tests added/updated: `tests/server/scratchpad-trigger-service.test.ts` covers terminal no-prompt, GUI prompt-failure cleanup/reporting, and missing-block precondition using injected dependencies.
+- Post-migration parity tests: focused service, public harness, workspace-service, and KiriControl service tests passed.
+- Perf/memory impact: no payload/query changes; the async prompt failure cleanup remains bounded to one retained session cleanup path and is now directly unit-testable.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec eslint src/server/scratchpad-trigger.ts tests/server/scratchpad-trigger-service.test.ts --max-warnings=0` - passed
+  - `pnpm exec vitest run tests/server/scratchpad-trigger-service.test.ts tests/server/scratchpad-trigger.test.ts tests/server/workspace-service.test.ts tests/server/kiri-control-service.test.ts` - passed, 4 files / 14 tests
+  - `pnpm effect:audit` - passed, 44 tracked/server files
+  - `pnpm exec vitest run tests/server/scratchpad-trigger-service.test.ts tests/server/scratchpad-trigger.test.ts tests/server/workspace-service.test.ts tests/server/kiri-control-service.test.ts tests/server/kiri-control-cli.test.ts tests/server/kiri-mcp.test.ts` - passed, 6 files / 17 tests
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `pnpm test -- --runInBand` - passed, 52 files / 221 tests including `tests/server/perf-gates.test.ts`
+- Review subagent summary: Sagan found no blockers. Notes: compatibility export still accepts custom `prompt`, normal `Error` failures unwrap for existing callers, GUI prompt failure cleanup and terminal no-prompt behavior are preserved.
+- Findings fixed: typecheck caught that live `getScratchpadBlock` can return `undefined`; dependency type now allows `null | undefined` so the service preserves the existing missing-block behavior.
+- Residual risk: the compatibility export builds a small one-off layer per call to preserve the optional prompt override; final app-layer composition should provide the service once at the transport boundary.
 
 ### src/server/pi-retained-state.ts, src/server/pi-runtime.ts, src/server/pi-rpc.ts, and project runtime cleanup
 
