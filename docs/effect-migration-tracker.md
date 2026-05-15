@@ -54,7 +54,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/pi-jsonl.ts` | projection | `db/projections/pi-jsonl.ts` plus file reader service | not-started | required | Split pure JSONL projection from file IO. |
 | `src/server/pi-rpc.ts` | runtime-adapter | `runtime/pi/rpc-adapter.ts` scoped process adapter | not-started | required | Already Effect-aware; needs scoped process/listener lifetime. |
 | `src/server/pi-runtime.ts` | runtime-adapter | `runtime/pi/{runtime-service,retained-state,attachments}.ts` | not-started | required | Main Pi retained-state and cleanup risk. |
-| `src/server/preferences.ts` | config | `config/preferences-service.ts` with atomic file and in-memory adapters | not-started | required | Direct JSON file persistence. |
+| `src/server/preferences.ts` | config | `config/preferences-service.ts` with atomic file and in-memory adapters | migrating | required | Typed injectable preferences service added; review/verification pending. |
 | `src/server/provider-runtime.ts` | use-case | `runtime/registry.ts` with injected runtime services | not-started | required | Registry exists; adapters are still imported singletons. |
 | `src/server/runtime-binaries.ts` | process-adapter | `integrations/runtime-binaries.ts` resolver service | not-started | required | Direct PATH/executable resolution. |
 | `src/server/runtime-file-operations.ts` | pure | pure runtime file-operation classifier | explicit-non-migration | not-required | Keep pure unless telemetry/resource dependencies are added. |
@@ -88,6 +88,28 @@ Copy this section under `## Migration Records` for each file or inseparable file
 ```
 
 ## Migration Records
+
+### src/server/preferences.ts
+
+- Status: migrating; final status waits for workspace snapshot hydration and workspace mutations to depend on the service instead of compatibility sync exports.
+- Target seam: typed injectable `UiPreferencesService` over `KiriConfigService` plus atomic file adapter.
+- Behavior preserved: synchronous exports `getUiPreferences`, `setThemePreference`, `setKeymapPreference`, `setChatTypographyPreference`, and `setAgentByProjectPreference` keep their existing signatures, default behavior, validation behavior, and temp-file-then-rename persistence.
+- Dependencies moved: direct preference file exists/read/write/mkdir/rename operations can now be supplied through `PreferencesFileSystem`; live layer still uses Node fs and process/date suffixes.
+- Baseline tests before migration: existing preferences tests, workspace snapshot projection tests, and effect-layer harness.
+- Tests added/updated: `tests/server/preferences.test.ts` now covers service defaults, atomic temp cleanup, persisted reads through the service, typed errors for invalid preference files, and `UiPreferencesService.layerFromConfig` wiring.
+- Post-migration parity tests: focused preferences/workspace/effect-layer tests passed.
+- Perf/memory impact: no retained state added; service remains on-demand and uses an in-memory file adapter only in tests.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm exec vitest run tests/server/preferences.test.ts tests/server/db-workspace-snapshot.test.ts tests/server/effect-layers.test.ts` - passed, 3 files / 9 tests
+  - `pnpm exec eslint src/server/preferences.ts tests/server/preferences.test.ts --max-warnings=0` - passed
+  - `pnpm effect:audit` - passed, 37 tracked/server files
+  - `pnpm lint` - passed
+  - `pnpm build` - passed with existing Vite chunk-size warning
+  - `git diff --check` - passed
+- Review subagent summary: Euler found no code blockers; first pass noted missing layer wiring coverage, second pass only found stale tracker test count, corrected here.
+- Findings fixed: focused tests caught an invalid theme fixture; changed it to an allowed theme. Typecheck lint messages caught test-side JSON helpers; replaced them with service reads and raw invalid fixture text. Added layer wiring coverage and changed chained layer provides to a single composed provide after Effect lint flagged lifecycle risk.
+- Residual risk: workspace still calls compatibility sync exports until the workspace service phase.
 
 ### src/server/kiri-config.ts and src/server/settings.ts
 
