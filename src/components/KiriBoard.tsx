@@ -114,7 +114,7 @@ const workspacePollMaxDurationMs = 120_000
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const migrationAttemptedRef = React.useRef(false)
-  const boardPaneRef = React.useRef<HTMLElement | null>(null)
+  const boardScrollRef = React.useRef<HTMLDivElement | null>(null)
   const previousSelectedProjectIdRef = React.useRef<string | null>(null)
   const [workspace, setWorkspace] = React.useState(snapshot)
   const [activeProjectId, setActiveProjectId] = React.useState<string>(snapshot.selected.projectId)
@@ -294,7 +294,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     previousSelectedProjectIdRef.current = selection.projectId
     if (!previousProjectId || previousProjectId === selection.projectId) return
 
-    const pane = boardPaneRef.current
+    const pane = boardScrollRef.current
     if (!pane || !selection.projectId) return
     const target = pane.querySelector<HTMLElement>('[data-project-selected="true"]')
     if (!target) return
@@ -1137,7 +1137,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       ) : null}
 
       <section
-        ref={boardPaneRef}
         className="board-pane"
         aria-label="Projects and agents"
         data-hydrated={hydrated ? 'true' : 'false'}
@@ -1174,23 +1173,25 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           </div>
         </header>
 
-        <div
-          className="board-grid"
-          data-has-selection={selection.projectId ? 'true' : 'false'}
-          data-testid="board-grid"
-        >
-          {workspace.projects.map((project) => (
-            <ProjectLane
-              key={project.id}
-              project={project}
-              selectedAgentId={selection.agentId}
-              selectedProjectId={selection.projectId}
-              startSessionKey={keymap.startSession}
-              hideDisabled={workspace.projects.length <= 1 || projectVisibilityPendingId === project.id}
-              onHide={handleHideProject}
-              onSelect={selectAgent}
-            />
-          ))}
+        <div className="board-scroll" ref={boardScrollRef}>
+          <div
+            className="board-grid"
+            data-has-selection={selection.projectId ? 'true' : 'false'}
+            data-testid="board-grid"
+          >
+            {workspace.projects.map((project) => (
+              <ProjectLane
+                key={project.id}
+                project={project}
+                selectedAgentId={selection.agentId}
+                selectedProjectId={selection.projectId}
+                startSessionKey={keymap.startSession}
+                hideDisabled={workspace.projects.length <= 1 || projectVisibilityPendingId === project.id}
+                onHide={handleHideProject}
+                onSelect={selectAgent}
+              />
+            ))}
+          </div>
         </div>
 
         {workspace.hiddenProjects.length > 0 ? (

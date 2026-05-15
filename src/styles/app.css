@@ -79,10 +79,12 @@ button {
 }
 
 .board-pane {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   max-width: 100%;
-  max-height: 100vh;
-  overflow: auto;
+  height: 100vh;
+  overflow: hidden;
   padding: 18px 20px 22px;
   scrollbar-width: none;
 }
@@ -92,6 +94,7 @@ button {
 }
 
 .topbar {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -142,14 +145,25 @@ button {
   box-shadow: inset 0 0 0 1px var(--line-subtle);
 }
 
+.board-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+.board-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 .hidden-project-dock {
-  position: sticky;
-  bottom: 0;
+  flex: 0 0 auto;
+  position: relative;
   z-index: 3;
   display: grid;
   gap: 7px;
-  margin-top: 28px;
-  padding: 12px 0 2px;
+  margin-top: 16px;
+  padding: 12px 0 0;
   border-top: 1px solid var(--line-subtle);
   background: linear-gradient(
     to bottom,
