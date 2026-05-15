@@ -53,7 +53,8 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | migrating | required | Typed injectable config service added; review/verification pending. |
 | `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | migrating | required | Effect facade now has injectable dependencies and shared cleanup/trigger seams; final leaf service composition remains. |
 | `src/server/kiri-mcp.ts` | transport | `transport/mcp.ts` over `KiriControl` app layer | not-started | required | Keep MCP output parity. |
-| `src/server/pi-jsonl.ts` | projection | `db/projections/pi-jsonl.ts` plus file reader service | not-started | required | Split pure JSONL projection from file IO. |
+| `src/server/pi-jsonl-file.ts` | projection | Pi JSONL file reader service over pure projection | migrating | required | File IO moved out of pure Pi JSONL projection; final filesystem service injection remains. |
+| `src/server/pi-jsonl.ts` | projection | pure Pi JSONL session projection | explicit-non-migration | not-required | Pure parser/projection module after file IO split. |
 | `src/server/pi-rpc.ts` | runtime-adapter | `runtime/pi/rpc-adapter.ts` scoped process adapter | migrating | required | Prompt completion waiters now cancel on stop; full scoped process/listener lifetime remains. |
 | `src/server/pi-retained-state.ts` | runtime-adapter | Pi retained-state registry for adapters, launch keys, queues, and reset generations | migrating | required | Extracted from `pi-runtime.ts`; review/verification pending. |
 | `src/server/pi-runtime.ts` | runtime-adapter | `runtime/pi/{runtime-service,retained-state,attachments}.ts` | migrating | required | Retained-state maps extracted; runtime service and attachment split remain. |
@@ -209,6 +210,30 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: Sagan found no blockers. Notes: compatibility export still accepts custom `prompt`, normal `Error` failures unwrap for existing callers, GUI prompt failure cleanup and terminal no-prompt behavior are preserved.
 - Findings fixed: typecheck caught that live `getScratchpadBlock` can return `undefined`; dependency type now allows `null | undefined` so the service preserves the existing missing-block behavior.
 - Residual risk: the compatibility export builds a small one-off layer per call to preserve the optional prompt override; final app-layer composition should provide the service once at the transport boundary.
+
+### src/server/pi-jsonl.ts and src/server/pi-jsonl-file.ts
+
+- Status: `pi-jsonl.ts` is explicit non-migration pure projection; `pi-jsonl-file.ts` is migrating until filesystem reads are provided by the app filesystem service.
+- Target seam: pure Pi JSONL projection is separated from file IO; `PiJsonlFileService` owns reading a session JSONL file and projecting it.
+- Behavior preserved: `projectPiSessionJsonl` parser behavior, task projection, tool placeholder filtering, empty task-list clearing, and session-operation hydration behavior remain unchanged.
+- Dependencies moved: direct `readFileSync` moved out of `pi-jsonl.ts` into `pi-jsonl-file.ts`; `db/session-operations.ts` now imports the file-reader compatibility export.
+- Baseline tests before migration: `tests/server/pi-jsonl.test.ts` covered parser behavior and `tests/server/db-session-operations.test.ts` covered persisted Pi hydration.
+- Tests added/updated: `tests/server/pi-jsonl-file.test.ts` covers injected file reading/projection, injected projection failure wrapping, and compatibility export `Error` shape for missing files.
+- Post-migration parity tests: focused parser, file reader, and DB session-operation tests passed.
+- Perf/memory impact: no parser behavior or payload changes; the pure projection can now be tested without filesystem state and file reads have a service seam for later app-layer injection.
+- Verification commands and results:
+  - `pnpm typecheck` - passed
+  - `pnpm lint` - passed
+  - `pnpm exec eslint src/server/pi-jsonl.ts src/server/pi-jsonl-file.ts src/server/db/session-operations.ts tests/server/pi-jsonl-file.test.ts --max-warnings=0` - passed
+  - `node --check scripts/effect-migration-audit.mjs` - passed
+  - `pnpm effect:audit` - passed, 45 tracked / 45 server files
+  - `pnpm exec vitest run tests/server/pi-jsonl.test.ts tests/server/pi-jsonl-file.test.ts tests/server/db-session-operations.test.ts tests/server/task-progress-db.test.ts` - passed, 4 files / 10 tests
+  - `pnpm build` - passed, existing Vite large chunk warning only
+  - `pnpm test -- --runInBand` - passed, 53 files / 224 tests
+  - `git diff --check` - passed
+- Review subagent summary: no blockers; confirmed session-operation parity, pure/file import direction, compatibility `Error` unwrapping, and no scoped import cycle. Optional projection-failure test gap was fixed.
+- Findings fixed: focused lint caught unsafe parser member access in `pi-jsonl.ts`; replaced ad hoc member reads with explicit record narrowing and typed unknown arrays. The migration audit parser also skipped rows whose notes contained `File`; narrowed header skipping to the actual first-cell header and reran the audit.
+- Residual risk: compatibility `projectPiSessionFile` still runs synchronously to preserve DB/session-operation behavior; final app composition can provide async/scoped filesystem access if needed.
 
 ### src/server/pi-retained-state.ts, src/server/pi-runtime.ts, src/server/pi-rpc.ts, and project runtime cleanup
 

@@ -126,13 +126,14 @@ function parseRows(markdown) {
     }
     if (inTable && line.startsWith('## ')) break
     if (!inTable || !line.startsWith('|')) continue
-    if (line.includes('---') || line.includes(' File ')) continue
+    if (line.includes('---')) continue
 
     const cells = line
       .split('|')
       .slice(1, -1)
       .map((cell) => cell.trim())
     if (cells.length !== 6) continue
+    if (cells[0] === 'File') continue
     rows.push({
       file: stripCode(cells[0]),
       classification: cells[1],

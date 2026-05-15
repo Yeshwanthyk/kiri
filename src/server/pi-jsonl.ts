@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { z } from 'zod'
 import type { AgentTask, BoardMessage, MessageRole } from '~/lib/contracts'
 import { agentTaskSchema, boardMessageSchema, messageRoleSchema } from '~/lib/contracts'
@@ -45,10 +44,6 @@ export type PiSessionProjection = {
   preview: string
   contextUsedTokens?: number
   updatedAt?: string
-}
-
-export function projectPiSessionFile(path: string): PiSessionProjection {
-  return projectPiSessionJsonl(readFileSync(path, 'utf8'))
 }
 
 export function projectPiSessionJsonl(content: string): PiSessionProjection {
@@ -165,9 +160,10 @@ function contentToText(content: unknown): string {
   return content
     .flatMap((part) => {
       if (!part || typeof part !== 'object') return []
-      if ('text' in part && typeof part.text === 'string') return [part.text]
-      if ('thinking' in part && typeof part.thinking === 'string') {
-        return [part.thinking]
+      const record = part as Record<string, unknown>
+      if (typeof record.text === 'string') return [record.text]
+      if (typeof record.thinking === 'string') {
+        return [record.thinking]
       }
       return []
     })
@@ -300,7 +296,7 @@ function stringField(record: Record<string, unknown>, key: string) {
 
 function arrayField(record: Record<string, unknown>, key: string) {
   const value = record[key]
-  return Array.isArray(value) ? value : []
+  return Array.isArray(value) ? value as unknown[] : []
 }
 
 function normalizeTaskStatus(value: string | undefined): AgentTask['status'] | undefined {

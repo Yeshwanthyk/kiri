@@ -95,6 +95,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed KiriControl dependency injection. Review found no blockers; added sync/async error-shape tests, CLI model smoke passed, and focused CLI/MCP/service checks passed.
 - 2026-05-15: Started scratchpad trigger service extraction. Added `ScratchpadTriggerService` with injected DB/session/runtime prompt/reporting dependencies while preserving `triggerScratchpadSession(input, prompt?)`.
 - 2026-05-15: Completed scratchpad trigger service extraction. Review found no blockers; focused service tests, compatibility harness, workspace/KiriControl service tests, CLI/MCP parity, typecheck, eslint, and effect audit passed.
+- 2026-05-15: Started Pi JSONL file boundary split. Moved session-file reads into `pi-jsonl-file.ts` while keeping `pi-jsonl.ts` as pure projection logic.
+- 2026-05-15: Pi JSONL review pass completed with no blockers. Added injected projection-failure coverage, fixed the migration audit parser so note text containing `File` no longer hides tracker rows, and verified focused parser/file/session/task tests plus full typecheck/lint/audit/build/test/diff gates.
 
 ## Remaining Knip Findings
 

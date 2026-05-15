@@ -6,7 +6,7 @@ import {
 } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
-import { projectPiSessionFile } from '../pi-jsonl'
+import { projectPiSessionFile } from '../pi-jsonl-file'
 import {
   clearAgentContextUsage,
   upsertAgentContextUsage,
