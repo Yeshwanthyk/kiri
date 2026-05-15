@@ -23,8 +23,8 @@ import {
   sessionInterfaceModeSchema,
 } from '~/lib/contracts'
 import {
-  idDbRowSchema,
-} from './db/schema'
+  applyDatabaseBootstraps,
+} from './db/bootstrap'
 import { readAgentDetail } from './db/agent-detail'
 import { openKiriDatabase } from './db/connection'
 import {
@@ -110,8 +110,11 @@ export function getDb() {
   if (db) return db
   const config = getKiriConfig()
   db = openKiriDatabase(config.dbPath)
-  normalizeSeededModels(db)
-  removeLegacySeedProject(db)
+  const piSettings = getRuntimeSettings('pi')
+  applyDatabaseBootstraps(db, {
+    piModels: piSettings.models,
+    defaultPiModel: piSettings.defaultModel,
+  })
   return db
 }
 
@@ -493,41 +496,4 @@ function hydratePersistedPiSessions(database: DatabaseSync) {
     piSessionsDir: getKiriConfig().piSessionsDir,
     defaultModel: piSettings.defaultModel,
   })
-}
-
-function normalizeSeededModels(database: DatabaseSync) {
-  const piSettings = getRuntimeSettings('pi')
-  const staleRows = database
-    .prepare(
-      `
-        SELECT id
-        FROM agent_slots
-        WHERE runtime = 'pi'
-          AND model NOT IN (${piSettings.models.map(() => '?').join(', ')})
-      `,
-    )
-    .all(...piSettings.models)
-    .map((row) => idDbRowSchema.parse(row))
-
-  const update = database.prepare('UPDATE agent_slots SET model = ? WHERE id = ?')
-  for (const row of staleRows) {
-    update.run(piSettings.defaultModel, row.id)
-  }
-}
-
-function removeLegacySeedProject(database: DatabaseSync) {
-  database.exec(`
-    DELETE FROM projects
-    WHERE id = 'kiri'
-      AND name = 'kiri Orchestrator'
-      AND (
-        SELECT COUNT(*)
-        FROM projects
-      ) = 1
-      AND NOT EXISTS (
-        SELECT 1
-        FROM agent_slots
-        WHERE project_id = 'kiri'
-      )
-  `)
 }

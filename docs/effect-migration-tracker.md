@@ -33,6 +33,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | not-started | required | Main Codex retained-state and stale-turn risk. |
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | not-started | required | Highest priority split; preserve compatibility exports until callers move. |
 | `src/server/db/agent-detail.ts` | repository | Paged agent detail reader for timeline, diffs, tasks, and context usage | migrating | required | Extracted from `db.ts`; review/verification pending. |
+| `src/server/db/bootstrap.ts` | repository | Startup DB data repair and seed cleanup boundary | migrating | required | Extracted from `db.ts`; direct bootstrap tests added and review passed; final status waits for DB/settings service boundary. |
 | `src/server/db/connection.ts` | repository | DB open/configure/migrate boundary | migrating | required | Owns SQLite handle creation; review/verification pending. |
 | `src/server/db/migrations.ts` | repository | DB schema creation and migration helpers | migrating | required | Extracted and reviewed; final status waits for DB connection/transaction service boundary. |
 | `src/server/db/projects.ts` | repository | Project repository over DB connection/transaction helpers | migrating | required | Extracted from `db.ts`; review/verification pending. |
@@ -127,6 +128,23 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: no blockers; confirmed safe pure extraction, no circular dependency, valid tracker row. Non-blocking unused import nit fixed.
 - Findings fixed: restored required contract-schema imports in `db.ts` after focused tests caught the missing imports; removed unused imports from `schema.ts`.
 - Residual risk: none known for this pure extraction.
+
+### src/server/db/bootstrap.ts
+
+- Status: extracted; final migration status remains `migrating|required` until DB startup bootstraps sit behind the DB/settings service boundary.
+- Target seam: startup data repair for stale seeded Pi models and legacy empty project cleanup.
+- Behavior preserved: stale Pi session models are rewritten to the configured default Pi model while non-Pi agents are untouched; the empty legacy `kiri Orchestrator` project is removed only when it is the sole project and has no agent slots.
+- Dependencies moved: seeded-model normalization SQL and legacy seed project cleanup SQL moved out of `src/server/db.ts`.
+- Baseline tests before migration: DB connection/migration tests and full facade startup through existing harnesses.
+- Tests added/updated: `tests/server/db-bootstrap.test.ts` covers stale model normalization and empty legacy project cleanup.
+- Post-migration parity tests: focused bootstrap test passed; broader DB/effect gates run before commit.
+- Perf/memory impact: none expected; startup SQL moved without changing query shape.
+- Verification commands and results:
+  - `pnpm exec vitest run tests/server/db-bootstrap.test.ts` - passed, 2 tests
+  - `pnpm typecheck` - passed
+- Review subagent summary: Noether reported no blockers and no edits; verified diff check, focused bootstrap test, typecheck, and effect audit.
+- Findings fixed: none yet.
+- Residual risk: bootstrap still receives raw settings values from the compatibility facade; service phase should inject settings through `KiriSettingsService`.
 
 ### src/server/db/migrations.ts
 

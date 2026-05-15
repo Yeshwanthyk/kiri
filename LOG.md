@@ -58,6 +58,8 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 - 2026-05-15: Completed workspace snapshot projection extraction. Added direct snapshot projection coverage; review passed; typecheck, lint, effect audit, diff check, focused projection/runtime tests, and perf gate passed.
 - 2026-05-15: Started session operations extraction with `src/server/db/session-operations.ts` owning reset cleanup, forked Pi session copy/hydration, persisted Pi session discovery, deleted-slot filtering, and safe JSONL projection.
 - 2026-05-15: Completed session operations extraction. Added direct reset/fork/hydration tests; review passed; typecheck, lint, effect audit, build, reset harness, and focused DB/runtime tests passed.
+- 2026-05-15: Started DB bootstrap extraction with `src/server/db/bootstrap.ts` owning stale seeded Pi model normalization and legacy empty project cleanup.
+- 2026-05-15: Completed DB bootstrap extraction. Added direct startup repair tests; review passed; typecheck, lint, effect audit, diff check, and focused DB/effect-layer tests passed.
 
 ## Remaining Knip Findings
 
