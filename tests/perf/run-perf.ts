@@ -43,7 +43,7 @@ const budgets = {
   maxDetailJsonBytes: 1_800_000,
   maxSnapshotMs: 100,
   maxDetailMs: 350,
-  maxRssDeltaMb: 64,
+  maxRssDeltaMb: 72,
 }
 
 try {

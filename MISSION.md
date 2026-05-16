@@ -2,9 +2,13 @@
 
 Complete the Kiri performance, memory, and Effect migration in safe phases without feature loss, behavioral regressions, or unbounded retained state.
 
+## Current Goal
+
+Implement `SIMPLE.md` section by section with coverage before refactors, no functionality changes, and review subagents after each meaningful chunk.
+
 # Done Criteria
 
-- [x] Existing work is committed in logical blocks on `kyendamuri/perf-improvements`.
+- [ ] Current `SIMPLE.md` work is implemented and committed in logical blocks on `chore/simple-audit`.
 - [x] `LOG.md` tracks the goal, phase progress, verification, review findings, and residual risks.
 - [x] `docs/effect-migration-tracker.md` tracks every server migration target and per-file review gate.
 - [ ] Every migration-scope server file is either behind an Effect service/layer or explicitly classified as a non-migration with rationale.
@@ -13,6 +17,7 @@ Complete the Kiri performance, memory, and Effect migration in safe phases witho
 - [ ] Runtime and terminal retained state has bounded ownership and cleanup coverage.
 - [ ] UI, CLI, MCP, scratchpad, terminal, runtime, and project/session flows keep focused smoke coverage.
 - [ ] A review subagent runs after every migrated file or tightly-coupled group; blockers are fixed before the next phase.
+- [ ] Review gate exceptions caused by external usage limits are recorded in `SIMPLE.md` and cleared before final completion.
 - [ ] Each phase is committed in a logical block after tests, lint, migration audit, and review pass.
 - [ ] Final branch verification runs typecheck, lint, unit tests, perf gates, migration audit, Knip triage, and relevant browser/Playwright smokes.
 - [ ] Final detailed interactive HTML explainer documents the completed architecture, harnesses, perf/memory wins, and remaining risks.

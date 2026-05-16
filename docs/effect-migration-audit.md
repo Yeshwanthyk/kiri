@@ -1,7 +1,7 @@
 # Kiri Effect Migration Audit
 
-Date: 2026-05-15
-Branch: `kyendamuri/perf-improvements`
+Date: 2026-05-16
+Branch: `chore/simple-audit`
 Reference checked: `/private/tmp/AnswerOverflow`
 Effect guidance checked: `effect-solutions show services-and-layers error-handling testing cli config`
 Effect package checked: `node_modules/effect` at `effect@3.21.2`
@@ -39,6 +39,8 @@ Missing for a complete Effect setup:
 - Schema consistency. Runtime protocol uses Effect `Schema`; contracts and DB rows mostly use `zod`. This can remain during migration, but each seam should own exactly one parser.
 - Test layers for DB repositories, runtime registries, terminal registry, settings/preferences, and transport handlers.
 
+Current audit gate: `pnpm effect:audit` passes with 57 tracked server files, 57 server files, 45 migrating files, and 12 explicit non-migration files.
+
 ## What Is Good Effect Code Today
 
 | Module | What is good | What still blocks full migration |
@@ -48,6 +50,7 @@ Missing for a complete Effect setup:
 | `src/cli/kirictl.ts` | Real Effect CLI boundary with `@effect/cli`, `NodeRuntime`, and a composed main layer. | CLI has its own command parsing, but shares the same thin `KiriControl` layer, so lower dependencies are still global. |
 | `src/server/codex-app-server.ts` | Strong protocol boundary: Effect async wrappers around JSON-RPC, schema parsing, pending request cleanup, typed adapter errors. | The adapter class owns mutable maps/timeouts directly. A scoped layer would make lifecycle cleanup testable by construction. |
 | `src/server/pi-rpc.ts` | Similar good boundary for subprocess/RPC: Effect command variants preserve typed process errors while Promise methods preserve public behavior. | Process lifetime and listener cleanup are class-owned rather than layer-scoped. |
+| `src/server/terminal-server.ts` | Scoped `TerminalServerService.layer` now owns websocket/PTY server state and closes resources with a finalizer; compatibility exports remain for current callers. | Workspace/control callers still use compatibility exports instead of depending on the service layer. |
 | `src/server/provider-runtime.ts` | Introduces a runtime registry tag and testable adapter map. | Adapters are still imported singleton functions; no scoped runtime pools or injectable retention policy yet. |
 | `src/server/db.ts`, `settings.ts`, `kiri-config.ts` | Thin tags exist, giving a first seam. | They expose old direct functions rather than repositories/config services. This is a compatibility shim, not the destination. |
 
@@ -89,7 +92,7 @@ These are the important non-Effect server modules and their likely target seams.
 |---|---|---|
 | `src/server/workspace.ts` | TanStack server functions directly call DB/runtime/preferences/terminal. | `WorkspaceService`; server functions become parse/run/respond transport. |
 | `src/server/preferences.ts` | Direct JSON preference persistence. | `PreferenceStore` with atomic file adapter and in-memory test adapter. |
-| `src/server/terminal-server.ts` | Singleton websocket/PTY registry. | `TerminalRegistry` scoped layer with per-agent session cleanup. |
+| `src/server/terminal-server.ts` | Compatibility exports over scoped websocket/PTY service. | Move workspace/control callers onto `TerminalServerService`. |
 | `src/server/terminal-launch.ts` | Runtime-specific terminal command construction and resume detection. | `TerminalLaunchResolver` pure/service split. |
 | `src/server/git-diff.ts` | Direct `git` subprocess calls. | `GitDiffService` with process adapter and truncation/budget policy. |
 | `src/server/diff-refresh.ts` | Thin runtime-state/diff refresh command. | Use-case under runtime projection/repository layer. |
@@ -100,7 +103,7 @@ These are the important non-Effect server modules and their likely target seams.
 | `src/server/scratchpad-trigger.ts` | Shared scratchpad trigger use-case. | Already a good candidate to become a `ScratchpadService` method. |
 | `src/server/runtime.ts` | Runtime dispatch surface. | Replace with `RuntimeRegistry`-backed use-cases. |
 
-Scripts and desktop files are lower priority. `src/desktop/main.mjs`, `scripts/kiri-desktop-backend.mjs`, `scripts/kiri-projects.mjs`, and build/install scripts are process boundaries. They can stay raw Node until the app layer exists, then either call the CLI/control layer or remain deliberately outside Effect.
+Scripts and desktop files are lower priority. `src/desktop/main.mjs`, `scripts/kiri-desktop-backend.mjs`, and build/install scripts are process boundaries. They can stay raw Node until the app layer exists, then either call the CLI/control layer or remain deliberately outside Effect.
 
 Frontend files are not primary Effect migration targets. Their risks are size/rendering/locality, not Effect architecture.
 
@@ -110,14 +113,15 @@ Measured top files:
 
 | File | Lines | Risk |
 |---|---:|---|
-| `src/server/db.ts` | 2,791 | DB connection, migrations, repositories, projections, hydration, row parsing, and detail paging all share one module. This is the main bug-locality problem. |
-| `src/components/kiri-board/dialogs.tsx` | 1,428 | Modal/form/UI flows are dense and hard to isolate. Split by dialog domain, not by tiny components. |
-| `src/components/kiri-board/chat-panel.tsx` | 1,312 | Timeline rendering, composer behavior, detail states, diffs, markdown/code rendering, and local draft behavior are coupled. |
-| `src/components/KiriBoard.tsx` | 1,181 | Board orchestration owns query polling, selection, shortcuts, mutations, and layout state. |
-| `src/server/codex-runtime.ts` | 1,048 | Runtime use-cases, retained maps, protocol projection, thread lifecycle, attachments, and task projection are together. |
-| `tests/e2e/kiri.spec.ts` | 898 | Valuable coverage, but hard to run/triage by feature. Split by flow after server harnesses are in place. |
-| `src/server/codex-app-server.ts` | 715 | Protocol schema, transport adapter, process launch, request bookkeeping, and decoding are together. |
-| `src/server/pi-runtime.ts` | 415 | Smaller, but same pattern as Codex: retained maps, use-cases, attachments, and process adapter ownership. |
+| `tests/e2e/kiri.spec.ts` | 1,399 | Valuable coverage, but now broad enough that failures can take time to triage by feature. Split by flow after shared fixtures are in place. |
+| `src/server/codex-runtime.ts` | 865 | Runtime orchestration, retained maps, thread lifecycle, diff capture, and DB dispatch remain together after pure helpers were extracted. |
+| `src/components/KiriBoard.tsx` | 783 | Board orchestration still owns the top-level mutation/selection coordination after workflow helpers were extracted. |
+| `src/server/db/timeline-writes.ts` | 573 | Timeline persistence is still dense, though repeated manual transactions now use `withTransaction`. |
+| `src/server/codex-app-server.ts` | 562 | Protocol schema, transport adapter, process launch, request bookkeeping, and decoding are together. |
+| `src/server/db.ts` | 543 | The compatibility facade is much smaller after repository splits, but still hides projection and repository boundaries from callers. |
+| `src/server/workspace-service.ts` | 422 | Workspace use-cases share helper builders, but still coordinate many project/session/runtime operations. |
+| `src/components/kiri-board/chat-panel.tsx` | 420 | The panel now mainly owns orchestration, pending local prompt state, scroll state, and composer wiring. |
+| `src/server/terminal-server.ts` | 439 | Scoped service extraction is complete, but compatibility exports still bridge current callers. |
 
 Recommended split order:
 
@@ -254,10 +258,10 @@ This prevents a rewrite where behavior and architecture change at the same time.
    - Benefits: Desktop, web dev, tests, and packaged helper flows stop needing env mutation discipline across many modules.
 
 6. **Frontend Board Locality Pass**
-   - Files: `src/components/KiriBoard.tsx`, `src/components/kiri-board/chat-panel.tsx`, `src/components/kiri-board/dialogs.tsx`.
-   - Problem: These files are large enough that render bugs and polling behavior are difficult to isolate.
-   - Solution: After backend services stabilize, split by workflow: board selection/query orchestration, session actions, chat timeline, composer/drafts, dialogs.
-   - Benefits: UI regressions become easier to pin down, and render/perf gates can attach to smaller units.
+   - Files: `src/components/KiriBoard.tsx`, `src/components/kiri-board/chat-panel.tsx`, extracted dialog modules, and split CSS modules.
+   - Problem: These surfaces were large enough that render bugs and polling behavior were difficult to isolate.
+   - Solution: Split by workflow: board selection/query orchestration, session actions, chat timeline, composer/drafts, dialogs, settings, command palette, and stylesheet domains.
+   - Benefits: UI regressions are easier to pin down, and render/perf gates attach to smaller units.
 
 ## Recommended Next Decision
 
@@ -277,22 +281,21 @@ The branch followed the recommended order instead of doing a broad rewrite. The 
 - Config and IO boundaries now have typed service seams for settings, preferences, Kiri config, runtime binary resolution, directory picker, terminal launch, git diff, and diff refresh.
 - Runtime lifecycle work now includes a command service, registry cleanup seam, retained-state modules for Codex and Pi, runtime projection, Pi JSONL file IO split, Kiri MCP runtime extraction, and pure Codex app protocol parsing.
 - Control surfaces now share more use-case code through workspace service, Kiri control dependency injection, scratchpad trigger service with runtime cleanup on async prompt failure, backend readiness service, and MCP runtime context handling.
-- The migration tracker covers 48 server files: 43 marked migrating and 5 marked explicit non-migration, with no not-started rows left in the audit.
+- The migration tracker covers 57 server files: 45 marked migrating and 12 marked explicit non-migration, with no not-started rows left in the audit.
 
 ## Final Verification
 
-Final branch gates run on 2026-05-15:
+Final branch gates run on 2026-05-16:
 
-- `pnpm typecheck` - passed.
-- `pnpm lint` - passed.
-- `pnpm effect:audit` - passed with 48 tracked server files, 43 migrating, 5 explicit non-migration, and no not-started rows.
-- `pnpm exec tsx tests/perf/run-perf.ts` - passed with 6,000 stored timeline rows, 500 returned timeline rows, 80 stored diffs, 50 returned diffs, 1.08 MB detail JSON, 88.42 ms detail hydration, and 45.22 MB RSS delta against a 64 MB budget.
-- `pnpm exec vitest run tests/server/agent-detail-history.test.ts tests/server/perf-gates.test.ts tests/kiri-board/detail-merge.test.ts` - passed after the final older-history paging patch, proving the latest page, older offset page, perf budget, and chronological page merge behavior.
-- `pnpm exec vitest run tests/server/scratchpad-trigger.test.ts tests/server/scratchpad-trigger-service.test.ts tests/server/runtime-cleanup.test.ts tests/server/runtime-retention.test.ts` - passed after the final scratchpad cleanup patch, proving async prompt-failure cleanup archives through retained-runtime cleanup.
+- `pnpm verify` - passed; includes typecheck, staged lint, Effect audit, unit tests, serial perf gate, and Knip report.
+- `pnpm effect:audit` - passed with 57 tracked server files, 57 server files, 45 migrating files, and 12 explicit non-migration files.
+- `pnpm test` - passed through `test:unit` plus serial `test:perf`; latest unit phase covered 73 files and 307 tests, and perf covered 1 file / 2 tests.
+- `pnpm verify:knip` - passed after direct dependency cleanup, explicit harness entries, and unused export narrowing.
 - `pnpm build` - passed; the existing Vite large-chunk warning remains.
-- `pnpm test -- --runInBand` - passed, 57 files and 238 tests.
-- `pnpm exec playwright test --project=chromium -g "codex runtime runs through app-server harness|selected agent detail loads chat, diffs, and local drafts|terminal preserves running shell across sidebar tab switches"` - passed, 3 focused Chromium tests.
-- `pnpm dlx knip --no-exit-code --reporter compact` - completed; remaining findings are retained/triaged surfaces rather than deletion candidates for this branch.
+- `pnpm verify:e2e` - passed on chromium with 27 tests passed and 2 mobile-only tests skipped.
+- `pnpm exec playwright test tests/e2e/kiri.spec.ts --project=mobile --grep "mobile layout keeps navigation and sidebar usable|mobile shell visual snapshot"` - passed with 2 mobile tests.
+- Focused Playwright gates for Codex terminal resume, selected agent detail, large chat/diff render, and core accessibility semantics passed during the cleanup pass.
+- `pnpm verify:desktop` - passed with fresh macOS app directory packaging and package-content assertions.
 
 ## Remaining Risks
 

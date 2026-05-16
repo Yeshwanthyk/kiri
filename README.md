@@ -1,6 +1,6 @@
 # kiri
 
-Keyboard-first kanban orchestrator for Pi agent sessions.
+Keyboard-first kanban orchestrator for local AI coding sessions across Pi, Codex, Claude, and terminal panes.
 
 ## Run
 
@@ -21,7 +21,19 @@ phone on Tailscale can open `http://<mac-tailnet-name-or-ip>:3090`.
 ## Verify
 
 ```sh
-pnpm build
+pnpm verify
+```
+
+Focused gates:
+
+```sh
+pnpm typecheck
+pnpm lint
+pnpm effect:audit
+pnpm test
+pnpm verify:knip
+pnpm verify:e2e
+pnpm verify:desktop
 ```
 
 ## Projects
@@ -42,16 +54,19 @@ working directory.
 ## Settings
 
 Runtime model lists live in `settings.json`. Start a session from the selected
-project, choose a runtime/model, or keep the runtime default for a base session.
-Pi launches with the configured list through `pi --models ...` and the selected
-session model through `--model ...`.
+project, choose a runtime/model/interface, or keep the runtime default for a
+base session. Pi launches through RPC mode with the configured model list. Codex
+sessions can run through the app-server bridge or terminal resume flow. Claude
+sessions are terminal-only.
 
 ## Shape
 
 - TanStack Start app shell.
 - SQLite read model under `~/.kiri/userdata/kiri.sqlite` by default.
-- Pi is the first runtime via `pi --mode rpc`.
+- Runtime surfaces cover Pi, Codex, Claude terminal sessions, shell panes, and MCP/CLI control.
+- Started sessions store the chosen runtime/model/interface; project rows do not own default agent slots.
 - Pi JSONL is parsed as a transcript/read-model source, not the live command channel.
+- Codex app-server notifications and terminal session metadata project into the same read model.
 - Pierre diffs render review artifacts.
 
 ## Keyboard

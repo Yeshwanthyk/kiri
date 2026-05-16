@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { describe, expect, it, vi } from '@effect/vitest'
 import { Effect } from 'effect'
 import { z } from 'zod'
@@ -9,6 +8,7 @@ import {
   makeDiffRefreshService,
 } from '../../src/server/diff-refresh'
 import { GitDiffError } from '../../src/server/git-diff'
+import { runTsxJson } from '../harness/run-tsx'
 
 function workspaceSnapshot(): WorkspaceSnapshot {
   return {
@@ -33,22 +33,13 @@ function workspaceSnapshot(): WorkspaceSnapshot {
 
 describe('diff refresh service', () => {
   it('keeps the public sync export wired to the live service layer', () => {
-    const output = execFileSync(
-      'pnpm',
-      ['exec', 'tsx', 'tests/harness/diff-refresh-public-harness.ts'],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
-        timeout: 10_000,
-      },
-    )
-    const result = z.object({
+    const result = runTsxJson('tests/harness/diff-refresh-public-harness.ts', (output) => z.object({
       ok: z.literal(true),
       sessionId: z.string(),
       diffCount: z.literal(1),
       diffPath: z.literal('app.ts'),
       snapshotAgentDiffCount: z.literal(1),
-    }).parse(JSON.parse(output))
+    }).parse(output), { timeout: 10_000 })
 
     expect(result.sessionId).toContain('diff-project-session-')
   })

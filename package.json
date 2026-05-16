@@ -11,10 +11,23 @@
     "build": "vite build && tsc --noEmit",
     "build:cli": "node scripts/build-cli.mjs",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/server/codex-app-server.ts tests/server/**/*.ts --max-warnings=0",
-    "test": "vitest run",
+    "lint": "pnpm lint:server && pnpm lint:routes && pnpm lint:harness && pnpm lint:scripts",
+    "lint:server": "eslint src/server/codex-app-server.ts tests/server/**/*.ts --max-warnings=0",
+    "lint:routes": "eslint src/routes/__root.tsx src/routes/landing.tsx --max-warnings=0",
+    "lint:harness": "eslint tests/harness/**/*.ts --max-warnings=0",
+    "lint:scripts": "node --check scripts/*.mjs",
+    "test": "pnpm test:unit && pnpm test:perf",
+    "test:unit": "vitest run --exclude tests/server/perf-gates.test.ts",
+    "test:perf": "vitest run tests/server/perf-gates.test.ts --no-file-parallelism --maxWorkers=1",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "knip:report": "pnpm exec knip --no-exit-code --reporter compact",
+    "verify:knip": "pnpm exec knip --reporter compact",
+    "verify:e2e": "pnpm test:e2e --project=chromium",
+    "verify:desktop:smoke": "node --check scripts/*.mjs && pnpm build:cli",
+    "verify:desktop:package": "pnpm build && pnpm build:cli && node -e \"for (const path of ['dist/mac','dist/mac-arm64','dist/mac-universal']) require('node:fs').rmSync(path, { recursive: true, force: true })\" && electron-builder --mac dir && KIRI_ASSERT_PACKAGED_APP=1 pnpm exec vitest run tests/server/desktop-package-contract.test.ts tests/server/kiri-mcp.test.ts",
+    "verify:desktop": "pnpm verify:desktop:smoke && pnpm verify:desktop:package",
+    "verify": "pnpm typecheck && pnpm lint && pnpm effect:audit && pnpm test && pnpm knip:report",
     "desktop:dev": "KIRI_DESKTOP_DEV_URL=http://127.0.0.1:3090 electron src/desktop/main.mjs",
     "desktop:start": "pnpm build && electron src/desktop/main.mjs",
     "desktop:backend": "node scripts/kiri-desktop-backend.mjs",
@@ -32,34 +45,6 @@
     "preview": "vite preview",
     "start": "pnpx srvx --prod -s ../client dist/server/server.js"
   },
-  "reactDoctor": {
-    "entryFiles": [
-      "src/desktop/preload.cjs",
-      "scripts/kiri-projects.mjs",
-      "tests/harness/task-progress-db-harness.ts"
-    ],
-    "ignore": {
-      "overrides": [
-        {
-          "files": [
-            "src/components/KiriBoard.tsx"
-          ],
-          "rules": [
-            "react/no-danger",
-            "react-doctor/no-mirror-prop-effect",
-            "react-doctor/no-effect-chain",
-            "react-doctor/prefer-useReducer",
-            "react-doctor/no-giant-component",
-            "react-doctor/no-derived-useState",
-            "react-doctor/no-derived-state-effect",
-            "react-doctor/no-cascading-set-state",
-            "react-doctor/no-effect-event-handler",
-            "react-doctor/no-prop-callback-in-effect"
-          ]
-        }
-      ]
-    }
-  },
   "dependencies": {
     "@effect/cli": "^0.75.1",
     "@effect/platform": "^0.96.1",
@@ -72,26 +57,20 @@
     "@pierre/diffs": "1.1.21",
     "@pierre/trees": "^1.0.0-beta.3",
     "@tanstack/react-query": "^5.90.0",
-    "@tanstack/react-query-devtools": "^5.90.0",
     "@tanstack/react-router": "^1.169.2",
-    "@tanstack/react-router-devtools": "^1.166.13",
     "@tanstack/react-router-ssr-query": "^1.166.12",
     "@tanstack/react-start": "^1.167.65",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "effect": "^3.21.2",
-    "fast-check": "3.23.2",
     "lucide-react": "^1.14.0",
     "node-pty": "1.2.0-beta.12",
-    "pure-rand": "6.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
-    "redaxios": "^0.5.1",
     "remark-gfm": "^4.0.1",
     "shiki": "3.23.0",
     "srvx": "0.11.15",
-    "tailwind-merge": "^2.6.0",
     "ws": "^8.20.0",
     "zod": "^4.4.3"
   },
@@ -104,8 +83,6 @@
       "dist/cli/**",
       "src/desktop/**",
       "scripts/kiri-desktop-backend.mjs",
-      "scripts/create-desktop-dmg.mjs",
-      "scripts/normalize-desktop-app.mjs",
       "settings.json",
       "package.json"
     ],
@@ -141,6 +118,7 @@
     "electron-builder": "26.0.12",
     "esbuild": "0.27.7",
     "eslint": "^10.3.0",
+    "knip": "6.14.0",
     "tailwindcss": "^4.2.2",
     "tsx": "4.20.6",
     "typescript": "^6.0.2",

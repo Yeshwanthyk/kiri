@@ -32,8 +32,15 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/backend-server.ts` | transport | `app/readiness` entrypoint over app layer | migrating | required | Readiness probe moved behind injectable service; transport behavior preserved. |
 | `src/server/codex-app-protocol.ts` | pure | Codex app-server JSON-RPC schemas and parsers | explicit-non-migration | not-required | Pure protocol/schema module extracted from adapter. |
 | `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | migrating | required | Protocol parsing extracted; scoped lifecycle and process adapter split remain. |
+| `src/server/codex-cli-sessions.ts` | runtime-adapter | Codex CLI session discovery and terminal resume persistence boundary | migrating | required | Added after Codex terminal resume support; review/verification pending. |
+| `src/server/codex-item-recording.ts` | pure | Codex completed-item to timeline/message write payload helper | explicit-non-migration | not-required | Pure item formatting extracted from Codex runtime; keep DB writes in the runtime/projection boundary. |
 | `src/server/codex-retained-state.ts` | runtime-adapter | Codex retained-state registry for adapters, listeners, threads, turns, queues, generations, and diff-turn guards | migrating | required | Extracted from `codex-runtime.ts`; review/verification pending. |
+| `src/server/codex-review.ts` | pure | Codex review display text helper | explicit-non-migration | not-required | Pure review prompt formatting extracted from Codex runtime. |
 | `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | migrating | required | Retained-state maps extracted; runtime service/projection/attachment splits remain. |
+| `src/server/codex-runtime-state.ts` | pure | Codex runtime-state parser/defaults helper | explicit-non-migration | not-required | Pure runtime-state normalization extracted from Codex runtime; keep Effect-free unless IO dependencies are added. |
+| `src/server/codex-server-requests.ts` | pure | Codex automatic server request response helper | explicit-non-migration | not-required | Pure request-method to response-payload mapping extracted from Codex runtime. |
+| `src/server/codex-thread-state.ts` | pure | Codex active-turn and thread-status helper | explicit-non-migration | not-required | Pure thread state derivation extracted from Codex runtime. |
+| `src/server/codex-value-helpers.ts` | pure | Codex notification value normalization helpers | explicit-non-migration | not-required | Pure object/number/status/timestamp/command text helpers extracted from Codex runtime. |
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | migrating | required | Compatibility facade now uses explicit `KiriDbService` cache/close seam over extracted repositories. |
 | `src/server/db/agent-detail.ts` | repository | Paged agent detail reader for timeline, diffs, tasks, and context usage | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/bootstrap.ts` | repository | Startup DB data repair and seed cleanup boundary | migrating | required | Extracted from `db.ts`; direct bootstrap tests added and review passed; final status waits for DB/settings service boundary. |
@@ -65,15 +72,17 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/provider-runtime.ts` | use-case | runtime registry with injected command and cleanup adapters | migrating | required | Cleanup now routes through typed registry; review/verification pending. |
 | `src/server/runtime-binaries.ts` | process-adapter | `integrations/runtime-binaries.ts` resolver service | migrating | required | Typed injectable runtime binary service added; review/verification pending. |
 | `src/server/runtime-cleanup.ts` | use-case | runtime cleanup use-case for session/project delete retained-state cleanup | migrating | required | Project and session delete cleanup now share tested ordering; final scoped finalizer model remains. |
+| `src/server/runtime-attachments.ts` | use-case | shared runtime prompt attachment persistence with injectable config/time seam | migrating | required | Extracted from Pi/Codex runtimes; final filesystem service injection remains. |
 | `src/server/runtime-file-operations.ts` | pure | pure runtime file-operation classifier | explicit-non-migration | not-required | Keep pure unless telemetry/resource dependencies are added. |
 | `src/server/runtime-lifecycle.ts` | use-case | runtime lifecycle orchestration over injected `RuntimeProjector` | migrating | required | DB-backed live projector extracted; lifecycle now owns orchestration only. |
 | `src/server/runtime-projection.ts` | projection | DB-backed runtime projector layer | migrating | required | Extracted from `runtime-lifecycle.ts`; review/verification pending. |
 | `src/server/runtime.ts` | use-case | runtime registry-backed command surface | migrating | required | Runtime command service now dispatches through `RuntimeRegistry`; review/verification pending. |
 | `src/server/scratchpad-trigger.ts` | use-case | scratchpad trigger service method | migrating | required | Effect service and injectable dependencies added; compatibility export preserved. |
 | `src/server/settings.ts` | config | `config/settings-service.ts` with typed config errors | migrating | required | Typed injectable settings service added; review/verification pending. |
+| `src/server/terminal-env.ts` | pure | terminal process env normalization helpers | explicit-non-migration | not-required | Pure environment normalization extracted from terminal launch; keep Effect-free unless filesystem/process dependencies are added. |
 | `src/server/terminal-launch.ts` | process-adapter | terminal launch resolver service | migrating | required | Typed injectable terminal launch service added; review/verification pending. |
 | `src/server/terminal-registry.ts` | runtime-adapter | terminal session registry for PTY/socket state | migrating | required | Extracted from `terminal-server.ts`; review/verification pending. |
-| `src/server/terminal-server.ts` | runtime-adapter | scoped websocket/PTY service over terminal registry | migrating | required | Terminal session registry extracted; final service boundary pending. |
+| `src/server/terminal-server.ts` | runtime-adapter | scoped websocket/PTY service over terminal registry | migrating | required | Scoped service boundary and Effect layer added; workspace terminal config consumes the service layer; cleanup compatibility exports remain. |
 | `src/server/workspace-service.ts` | use-case | shared workspace service over DB/runtime/preference/terminal use-cases | migrating | required | First service slice added; workspace transport delegates to it while dependency leaf services remain compatibility exports. |
 | `src/server/workspace.ts` | transport | `transport/workspace-functions.ts` over `WorkspaceService` | migrating | required | Server functions now delegate through `WorkspaceService`; final transport split/file move remains. |
 
@@ -404,12 +413,12 @@ Copy this section under `## Migration Records` for each file or inseparable file
 
 ### src/server/terminal-registry.ts and src/server/terminal-server.ts
 
-- Status: migrating; final status waits for websocket/PTY server startup to move behind a scoped terminal service.
+- Status: migrating; scoped service boundary exists, final status waits for cleanup/control callers to consume the service layer instead of compatibility exports.
 - Target seam: terminal session registry for session keys, reusable session lookup, socket attach/detach, idle cleanup, replay buffer caps, broadcast, exit handling, runtime-session close, and close-all cleanup.
-- Behavior preserved: `ensureTerminalServer`, terminal websocket handling, PTY spawn, shell/runtime keying, replay buffer cap, idle kill, close-on-exit, and `closeAgentRuntimeTerminal` behavior remain wired through compatibility server functions.
-- Dependencies moved: mutable terminal session map and timer cleanup logic moved out of `terminal-server.ts` into `terminal-registry.ts` with injectable timers and socket open-state.
+- Behavior preserved: `ensureTerminalServer`, terminal websocket handling, PTY spawn, shell/runtime keying, replay buffer cap, idle kill, close-on-exit, and `closeAgentRuntimeTerminal` compatibility behavior remain stable.
+- Dependencies moved: mutable terminal session map and timer cleanup logic moved out of `terminal-server.ts` into `terminal-registry.ts` with injectable timers and socket open-state; websocket/PTY server state now lives in `makeTerminalServerService` with a scoped `TerminalServerService.layer` finalizer; `WorkspaceService.layer` consumes `TerminalServerService.liveLayer` for terminal config without closing the live server after each transport call.
 - Baseline tests before migration: terminal e2e coverage for switching tabs, shell persistence, terminal-interface runtime/shell split, plus terminal launch unit tests.
-- Tests added/updated: `tests/server/terminal-registry.test.ts` covers shell/runtime keying, cwd reuse and stale-session kill, stale-exit replacement ownership, replay buffer cap, open-socket broadcast, idle kill cancellation on reattach, close-agent-runtime idle cleanup, late-exit ownership safety, and close-all cleanup.
+- Tests added/updated: `tests/server/terminal-registry.test.ts` covers shell/runtime keying, cwd reuse and stale-session kill, stale-exit replacement ownership, replay buffer cap, open-socket broadcast, idle kill cancellation on reattach, close-agent-runtime idle cleanup, late-exit ownership safety, and close-all cleanup. `tests/server/terminal-server.test.ts` covers retry after listen failure, independent service instances, and the scoped Effect layer.
 - Post-migration parity tests: focused terminal-registry/terminal-launch tests passed.
 - Perf/memory impact: retained terminal sessions remain bounded by explicit key map and idle timers; buffer cap is now directly unit-tested.
 - Verification commands and results:
@@ -417,6 +426,9 @@ Copy this section under `## Migration Records` for each file or inseparable file
   - `pnpm exec vitest run tests/server/terminal-registry.test.ts tests/server/terminal-launch.test.ts` - passed, 2 files / 17 tests
   - `pnpm exec eslint src/server/terminal-registry.ts src/server/terminal-server.ts tests/server/terminal-registry.test.ts --max-warnings=0` - passed
   - `pnpm effect:audit` - passed, 39 tracked/server files
+  - `pnpm exec vitest run tests/server/terminal-server.test.ts tests/server/terminal-registry.test.ts tests/server/workspace-service.test.ts` - passed, 3 files / 14 tests
+  - `pnpm exec vitest run tests/server/workspace-service.test.ts tests/server/terminal-server.test.ts tests/server/effect-layers.test.ts` - passed, 3 files / 9 tests
+  - `pnpm exec eslint src/server/terminal-server.ts tests/server/terminal-server.test.ts --max-warnings=0` - passed
   - `pnpm lint` - passed
   - `pnpm build` - passed with existing Vite chunk-size warning
   - `git diff --check` - passed

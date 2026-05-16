@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { runPnpmJson } from '../harness/run-tsx'
 
 const harnessOutputSchema = z.object({
   ok: z.literal(true),
@@ -21,15 +21,10 @@ const harnessOutputSchema = z.object({
 
 describe('agent detail history harness', () => {
   it('loads full chat history with dense runtime events', () => {
-    const output = execFileSync(
-      'pnpm',
+    const result = runPnpmJson(
       ['--silent', 'kiri:history-harness'],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
-      },
+      (output) => harnessOutputSchema.parse(output),
     )
-    const result = harnessOutputSchema.parse(JSON.parse(output))
 
     expect(result).toMatchObject({
       ok: true,

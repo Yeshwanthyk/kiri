@@ -113,7 +113,7 @@ Improve Kiri performance, memory use, and leak resistance without removing featu
 
 ## Remaining Knip Findings
 
-- Unused dependency candidates retained for now instead of removing features blindly: `@tanstack/react-query-devtools`, `@tanstack/react-router-devtools`, `fast-check`, `pure-rand`, `redaxios`, `tailwind-merge`.
+- Removed unused direct dependency candidates after confirming no source/test imports: `@tanstack/react-query-devtools`, `@tanstack/react-router-devtools`, `fast-check`, `pure-rand`, `redaxios`, `tailwind-merge`.
 - Unused exported API candidates retained as public/internal contract surface until a separate API-pruning pass: `KiriBoard` compatibility re-export, storage helpers, contract symbols, UI preference constants, service tags, `createKiriMcpServer`, and runtime cleanup/projection helpers.
 
 # Kiri Effect Migration Goal
