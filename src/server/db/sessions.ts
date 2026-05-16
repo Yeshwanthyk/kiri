@@ -202,9 +202,11 @@ export function restoreSessionRow(database: DatabaseSync, agentId: string) {
   if (!row) throw new Error(`Session not found: ${id}`)
   assertStartedSession(row.slot, 'restored')
 
-  database
-    .prepare('UPDATE agent_slots SET archived_at = NULL WHERE id = ?')
-    .run(id)
+  withTransaction(database, () => {
+    database
+      .prepare('UPDATE agent_slots SET archived_at = NULL WHERE id = ?')
+      .run(id)
+  })
   return id
 }
 

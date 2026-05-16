@@ -13,6 +13,7 @@ export type RuntimeBinariesApi = {
   readonly resolveExecutable: (input: {
     readonly command: string
     readonly configuredPath?: string
+    readonly configuredPathEnvKey?: string
   }) => Effect.Effect<string, RuntimeBinaryError>
   readonly processEnv: (extra?: NodeJS.ProcessEnv) => Effect.Effect<NodeJS.ProcessEnv, RuntimeBinaryError>
 }
@@ -50,7 +51,14 @@ export function makeRuntimeBinariesService(
 
   return {
     resolveExecutable: (request) => Effect.try({
-      try: () => resolveRuntimeExecutableWith(context(), request.command, request.configuredPath),
+      try: () => {
+        const current = context()
+        return resolveRuntimeExecutableWith(
+          current,
+          request.command,
+          request.configuredPath ?? envValue(current.env, request.configuredPathEnvKey),
+        )
+      },
       catch: toRuntimeBinaryError,
     }),
     processEnv: (extra) => Effect.try({
@@ -62,8 +70,8 @@ export function makeRuntimeBinariesService(
 
 function desktopPathEntries(homeDir: string) {
   return [
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
     join(homeDir, '.local', 'bin'),
     join(homeDir, '.bun', 'bin'),
     join(homeDir, '.npm-global', 'bin'),
@@ -120,6 +128,10 @@ function executableOnPath(context: RuntimeBinariesContext, command: string) {
 
 function firstExistingPath(context: RuntimeBinariesContext, paths: ReadonlyArray<string>) {
   return paths.find((path) => context.exists(path))
+}
+
+function envValue(env: NodeJS.ProcessEnv, key: string | undefined) {
+  return key ? env[key] : undefined
 }
 
 function toRuntimeBinaryError(error: unknown) {

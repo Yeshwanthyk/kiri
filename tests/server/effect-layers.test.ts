@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { runTsxJson } from '../harness/run-tsx'
 
 const harnessOutputSchema = z.object({
   ok: z.literal(true),
@@ -12,15 +12,10 @@ const harnessOutputSchema = z.object({
 
 describe('Effect service layers', () => {
   it('wires DB, settings, and runtime registry through testable layers', () => {
-    const output = execFileSync(
-      'pnpm',
-      ['exec', 'tsx', 'tests/harness/effect-layers.ts'],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
-      },
+    const result = runTsxJson(
+      'tests/harness/effect-layers.ts',
+      (output) => harnessOutputSchema.parse(output),
     )
-    const result = harnessOutputSchema.parse(JSON.parse(output))
     expect(result.runtimeKinds).toEqual(['claude', 'codex', 'pi'])
   }, 20_000)
 })

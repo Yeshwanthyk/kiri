@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { platform } from 'node:os'
 import { parse } from 'node:url'
+import { Context, Effect, Layer } from 'effect'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import * as pty from 'node-pty'
 import { terminalModeSchema, type TerminalMode } from '~/lib/contracts'
@@ -29,52 +30,170 @@ type TerminalClientMessage =
       rows: number
     }
 
-let terminalServer: TerminalServerInfo | null = null
-let httpServer: Server | null = null
-let terminalServerPromise: Promise<TerminalServerInfo> | null = null
+export type TerminalServerApi = {
+  readonly ensure: () => Promise<TerminalServerInfo>
+  readonly closeAgentRuntime: (agentId: string) => void
+  readonly close: () => Promise<void>
+}
+
+type TerminalServerRuntime = {
+  readonly token: string
+  readonly registry: ReturnType<typeof makeTerminalRegistry>
+  setInfo: (info: TerminalServerInfo | null) => void
+  setHttpServer: (server: Server | null) => void
+  setWebSocketServer: (server: WebSocketServer | null) => void
+}
 
 const terminalPath = '/terminal'
-const terminalToken = randomBytes(32).toString('base64url')
 const maxReplayBytes = 32_000
 const idleKillMs = 5 * 60 * 1000
-const terminalRegistry = makeTerminalRegistry({
-  maxReplayBytes,
-  idleKillMs,
-  socketOpenState: WebSocket.OPEN,
-})
+
+export class TerminalServerService extends Context.Tag('@kiri/TerminalServer')<
+  TerminalServerService,
+  TerminalServerApi
+>() {
+  static readonly liveLayer = Layer.sync(TerminalServerService, () =>
+    TerminalServerService.of(defaultTerminalServerService))
+
+  static readonly layer = Layer.scoped(
+    TerminalServerService,
+    Effect.acquireRelease(
+      Effect.sync(() => makeTerminalServerService()),
+      (service) => Effect.promise(() => service.close()),
+    ),
+  )
+}
+
+const defaultTerminalServerService = makeTerminalServerService()
 
 export function ensureTerminalServer(): Promise<TerminalServerInfo> {
-  if (terminalServer) return Promise.resolve(terminalServer)
-  if (terminalServerPromise) return terminalServerPromise
-  terminalServerPromise = startTerminalServer()
-  return terminalServerPromise
+  return defaultTerminalServerService.ensure()
 }
 
 export function closeAgentRuntimeTerminal(agentId: string) {
-  terminalRegistry.closeAgentRuntime(agentId)
+  defaultTerminalServerService.closeAgentRuntime(agentId)
 }
 
-async function startTerminalServer(): Promise<TerminalServerInfo> {
+export function closeTerminalServerForTests() {
+  return defaultTerminalServerService.close()
+}
+
+export function makeTerminalServerService(): TerminalServerApi {
+  let terminalServer: TerminalServerInfo | null = null
+  let httpServer: Server | null = null
+  let webSocketServer: WebSocketServer | null = null
+  let terminalServerPromise: Promise<TerminalServerInfo> | null = null
+  const runtime: TerminalServerRuntime = {
+    token: randomBytes(32).toString('base64url'),
+    registry: makeTerminalRegistry({
+      maxReplayBytes,
+      idleKillMs,
+      socketOpenState: WebSocket.OPEN,
+    }),
+    setInfo: (info) => {
+      terminalServer = info
+    },
+    setHttpServer: (server) => {
+      httpServer = server
+    },
+    setWebSocketServer: (server) => {
+      webSocketServer = server
+    },
+  }
+
+  return {
+    ensure: () => {
+      if (terminalServer) return Promise.resolve(terminalServer)
+      if (terminalServerPromise) return terminalServerPromise
+      terminalServerPromise = startTerminalServer(runtime).catch((error) => {
+        terminalServerPromise = null
+        throw error
+      })
+      return terminalServerPromise
+    },
+    closeAgentRuntime: (agentId) => {
+      runtime.registry.closeAgentRuntime(agentId)
+    },
+    close: async () => {
+      const wss = webSocketServer
+      const server = httpServer
+      runtime.registry.closeAll()
+      webSocketServer = null
+      httpServer = null
+      terminalServer = null
+      terminalServerPromise = null
+      wss?.off('error', logTerminalServerError)
+      server?.off('error', logTerminalServerError)
+      await Promise.all([
+        closeWebSocketServer(wss),
+        closeHttpServer(server),
+      ])
+    },
+  }
+}
+
+function closeWebSocketServer(server: WebSocketServer | null) {
+  if (!server) return Promise.resolve()
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error)
+        return
+      }
+      resolve()
+    })
+  })
+}
+
+function closeHttpServer(server: Server | null) {
+  if (!server || !server.listening) return Promise.resolve()
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error)
+        return
+      }
+      resolve()
+    })
+  })
+}
+
+async function startTerminalServer(runtime: TerminalServerRuntime): Promise<TerminalServerInfo> {
   const host = process.env.KIRI_TERMINAL_HOST ?? '127.0.0.1'
   const requestedPort = numberFromEnv(process.env.KIRI_TERMINAL_PORT, 0)
   const server = createServer()
   const wss = new WebSocketServer({ server, path: terminalPath })
 
   wss.on('connection', (socket, request) => {
-    void handleTerminalConnection(socket, request).catch((error) => {
+    void handleTerminalConnection(runtime, socket, request).catch((error) => {
       closeWithReason(socket, error instanceof Error ? error.message : String(error))
     })
   })
 
-  const port = await listen(server, requestedPort, host)
-  httpServer = server
-  terminalServer = { host, port, path: terminalPath, token: terminalToken }
-  return terminalServer
+  let port: number
+  try {
+    port = await listen(server, requestedPort, host, wss)
+  } catch (error) {
+    wss.close()
+    server.close()
+    throw error
+  }
+  server.on('error', logTerminalServerError)
+  wss.on('error', logTerminalServerError)
+  runtime.setHttpServer(server)
+  runtime.setWebSocketServer(wss)
+  const info = { host, port, path: terminalPath, token: runtime.token }
+  runtime.setInfo(info)
+  return info
 }
 
-async function handleTerminalConnection(socket: WebSocket, request: IncomingMessage) {
+async function handleTerminalConnection(
+  runtime: TerminalServerRuntime,
+  socket: WebSocket,
+  request: IncomingMessage,
+) {
   const query = parse(request.url ?? '', true).query
-  if (query.token !== terminalToken) {
+  if (query.token !== runtime.token) {
     closeWithReason(socket, 'Invalid terminal token')
     return
   }
@@ -91,8 +210,8 @@ async function handleTerminalConnection(socket: WebSocket, request: IncomingMess
     const mode = parseTerminalMode(query.mode)
     const cols = positiveInt(query.cols, 100)
     const rows = positiveInt(query.rows, 30)
-    session = await getOrCreateTerminalSession(config, mode, cols, rows)
-    attachTerminalSocket(session, socket)
+    session = await getOrCreateTerminalSession(runtime, config, mode, cols, rows)
+    attachTerminalSocket(runtime, session, socket)
   } catch (error) {
     closeWithReason(socket, error instanceof Error ? error.message : String(error))
     return
@@ -109,26 +228,19 @@ async function handleTerminalConnection(socket: WebSocket, request: IncomingMess
   })
 
   socket.on('close', () => {
-    detachTerminalSocket(session, socket)
+    detachTerminalSocket(runtime, session, socket)
   })
 }
 
-export function closeTerminalServerForTests() {
-  terminalRegistry.closeAll()
-  httpServer?.close()
-  httpServer = null
-  terminalServer = null
-  terminalServerPromise = null
-}
-
 async function getOrCreateTerminalSession(
+  runtime: TerminalServerRuntime,
   config: TerminalAgentLaunchConfig,
   mode: TerminalMode,
   cols: number,
   rows: number,
 ) {
-  const key = terminalRegistry.sessionKey(config, mode)
-  const existing = terminalRegistry.getReusable(config, mode, cols, rows)
+  const key = runtime.registry.sessionKey(config, mode)
+  const existing = runtime.registry.getReusable(config, mode, cols, rows)
   if (existing) return existing
 
   const launch = buildTerminalProcessLaunch(config, mode, defaultShell())
@@ -142,7 +254,7 @@ async function getOrCreateTerminalSession(
     cwd: launch.cwd,
     env: launch.env,
   })
-  const session = terminalRegistry.register({
+  const session = runtime.registry.register({
     key,
     cwd: config.cwd,
     mode,
@@ -160,38 +272,57 @@ async function getOrCreateTerminalSession(
   }
 
   proc.onData((data) => {
-    terminalRegistry.append(session, data)
-    terminalRegistry.broadcast(session, data)
+    runtime.registry.append(session, data)
+    runtime.registry.broadcast(session, data)
   })
   proc.onExit(({ exitCode, signal }) => {
     const message = `\r\n[kiri terminal exited: ${exitCode}${signal ? ` ${signal}` : ''}]\r\n`
-    terminalRegistry.exit(session, message)
+    runtime.registry.exit(session, message)
   })
 
   return session
 }
 
-function attachTerminalSocket(session: TerminalRegistrySession, socket: WebSocket) {
-  terminalRegistry.attach(session, socket)
+function attachTerminalSocket(
+  runtime: TerminalServerRuntime,
+  session: TerminalRegistrySession,
+  socket: WebSocket,
+) {
+  runtime.registry.attach(session, socket)
 }
 
-function detachTerminalSocket(session: TerminalRegistrySession, socket: WebSocket) {
-  terminalRegistry.detach(session, socket)
+function detachTerminalSocket(
+  runtime: TerminalServerRuntime,
+  session: TerminalRegistrySession,
+  socket: WebSocket,
+) {
+  runtime.registry.detach(session, socket)
 }
 
-function listen(server: Server, port: number, host: string) {
+function listen(server: Server, port: number, host: string, wss: WebSocketServer) {
   return new Promise<number>((resolve, reject) => {
-    function onError(error: Error) {
+    let settled = false
+    function cleanup() {
+      server.off('error', onError)
       server.off('listening', onListening)
+      wss.off('error', onError)
+    }
+    function onError(error: Error) {
+      if (settled) return
+      settled = true
+      cleanup()
       reject(error)
     }
     function onListening() {
-      server.off('error', onError)
+      if (settled) return
+      settled = true
+      cleanup()
       const address = server.address()
       resolve(typeof address === 'object' && address ? address.port : port)
     }
     server.once('error', onError)
     server.once('listening', onListening)
+    wss.once('error', onError)
     server.listen(port, host)
   })
 }
@@ -199,6 +330,10 @@ function listen(server: Server, port: number, host: string) {
 function closeWithReason(socket: WebSocket, reason: string) {
   if (socket.readyState === WebSocket.OPEN) socket.send(`\r\n[kiri terminal error: ${reason}]\r\n`)
   socket.close()
+}
+
+function logTerminalServerError(error: Error) {
+  console.error('Kiri terminal server error', error)
 }
 
 function parseClientMessage(raw: RawData): TerminalClientMessage | null {

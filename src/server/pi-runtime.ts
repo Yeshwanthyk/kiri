@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
-import { extname, join } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs'
+import { join } from 'node:path'
 import { Effect } from 'effect'
 import type { SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import { PiRpcProcessAdapter, PiRpcProcessError } from './pi-rpc'
@@ -20,8 +20,8 @@ import {
   resetSession,
   setAgentStatus,
 } from './db'
-import { attachmentDirPath, getKiriConfig } from './kiri-config'
 import { collectGitDiffArtifacts } from './git-diff'
+import { promptWithSavedImages } from './runtime-attachments'
 import {
   captureRuntimeDiffs,
   enqueueAgentTurn,
@@ -364,46 +364,4 @@ function getOrCreatePiAdapter(config: ReturnType<typeof getAgentLaunchConfig>) {
       model: config.model,
       models: settings.models,
     }))
-}
-
-function promptWithSavedImages(agentId: string, text: string, images: SendMessageImage[]) {
-  if (images.length === 0) return text
-
-  const paths = images.map((image, index) => savePromptImage(agentId, image, index))
-  return `${text.trim()}\n\nAttached image files:\n${paths
-    .map((path) => `- ${path}`)
-    .join('\n')}\n\nUse these file paths if you need to inspect the images.`
-}
-
-function savePromptImage(agentId: string, image: SendMessageImage, index: number) {
-  const bytes = Buffer.from(image.data, 'base64')
-  if (bytes.length > 5 * 1024 * 1024) {
-    throw new Error(`Image "${image.name}" is larger than 5MB`)
-  }
-
-  const dir = attachmentDirPath(getKiriConfig(), agentId)
-  mkdirSync(dir, { recursive: true })
-  const extension = imageExtension(image)
-  const path = join(
-    dir,
-    `${Date.now()}-${index + 1}-${safePathSegment(image.name, 'image')}${extension}`,
-  )
-  writeFileSync(path, bytes, { flag: 'wx' })
-  return path
-}
-
-function imageExtension(image: SendMessageImage) {
-  const existing = extname(image.name).toLowerCase()
-  if (['.png', '.jpg', '.jpeg', '.webp', '.gif'].includes(existing)) return ''
-  if (image.mimeType === 'image/png') return '.png'
-  if (image.mimeType === 'image/webp') return '.webp'
-  if (image.mimeType === 'image/gif') return '.gif'
-  return '.jpg'
-}
-
-function safePathSegment(value: string, fallback = 'attachment') {
-  return value
-    .replace(/[^a-zA-Z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 120) || fallback
 }

@@ -1,11 +1,14 @@
-import { Effect, Either } from 'effect'
+import { Effect, Either, Layer } from 'effect'
 import { describe, expect, it } from 'vitest'
 import type { WorkspaceSnapshot } from '~/lib/contracts'
 import { defaultUiPreferences } from '~/lib/ui-preferences'
 import {
   makeWorkspaceService,
+  WorkspaceService,
   type WorkspaceServiceDependencies,
 } from '~/server/workspace-service'
+import { UiPreferencesService } from '~/server/preferences'
+import { TerminalServerService } from '~/server/terminal-server'
 
 const snapshot: WorkspaceSnapshot = {
   settings: {
@@ -139,6 +142,66 @@ describe('WorkspaceService', () => {
       expect(result.left.cause).toBe(failure)
     }
   })
+
+  it('runs preference writes through Effect dependencies', async () => {
+    const calls: string[] = []
+    const preferences = {
+      ...defaultUiPreferences,
+      theme: { name: 'rosepine', mode: 'light' } as const,
+    }
+    const service = makeWorkspaceService(testDependencies({
+      setThemePreference: (theme) =>
+        Effect.sync(() => {
+          calls.push(`${theme.name}:${theme.mode}`)
+          return preferences
+        }),
+    }))
+
+    await expect(Effect.runPromise(service.setThemePreference({
+      name: 'rosepine',
+      mode: 'light',
+    }))).resolves.toBe(preferences)
+
+    expect(calls).toEqual(['rosepine:light'])
+  })
+
+  it('lets callers provide workspace terminal and preference services', async () => {
+    const calls: string[] = []
+    const terminalLayer = Layer.succeed(TerminalServerService, {
+      ensure: () => {
+        calls.push('terminal')
+        return Promise.resolve({
+          host: '127.0.0.1',
+          port: 12345,
+          path: '/provided',
+          token: 'provided-token',
+        })
+      },
+      closeAgentRuntime: () => undefined,
+      close: () => Promise.resolve(),
+    })
+    const preferencesLayer = Layer.succeed(UiPreferencesService, {
+      get: Effect.succeed(defaultUiPreferences),
+      setTheme: (theme) => Effect.sync(() => {
+        calls.push(`theme:${theme.name}`)
+        return { ...defaultUiPreferences, theme }
+      }),
+      setKeymap: () => Effect.succeed(defaultUiPreferences),
+      setChatTypography: () => Effect.succeed(defaultUiPreferences),
+      setAgentByProject: () => Effect.succeed(defaultUiPreferences),
+    })
+    const layer = WorkspaceService.layer.pipe(
+      Layer.provide(Layer.mergeAll(terminalLayer, preferencesLayer)),
+    )
+
+    const preferences = await Effect.runPromise(Effect.gen(function* () {
+      const workspace = yield* WorkspaceService
+      return yield* workspace.setThemePreference({ name: 'tokyonight', mode: 'dark' })
+    }).pipe(Effect.provide(layer)))
+
+    expect(preferences.theme).toEqual({ name: 'tokyonight', mode: 'dark' })
+    expect(calls).toEqual(['theme:tokyonight'])
+  })
 })
 
 function testDependencies(
@@ -162,10 +225,10 @@ function testDependencies(
     steerAgent: () => Promise.resolve(),
     interruptAgent: () => Promise.resolve(),
     setAgentThinkingLevel: () => Promise.resolve(),
-    setThemePreference: () => defaultUiPreferences,
-    setKeymapPreference: () => defaultUiPreferences,
-    setChatTypographyPreference: () => defaultUiPreferences,
-    setAgentByProjectPreference: () => defaultUiPreferences,
+    setThemePreference: () => Effect.succeed(defaultUiPreferences),
+    setKeymapPreference: () => Effect.succeed(defaultUiPreferences),
+    setChatTypographyPreference: () => Effect.succeed(defaultUiPreferences),
+    setAgentByProjectPreference: () => Effect.succeed(defaultUiPreferences),
     resetAgentSession: () => Promise.resolve(),
     forkAgentSession: () => Promise.resolve('agent-2'),
     reviewAgentSession: () => Promise.resolve(),

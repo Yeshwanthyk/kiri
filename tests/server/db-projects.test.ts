@@ -157,4 +157,77 @@ describe('project repository', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('keeps project order unchanged when reorder input is stale', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-project-reorder-stale-'))
+    const firstCwd = join(root, 'first')
+    const secondCwd = join(root, 'second')
+    const thirdCwd = join(root, 'third')
+    mkdirSync(firstCwd)
+    mkdirSync(secondCwd)
+    mkdirSync(thirdCwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const firstId = insertProject(database, { name: 'First Project', cwd: firstCwd })
+      const secondId = insertProject(database, { name: 'Second Project', cwd: secondCwd })
+      const thirdId = insertProject(database, { name: 'Third Project', cwd: thirdCwd })
+      hideProjectRow(database, secondId)
+      const before = projectPositions(database)
+
+      expect(() => reorderVisibleProjectRows(database, [thirdId, secondId, firstId])).toThrow(
+        'Project order is stale; reopen projects and try again',
+      )
+
+      expect(projectPositions(database)).toEqual(before)
+      expect(listProjectSummaries(database, true).map((project) => project.id)).toEqual([
+        firstId,
+        secondId,
+        thirdId,
+      ])
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rolls back project reorder failures', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-project-reorder-rollback-'))
+    const firstCwd = join(root, 'first')
+    const secondCwd = join(root, 'second')
+    const thirdCwd = join(root, 'third')
+    mkdirSync(firstCwd)
+    mkdirSync(secondCwd)
+    mkdirSync(thirdCwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const firstId = insertProject(database, { name: 'First Project', cwd: firstCwd })
+      const secondId = insertProject(database, { name: 'Second Project', cwd: secondCwd })
+      const thirdId = insertProject(database, { name: 'Third Project', cwd: thirdCwd })
+      const before = projectPositions(database)
+      database.exec(`
+        CREATE TEMP TRIGGER fail_project_reorder
+        BEFORE UPDATE OF position ON projects
+        WHEN OLD.id = '${secondId}'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced project reorder failure');
+        END;
+      `)
+
+      expect(() => reorderVisibleProjectRows(database, [thirdId, secondId, firstId])).toThrow(
+        'forced project reorder failure',
+      )
+      expect(projectPositions(database)).toEqual(before)
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
+
+function projectPositions(database: ReturnType<typeof openKiriDatabase>) {
+  return database
+    .prepare('SELECT id, position, hidden_at AS hiddenAt FROM projects ORDER BY position ASC')
+    .all()
+}

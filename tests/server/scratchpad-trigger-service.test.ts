@@ -73,6 +73,37 @@ describe('ScratchpadTriggerService', () => {
     expect(calls).toEqual(['prompt', 'delete:agent-1', 'report:Prompt failed'])
   })
 
+  it('archives the created session when marking the block as triggered fails', async () => {
+    const calls: string[] = []
+    const service = makeScratchpadTriggerService(testDependencies({
+      startSessionAndGetId: () => {
+        calls.push('start')
+        return 'agent-1'
+      },
+      markScratchpadBlockTriggered: () => {
+        calls.push('mark')
+        throw new Error('Mark failed')
+      },
+      deleteSessionSummary: (input) => {
+        calls.push(`delete:${input.agentId}`)
+      },
+      promptAgent: () => {
+        calls.push('prompt')
+        return Promise.resolve()
+      },
+    }))
+
+    await expect(Effect.runPromise(service.trigger({
+      id: 'block-1',
+      projectId: 'project-1',
+      runtime: 'codex',
+      interfaceMode: 'gui',
+      thinkingLevel: 'medium',
+    }))).rejects.toMatchObject({ message: 'Mark failed' })
+
+    expect(calls).toEqual(['start', 'mark', 'delete:agent-1'])
+  })
+
   it('fails before creating a session when the scratchpad block is missing', async () => {
     const calls: string[] = []
     const service = makeScratchpadTriggerService(testDependencies({

@@ -14,7 +14,7 @@ export type KiriMcpRuntimeServiceApi = {
   readonly selectedSessionId: () => Promise<string>
 }
 
-export class KiriMcpRuntimeService extends Context.Tag('@kiri/KiriMcpRuntime')<
+class KiriMcpRuntimeService extends Context.Tag('@kiri/KiriMcpRuntime')<
   KiriMcpRuntimeService,
   KiriMcpRuntimeServiceApi
 >() {

@@ -1,6 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { Cause, Data, Effect, Exit, Option, Schema } from 'effect'
-import { resolveRuntimeExecutable, runtimeProcessEnv } from './runtime-binaries'
+import {
+  makeRuntimeBinariesService,
+  type RuntimeBinariesApi,
+} from './runtime-binaries'
 import {
   ReviewStartResponseSchema,
   ThreadResponseSchema,
@@ -26,7 +29,6 @@ export {
 } from './codex-app-protocol'
 export type {
   CodexServerMessage,
-  CodexThread,
   CodexTurn,
 } from './codex-app-protocol'
 
@@ -58,6 +60,7 @@ async function runCodexEffect<A>(
 const defaultCodexPort = 8390
 const requestTimeoutMs = 30_000
 const turnTimeoutMs = 30 * 60_000
+const maxCachedCompletedTurns = 100
 
 export class CodexAppServerAdapter {
   private socket: WebSocket | null = null
@@ -75,6 +78,7 @@ export class CodexAppServerAdapter {
       websocketUrl: string
       spawnIfMissing?: boolean
       codexHome?: string
+      runtimeBinaries?: RuntimeBinariesApi
     },
   ) {}
 
@@ -102,6 +106,10 @@ export class CodexAppServerAdapter {
   onMessage(listener: (message: CodexServerMessage) => void) {
     this.notifications.add(listener)
     return () => this.notifications.delete(listener)
+  }
+
+  getWebsocketUrl() {
+    return this.options.websocketUrl
   }
 
   async request<T = unknown>(
@@ -189,15 +197,6 @@ export class CodexAppServerAdapter {
     }, ThreadResponseSchema)
   }
 
-  listThreads(input: {
-    cursor?: string | null
-    limit?: number | null
-    cwd?: string | string[] | null
-    archived?: boolean | null
-  } = {}) {
-    return this.request<Record<string, unknown>>('thread/list', input)
-  }
-
   resumeThread(input: {
     threadId: string
     cwd: string
@@ -215,43 +214,6 @@ export class CodexAppServerAdapter {
     sandbox: string
   }) {
     return this.requestDecoded('thread/start', input, ThreadResponseSchema)
-  }
-
-  forkThread(input: {
-    threadId: string
-    cwd?: string | null
-    model?: string | null
-    approvalPolicy?: string | null
-    sandbox?: string | null
-  }) {
-    return this.request<Record<string, unknown>>('thread/fork', input)
-  }
-
-  rollbackThread(input: { threadId: string; numTurns: number }) {
-    return this.request<Record<string, unknown>>('thread/rollback', input)
-  }
-
-  compactThread(input: { threadId: string }) {
-    return this.request<Record<string, unknown>>('thread/compact/start', input)
-  }
-
-  setThreadName(input: { threadId: string; name: string }) {
-    return this.request<Record<string, unknown>>('thread/name/set', input)
-  }
-
-  archiveThread(input: { threadId: string }) {
-    return this.request<Record<string, unknown>>('thread/archive', input)
-  }
-
-  unarchiveThread(input: { threadId: string }) {
-    return this.request<Record<string, unknown>>('thread/unarchive', input)
-  }
-
-  updateThreadMetadata(input: {
-    threadId: string
-    gitInfo?: Record<string, string | null | undefined> | null
-  }) {
-    return this.request<Record<string, unknown>>('thread/metadata/update', input)
   }
 
   startTurn(input: Record<string, unknown>) {
@@ -397,12 +359,18 @@ export class CodexAppServerAdapter {
     const port = portFromWebsocketUrl(this.options.websocketUrl)
     if (!port) throw new Error(`Cannot spawn Codex app-server for ${this.options.websocketUrl}`)
 
-    const child = spawn(resolveRuntimeExecutable('codex', process.env.KIRI_CODEX_BIN), [
+    const runtimeBinaries = this.options.runtimeBinaries ?? makeRuntimeBinariesService()
+    const child = spawn(runRuntimeBinarySync(runtimeBinaries.resolveExecutable({
+      command: 'codex',
+      configuredPathEnvKey: 'KIRI_CODEX_BIN',
+    })), [
       'app-server',
       '--listen',
       this.options.websocketUrl,
     ], {
-      env: runtimeProcessEnv(this.options.codexHome ? { CODEX_HOME: this.options.codexHome } : undefined),
+      env: runRuntimeBinarySync(runtimeBinaries.processEnv(
+        this.options.codexHome ? { CODEX_HOME: this.options.codexHome } : undefined,
+      )),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.child = child
@@ -485,6 +453,11 @@ export class CodexAppServerAdapter {
     const params = decodeServerParams(message, TurnCompletedParamsSchema)
     if (!params?.turn.id) return
     this.completedTurns.set(completedTurnKey(params.threadId, params.turn.id), params.turn)
+    while (this.completedTurns.size > maxCachedCompletedTurns) {
+      const firstKey = this.completedTurns.keys().next().value
+      if (!firstKey) break
+      this.completedTurns.delete(firstKey)
+    }
   }
 
   private completedTurn(input: { threadId: string; turnId?: string }) {
@@ -504,8 +477,8 @@ export class CodexAppServerAdapter {
   }
 }
 
-export function defaultCodexWebsocketUrl() {
-  return process.env.KIRI_CODEX_APP_SERVER_URL ?? `ws://127.0.0.1:${defaultCodexPort}`
+export function defaultCodexWebsocketUrl(env: NodeJS.ProcessEnv = process.env) {
+  return env.KIRI_CODEX_APP_SERVER_URL ?? `ws://127.0.0.1:${defaultCodexPort}`
 }
 
 function portFromWebsocketUrl(value: string) {
@@ -564,6 +537,14 @@ function codexAppServerError(message: string, cause?: unknown) {
   return new CodexAppServerError(
     cause === undefined ? { message } : { message, cause },
   )
+}
+
+function runRuntimeBinarySync<A>(effect: Effect.Effect<A, unknown>) {
+  const exit = Effect.runSyncExit(effect)
+  if (Exit.isSuccess(exit)) return exit.value
+  const failure = Option.getOrUndefined(Cause.failureOption(exit.cause))
+  if (failure instanceof Error) throw failure
+  throw Cause.squash(exit.cause)
 }
 
 function completedTurnKey(threadId: string, turnId: string) {

@@ -153,10 +153,6 @@ export function getDb() {
   return Effect.runSync(liveKiriDb.get)
 }
 
-export function closeKiriDb() {
-  return Effect.runSync(liveKiriDb.close)
-}
-
 export function getWorkspaceSnapshot() {
   const database = getDb()
   hydratePersistedPiSessions(database)

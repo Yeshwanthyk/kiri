@@ -18,7 +18,7 @@ export type DirectoryPickerServiceApi = {
   readonly chooseProjectDirectory: Effect.Effect<string, DirectoryPickerError>
 }
 
-export class DirectoryPickerService extends Context.Tag('@kiri/DirectoryPicker')<
+class DirectoryPickerService extends Context.Tag('@kiri/DirectoryPicker')<
   DirectoryPickerService,
   DirectoryPickerServiceApi
 >() {

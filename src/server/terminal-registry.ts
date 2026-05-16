@@ -31,7 +31,7 @@ export type TerminalRegistrySession = {
   exited: boolean
 }
 
-export type TerminalRegistryTimers = {
+type TerminalRegistryTimers = {
   readonly setTimeout: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>
   readonly clearTimeout: (timer: ReturnType<typeof setTimeout>) => void
 }

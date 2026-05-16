@@ -202,4 +202,124 @@ describe('session repository', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('rolls back archive failures and compacts session positions on success', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-archive-rollback-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const firstId = insertSessionRow(database, {
+        projectId,
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, slot),
+        slotTimestampMs: () => 13,
+        slotSuffix: () => 'aaaaaa',
+      })
+      const secondId = insertSessionRow(database, {
+        projectId,
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, slot),
+        slotTimestampMs: () => 14,
+        slotSuffix: () => 'bbbbbb',
+      })
+      const thirdId = insertSessionRow(database, {
+        projectId,
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, slot),
+        slotTimestampMs: () => 15,
+        slotSuffix: () => 'cccccc',
+      })
+      database
+        .prepare(
+          `
+            UPDATE agent_slots
+            SET position = CASE id
+              WHEN ? THEN 10
+              WHEN ? THEN 20
+              WHEN ? THEN 30
+            END
+            WHERE id IN (?, ?, ?)
+          `,
+        )
+        .run(firstId, secondId, thirdId, firstId, secondId, thirdId)
+      const before = sessionPositions(database)
+      database.exec(`
+        CREATE TEMP TRIGGER fail_archive_position_update
+        BEFORE UPDATE OF position ON agent_slots
+        WHEN OLD.id = '${secondId}'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced archive compaction failure');
+        END;
+      `)
+
+      expect(() => archiveSessionRow(database, firstId)).toThrow(
+        'forced archive compaction failure',
+      )
+      expect(sessionPositions(database)).toEqual(before)
+
+      database.exec('DROP TRIGGER fail_archive_position_update')
+      archiveSessionRow(database, firstId)
+      const archivedRows = sessionPositions(database)
+      expect(typeof archivedRows[0]?.archivedAt).toBe('string')
+      expect(archivedRows).toEqual([
+        { id: firstId, archivedAt: archivedRows[0]?.archivedAt, position: 0 },
+        { id: secondId, archivedAt: null, position: 1 },
+        { id: thirdId, archivedAt: null, position: 2 },
+      ])
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps archived state unchanged when restore fails', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-restore-rollback-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const agentId = insertSessionRow(database, {
+        projectId,
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, slot),
+        slotTimestampMs: () => 16,
+        slotSuffix: () => 'aaaaaa',
+      })
+      archiveSessionRow(database, agentId)
+      const archived = sessionPositions(database)
+      database.exec(`
+        CREATE TEMP TRIGGER fail_restore_update
+        AFTER UPDATE OF archived_at ON agent_slots
+        WHEN OLD.id = '${agentId}' AND NEW.archived_at IS NULL
+        BEGIN
+          SELECT RAISE(ABORT, 'forced restore failure');
+        END;
+      `)
+
+      expect(() => restoreSessionRow(database, agentId)).toThrow('forced restore failure')
+      expect(sessionPositions(database)).toEqual(archived)
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
+
+function sessionPositions(database: ReturnType<typeof openKiriDatabase>) {
+  return database
+    .prepare('SELECT id, archived_at AS archivedAt, position FROM agent_slots ORDER BY position ASC, id ASC')
+    .all() as Array<{ id: string; archivedAt: string | null; position: number }>
+}

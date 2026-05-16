@@ -46,7 +46,7 @@ export type TriggerScratchpadResult = {
   readonly block: ScratchpadBlock
 }
 
-export class ScratchpadTriggerError extends Data.TaggedError('ScratchpadTriggerError')<{
+class ScratchpadTriggerError extends Data.TaggedError('ScratchpadTriggerError')<{
   readonly message: string
   readonly cause?: unknown
 }> {}
@@ -58,7 +58,7 @@ export type ScratchpadTriggerServiceApi = {
   >
 }
 
-export class ScratchpadTriggerService extends Context.Tag('@kiri/ScratchpadTrigger')<
+class ScratchpadTriggerService extends Context.Tag('@kiri/ScratchpadTrigger')<
   ScratchpadTriggerService,
   ScratchpadTriggerServiceApi
 >() {
@@ -144,7 +144,16 @@ function triggerScratchpadSessionSync(
     thinkingLevel: input.thinkingLevel ?? 'medium',
   })
 
-  dependencies.markScratchpadBlockTriggered(input.id, agentId)
+  try {
+    dependencies.markScratchpadBlockTriggered(input.id, agentId)
+  } catch (error) {
+    try {
+      dependencies.deleteSessionSummary({ agentId })
+    } catch {
+      // The mark failure is the primary signal; cleanup is best effort.
+    }
+    throw error
+  }
 
   if (interfaceMode !== 'terminal') {
     void dependencies.promptAgent({ agentId, text: block.body, images: [] }).catch((error) => {

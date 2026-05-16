@@ -36,7 +36,7 @@ type RememberCodexTerminalSessionInput = {
 
 const latestLaunchTokenByAgentId = new Map<string, string>()
 
-export function codexSessionsRoot(codexHome?: string) {
+function codexSessionsRoot(codexHome?: string) {
   return join(codexHome ?? join(homedir(), '.codex'), 'sessions')
 }
 

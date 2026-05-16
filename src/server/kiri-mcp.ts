@@ -24,7 +24,7 @@ export async function runKiriMcpServer(control: KiriControlApi) {
   await server.connect(transport)
 }
 
-export function createKiriMcpServer(control: KiriControlApi) {
+function createKiriMcpServer(control: KiriControlApi) {
   const server = new McpServer({
     name: 'kiri',
     version,

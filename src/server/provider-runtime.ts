@@ -19,9 +19,16 @@ import {
   forgetPiRuntimeAgent,
 } from './pi-runtime'
 import type { RuntimeKind } from '~/lib/contracts'
+import {
+  makeRuntimeBinariesService,
+  RuntimeBinariesService,
+  type RuntimeBinariesApi,
+} from './runtime-binaries'
+
+const compatibilityRuntimeBinaries = makeRuntimeBinariesService()
 
 export type ProviderRuntimeAdapter = {
-  prompt: (input: {
+  prompt?: (input: {
     agentId: string
     text: string
     images?: SendMessageImage[]
@@ -72,15 +79,14 @@ export const runtimeAdapters: Record<RuntimeKind, ProviderRuntimeAdapter> = {
     fork: forkPiSession,
   },
   codex: {
-    prompt: promptCodexAgent,
-    steer: steerCodexAgent,
-    interrupt: interruptCodexAgent,
+    prompt: (command) => promptCodexAgent({ ...command, runtimeBinaries: compatibilityRuntimeBinaries }),
+    steer: (command) => steerCodexAgent({ ...command, runtimeBinaries: compatibilityRuntimeBinaries }),
+    interrupt: (command) => interruptCodexAgent({ ...command, runtimeBinaries: compatibilityRuntimeBinaries }),
     setThinkingLevel: setCodexThinkingLevel,
-    reset: resetCodexSession,
-    review: reviewCodexSession,
+    reset: (command) => resetCodexSession({ ...command, runtimeBinaries: compatibilityRuntimeBinaries }),
+    review: (command) => reviewCodexSession({ ...command, runtimeBinaries: compatibilityRuntimeBinaries }),
   },
   claude: {
-    prompt: rejectClaudeGuiRuntime,
   },
 }
 
@@ -88,13 +94,39 @@ export class RuntimeRegistry extends Context.Tag('@kiri/RuntimeRegistry')<
   RuntimeRegistry,
   RuntimeRegistryApi
 >() {
-  static readonly layer = Layer.succeed(
+  static readonly layer = Layer.effect(
     RuntimeRegistry,
-    RuntimeRegistry.of(makeRuntimeRegistry(runtimeAdapters, {
-      pi: forgetPiRuntimeAgent,
-      codex: forgetCodexRuntimeAgent,
-    })),
+    Effect.gen(function* () {
+      const runtimeBinaries = yield* RuntimeBinariesService
+      return RuntimeRegistry.of(makeRuntimeRegistry(
+        runtimeAdaptersWithServices({ runtimeBinaries }),
+        {
+          pi: forgetPiRuntimeAgent,
+          codex: forgetCodexRuntimeAgent,
+        },
+      ))
+    }),
   )
+
+  static readonly liveLayer = RuntimeRegistry.layer.pipe(
+    Layer.provide(RuntimeBinariesService.layer),
+  )
+}
+
+function runtimeAdaptersWithServices(input: {
+  readonly runtimeBinaries: RuntimeBinariesApi
+}): Record<RuntimeKind, ProviderRuntimeAdapter> {
+  return {
+    ...runtimeAdapters,
+    codex: {
+      prompt: (command) => promptCodexAgent({ ...command, runtimeBinaries: input.runtimeBinaries }),
+      steer: (command) => steerCodexAgent({ ...command, runtimeBinaries: input.runtimeBinaries }),
+      interrupt: (command) => interruptCodexAgent({ ...command, runtimeBinaries: input.runtimeBinaries }),
+      setThinkingLevel: setCodexThinkingLevel,
+      reset: (command) => resetCodexSession({ ...command, runtimeBinaries: input.runtimeBinaries }),
+      review: (command) => reviewCodexSession({ ...command, runtimeBinaries: input.runtimeBinaries }),
+    },
+  }
 }
 
 export function makeRuntimeRegistry(
@@ -124,14 +156,10 @@ export function forgetProviderRuntimeAgent(runtime: RuntimeKind, agentId: string
       const registry = yield* RuntimeRegistry
       return yield* registry.forget(runtime, agentId)
     }).pipe(
-      Effect.provide(RuntimeRegistry.layer),
+      Effect.provide(RuntimeRegistry.liveLayer),
       Effect.either,
     ),
   )
   if (Either.isRight(result)) return
   throw result.left
-}
-
-function rejectClaudeGuiRuntime(): Promise<never> {
-  return Promise.reject(new Error('Claude sessions run in terminal mode only'))
 }

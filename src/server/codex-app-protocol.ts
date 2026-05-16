@@ -3,13 +3,13 @@ import { Option, Schema } from 'effect'
 const JsonRpcIdSchema = Schema.Union(Schema.String, Schema.Number)
 export type JsonRpcId = typeof JsonRpcIdSchema.Type
 
-export type JsonRpcRequest = {
+type JsonRpcRequest = {
   id: JsonRpcId
   method: string
   params?: unknown
 }
 
-export type JsonRpcNotification = {
+type JsonRpcNotification = {
   method: string
   params?: unknown
 }
@@ -28,7 +28,7 @@ export type CodexServerMessage = JsonRpcRequest | JsonRpcNotification
 
 const UnknownRecord = Schema.Record({ key: Schema.String, value: Schema.Unknown })
 
-export const CodexTurnSchema = Schema.Struct({
+const CodexTurnSchema = Schema.Struct({
   id: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
   items: Schema.optional(Schema.Array(Schema.Unknown)),
@@ -41,8 +41,6 @@ const CodexThreadSchema = Schema.Struct({
   status: Schema.optional(UnknownRecord),
   turns: Schema.optional(Schema.Array(CodexTurnSchema)),
 })
-
-export type CodexThread = typeof CodexThreadSchema.Type
 
 export const ThreadResponseSchema = Schema.Struct({
   thread: CodexThreadSchema,

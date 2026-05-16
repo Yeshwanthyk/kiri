@@ -19,7 +19,7 @@ export class RuntimeProjector extends Context.Tag('@kiri/RuntimeProjector')<
   static readonly liveLayer = Layer.succeed(RuntimeProjector, makeDbRuntimeProjector())
 }
 
-export function makeDbRuntimeProjector(): RuntimeLifecycleProjection {
+function makeDbRuntimeProjector(): RuntimeLifecycleProjection {
   return {
     project: (event) => Effect.sync(() => {
       projectRuntimeEventToDb(event)
@@ -27,7 +27,7 @@ export function makeDbRuntimeProjector(): RuntimeLifecycleProjection {
   }
 }
 
-export function projectRuntimeEventToDb(event: RuntimeProjectionEvent) {
+function projectRuntimeEventToDb(event: RuntimeProjectionEvent) {
   if (event.type === 'status') {
     setAgentStatus(event.agentId, event.status)
     return
@@ -83,7 +83,7 @@ export function projectRuntimeEventToDb(event: RuntimeProjectionEvent) {
   }
 }
 
-export function fileOperationTimelineEvent(
+function fileOperationTimelineEvent(
   event: Extract<RuntimeProjectionEvent, {
     type: 'fileOperationStarted' | 'fileOperationCompleted'
   }>,

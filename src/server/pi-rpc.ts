@@ -3,7 +3,10 @@ import { StringDecoder } from 'node:string_decoder'
 import { Cause, Data, Effect, Exit, Option, Schema } from 'effect'
 import { z } from 'zod'
 import type { AgentRuntimeState, ThinkingLevel } from '~/lib/contracts'
-import { resolveRuntimeExecutable, runtimeProcessEnv } from './runtime-binaries'
+import {
+  makeRuntimeBinariesService,
+  type RuntimeBinariesApi,
+} from './runtime-binaries'
 
 type PendingRequest = {
   resolve: (value: unknown) => void
@@ -68,6 +71,7 @@ export class PiRpcProcessAdapter {
       sessionFile?: string
       model?: string
       models?: string[]
+      runtimeBinaries?: RuntimeBinariesApi
     },
   ) {}
 
@@ -91,9 +95,13 @@ export class PiRpcProcessAdapter {
       }
 
       this.stderr = ''
-      const child = spawn(resolveRuntimeExecutable('pi', process.env.KIRI_PI_BIN), args, {
+      const runtimeBinaries = this.options.runtimeBinaries ?? makeRuntimeBinariesService()
+      const child = spawn(runRuntimeBinarySync(runtimeBinaries.resolveExecutable({
+        command: 'pi',
+        configuredPathEnvKey: 'KIRI_PI_BIN',
+      })), args, {
         cwd: this.options.cwd,
-        env: runtimeProcessEnv(),
+        env: runRuntimeBinarySync(runtimeBinaries.processEnv()),
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       this.child = child
@@ -156,22 +164,11 @@ export class PiRpcProcessAdapter {
     return () => this.events.delete(listener)
   }
 
-  async getState(): Promise<AgentRuntimeState> {
-    return runPiRpcPromise(this.getStateEffect())
-  }
-
   getStateEffect(): Effect.Effect<AgentRuntimeState, PiRpcProcessError, never> {
     return Effect.gen(this, function* () {
       const response = yield* this.sendEffect('get_state', {})
       const data = yield* piRpcSync('get_state', () => getResponseData(response))
-      return {
-        kind: 'pi',
-        sessionId: stringValue(data.sessionId),
-        sessionFile: stringValue(data.sessionFile),
-        isStreaming: data.isStreaming === true,
-        messageCount: numberValue(data.messageCount),
-        pendingMessageCount: numberValue(data.pendingMessageCount),
-      }
+      return yield* piRpcSync('get_state', () => parsePiRuntimeState(data))
     })
   }
 
@@ -233,19 +230,11 @@ export class PiRpcProcessAdapter {
     return this.sendEffect('abort', {})
   }
 
-  async newSession() {
-    return runPiRpcPromise(this.newSessionEffect())
-  }
-
   newSessionEffect() {
     return Effect.gen(this, function* () {
       const response = yield* this.sendEffect('new_session', {})
       yield* piRpcSync('new_session', () => getResponseData(response))
     })
-  }
-
-  async clone() {
-    return runPiRpcPromise(this.cloneEffect())
   }
 
   cloneEffect() {
@@ -255,19 +244,11 @@ export class PiRpcProcessAdapter {
     })
   }
 
-  async setThinkingLevel(level: ThinkingLevel) {
-    return runPiRpcPromise(this.setThinkingLevelEffect(level))
-  }
-
   setThinkingLevelEffect(level: ThinkingLevel) {
     return Effect.gen(this, function* () {
       const response = yield* this.sendEffect('set_thinking_level', { level })
       yield* piRpcSync('set_thinking_level', () => getResponseData(response))
     })
-  }
-
-  async cycleThinkingLevel(): Promise<ThinkingLevel | null> {
-    return runPiRpcPromise(this.cycleThinkingLevelEffect())
   }
 
   cycleThinkingLevelEffect(): Effect.Effect<ThinkingLevel | null, PiRpcProcessError, never> {
@@ -440,6 +421,14 @@ function piRpcPromise<A>(operation: string, run: () => Promise<A>) {
   })
 }
 
+function runRuntimeBinarySync<A>(effect: Effect.Effect<A, unknown>) {
+  const exit = Effect.runSyncExit(effect)
+  if (Exit.isSuccess(exit)) return exit.value
+  const failure = Option.getOrUndefined(Cause.failureOption(exit.cause))
+  if (failure instanceof Error) throw failure
+  throw Cause.squash(exit.cause)
+}
+
 function encodeJson(value: unknown) {
   return Schema.encodeSync(jsonUnknownSchema)(value)
 }
@@ -465,6 +454,18 @@ function stringValue(value: unknown) {
   return typeof value === 'string' ? value : undefined
 }
 
-function numberValue(value: unknown) {
-  return typeof value === 'number' ? value : 0
+function parsePiRuntimeState(data: Record<string, unknown>): AgentRuntimeState {
+  return {
+    kind: 'pi',
+    sessionId: stringValue(data.sessionId),
+    sessionFile: stringValue(data.sessionFile),
+    isStreaming: data.isStreaming === true,
+    messageCount: requiredNumberValue('messageCount', data.messageCount),
+    pendingMessageCount: requiredNumberValue('pendingMessageCount', data.pendingMessageCount),
+  }
+}
+
+function requiredNumberValue(field: string, value: unknown) {
+  if (typeof value === 'number') return value
+  throw new Error(`Pi RPC get_state returned invalid ${field}`)
 }

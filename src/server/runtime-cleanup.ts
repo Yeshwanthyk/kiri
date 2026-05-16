@@ -9,7 +9,7 @@ import {
 import { forgetProviderRuntimeAgent } from './provider-runtime'
 import { closeAgentRuntimeTerminal } from './terminal-server'
 
-export type RuntimeCleanupSession = {
+type RuntimeCleanupSession = {
   readonly id: string
   readonly runtime: RuntimeKind
 }
@@ -34,7 +34,7 @@ const liveCleanupDependencies: RuntimeCleanupDependencies = {
   closeTerminal: closeAgentRuntimeTerminal,
 }
 
-export function cleanupRuntimeSessions(
+function cleanupRuntimeSessions(
   sessions: readonly RuntimeCleanupSession[],
   dependencies: RuntimeCleanupDependencies = liveCleanupDependencies,
 ) {
@@ -42,11 +42,6 @@ export function cleanupRuntimeSessions(
     dependencies.forgetRuntime(session.runtime, session.id)
     dependencies.closeTerminal(session.id)
   }
-}
-
-export function cleanupProjectRuntimeSessions(projectId: string) {
-  const sessions = listSessionSummaries({ projectId, includeArchived: true })
-  cleanupRuntimeSessions(sessions)
 }
 
 export function deleteProjectWithRuntimeCleanup(

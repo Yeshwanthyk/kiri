@@ -11,7 +11,7 @@ export type BackendReadinessServiceApi = {
   readonly check: () => Effect.Effect<void, BackendReadinessError>
 }
 
-export class BackendReadinessService extends Context.Tag('@kiri/BackendReadiness')<
+class BackendReadinessService extends Context.Tag('@kiri/BackendReadiness')<
   BackendReadinessService,
   BackendReadinessServiceApi
 >() {

@@ -63,7 +63,7 @@ export class RuntimeCommands extends Context.Tag('@kiri/RuntimeCommands')<
 }
 
 const liveRuntimeCommandsLayer = RuntimeCommands.layer.pipe(
-  Layer.provide(RuntimeRegistry.layer),
+  Layer.provide(RuntimeRegistry.liveLayer),
 )
 
 export function makeRuntimeCommands(input: {
@@ -81,56 +81,52 @@ export function makeRuntimeCommands(input: {
     const adapter = yield* input.registry.get(config.runtime)
     return { runtime: config.runtime, adapter }
   })
+  const dispatch = <K extends keyof ProviderRuntimeAdapter, A>(
+    agentId: string,
+    key: K,
+    unsupported: string,
+    call: (capability: NonNullable<ProviderRuntimeAdapter[K]>) => Promise<A>,
+  ) =>
+    Effect.gen(function* () {
+      const { runtime, adapter } = yield* adapterFor(agentId)
+      const capability = yield* requireCapability(runtime, adapter, key, unsupported)
+      return yield* callAdapter(() => call(capability))
+    })
 
   return {
     prompt: Effect.fn('RuntimeCommands.prompt')(function* (command) {
-      const { adapter } = yield* adapterFor(command.agentId)
-      return yield* callAdapter(() => adapter.prompt(command))
+      return yield* dispatch(command.agentId, 'prompt', 'chat prompts yet', (prompt) => prompt(command))
     }),
     steer: Effect.fn('RuntimeCommands.steer')(function* (command) {
-      const { runtime, adapter } = yield* adapterFor(command.agentId)
-      const steer = yield* requireCapability(runtime, adapter, 'steer', 'steer yet')
-      return yield* callAdapter(() => steer(command))
+      return yield* dispatch(command.agentId, 'steer', 'steer yet', (steer) => steer(command))
     }),
     interrupt: Effect.fn('RuntimeCommands.interrupt')(function* (command) {
-      const { runtime, adapter } = yield* adapterFor(command.agentId)
-      const interrupt = yield* requireCapability(runtime, adapter, 'interrupt', 'interrupt yet')
-      return yield* callAdapter(() => interrupt(command))
+      return yield* dispatch(command.agentId, 'interrupt', 'interrupt yet', (interrupt) => interrupt(command))
     }),
     setThinkingLevel: Effect.fn('RuntimeCommands.setThinkingLevel')(function* (command) {
-      const { runtime, adapter } = yield* adapterFor(command.agentId)
-      const setThinkingLevel = yield* requireCapability(
-        runtime,
-        adapter,
+      return yield* dispatch(
+        command.agentId,
         'setThinkingLevel',
         '/thinking yet',
+        (setThinkingLevel) => setThinkingLevel(command),
       )
-      return yield* callAdapter(() => setThinkingLevel(command))
     }),
     reset: Effect.fn('RuntimeCommands.reset')(function* (command) {
-      const { runtime, adapter } = yield* adapterFor(command.agentId)
-      const reset = yield* requireCapability(runtime, adapter, 'reset', '/new yet')
-      return yield* callAdapter(() => reset(command))
+      return yield* dispatch(command.agentId, 'reset', '/new yet', (reset) => reset(command))
     }),
     fork: Effect.fn('RuntimeCommands.fork')(function* (command) {
-      const { runtime, adapter } = yield* adapterFor(command.agentId)
-      const fork = yield* requireCapability(runtime, adapter, 'fork', '/fork yet')
-      return yield* callAdapter(() => fork(command))
+      return yield* dispatch(command.agentId, 'fork', '/fork yet', (fork) => fork(command))
     }),
     review: Effect.fn('RuntimeCommands.review')(function* (command) {
-      const { runtime, adapter } = yield* adapterFor(command.agentId)
-      const review = yield* requireCapability(runtime, adapter, 'review', '/review yet')
-      return yield* callAdapter(() => review(command))
+      return yield* dispatch(command.agentId, 'review', '/review yet', (review) => review(command))
     }),
     answerQuestion: Effect.fn('RuntimeCommands.answerQuestion')(function* (command) {
-      const { runtime, adapter } = yield* adapterFor(command.agentId)
-      const answerQuestion = yield* requireCapability(
-        runtime,
-        adapter,
+      return yield* dispatch(
+        command.agentId,
         'answerQuestion',
         'interactive questions yet',
+        (answerQuestion) => answerQuestion(command),
       )
-      return yield* callAdapter(() => answerQuestion(command))
     }),
   }
 }
@@ -165,11 +161,23 @@ function requireCapability<K extends keyof ProviderRuntimeAdapter>(
   unsupported: string,
 ): Effect.Effect<NonNullable<ProviderRuntimeAdapter[K]>, RuntimeCommandError> {
   const capability = adapter[key]
-  return capability
-    ? Effect.succeed(capability)
-    : Effect.fail(new RuntimeCommandError({
-      message: `${runtime} agents do not support ${unsupported}`,
+  if (!capability) {
+    return Effect.fail(new RuntimeCommandError({
+      message: unsupportedCapabilityMessage(runtime, key, unsupported),
     }))
+  }
+  return Effect.succeed(capability)
+}
+
+function unsupportedCapabilityMessage(
+  runtime: RuntimeKind,
+  key: keyof ProviderRuntimeAdapter,
+  unsupported: string,
+) {
+  if (runtime === 'claude' && key === 'prompt') {
+    return 'Claude sessions run in terminal mode only'
+  }
+  return `${runtime} agents do not support ${unsupported}`
 }
 
 function normalizeRuntimeCommandFailure(error: unknown) {

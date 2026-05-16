@@ -18,6 +18,7 @@ import {
   normalizeUnixTimestamp,
   piEventToTimelineEvent,
 } from './timeline-format'
+import { withTransaction } from './transaction'
 
 export function appendUserMessageRow(
   database: DatabaseSync,
@@ -36,8 +37,7 @@ export function appendUserMessageRow(
     .update(`${input.agentId}\n${timestamp}\n${text}`)
     .digest('hex')
     .slice(0, 16)
-  database.exec('BEGIN')
-  try {
+  withTransaction(database, () => {
     database
       .prepare(
         `
@@ -47,11 +47,7 @@ export function appendUserMessageRow(
       )
       .run(`user-${input.agentId}-${hash}`, thread.id, text, timestamp)
     updateThreadSummary(database, thread.id, text, timestamp)
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
+  })
 }
 
 export function recordRuntimeMessageRow(
@@ -69,8 +65,7 @@ export function recordRuntimeMessageRow(
 
   const threadId = ensureThreadForAgent(database, input.agentId, undefined)
   const timestamp = input.timestamp ?? new Date().toISOString()
-  database.exec('BEGIN')
-  try {
+  withTransaction(database, () => {
     database
       .prepare(
         `
@@ -84,11 +79,7 @@ export function recordRuntimeMessageRow(
       )
       .run(input.id, threadId, input.role, text, timestamp)
     updateThreadSummary(database, threadId, input.role === 'assistant' ? text : null, timestamp)
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
+  })
 }
 
 export function recordRuntimeTimelineEventRow(
@@ -146,8 +137,7 @@ export function replaceAgentTasksRows(
 ) {
   const threadId = ensureThreadForAgent(database, input.agentId, undefined)
   const updatedAt = input.updatedAt ?? new Date().toISOString()
-  database.exec('BEGIN')
-  try {
+  withTransaction(database, () => {
     replaceAgentTasksForThread(database, {
       threadId,
       source: input.source,
@@ -157,11 +147,7 @@ export function replaceAgentTasksRows(
     database
       .prepare('UPDATE threads SET updated_at = ? WHERE id = ?')
       .run(updatedAt, threadId)
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
+  })
 }
 
 export function recordPiProjectionMessages(
@@ -174,8 +160,7 @@ export function recordPiProjectionMessages(
   },
 ) {
   const thread = requireActiveThread(database, input.agentId)
-  database.exec('BEGIN')
-  try {
+  withTransaction(database, () => {
     database
       .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
       .run(input.sessionFile, input.agentId)
@@ -203,11 +188,7 @@ export function recordPiProjectionMessages(
       sessionFile: input.sessionFile,
       updatedAt: input.projection.updatedAt,
     })
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
+  })
 }
 
 export function recordPiLiveMessages(
@@ -253,8 +234,7 @@ export function recordPiLiveMessages(
     })
   const preview = lastMessageText(rows, 'assistant') ?? rows[rows.length - 1]?.text
 
-  database.exec('BEGIN')
-  try {
+  withTransaction(database, () => {
     for (const row of rows) {
       insertMessage.run(row.id, thread.id, row.role, row.text, row.timestamp)
     }
@@ -269,11 +249,7 @@ export function recordPiLiveMessages(
         .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
         .run(input.sessionFile, input.agentId)
     }
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
+  })
 }
 
 export function recordPiTimelineEventRow(
@@ -368,8 +344,7 @@ export function replaceAgentDiffArtifactsRows(
     .get(input.agentId)
   if (!row) return
   const updatedAt = new Date().toISOString()
-  database.exec('BEGIN')
-  try {
+  withTransaction(database, () => {
     database.prepare('DELETE FROM diff_artifacts WHERE agent_id = ?').run(input.agentId)
     const insert = database.prepare(`
       INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
@@ -389,11 +364,7 @@ export function replaceAgentDiffArtifactsRows(
         updatedAt,
       )
     }
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
+  })
 }
 
 export function ensureThreadForAgent(
@@ -587,15 +558,16 @@ function lastMessageText(
 function piMessageToText(message: PiRpcMessage) {
   if (typeof message.content === 'string') return message.content.trim()
   if (!Array.isArray(message.content)) return ''
-  return message.content
-    .flatMap((part) => {
-      if (!part || typeof part !== 'object') return []
-      if ('text' in part && typeof part.text === 'string') return [part.text]
-      if ('thinking' in part && typeof part.thinking === 'string') {
-        return [part.thinking]
-      }
-      return []
-    })
+  return (message.content as readonly unknown[])
+    .flatMap(piContentPartText)
     .join('\n')
     .trim()
+}
+
+function piContentPartText(part: unknown) {
+  if (!part || typeof part !== 'object') return []
+  const record = part as Record<string, unknown>
+  if (typeof record.text === 'string') return [record.text]
+  if (typeof record.thinking === 'string') return [record.thinking]
+  return []
 }

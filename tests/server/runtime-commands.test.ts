@@ -1,5 +1,4 @@
 import { describe, expect, it } from '@effect/vitest'
-import { execFileSync } from 'node:child_process'
 import { Effect } from 'effect'
 import { z } from 'zod'
 import type { ProviderRuntimeAdapter } from '../../src/server/provider-runtime'
@@ -8,6 +7,7 @@ import {
   RuntimeCommandError,
   makeRuntimeCommands,
 } from '../../src/server/runtime'
+import { runTsxJson } from '../harness/run-tsx'
 
 describe('runtime commands', () => {
   it.effect('dispatches through the injected runtime registry', () =>
@@ -41,7 +41,7 @@ describe('runtime commands', () => {
         registry: makeRuntimeRegistry({
           pi: { prompt: () => Promise.resolve(undefined) },
           codex: { prompt: () => Promise.resolve(undefined) },
-          claude: { prompt: () => Promise.resolve(undefined) },
+          claude: {},
         }),
         getLaunchConfig: () => ({ runtime: 'claude' }),
       })
@@ -55,6 +55,26 @@ describe('runtime commands', () => {
     }),
   )
 
+  it.effect('fails terminal-only prompts through the same typed command boundary', () =>
+    Effect.gen(function* () {
+      const commands = makeRuntimeCommands({
+        registry: makeRuntimeRegistry({
+          pi: { prompt: () => Promise.resolve(undefined) },
+          codex: { prompt: () => Promise.resolve(undefined) },
+          claude: {},
+        }),
+        getLaunchConfig: () => ({ runtime: 'claude' }),
+      })
+
+      const error = yield* commands.prompt({ agentId: 'agent-1', text: 'hello' }).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(RuntimeCommandError)
+      if (error instanceof RuntimeCommandError) {
+        expect(error.message).toBe('Claude sessions run in terminal mode only')
+      }
+    }),
+  )
+
   it.effect('wraps adapter promise rejections in a typed runtime command error', () =>
     Effect.gen(function* () {
       const commands = makeRuntimeCommands({
@@ -63,7 +83,7 @@ describe('runtime commands', () => {
             prompt: () => Promise.reject(new Error('adapter exploded')),
           },
           codex: { prompt: () => Promise.resolve(undefined) },
-          claude: { prompt: () => Promise.resolve(undefined) },
+          claude: {},
         }),
         getLaunchConfig: () => ({ runtime: 'pi' }),
       })
@@ -80,21 +100,13 @@ describe('runtime commands', () => {
   )
 
   it('keeps public async exports rejecting with typed errors instead of FiberFailure', () => {
-    const output = execFileSync(
-      'pnpm',
-      ['exec', 'tsx', 'tests/harness/runtime-command-public-harness.ts'],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
-      },
-    )
-    const result = z.object({
+    const result = runTsxJson('tests/harness/runtime-command-public-harness.ts', (output) => z.object({
       ok: z.literal(true),
       ctor: z.string(),
       isError: z.literal(true),
       isRuntimeCommandError: z.literal(true),
       message: z.literal('claude agents do not support /new yet'),
-    }).parse(JSON.parse(output))
+    }).parse(output))
 
     expect(result.ctor).toBe('RuntimeCommandError')
   })

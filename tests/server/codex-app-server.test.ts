@@ -1,8 +1,10 @@
 import { createServer, type Server } from 'node:http'
 import { AddressInfo } from 'node:net'
+import { Effect } from 'effect'
 import { describe, expect, it } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
 import { CodexAppServerAdapter } from '../../src/server/codex-app-server'
+import { RuntimeBinaryError } from '../../src/server/runtime-binaries'
 
 type RpcRequest = {
   id: string | number
@@ -183,6 +185,38 @@ describe('CodexAppServerAdapter', () => {
     }
   })
 
+  it('bounds completed turns that are never consumed', async () => {
+    const harness = await startHarness()
+    const adapter = new CodexAppServerAdapter({
+      websocketUrl: harness.url,
+      spawnIfMissing: false,
+    })
+
+    try {
+      await adapter.connect()
+      for (let index = 0; index < 105; index += 1) {
+        harness.send({
+          method: 'turn/completed',
+          params: {
+            threadId: 'thread-1',
+            turn: { id: `turn-${index}`, status: 'completed', items: [] },
+          },
+        })
+      }
+      await waitForCachedCompletedTurn(adapter, 'thread-1', 'turn-104')
+
+      const evicted = adapter.waitForTurnCompleted({ threadId: 'thread-1', turnId: 'turn-0' })
+      harness.closeSockets()
+      await expect(evicted).rejects.toThrow('Codex app-server websocket closed')
+      await expect(
+        adapter.waitForTurnCompleted({ threadId: 'thread-1', turnId: 'turn-104' }),
+      ).resolves.toEqual({ id: 'turn-104', status: 'completed', items: [] })
+    } finally {
+      adapter.close()
+      await harness.close()
+    }
+  }, 2_000)
+
   it('ignores malformed websocket payloads before valid notifications', async () => {
     const harness = await startHarness()
     const adapter = new CodexAppServerAdapter({
@@ -300,6 +334,34 @@ describe('CodexAppServerAdapter', () => {
       await harness.close()
     }
   })
+
+  it('preserves runtime binary service failures when spawning a local app-server', async () => {
+    const requests: unknown[] = []
+    const adapter = new CodexAppServerAdapter({
+      websocketUrl: 'ws://127.0.0.1:39999',
+      spawnIfMissing: true,
+      runtimeBinaries: {
+        resolveExecutable: (input) => {
+          requests.push(input)
+          return Effect.fail(new RuntimeBinaryError({
+            message: 'codex binary lookup failed',
+          }))
+        },
+        processEnv: () => Effect.succeed({}),
+      },
+    })
+    const unsafeAdapter = adapter as unknown as { spawnLocalAppServer: () => Promise<void> }
+
+    try {
+      await expect(unsafeAdapter.spawnLocalAppServer()).rejects.toMatchObject({
+        _tag: 'RuntimeBinaryError',
+        message: 'codex binary lookup failed',
+      })
+      expect(requests).toEqual([{ command: 'codex', configuredPathEnvKey: 'KIRI_CODEX_BIN' }])
+    } finally {
+      adapter.close()
+    }
+  })
 })
 
 async function startHarness(
@@ -385,6 +447,19 @@ function listen(server: Server) {
 
 async function waitForRequest(harness: Harness, method: string) {
   return waitForRequestAttempt(harness, method, 50)
+}
+
+async function waitForCachedCompletedTurn(
+  adapter: CodexAppServerAdapter,
+  threadId: string,
+  turnId: string,
+) {
+  const unsafeAdapter = adapter as unknown as { completedTurns: Map<string, unknown> }
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (unsafeAdapter.completedTurns.has(`${threadId}:${turnId}`)) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error(`Timed out waiting for cached completed turn ${turnId}`)
 }
 
 async function waitForRequestAttempt(harness: Harness, method: string, attemptsRemaining: number): Promise<void> {

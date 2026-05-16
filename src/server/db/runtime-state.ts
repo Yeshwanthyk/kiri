@@ -61,12 +61,13 @@ export function getAgentRuntimeState(database: DatabaseSync, agentId: string) {
   if (!row?.runtimeStateJson) return {}
   try {
     const parsed: unknown = JSON.parse(row.runtimeStateJson)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {}
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
   } catch {
-    return {}
+    throw new Error(`Invalid runtime state JSON for agent ${agentId}`)
   }
+  throw new Error(`Invalid runtime state JSON for agent ${agentId}`)
 }
 
 export function setAgentRuntimeState(

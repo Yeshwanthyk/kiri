@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { runTsxJson } from '../harness/run-tsx'
 
 const harnessOutputSchema = z.object({
   ok: z.literal(true),
@@ -13,15 +13,10 @@ const harnessOutputSchema = z.object({
 
 describe('scratchpad trigger semantics', () => {
   it('uses one trigger path for terminal and gui sessions', () => {
-    const output = execFileSync(
-      'pnpm',
-      ['exec', 'tsx', 'tests/harness/scratchpad-trigger-harness.ts'],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
-      },
-    )
-    expect(harnessOutputSchema.parse(JSON.parse(output))).toMatchObject({
+    expect(runTsxJson(
+      'tests/harness/scratchpad-trigger-harness.ts',
+      (output) => harnessOutputSchema.parse(output),
+    )).toMatchObject({
       ok: true,
     })
   }, 20_000)

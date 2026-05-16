@@ -1,10 +1,7 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { extname, join } from 'node:path'
 import { Effect } from 'effect'
-import type { AgentTask, ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
+import type { ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import {
   CodexAppServerAdapter,
-  defaultCodexWebsocketUrl,
   decodeServerParams,
   ItemCompletedParamsSchema,
   ThreadCompactedParamsSchema,
@@ -13,11 +10,27 @@ import {
   TurnPlanUpdatedParamsSchema,
   TurnStartedParamsSchema,
   type CodexServerMessage,
-  type CodexThread,
   type CodexTurn,
 } from './codex-app-server'
+import {
+  adapterUrl as stateAdapterUrl,
+  codexReasoningOptions,
+  codexState,
+  parseCodexRuntimeStateJson,
+  stringValue,
+  type CodexRuntimeState,
+} from './codex-runtime-state'
+import { codexReviewDisplayText } from './codex-review'
+import { automaticCodexServerRequestResponse } from './codex-server-requests'
+import {
+  normalizeTaskStatus,
+  numberValue,
+  objectValue,
+  timestampFromMs,
+} from './codex-value-helpers'
+import { codexItemRecord } from './codex-item-recording'
 import { makeCodexRetainedState } from './codex-retained-state'
-import { attachmentDirPath, getKiriConfig } from './kiri-config'
+import { activeCodexTurnId, codexThreadAgentStatus } from './codex-thread-state'
 import {
   appendUserMessage,
   clearAgentRuntimeState,
@@ -43,40 +56,43 @@ import {
   runRuntimeLifecycleSync,
   setRuntimeState,
 } from './runtime-lifecycle'
+import { promptWithSavedImages } from './runtime-attachments'
+import type { RuntimeBinariesApi } from './runtime-binaries'
 
-type CodexRuntimeState = {
-  threadId?: string
-  websocketUrl?: string
-  userAgent?: string
-}
+export { parseCodexRuntimeStateJson } from './codex-runtime-state'
 
 const retainedState = makeCodexRetainedState()
 const CODEX_SANDBOX_MODE = 'danger-full-access'
 const CODEX_SANDBOX_POLICY = { type: 'dangerFullAccess' } as const
 
+type CodexRuntimeDependencies = {
+  readonly runtimeBinaries: RuntimeBinariesApi
+}
+
 export async function promptCodexAgent(input: {
   agentId: string
   text: string
   images?: SendMessageImage[]
-}) {
+} & CodexRuntimeDependencies) {
+  const runtimeBinaries = runtimeBinariesFor(input)
   const config = getAgentLaunchConfig(input.agentId)
   if (config.runtime !== 'codex') {
     throw new Error(`${config.runtime} agent is not a Codex session`)
   }
 
-  const state = codexState(readState(config.runtimeStateJson) ?? getAgentRuntimeState(config.id))
+  const state = codexState(parseCodexRuntimeStateJson(config.runtimeStateJson) ?? getAgentRuntimeState(config.id))
   const text = promptWithSavedImages(config.id, input.text, input.images ?? [])
   if (state.threadId) {
-    const adapter = getOrCreateCodexAdapter(state.websocketUrl)
+    const adapter = getOrCreateCodexAdapter(state.websocketUrl, runtimeBinaries)
     const thread = await readCodexThreadIfAvailable(adapter, state.threadId)
     if (thread) {
       syncCodexThreadStatus(config.id, thread)
-      const activeTurnId = activeTurnIdFromThread(thread)
+      const activeTurnId = activeCodexTurnId(thread)
       if (activeTurnId) {
         await steerCodexTurn(config.id, {
           ...state,
           threadId: state.threadId,
-        }, activeTurnId, text)
+        }, activeTurnId, text, runtimeBinaries)
         return
       }
     } else {
@@ -90,7 +106,7 @@ export async function promptCodexAgent(input: {
     return promptCodexAgentNow({
       ...config,
       runtimeState: getAgentRuntimeState(config.id),
-    }, text, generation)
+    }, text, generation, runtimeBinaries)
   }))
 }
 
@@ -98,20 +114,21 @@ export async function steerCodexAgent(input: {
   agentId: string
   text: string
   images?: SendMessageImage[]
-}) {
+} & CodexRuntimeDependencies) {
+  const runtimeBinaries = runtimeBinariesFor(input)
   const config = getAgentLaunchConfig(input.agentId)
   const state = codexState(getAgentRuntimeState(config.id))
   if (!state.threadId) {
     return promptCodexAgent(input)
   }
-  const adapter = getOrCreateCodexAdapter(state.websocketUrl)
+  const adapter = getOrCreateCodexAdapter(state.websocketUrl, runtimeBinaries)
   const thread = await readCodexThreadIfAvailable(adapter, state.threadId)
   if (!thread) {
     forgetCodexThread(config.id, state)
     return promptCodexAgent(input)
   }
   syncCodexThreadStatus(config.id, thread)
-  const activeTurnId = activeTurnIdFromThread(thread)
+  const activeTurnId = activeCodexTurnId(thread)
   if (!activeTurnId) return promptCodexAgent(input)
 
   await steerCodexTurn(
@@ -119,22 +136,24 @@ export async function steerCodexAgent(input: {
     { ...state, threadId: state.threadId },
     activeTurnId,
     promptWithSavedImages(config.id, input.text, input.images ?? []),
+    runtimeBinaries,
   )
 }
 
-export async function interruptCodexAgent(input: { agentId: string }) {
+export async function interruptCodexAgent(input: { agentId: string } & CodexRuntimeDependencies) {
+  const runtimeBinaries = runtimeBinariesFor(input)
   const state = codexState(getAgentRuntimeState(input.agentId))
   if (!state.threadId) {
     throw new Error('Codex session has no active turn to interrupt')
   }
-  const adapter = getOrCreateCodexAdapter(state.websocketUrl)
+  const adapter = getOrCreateCodexAdapter(state.websocketUrl, runtimeBinaries)
   const thread = await readCodexThreadIfAvailable(adapter, state.threadId)
   if (!thread) {
     forgetCodexThread(input.agentId, state)
     throw new Error('Codex session has no active turn to interrupt')
   }
   syncCodexThreadStatus(input.agentId, thread)
-  const activeTurnId = activeTurnIdFromThread(thread)
+  const activeTurnId = activeCodexTurnId(thread)
   if (!activeTurnId) {
     throw new Error('Codex session has no active turn to interrupt')
   }
@@ -163,14 +182,15 @@ export function setCodexThinkingLevel(input: {
   return Promise.resolve(level)
 }
 
-export async function resetCodexSession(input: { agentId: string }) {
+export async function resetCodexSession(input: { agentId: string } & CodexRuntimeDependencies) {
+  const runtimeBinaries = runtimeBinariesFor(input)
   retainedState.bumpGeneration(input.agentId)
   const state = codexState(getAgentRuntimeState(input.agentId))
   if (state.threadId) {
     try {
-      const adapter = getOrCreateCodexAdapter(state.websocketUrl)
+      const adapter = getOrCreateCodexAdapter(state.websocketUrl, runtimeBinaries)
       const thread = await readCodexThread(adapter, state.threadId)
-      const activeTurnId = activeTurnIdFromThread(thread)
+      const activeTurnId = activeCodexTurnId(thread)
       if (activeTurnId) {
         await adapter.interruptTurn({
           threadId: state.threadId,
@@ -189,7 +209,8 @@ export async function resetCodexSession(input: { agentId: string }) {
 export async function reviewCodexSession(input: {
   agentId: string
   target: ReviewTarget
-}) {
+} & CodexRuntimeDependencies) {
+  const runtimeBinaries = runtimeBinariesFor(input)
   const config = getAgentLaunchConfig(input.agentId)
   if (config.runtime !== 'codex') {
     throw new Error(`${config.runtime} agents do not support /review yet`)
@@ -200,7 +221,7 @@ export async function reviewCodexSession(input: {
     return reviewCodexSessionNow({
       ...config,
       runtimeState: getAgentRuntimeState(config.id),
-    }, input.target, generation)
+    }, input.target, generation, runtimeBinaries)
   }))
 }
 
@@ -208,8 +229,9 @@ async function promptCodexAgentNow(
   config: ReturnType<typeof getAgentLaunchConfig> & { runtimeState: Record<string, unknown> },
   text: string,
   generation: number,
+  runtimeBinaries: RuntimeBinariesApi,
 ) {
-  const adapter = getOrCreateCodexAdapter(stringValue(config.runtimeState.websocketUrl))
+  const adapter = getOrCreateCodexAdapter(stringValue(config.runtimeState.websocketUrl), runtimeBinaries)
   const state = codexState(config.runtimeState)
   let activeThreadId = state.threadId
   await runRuntimeLifecyclePromise(runAgentTurnLifecycle({
@@ -222,7 +244,7 @@ async function promptCodexAgentNow(
       setCodexState(config.id, {
         ...state,
         threadId: activeThreadId,
-        websocketUrl: adapterUrl(state.websocketUrl),
+        websocketUrl: adapterUrl(state.websocketUrl, runtimeBinaries),
       })
     },
     run: () => runRuntimeLifecyclePromise(startOrSteerCodexTurn({
@@ -231,6 +253,7 @@ async function promptCodexAgentNow(
       state,
       text,
       generation,
+      runtimeBinaries,
       setActiveThreadId: (threadId) => {
         activeThreadId = threadId
       },
@@ -242,11 +265,12 @@ async function reviewCodexSessionNow(
   config: ReturnType<typeof getAgentLaunchConfig> & { runtimeState: Record<string, unknown> },
   target: ReviewTarget,
   generation: number,
+  runtimeBinaries: RuntimeBinariesApi,
 ) {
-  const adapter = getOrCreateCodexAdapter(stringValue(config.runtimeState.websocketUrl))
+  const adapter = getOrCreateCodexAdapter(stringValue(config.runtimeState.websocketUrl), runtimeBinaries)
   const state = codexState(config.runtimeState)
   let activeThreadId = state.threadId
-  const displayText = reviewDisplayText(target)
+  const displayText = codexReviewDisplayText(target)
   await runRuntimeLifecyclePromise(runAgentTurnLifecycle({
     agentId: config.id,
     displayText,
@@ -257,7 +281,7 @@ async function reviewCodexSessionNow(
       setCodexState(config.id, {
         ...state,
         threadId: activeThreadId,
-        websocketUrl: adapterUrl(state.websocketUrl),
+        websocketUrl: adapterUrl(state.websocketUrl, runtimeBinaries),
       })
     },
     run: () => runRuntimeLifecyclePromise(startCodexReview({
@@ -266,6 +290,7 @@ async function reviewCodexSessionNow(
       state,
       target,
       generation,
+      runtimeBinaries,
       setActiveThreadId: (threadId) => {
         activeThreadId = threadId
       },
@@ -284,6 +309,7 @@ function startOrSteerCodexTurn(input: {
   state: CodexRuntimeState
   text: string
   generation: number
+  runtimeBinaries: RuntimeBinariesApi
   setActiveThreadId: (threadId: string) => void
 }) {
   return Effect.gen(function* () {
@@ -297,13 +323,13 @@ function startOrSteerCodexTurn(input: {
     yield* Effect.sync(() => {
       syncCodexThreadStatus(input.config.id, thread)
     })
-    const activeTurnId = activeTurnIdFromThread(thread)
+    const activeTurnId = activeCodexTurnId(thread)
     if (activeTurnId) {
       yield* steerCodexTurnEffect(input.config.id, {
         ...input.state,
         threadId,
-        websocketUrl: adapterUrl(input.state.websocketUrl),
-      }, activeTurnId, input.text)
+        websocketUrl: adapterUrl(input.state.websocketUrl, input.runtimeBinaries),
+      }, activeTurnId, input.text, input.runtimeBinaries)
       return false
     }
 
@@ -320,7 +346,7 @@ function startOrSteerCodexTurn(input: {
       setCodexState(input.config.id, {
         ...input.state,
         threadId,
-        websocketUrl: adapterUrl(input.state.websocketUrl),
+        websocketUrl: adapterUrl(input.state.websocketUrl, input.runtimeBinaries),
       })
     })
     const completedTurn = yield* codexProtocolPromise(() =>
@@ -332,7 +358,7 @@ function startOrSteerCodexTurn(input: {
       setCodexState(input.config.id, {
         ...input.state,
         threadId,
-        websocketUrl: adapterUrl(input.state.websocketUrl),
+        websocketUrl: adapterUrl(input.state.websocketUrl, input.runtimeBinaries),
       })
     })
     return true
@@ -345,6 +371,7 @@ function startCodexReview(input: {
   state: CodexRuntimeState
   target: ReviewTarget
   generation: number
+  runtimeBinaries: RuntimeBinariesApi
   setActiveThreadId: (threadId: string) => void
 }) {
   return Effect.gen(function* () {
@@ -355,7 +382,7 @@ function startCodexReview(input: {
       rememberCodexThread(input.config.id, threadId)
     })
     const thread = yield* readCodexThreadEffect(input.adapter, threadId)
-    const activeTurnId = activeTurnIdFromThread(thread)
+    const activeTurnId = activeCodexTurnId(thread)
     if (activeTurnId) {
       return yield* new RuntimeLifecycleError({
         message: 'Runtime turn failed',
@@ -374,7 +401,7 @@ function startCodexReview(input: {
       setCodexState(input.config.id, {
         ...input.state,
         threadId,
-        websocketUrl: adapterUrl(input.state.websocketUrl),
+        websocketUrl: adapterUrl(input.state.websocketUrl, input.runtimeBinaries),
       })
     })
     const completedTurn = yield* codexProtocolPromise(() =>
@@ -386,7 +413,7 @@ function startCodexReview(input: {
       setCodexState(input.config.id, {
         ...input.state,
         threadId,
-        websocketUrl: adapterUrl(input.state.websocketUrl),
+        websocketUrl: adapterUrl(input.state.websocketUrl, input.runtimeBinaries),
       })
     })
     return true
@@ -397,6 +424,7 @@ function ensureCodexThreadEffect(input: {
   adapter: CodexAppServerAdapter
   config: ReturnType<typeof getAgentLaunchConfig>
   state: CodexRuntimeState
+  runtimeBinaries: RuntimeBinariesApi
 }) {
   return Effect.gen(function* () {
     const existingThreadId = input.state.threadId
@@ -439,21 +467,30 @@ function ensureCodexThreadEffect(input: {
       setCodexState(input.config.id, {
         ...input.state,
         threadId,
-        websocketUrl: adapterUrl(input.state.websocketUrl),
+        websocketUrl: adapterUrl(input.state.websocketUrl, input.runtimeBinaries),
       })
     })
     return threadId
   })
 }
 
-function getOrCreateCodexAdapter(websocketUrl: string | undefined) {
-  const url = adapterUrl(websocketUrl)
+function adapterUrl(websocketUrl: string | undefined, runtimeBinaries: RuntimeBinariesApi) {
+  return stateAdapterUrl(websocketUrl, runtimeProcessEnv(runtimeBinaries))
+}
+
+function getOrCreateCodexAdapter(
+  websocketUrl: string | undefined,
+  runtimeBinaries: RuntimeBinariesApi,
+) {
+  const env = runtimeProcessEnv(runtimeBinaries)
+  const url = stateAdapterUrl(websocketUrl, env)
   let adapter = retainedState.getAdapter(url)
   if (!adapter) {
     adapter = new CodexAppServerAdapter({
       websocketUrl: url,
-      spawnIfMissing: !process.env.KIRI_CODEX_APP_SERVER_URL,
-      codexHome: process.env.KIRI_CODEX_HOME,
+      spawnIfMissing: !env.KIRI_CODEX_APP_SERVER_URL,
+      codexHome: env.KIRI_CODEX_HOME,
+      runtimeBinaries,
     })
     retainedState.rememberAdapter(url, adapter)
   }
@@ -462,6 +499,14 @@ function getOrCreateCodexAdapter(websocketUrl: string | undefined) {
     adapter.onMessage((message) => handleCodexServerMessage(adapter, message))
   }
   return adapter
+}
+
+function runtimeProcessEnv(runtimeBinaries: RuntimeBinariesApi) {
+  return Effect.runSync(runtimeBinaries.processEnv())
+}
+
+function runtimeBinariesFor(input: CodexRuntimeDependencies) {
+  return input.runtimeBinaries
 }
 
 function handleCodexServerMessage(adapter: CodexAppServerAdapter, message: CodexServerMessage) {
@@ -490,7 +535,7 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
           },
         })
       }
-      const response = automaticServerRequestResponse(message.method)
+      const response = automaticCodexServerRequestResponse(message.method)
       if (response) {
         adapter.respond(message.id, response)
       } else {
@@ -583,7 +628,7 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
         yield* setRuntimeState(agentId, {
           ...currentState,
           threadId,
-          websocketUrl: adapterUrl(currentState.websocketUrl),
+          websocketUrl: currentState.websocketUrl ?? adapter.getWebsocketUrl(),
         })
       }
       yield* projectRuntimeEvent({
@@ -648,8 +693,9 @@ async function steerCodexTurn(
   state: CodexRuntimeState & { threadId: string },
   activeTurnId: string,
   text: string,
+  runtimeBinaries: RuntimeBinariesApi,
 ) {
-  const adapter = getOrCreateCodexAdapter(state.websocketUrl)
+  const adapter = getOrCreateCodexAdapter(state.websocketUrl, runtimeBinaries)
   await adapter.steerTurn({
     threadId: state.threadId,
     expectedTurnId: activeTurnId,
@@ -702,9 +748,10 @@ function steerCodexTurnEffect(
   state: CodexRuntimeState & { threadId: string },
   activeTurnId: string,
   text: string,
+  runtimeBinaries: RuntimeBinariesApi,
 ) {
   return Effect.gen(function* () {
-    const adapter = getOrCreateCodexAdapter(state.websocketUrl)
+    const adapter = getOrCreateCodexAdapter(state.websocketUrl, runtimeBinaries)
     yield* codexProtocolPromise(() => adapter.steerTurn({
       threadId: state.threadId,
       expectedTurnId: activeTurnId,
@@ -784,19 +831,12 @@ export function __unsafeClearCodexRuntimeStateForTest() {
   retainedState.clearRuntimeStateForTest()
 }
 
-function activeTurnIdFromThread(thread: CodexThread) {
-  const activeTurn = [...(thread.turns ?? [])].reverse().find((turn) => turn.status === 'inProgress')
-  return activeTurn?.id
-}
-
-function syncCodexThreadStatus(agentId: string, thread: CodexThread) {
-  if (thread.status?.type === 'active') {
-    setAgentStatus(agentId, 'running')
-  } else if (thread.status?.type === 'systemError') {
-    setAgentStatus(agentId, 'failed')
-  } else if (thread.status?.type === 'idle' || thread.status?.type === 'notLoaded') {
-    setAgentStatus(agentId, 'idle')
-  }
+function syncCodexThreadStatus(
+  agentId: string,
+  thread: Parameters<typeof codexThreadAgentStatus>[0],
+) {
+  const status = codexThreadAgentStatus(thread)
+  if (status) setAgentStatus(agentId, status)
 }
 
 function recordCodexTurn(agentId: string, turn: CodexTurn) {
@@ -807,188 +847,19 @@ function recordCodexTurn(agentId: string, turn: CodexTurn) {
 }
 
 function recordCodexItem(agentId: string, item: unknown, timestamp = new Date().toISOString()) {
-  const object = objectValue(item)
-  const id = stringValue(object.id)
-  const type = stringValue(object.type)
-  if (!id || !type) return
-  if (type === 'agentMessage') {
-    recordRuntimeMessage({
-      agentId,
-      id: `codex-${agentId}-${id}`,
-      role: 'assistant',
-      text: stringValue(object.text) ?? '',
-      timestamp,
-    })
+  const record = codexItemRecord(agentId, item, timestamp)
+  if (!record) return
+  if (record.type === 'message') {
+    recordRuntimeMessage(record.value)
     return
   }
-  if (type === 'reasoning') {
-    const text = [...stringArray(object.summary), ...stringArray(object.content)].join('\n')
-    recordRuntimeTimelineEvent({
-      agentId,
-      kind: 'codex_reasoning',
-      tone: 'thinking',
-      label: 'Reasoning',
-      detail: text || null,
-      payload: item,
-      timestamp,
-    })
-    return
-  }
-  if (type === 'commandExecution') {
-    recordRuntimeMessage({
-      agentId,
-      id: `codex-${agentId}-${id}`,
-      role: 'tool',
-      text: commandText(object),
-      timestamp,
-    })
-  }
+  recordRuntimeTimelineEvent(record.value)
 }
 
 function setCodexState(agentId: string, state: CodexRuntimeState) {
   runRuntimeLifecycleSync(setRuntimeState(agentId, state))
 }
 
-function codexState(value: Record<string, unknown>): CodexRuntimeState {
-  return {
-    threadId: stringValue(value.threadId),
-    websocketUrl: stringValue(value.websocketUrl),
-    userAgent: stringValue(value.userAgent),
-  }
-}
-
-function readState(value: string | null | undefined) {
-  if (!value) return null
-  try {
-    const parsed: unknown = JSON.parse(value)
-    return objectValue(parsed)
-  } catch {
-    return null
-  }
-}
-
 function textInput(text: string) {
   return [{ type: 'text', text, text_elements: [] }]
-}
-
-function promptWithSavedImages(agentId: string, text: string, images: SendMessageImage[]) {
-  if (images.length === 0) return text
-
-  const paths = images.map((image, index) => savePromptImage(agentId, image, index))
-  return `${text.trim()}\n\nAttached image files:\n${paths
-    .map((path) => `- ${path}`)
-    .join('\n')}\n\nUse these file paths if you need to inspect the images.`
-}
-
-function savePromptImage(agentId: string, image: SendMessageImage, index: number) {
-  const bytes = Buffer.from(image.data, 'base64')
-  if (bytes.length > 5 * 1024 * 1024) {
-    throw new Error(`Image "${image.name}" is larger than 5MB`)
-  }
-
-  const dir = attachmentDirPath(getKiriConfig(), agentId)
-  mkdirSync(dir, { recursive: true })
-  const path = join(
-    dir,
-    `${Date.now()}-${index + 1}-${safePathSegment(image.name, 'image')}${imageExtension(image)}`,
-  )
-  writeFileSync(path, bytes, { flag: 'wx' })
-  return path
-}
-
-function imageExtension(image: SendMessageImage) {
-  const existing = extname(image.name).toLowerCase()
-  if (['.png', '.jpg', '.jpeg', '.webp', '.gif'].includes(existing)) return ''
-  if (image.mimeType === 'image/png') return '.png'
-  if (image.mimeType === 'image/webp') return '.webp'
-  if (image.mimeType === 'image/gif') return '.gif'
-  return '.jpg'
-}
-
-function safePathSegment(value: string, fallback = 'attachment') {
-  return value
-    .replace(/[^a-zA-Z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 120) || fallback
-}
-
-function adapterUrl(value: string | undefined) {
-  return value ?? defaultCodexWebsocketUrl()
-}
-
-function codexReasoningOptions(level: ThinkingLevel | null) {
-  if (!level) return {}
-  return { effort: level === 'off' ? 'none' : level }
-}
-
-function objectValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
-
-function stringValue(value: unknown) {
-  return typeof value === 'string' ? value : undefined
-}
-
-function numberValue(value: unknown) {
-  return typeof value === 'number' ? value : undefined
-}
-
-function normalizeTaskStatus(value: unknown): AgentTask['status'] | undefined {
-  if (value === 'in_progress') return 'inProgress'
-  if (value === 'pending' || value === 'inProgress' || value === 'completed' || value === 'failed') {
-    return value
-  }
-  return undefined
-}
-
-function timestampFromMs(value: unknown) {
-  return typeof value === 'number' ? new Date(value).toISOString() : undefined
-}
-
-function stringArray(value: unknown) {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
-}
-
-function commandText(item: Record<string, unknown>) {
-  const command = stringValue(item.command) ?? 'Command'
-  const output = stringValue(item.aggregatedOutput)
-  return output ? `${command}\n${output}` : command
-}
-
-function reviewDisplayText(target: ReviewTarget) {
-  if (target.type === 'baseBranch') return `/review base ${target.branch}`
-  return '/review'
-}
-
-function automaticServerRequestResponse(method: string) {
-  if (method === 'item/commandExecution/requestApproval') {
-    return { decision: 'decline' }
-  }
-  if (method === 'item/fileChange/requestApproval') {
-    return { decision: 'decline' }
-  }
-  if (method === 'item/permissions/requestApproval') {
-    return { permissions: {}, scope: 'turn' }
-  }
-  if (method === 'item/tool/requestUserInput') {
-    return { answers: {} }
-  }
-  if (method === 'mcpServer/elicitation/request') {
-    return { action: 'decline', content: null, _meta: null }
-  }
-  if (method === 'item/tool/call') {
-    return {
-      contentItems: [{ type: 'inputText', text: 'kiri cannot run client dynamic tools yet.' }],
-      success: false,
-    }
-  }
-  if (method === 'execCommandApproval') {
-    return { decision: 'denied' }
-  }
-  if (method === 'applyPatchApproval') {
-    return { decision: 'denied' }
-  }
-  return null
 }

@@ -163,6 +163,41 @@ describe('buildTerminalProcessLaunch', () => {
     ])
   })
 
+  it('surfaces corrupt runtime state json instead of launching fresh', () => {
+    expect(() => buildTerminalProcessLaunch({
+      ...launchConfig('codex'),
+      runtimeStateJson: '{not-json',
+    }, 'runtime', shell)).toThrow('Invalid runtime state JSON')
+  })
+
+  it('returns typed terminal launch errors for corrupt runtime state through the service', async () => {
+    const service = makeTerminalLaunchService({
+      runtimeBinaries: makeRuntimeBinariesService({
+        getEnv: () => ({ PATH: '/bin', KIRI_CODEX_BIN: '/injected/codex' }),
+        getHomeDir: () => '/injected/home',
+        exists: () => false,
+      }),
+      getEnv: () => ({ PATH: '/bin', KIRI_CODEX_BIN: '/injected/codex' }),
+      getHomeDir: () => '/injected/home',
+      exists: () => false,
+      getProcessCwd: () => '/repo',
+      getExecPath: () => '/node',
+      getResourcesPath: () => undefined,
+    })
+
+    const error = await Effect.runPromise(service.buildProcessLaunch({
+      config: {
+        ...launchConfig('codex'),
+        runtimeStateJson: '[]',
+      },
+      mode: 'runtime',
+      shell,
+    }).pipe(Effect.flip))
+
+    expect(error).toBeInstanceOf(TerminalLaunchError)
+    expect(error.message).toBe('Invalid runtime state JSON')
+  })
+
   it('launches Pi against the Kiri session directory', () => {
     vi.stubEnv('KIRI_PI_BIN', '/tmp/bin/pi')
 

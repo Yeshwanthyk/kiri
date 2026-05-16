@@ -14,7 +14,7 @@ export type PiJsonlFileServiceApi = {
   readonly projectFile: (path: string) => Effect.Effect<PiSessionProjection, PiJsonlFileError>
 }
 
-export class PiJsonlFileService extends Context.Tag('@kiri/PiJsonlFile')<
+class PiJsonlFileService extends Context.Tag('@kiri/PiJsonlFile')<
   PiJsonlFileService,
   PiJsonlFileServiceApi
 >() {

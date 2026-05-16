@@ -26,16 +26,18 @@ try {
     { KiriDbService },
     { KiriSettingsService },
     { RuntimeRegistry },
+    { RuntimeBinariesService },
   ] = await Promise.all([
     import('../../src/server/db'),
     import('../../src/server/settings'),
     import('../../src/server/provider-runtime'),
+    import('../../src/server/runtime-binaries'),
   ])
 
   const layer = Layer.mergeAll(
     KiriDbService.layer,
     KiriSettingsService.layer,
-    RuntimeRegistry.layer,
+    RuntimeRegistry.layer.pipe(Layer.provide(RuntimeBinariesService.layer)),
   )
   const result = await Effect.runPromise(Effect.gen(function* () {
     const db = yield* KiriDbService
@@ -44,10 +46,11 @@ try {
     const database = yield* db.get
     const kiriSettings = yield* settings.get
     const adapters = yield* registry.list
+    const databaseOpen = Reflect.get(database, 'open')
 
     return outputSchema.parse({
       ok: true,
-      dbOpen: Boolean(database.open),
+      dbOpen: Boolean(databaseOpen),
       defaultPiModel: kiriSettings.runtimes.pi.defaultModel,
       runtimeKinds: Object.keys(adapters).sort(),
       codexPromptRegistered: typeof adapters.codex.prompt === 'function',

@@ -8,6 +8,7 @@ import {
   RuntimeBinariesService,
   type RuntimeBinariesApi,
 } from './runtime-binaries'
+import { commonTerminalEnv, removeColorDisablingEnv } from './terminal-env'
 
 export type TerminalAgentLaunchConfig = {
   id: string
@@ -41,7 +42,7 @@ export type TerminalLaunchServiceApi = {
   }) => Effect.Effect<TerminalProcessLaunch, TerminalLaunchError>
 }
 
-export class TerminalLaunchService extends Context.Tag('@kiri/TerminalLaunch')<
+class TerminalLaunchService extends Context.Tag('@kiri/TerminalLaunch')<
   TerminalLaunchService,
   TerminalLaunchServiceApi
 >() {
@@ -131,15 +132,28 @@ function buildTerminalProcessLaunchEffect(
       }
     }
 
-    if (config.runtime === 'claude') return yield* claudeLaunch(config, context)
-    if (config.runtime === 'codex') return yield* codexLaunch(config, context)
-    return yield* piLaunch(config, context)
+    switch (config.runtime) {
+      case 'claude':
+        return yield* claudeLaunch(config, context)
+      case 'codex':
+        return yield* codexLaunch(config, context)
+      case 'pi':
+        return yield* piLaunch(config, context)
+      default:
+        return yield* unsupportedRuntime(config.runtime)
+    }
   })
+}
+
+function unsupportedRuntime(runtime: never) {
+  return Effect.fail(new TerminalLaunchError({
+    message: `Unsupported terminal runtime: ${String(runtime)}`,
+  }))
 }
 
 function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
   return Effect.gen(function* () {
-  const state = objectState(config.runtimeStateJson)
+  const state = yield* parseRuntimeState(config.runtimeStateJson)
   const homePath = context.env.KIRI_CLAUDE_HOME ?? stringValue(state.homePath)
   const args = [
     '--dangerously-skip-permissions',
@@ -257,7 +271,7 @@ function claudeProjectKey(cwd: string) {
 
 function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
   return Effect.gen(function* () {
-  const state = objectState(config.runtimeStateJson)
+  const state = yield* parseRuntimeState(config.runtimeStateJson)
   const resume = stringValue(state.resume) ?? stringValue(state.codexSessionId)
   const args = resume
     ? ['resume', '--dangerously-bypass-approvals-and-sandbox']
@@ -300,7 +314,7 @@ function baseTerminalEnv(
   extra?: NodeJS.ProcessEnv,
 ) {
   return Effect.gen(function* () {
-  const env = yield* context.runtimeBinaries.processEnv({
+  return removeColorDisablingEnv(yield* context.runtimeBinaries.processEnv({
     ...extra,
     ...commonTerminalEnv(),
     KIRI_AGENT_ID: config.id,
@@ -309,45 +323,36 @@ function baseTerminalEnv(
     KIRI_MODEL: config.model,
     KIRI_SESSION_DIR: config.sessionDir,
     ...(config.sessionFile ? { KIRI_SESSION_FILE: config.sessionFile } : {}),
-  })
-  delete env.NO_COLOR
-  delete env.NODE_DISABLE_COLORS
-  return env
+  }))
   })
 }
 
 function shellTerminalEnv(cwd: string, context: TerminalLaunchContext) {
   return Effect.gen(function* () {
-  const env = yield* context.runtimeBinaries.processEnv({
+  return removeColorDisablingEnv(yield* context.runtimeBinaries.processEnv({
     ...commonTerminalEnv(),
     KIRI_PROJECT_CWD: cwd,
-  })
-  delete env.NO_COLOR
-  delete env.NODE_DISABLE_COLORS
-  return env
+  }))
   })
 }
 
-function commonTerminalEnv() {
-  return {
-    TERM: 'xterm-256color',
-    COLORTERM: 'truecolor',
-    FORCE_COLOR: '3',
-    CLICOLOR: '1',
-    CLICOLOR_FORCE: '1',
-  }
+function parseRuntimeState(value: string | null | undefined) {
+  return Effect.try({
+    try: () => objectState(value),
+    catch: (error) => new TerminalLaunchError({
+      message: 'Invalid runtime state JSON',
+      cause: error,
+    }),
+  })
 }
 
 function objectState(value: string | null | undefined) {
   if (!value) return {}
-  try {
-    const parsed: unknown = JSON.parse(value)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {}
-  } catch {
-    return {}
+  const parsed: unknown = JSON.parse(value)
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return parsed as Record<string, unknown>
   }
+  throw new Error('Runtime state JSON must be an object')
 }
 
 function stringValue(value: unknown) {

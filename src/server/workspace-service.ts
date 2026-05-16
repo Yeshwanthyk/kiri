@@ -48,10 +48,8 @@ import {
 import { chooseProjectDirectory } from './directory-picker'
 import { refreshTerminalSessionDiffs } from './diff-refresh'
 import {
-  setAgentByProjectPreference,
-  setChatTypographyPreference,
-  setKeymapPreference,
-  setThemePreference,
+  UiPreferencesService,
+  type UiPreferencesApi,
 } from './preferences'
 import {
   answerAgentQuestion,
@@ -68,7 +66,7 @@ import {
   deleteSessionWithRuntimeCleanup,
 } from './runtime-cleanup'
 import { triggerScratchpadSession } from './scratchpad-trigger'
-import { ensureTerminalServer } from './terminal-server'
+import { TerminalServerService, type TerminalServerApi } from './terminal-server'
 
 type AgentDetailInput = z.infer<typeof agentDetailInputSchema>
 type DeleteProjectInput = z.infer<typeof deleteProjectInputSchema>
@@ -88,7 +86,7 @@ type DeleteScratchpadBlockInput = z.infer<typeof deleteScratchpadBlockInputSchem
 type TriggerScratchpadBlockInput = z.infer<typeof triggerScratchpadBlockInputSchema>
 
 type AgentLaunchConfig = ReturnType<typeof getAgentLaunchConfig>
-type TerminalServerConfig = Awaited<ReturnType<typeof ensureTerminalServer>>
+type TerminalServerConfig = Awaited<ReturnType<TerminalServerApi['ensure']>>
 
 export type WorkspaceServiceApi = {
   readonly snapshot: () => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
@@ -143,8 +141,22 @@ export class WorkspaceService extends Context.Tag('@kiri/WorkspaceService')<
   WorkspaceService,
   WorkspaceServiceApi
 >() {
-  static readonly layer = Layer.sync(WorkspaceService, () =>
-    WorkspaceService.of(makeWorkspaceService(liveWorkspaceServiceDependencies)))
+  static readonly layer = Layer.effect(
+    WorkspaceService,
+    Effect.gen(function* () {
+      const terminalServer = yield* TerminalServerService
+      const preferences = yield* UiPreferencesService
+      return WorkspaceService.of(makeWorkspaceService(liveWorkspaceServiceDependencies({
+        preferences,
+        terminalServer,
+      })))
+    }),
+  )
+
+  static readonly liveLayer = WorkspaceService.layer.pipe(Layer.provide(Layer.mergeAll(
+    TerminalServerService.liveLayer,
+    UiPreferencesService.layer,
+  )))
 }
 
 export type WorkspaceServiceDependencies = {
@@ -163,10 +175,14 @@ export type WorkspaceServiceDependencies = {
   readonly steerAgent: (input: SteerMessageInput) => Promise<unknown>
   readonly interruptAgent: (input: InterruptMessageInput) => Promise<unknown>
   readonly setAgentThinkingLevel: (input: SetThinkingLevelInput) => Promise<unknown>
-  readonly setThemePreference: (input: UiPreferences['theme']) => UiPreferences
-  readonly setKeymapPreference: (input: UiPreferences['keymap']) => UiPreferences
-  readonly setChatTypographyPreference: (input: UiPreferences['chatTypography']) => UiPreferences
-  readonly setAgentByProjectPreference: (input: UiPreferences['agentByProject']) => UiPreferences
+  readonly setThemePreference: (input: UiPreferences['theme']) => Effect.Effect<UiPreferences, unknown>
+  readonly setKeymapPreference: (input: UiPreferences['keymap']) => Effect.Effect<UiPreferences, unknown>
+  readonly setChatTypographyPreference: (
+    input: UiPreferences['chatTypography']
+  ) => Effect.Effect<UiPreferences, unknown>
+  readonly setAgentByProjectPreference: (
+    input: UiPreferences['agentByProject']
+  ) => Effect.Effect<UiPreferences, unknown>
   readonly resetAgentSession: (input: ResetSessionInput) => Promise<unknown>
   readonly forkAgentSession: (input: ForkSessionInput) => Promise<string>
   readonly reviewAgentSession: (input: ReviewSessionInput) => Promise<unknown>
@@ -180,40 +196,47 @@ export type WorkspaceServiceDependencies = {
   readonly triggerScratchpadSession: (input: TriggerScratchpadBlockInput) => Promise<{ readonly agentId: string }>
 }
 
-const liveWorkspaceServiceDependencies: WorkspaceServiceDependencies = {
-  getWorkspaceSnapshot,
-  getAgentDetail,
-  addProject,
-  deleteProject: deleteProjectWithRuntimeCleanup,
-  hideProject,
-  reorderProjects,
-  unhideProject,
-  chooseProjectDirectory,
-  deleteSession: deleteSessionWithRuntimeCleanup,
-  restoreSession,
-  renameSession,
-  promptAgent,
-  steerAgent,
-  interruptAgent,
-  setAgentThinkingLevel,
-  setThemePreference,
-  setKeymapPreference,
-  setChatTypographyPreference,
-  setAgentByProjectPreference,
-  resetAgentSession,
-  forkAgentSession,
-  reviewAgentSession,
-  answerAgentQuestion,
-  getAgentLaunchConfig,
-  ensureTerminalServer,
-  refreshTerminalSessionDiffs,
-  startSession,
-  addScratchpadBlock,
-  deleteScratchpadBlock,
-  triggerScratchpadSession,
+function liveWorkspaceServiceDependencies(
+  input: {
+    readonly preferences: UiPreferencesApi
+    readonly terminalServer: TerminalServerApi
+  },
+): WorkspaceServiceDependencies {
+  return {
+    getWorkspaceSnapshot,
+    getAgentDetail,
+    addProject,
+    deleteProject: deleteProjectWithRuntimeCleanup,
+    hideProject,
+    reorderProjects,
+    unhideProject,
+    chooseProjectDirectory,
+    deleteSession: deleteSessionWithRuntimeCleanup,
+    restoreSession,
+    renameSession,
+    promptAgent,
+    steerAgent,
+    interruptAgent,
+    setAgentThinkingLevel,
+    setThemePreference: input.preferences.setTheme,
+    setKeymapPreference: input.preferences.setKeymap,
+    setChatTypographyPreference: input.preferences.setChatTypography,
+    setAgentByProjectPreference: input.preferences.setAgentByProject,
+    resetAgentSession,
+    forkAgentSession,
+    reviewAgentSession,
+    answerAgentQuestion,
+    getAgentLaunchConfig,
+    ensureTerminalServer: input.terminalServer.ensure,
+    refreshTerminalSessionDiffs,
+    startSession,
+    addScratchpadBlock,
+    deleteScratchpadBlock,
+    triggerScratchpadSession,
+  }
 }
 
-const liveWorkspaceServiceLayer = WorkspaceService.layer
+const liveWorkspaceServiceLayer = WorkspaceService.liveLayer
 
 export function makeWorkspaceService(
   dependencies: WorkspaceServiceDependencies,
@@ -230,87 +253,66 @@ export function makeWorkspaceService(
       yield* effect
       return yield* syncCall(label, dependencies.getWorkspaceSnapshot)
     })
+  const syncMethod = <Input, Output>(
+    label: string,
+    call: (input: Input) => Output,
+  ) =>
+    Effect.fn(label)(function* (input: Input) {
+      return yield* syncCall(label, () => call(input))
+    })
+  const syncIdMethod = <Input extends { readonly id: string }, Output>(
+    label: string,
+    call: (id: string) => Output,
+  ) => syncMethod(label, (input: Input) => call(input.id))
+  const snapshotAfterPromiseMethod = <Input>(
+    label: string,
+    call: (input: Input) => Promise<unknown>,
+  ) =>
+    Effect.fn(label)(function* (input: Input) {
+      return yield* snapshotAfter(
+        `${label}.snapshot`,
+        promiseCall(label, () => call(input)),
+      )
+    })
+  const effectMethod = <Input, Output>(
+    label: string,
+    call: (input: Input) => Effect.Effect<Output, unknown>,
+  ) =>
+    Effect.fn(label)(function* (input: Input) {
+      return yield* call(input).pipe(
+        Effect.mapError((error) => workspaceServiceError(label, error)),
+      )
+    })
 
   return {
     snapshot,
-    agentDetail: Effect.fn('WorkspaceService.agentDetail')(function* (input) {
-      return yield* syncCall('WorkspaceService.agentDetail', () => dependencies.getAgentDetail(input))
-    }),
-    addProject: Effect.fn('WorkspaceService.addProject')(function* (input) {
-      return yield* syncCall('WorkspaceService.addProject', () => dependencies.addProject(input))
-    }),
-    deleteProject: Effect.fn('WorkspaceService.deleteProject')(function* (input) {
-      return yield* syncCall('WorkspaceService.deleteProject', () => dependencies.deleteProject(input.id))
-    }),
-    hideProject: Effect.fn('WorkspaceService.hideProject')(function* (input) {
-      return yield* syncCall('WorkspaceService.hideProject', () => dependencies.hideProject(input.id))
-    }),
-    reorderProjects: Effect.fn('WorkspaceService.reorderProjects')(function* (input) {
-      return yield* syncCall('WorkspaceService.reorderProjects', () => dependencies.reorderProjects(input))
-    }),
-    unhideProject: Effect.fn('WorkspaceService.unhideProject')(function* (input) {
-      return yield* syncCall('WorkspaceService.unhideProject', () => dependencies.unhideProject(input.id))
-    }),
+    agentDetail: syncMethod('WorkspaceService.agentDetail', dependencies.getAgentDetail),
+    addProject: syncMethod('WorkspaceService.addProject', dependencies.addProject),
+    deleteProject: syncIdMethod('WorkspaceService.deleteProject', dependencies.deleteProject),
+    hideProject: syncIdMethod('WorkspaceService.hideProject', dependencies.hideProject),
+    reorderProjects: syncMethod('WorkspaceService.reorderProjects', dependencies.reorderProjects),
+    unhideProject: syncIdMethod('WorkspaceService.unhideProject', dependencies.unhideProject),
     chooseProjectDirectory: Effect.fn('WorkspaceService.chooseProjectDirectory')(function* () {
       return yield* syncCall('WorkspaceService.chooseProjectDirectory', dependencies.chooseProjectDirectory)
     }),
-    deleteSession: Effect.fn('WorkspaceService.deleteSession')(function* (input) {
-      return yield* syncCall('WorkspaceService.deleteSession', () => dependencies.deleteSession(input))
-    }),
-    restoreSession: Effect.fn('WorkspaceService.restoreSession')(function* (input) {
-      return yield* syncCall('WorkspaceService.restoreSession', () => dependencies.restoreSession(input))
-    }),
-    renameSession: Effect.fn('WorkspaceService.renameSession')(function* (input) {
-      return yield* syncCall('WorkspaceService.renameSession', () => dependencies.renameSession(input))
-    }),
-    sendMessage: Effect.fn('WorkspaceService.sendMessage')(function* (input) {
-      return yield* snapshotAfter(
-        'WorkspaceService.sendMessage.snapshot',
-        promiseCall('WorkspaceService.sendMessage', () => dependencies.promptAgent(input)),
-      )
-    }),
-    steerMessage: Effect.fn('WorkspaceService.steerMessage')(function* (input) {
-      return yield* snapshotAfter(
-        'WorkspaceService.steerMessage.snapshot',
-        promiseCall('WorkspaceService.steerMessage', () => dependencies.steerAgent(input)),
-      )
-    }),
-    interruptMessage: Effect.fn('WorkspaceService.interruptMessage')(function* (input) {
-      return yield* snapshotAfter(
-        'WorkspaceService.interruptMessage.snapshot',
-        promiseCall('WorkspaceService.interruptMessage', () => dependencies.interruptAgent(input)),
-      )
-    }),
-    setThinkingLevel: Effect.fn('WorkspaceService.setThinkingLevel')(function* (input) {
-      return yield* snapshotAfter(
-        'WorkspaceService.setThinkingLevel.snapshot',
-        promiseCall('WorkspaceService.setThinkingLevel', () => dependencies.setAgentThinkingLevel(input)),
-      )
-    }),
-    setThemePreference: Effect.fn('WorkspaceService.setThemePreference')(function* (input) {
-      return yield* syncCall('WorkspaceService.setThemePreference', () => dependencies.setThemePreference(input))
-    }),
-    setKeymapPreference: Effect.fn('WorkspaceService.setKeymapPreference')(function* (input) {
-      return yield* syncCall('WorkspaceService.setKeymapPreference', () => dependencies.setKeymapPreference(input))
-    }),
-    setChatTypographyPreference: Effect.fn('WorkspaceService.setChatTypographyPreference')(function* (input) {
-      return yield* syncCall(
-        'WorkspaceService.setChatTypographyPreference',
-        () => dependencies.setChatTypographyPreference(input),
-      )
-    }),
-    setAgentByProjectPreference: Effect.fn('WorkspaceService.setAgentByProjectPreference')(function* (input) {
-      return yield* syncCall(
-        'WorkspaceService.setAgentByProjectPreference',
-        () => dependencies.setAgentByProjectPreference(input),
-      )
-    }),
-    resetSession: Effect.fn('WorkspaceService.resetSession')(function* (input) {
-      return yield* snapshotAfter(
-        'WorkspaceService.resetSession.snapshot',
-        promiseCall('WorkspaceService.resetSession', () => dependencies.resetAgentSession(input)),
-      )
-    }),
+    deleteSession: syncMethod('WorkspaceService.deleteSession', dependencies.deleteSession),
+    restoreSession: syncMethod('WorkspaceService.restoreSession', dependencies.restoreSession),
+    renameSession: syncMethod('WorkspaceService.renameSession', dependencies.renameSession),
+    sendMessage: snapshotAfterPromiseMethod('WorkspaceService.sendMessage', dependencies.promptAgent),
+    steerMessage: snapshotAfterPromiseMethod('WorkspaceService.steerMessage', dependencies.steerAgent),
+    interruptMessage: snapshotAfterPromiseMethod('WorkspaceService.interruptMessage', dependencies.interruptAgent),
+    setThinkingLevel: snapshotAfterPromiseMethod('WorkspaceService.setThinkingLevel', dependencies.setAgentThinkingLevel),
+    setThemePreference: effectMethod('WorkspaceService.setThemePreference', dependencies.setThemePreference),
+    setKeymapPreference: effectMethod('WorkspaceService.setKeymapPreference', dependencies.setKeymapPreference),
+    setChatTypographyPreference: effectMethod(
+      'WorkspaceService.setChatTypographyPreference',
+      dependencies.setChatTypographyPreference,
+    ),
+    setAgentByProjectPreference: effectMethod(
+      'WorkspaceService.setAgentByProjectPreference',
+      dependencies.setAgentByProjectPreference,
+    ),
+    resetSession: snapshotAfterPromiseMethod('WorkspaceService.resetSession', dependencies.resetAgentSession),
     forkSession: Effect.fn('WorkspaceService.forkSession')(function* (input) {
       const agentId = yield* promiseCall(
         'WorkspaceService.forkSession',
@@ -322,18 +324,8 @@ export function makeWorkspaceService(
       )
       return { agentId, snapshot: forkSnapshot }
     }),
-    reviewSession: Effect.fn('WorkspaceService.reviewSession')(function* (input) {
-      return yield* snapshotAfter(
-        'WorkspaceService.reviewSession.snapshot',
-        promiseCall('WorkspaceService.reviewSession', () => dependencies.reviewAgentSession(input)),
-      )
-    }),
-    answerQuestion: Effect.fn('WorkspaceService.answerQuestion')(function* (input) {
-      return yield* snapshotAfter(
-        'WorkspaceService.answerQuestion.snapshot',
-        promiseCall('WorkspaceService.answerQuestion', () => dependencies.answerAgentQuestion(input)),
-      )
-    }),
+    reviewSession: snapshotAfterPromiseMethod('WorkspaceService.reviewSession', dependencies.reviewAgentSession),
+    answerQuestion: snapshotAfterPromiseMethod('WorkspaceService.answerQuestion', dependencies.answerAgentQuestion),
     terminalConfig: Effect.fn('WorkspaceService.terminalConfig')(function* (input) {
       const config = yield* syncCall(
         'WorkspaceService.terminalConfig.launchConfig',
@@ -350,24 +342,16 @@ export function makeWorkspaceService(
         model: config.model,
       }
     }),
-    refreshTerminalDiffs: Effect.fn('WorkspaceService.refreshTerminalDiffs')(function* (input) {
-      return yield* syncCall(
-        'WorkspaceService.refreshTerminalDiffs',
-        () => dependencies.refreshTerminalSessionDiffs(input.agentId),
-      )
-    }),
-    startSession: Effect.fn('WorkspaceService.startSession')(function* (input) {
-      return yield* syncCall('WorkspaceService.startSession', () => dependencies.startSession(input))
-    }),
-    addScratchpadBlock: Effect.fn('WorkspaceService.addScratchpadBlock')(function* (input) {
-      return yield* syncCall('WorkspaceService.addScratchpadBlock', () => dependencies.addScratchpadBlock(input))
-    }),
-    deleteScratchpadBlock: Effect.fn('WorkspaceService.deleteScratchpadBlock')(function* (input) {
-      return yield* syncCall(
-        'WorkspaceService.deleteScratchpadBlock',
-        () => dependencies.deleteScratchpadBlock(input.id),
-      )
-    }),
+    refreshTerminalDiffs: syncMethod(
+      'WorkspaceService.refreshTerminalDiffs',
+      (input: RefreshTerminalDiffsInput) => dependencies.refreshTerminalSessionDiffs(input.agentId),
+    ),
+    startSession: syncMethod('WorkspaceService.startSession', dependencies.startSession),
+    addScratchpadBlock: syncMethod('WorkspaceService.addScratchpadBlock', dependencies.addScratchpadBlock),
+    deleteScratchpadBlock: syncIdMethod(
+      'WorkspaceService.deleteScratchpadBlock',
+      dependencies.deleteScratchpadBlock,
+    ),
     triggerScratchpadBlock: Effect.fn('WorkspaceService.triggerScratchpadBlock')(function* (input) {
       const { agentId } = yield* promiseCall(
         'WorkspaceService.triggerScratchpadBlock',
@@ -382,7 +366,7 @@ export function makeWorkspaceService(
   }
 }
 
-export function runWorkspaceService<A>(
+function runWorkspaceService<A>(
   effect: Effect.Effect<A, WorkspaceServiceError, WorkspaceService>,
 ) {
   return Effect.runPromise(

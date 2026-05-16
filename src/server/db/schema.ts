@@ -16,7 +16,7 @@ export const projectDbRowSchema = z.object({
   hiddenAt: z.string().nullable(),
 })
 
-export const agentDbRowSchema = z.object({
+const agentDbRowSchema = z.object({
   id: z.string(),
   projectId: z.string(),
   slot: z.string(),

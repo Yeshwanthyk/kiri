@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { runTsxJson } from '../harness/run-tsx'
 
 const harnessOutputSchema = z.object({
   ok: z.literal(true),
@@ -10,15 +10,10 @@ const harnessOutputSchema = z.object({
 
 describe('task progress persistence', () => {
   it('clears persisted task snapshots when a session resets', () => {
-    const output = execFileSync(
-      'pnpm',
-      ['--silent', 'tsx', 'tests/harness/task-progress-db-harness.ts'],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
-      },
+    const result = runTsxJson(
+      'tests/harness/task-progress-db-harness.ts',
+      (output) => harnessOutputSchema.parse(output),
     )
-    const result = harnessOutputSchema.parse(JSON.parse(output))
 
     expect(result.beforeReset).toBe(1)
     expect(result.afterReset).toBe(0)

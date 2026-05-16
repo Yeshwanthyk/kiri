@@ -1,11 +1,12 @@
 import { describe, expect, it } from '@effect/vitest'
-import { Effect } from 'effect'
+import { Effect, Layer } from 'effect'
 import {
   makeRuntimeRegistry,
   RuntimeRegistry,
   RuntimeRegistryError,
   runtimeAdapters,
 } from '../../src/server/provider-runtime'
+import { RuntimeBinariesService } from '../../src/server/runtime-binaries'
 
 describe('provider runtime registry', () => {
   it('exposes adapter capabilities by runtime kind', () => {
@@ -23,7 +24,7 @@ describe('provider runtime registry', () => {
     expect(runtimeAdapters.codex.reset).toBeTypeOf('function')
     expect(runtimeAdapters.codex.review).toBeTypeOf('function')
 
-    expect(runtimeAdapters.claude.prompt).toBeTypeOf('function')
+    expect(runtimeAdapters.claude.prompt).toBeUndefined()
     expect(runtimeAdapters.claude.steer).toBeUndefined()
     expect(runtimeAdapters.claude.interrupt).toBeUndefined()
     expect(runtimeAdapters.claude.setThinkingLevel).toBeUndefined()
@@ -31,17 +32,31 @@ describe('provider runtime registry', () => {
     expect(runtimeAdapters.claude.answerQuestion).toBeUndefined()
   })
 
-  it('rejects chat prompts for terminal-only Claude sessions', async () => {
-    await expect(runtimeAdapters.claude.prompt({ agentId: 'agent-1', text: 'hello' }))
-      .rejects.toThrow('Claude sessions run in terminal mode only')
-  })
-
   it.effect('exposes the registry as an Effect service', () =>
     Effect.gen(function* () {
       const registry = yield* RuntimeRegistry
       const codex = yield* registry.get('codex')
+      if (!codex.prompt) throw new Error('Expected Codex prompt adapter')
       expect(codex.prompt).toBeTypeOf('function')
-    }).pipe(Effect.provide(RuntimeRegistry.layer)),
+    }).pipe(Effect.provide(RuntimeRegistry.liveLayer)),
+  )
+
+  it.effect('builds Codex runtime adapters from injected runtime binaries', () =>
+    Effect.gen(function* () {
+      const registry = yield* RuntimeRegistry
+      const codex = yield* registry.get('codex')
+      expect(codex.prompt).toBeTypeOf('function')
+    }).pipe(Effect.provide(RuntimeRegistry.layer.pipe(
+      Layer.provide(Layer.succeed(RuntimeBinariesService, {
+        resolveExecutable: (input) => {
+          throw new Error(`unexpected resolve: ${JSON.stringify(input)}`)
+        },
+        processEnv: () => Effect.succeed({
+          PATH: '/bin',
+          KIRI_CODEX_APP_SERVER_URL: 'ws://127.0.0.1:65535',
+        }),
+      })),
+    ))),
   )
 
   it.effect('routes cleanup through the injected registry cleanup handlers', () =>

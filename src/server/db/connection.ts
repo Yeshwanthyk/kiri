@@ -12,7 +12,7 @@ export function openKiriDatabase(dbPath: string) {
   return database
 }
 
-export function configureKiriDatabase(database: DatabaseSync) {
+function configureKiriDatabase(database: DatabaseSync) {
   database.exec('PRAGMA busy_timeout = 5000')
   database.exec('PRAGMA journal_mode = WAL')
   database.exec('PRAGMA foreign_keys = ON')

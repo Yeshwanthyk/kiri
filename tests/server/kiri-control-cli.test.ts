@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { execFileSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { runTsxJsonWithArgs } from '../harness/run-tsx'
 
 const projectRoot = process.cwd()
 const tempRoots: string[] = []
@@ -177,14 +177,8 @@ describe('kirictl', () => {
 })
 
 function runJson(env: NodeJS.ProcessEnv, args: string[]) {
-  const output = execFileSync(
-    'pnpm',
-    ['exec', 'tsx', 'src/cli/kirictl.ts', ...args],
-    {
-      cwd: projectRoot,
-      env,
-      encoding: 'utf8',
-    },
-  )
-  return JSON.parse(output) as unknown
+  return runTsxJsonWithArgs('src/cli/kirictl.ts', args, (output) => output, {
+    cwd: projectRoot,
+    env,
+  })
 }

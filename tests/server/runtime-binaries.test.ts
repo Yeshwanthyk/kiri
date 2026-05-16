@@ -26,6 +26,23 @@ describe('runtime binaries', () => {
     }),
   )
 
+  it.effect('resolves configured paths from service-owned env', () =>
+    Effect.gen(function* () {
+      const binaries = makeRuntimeBinariesService({
+        getEnv: () => ({ PATH: '/usr/bin', KIRI_CODEX_BIN: ' /env/codex ' }),
+        getHomeDir: () => '/Users/yesh',
+        exists: () => false,
+      })
+
+      const command = yield* binaries.resolveExecutable({
+        command: 'codex',
+        configuredPathEnvKey: 'KIRI_CODEX_BIN',
+      })
+
+      expect(command).toBe('/env/codex')
+    }),
+  )
+
   it.effect('keeps PATH lookup ahead of desktop fallback paths', () =>
     Effect.gen(function* () {
       const binaries = makeRuntimeBinariesService({

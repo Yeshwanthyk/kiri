@@ -238,4 +238,47 @@ describe('timeline write repository', () => {
       closeFixture(fixture)
     }
   })
+
+  it('rolls back diff replacement when a later insert fails', () => {
+    const fixture = createFixture()
+    try {
+      replaceAgentDiffArtifactsRows(fixture.database, {
+        agentId: fixture.agentId,
+        diffs: [
+          { title: 'Old', path: 'src/old.ts', patch: 'old patch' },
+        ],
+      })
+      fixture.database.exec(`
+        CREATE TEMP TRIGGER fail_diff_insert
+        BEFORE INSERT ON diff_artifacts
+        WHEN NEW.path = 'src/fail.ts'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced diff insert failure');
+        END;
+      `)
+
+      expect(() => replaceAgentDiffArtifactsRows(fixture.database, {
+        agentId: fixture.agentId,
+        diffs: [
+          { title: 'New', path: 'src/new.ts', patch: 'new patch' },
+          { title: 'Fail', path: 'src/fail.ts', patch: 'fail patch' },
+        ],
+      })).toThrow('forced diff insert failure')
+
+      expect(
+        fixture.database
+          .prepare(
+            `
+              SELECT title, path, patch
+              FROM diff_artifacts
+              WHERE agent_id = ?
+              ORDER BY path ASC
+            `,
+          )
+          .all(fixture.agentId),
+      ).toEqual([{ title: 'Old', path: 'src/old.ts', patch: 'old patch' }])
+    } finally {
+      closeFixture(fixture)
+    }
+  })
 })

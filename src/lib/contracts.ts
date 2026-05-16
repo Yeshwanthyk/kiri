@@ -19,10 +19,18 @@ export function sessionInterfaceModeForRuntime(
   runtime: RuntimeKind,
   interfaceMode?: SessionInterfaceMode,
 ): SessionInterfaceMode {
-  return runtime === 'claude' ? 'terminal' : interfaceMode ?? 'gui'
+  switch (runtime) {
+    case 'claude':
+      return 'terminal'
+    case 'codex':
+    case 'pi':
+      return interfaceMode ?? 'gui'
+    default:
+      return assertNeverRuntime(runtime)
+  }
 }
 
-export const terminalModes = ['runtime', 'shell'] as const
+const terminalModes = ['runtime', 'shell'] as const
 export const terminalModeSchema = z.enum(terminalModes)
 export type TerminalMode = z.infer<typeof terminalModeSchema>
 
@@ -201,15 +209,20 @@ const runtimeSettingsSchema = z.object({
   contextWindows: z.record(z.string(), z.number().int().positive()).optional(),
 })
 type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>
+const runtimeSettingsSchemaByKind = {
+  pi: runtimeSettingsSchema,
+  codex: runtimeSettingsSchema,
+  claude: runtimeSettingsSchema,
+} satisfies Record<RuntimeKind, typeof runtimeSettingsSchema>
 
 export const kiriSettingsSchema = z.object({
-  runtimes: z.object({
-    pi: runtimeSettingsSchema,
-    codex: runtimeSettingsSchema,
-    claude: runtimeSettingsSchema,
-  }),
+  runtimes: z.object(runtimeSettingsSchemaByKind),
 })
 export type KiriSettings = z.infer<typeof kiriSettingsSchema>
+
+function assertNeverRuntime(runtime: never): never {
+  throw new Error(`Unhandled runtime: ${String(runtime)}`)
+}
 
 const projectRowSchema = z.object({
   id: z.string(),
@@ -348,7 +361,7 @@ export const refreshTerminalDiffsInputSchema = z.object({
 })
 type RefreshTerminalDiffsInput = z.infer<typeof refreshTerminalDiffsInputSchema>
 
-export const terminalConfigSchema = z.object({
+const terminalConfigSchema = z.object({
   host: z.string(),
   port: z.number().int().nonnegative(),
   path: z.string(),

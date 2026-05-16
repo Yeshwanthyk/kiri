@@ -91,7 +91,9 @@ describe('runtime state repository', () => {
       database
         .prepare('UPDATE agent_slots SET runtime_state_json = ? WHERE id = ?')
         .run('{not-json', agentId)
-      expect(getAgentRuntimeState(database, agentId)).toEqual({})
+      expect(() => getAgentRuntimeState(database, agentId)).toThrow(
+        `Invalid runtime state JSON for agent ${agentId}`,
+      )
 
       setAgentStatus(database, agentId, 'running')
       expect(database.prepare('SELECT status FROM agent_slots WHERE id = ?').get(agentId))
