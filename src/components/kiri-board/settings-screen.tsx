@@ -283,7 +283,7 @@ function ChatTypographySettingsPanel({
         <div className="settings-lane-title">
           <p className="settings-kicker">Typography</p>
           <h2>Reading size &amp; code font</h2>
-          <p>Affects chat messages, the composer, and inline code.</p>
+          <p>Affects chat messages, the composer, inline code, and terminals.</p>
         </div>
         <button
           type="button"

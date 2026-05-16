@@ -758,6 +758,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         terminalFocusRequest={terminalFocusRequest}
         themeMode={themeSelection.mode}
         keymap={keymap}
+        chatTypography={chatTypography}
         startSessionKey={keymap.startSession}
         onStartSession={() => openSessionLauncher()}
         onDeleteSession={handleDeleteSession}

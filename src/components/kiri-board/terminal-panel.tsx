@@ -7,10 +7,18 @@ import * as React from 'react'
 import type { AgentCell, ProjectRow, TerminalConfig, TerminalMode } from '~/lib/contracts'
 import { terminalConfigQuery } from '~/server/workspace'
 import type { ThemeMode } from '~/theme/kiri-themes'
+import {
+  chatFontSizes,
+  monoFonts,
+  type ChatTypographySettings,
+} from './storage'
 
 type XTermTerminalInstance = InstanceType<(typeof import('@xterm/xterm'))['Terminal']>
 type XTermFitAddonInstance = InstanceType<(typeof import('@xterm/addon-fit'))['FitAddon']>
 type TerminalDisposable = { dispose: () => void }
+const wheelDeltaPixel = 0
+const wheelDeltaLine = 1
+const wheelDeltaPage = 2
 
 export function TerminalPanel({
   agent,
@@ -19,6 +27,7 @@ export function TerminalPanel({
   project,
   themeMode,
   toggleFocusKey,
+  typography,
   visible,
 }: {
   agent: AgentCell
@@ -27,6 +36,7 @@ export function TerminalPanel({
   project: ProjectRow
   themeMode: ThemeMode
   toggleFocusKey: string
+  typography: ChatTypographySettings
   visible: boolean
 }) {
   const getTerminalConfig = useServerFn(terminalConfigQuery)
@@ -35,6 +45,7 @@ export function TerminalPanel({
   const terminalRef = React.useRef<XTermTerminalInstance | null>(null)
   const fitAddonRef = React.useRef<XTermFitAddonInstance | null>(null)
   const themeModeRef = React.useRef(themeMode)
+  const typographyRef = React.useRef(typography)
   const transcriptEnabledRef = React.useRef(false)
   const [status, setStatus] = React.useState('Connecting')
   const [transcript, setTranscript] = React.useState<string | null>(null)
@@ -46,6 +57,14 @@ export function TerminalPanel({
   React.useEffect(() => {
     themeModeRef.current = themeMode
   }, [themeMode])
+
+  React.useEffect(() => {
+    typographyRef.current = typography
+    const term = terminalRef.current
+    if (!term) return
+    applyTerminalTypography(term, typography)
+    fitAddonRef.current?.fit()
+  }, [typography])
 
   React.useEffect(() => {
     if (!visible) return
@@ -100,9 +119,10 @@ export function TerminalPanel({
         ])
         if (disposed) return
 
+        const typographyOptions = terminalTypographyOptions(typographyRef.current)
         term = new Terminal({
-          fontSize: 13,
-          fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+          fontSize: typographyOptions.fontSize,
+          fontFamily: typographyOptions.fontFamily,
           cursorBlink: true,
           convertEol: true,
           scrollback: 1000,
@@ -119,6 +139,15 @@ export function TerminalPanel({
             return false
           }
           return true
+        })
+        term.attachCustomWheelEventHandler((event) => {
+          if (!terminalShouldCustomScrollWheel(term?.buffer.active)) return true
+          const lines = terminalWheelScrollLines(event)
+          if (lines === 0) return true
+          event.preventDefault()
+          event.stopPropagation()
+          term?.scrollLines(lines)
+          return false
         })
         fitAddon.fit()
         resizeObserver = new ResizeObserver(() => {
@@ -228,6 +257,40 @@ export function TerminalPanel({
       ) : null}
     </section>
   )
+}
+
+export function terminalTypographyOptions(settings: ChatTypographySettings) {
+  const tokens = chatFontSizes[settings.fontSize]
+  return {
+    fontSize: Number.parseInt(tokens.size, 10),
+    fontFamily: monoFonts[settings.monoFont].stack,
+  }
+}
+
+function applyTerminalTypography(
+  term: XTermTerminalInstance,
+  settings: ChatTypographySettings,
+) {
+  const options = terminalTypographyOptions(settings)
+  term.options.fontSize = options.fontSize
+  term.options.fontFamily = options.fontFamily
+}
+
+export function terminalWheelScrollLines(event: Pick<WheelEvent, 'deltaMode' | 'deltaY'>) {
+  if (event.deltaY === 0) return 0
+  const magnitude = Math.abs(event.deltaY)
+  const lines = event.deltaMode === wheelDeltaPage
+    ? 10
+    : event.deltaMode === wheelDeltaLine
+      ? Math.ceil(magnitude)
+      : Math.ceil(magnitude / 40)
+  return Math.sign(event.deltaY) * Math.max(1, lines)
+}
+
+export function terminalShouldCustomScrollWheel(
+  buffer: { readonly type: 'normal' | 'alternate'; readonly baseY: number } | undefined,
+) {
+  return buffer?.type === 'normal' && buffer.baseY > 0
 }
 
 function isTerminalToggleFocusEvent(event: KeyboardEvent, key: string) {

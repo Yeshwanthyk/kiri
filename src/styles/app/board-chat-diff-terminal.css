@@ -2202,9 +2202,18 @@
 }
 
 .terminal-host .xterm {
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
   padding: 8px 10px;
+}
+
+.terminal-host .xterm-viewport {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  touch-action: pan-y;
 }
 
 .terminal-transcript {

@@ -25,6 +25,7 @@ import { TerminalPanel } from './terminal-panel'
 import { mergeAgentDetail, prependAgentDetailPages } from './agent-detail'
 import type { RefreshAgentDetail, SidebarTab } from './board-types'
 import type { KeymapSettings } from './navigation'
+import type { ChatTypographySettings } from './storage'
 
 type OlderDetailPage = {
   readonly agentId: string
@@ -42,6 +43,7 @@ export function SelectedAgentPane({
   terminalFocusRequest,
   themeMode,
   keymap,
+  chatTypography,
   startSessionKey,
   onStartSession,
   onDeleteSession,
@@ -70,6 +72,7 @@ export function SelectedAgentPane({
   terminalFocusRequest: number
   themeMode: ThemeMode
   keymap: KeymapSettings
+  chatTypography: ChatTypographySettings
   startSessionKey: string
   onStartSession: () => void
   onDeleteSession: (agentId: string) => void
@@ -342,6 +345,7 @@ export function SelectedAgentPane({
           agent={agent}
           focusRequest={terminalFocusRequest}
           toggleFocusKey={keymap.toggleTerminalFocus}
+          typography={chatTypography}
           mode={visibleTerminalMode}
           project={selectedProject}
           themeMode={themeMode}
