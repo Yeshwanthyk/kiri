@@ -411,6 +411,24 @@ describe('deriveAgentTimelineRows', () => {
       startedAt: now,
     })
   })
+
+  it('applies the mounted row budget while deriving rows', () => {
+    const rows = deriveAgentTimelineRows(
+      agent({
+        messages: Array.from({ length: 8 }, (_, index) =>
+          message(`m${index}`, index % 2 === 0 ? 'user' : 'assistant', `message ${index}`),
+        ),
+      }),
+      '/repo',
+      { maxRows: 3 },
+    )
+
+    expect(rows.map((row) => row.id)).toEqual([
+      'message:m5',
+      'message:m6',
+      'message:m7',
+    ])
+  })
 })
 
 describe('timeline helpers', () => {

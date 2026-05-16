@@ -5,7 +5,7 @@ import {
   type ThemeSelection,
 } from '~/theme/kiri-themes'
 
-export const keymapActions = [
+const keymapActions = [
   'projectPrev',
   'projectNext',
   'agentPrev',
@@ -54,10 +54,10 @@ export const defaultKeymap: KeymapSettings = {
   toggleTerminalFocus: 'tab',
 }
 
-export const chatFontSizeOptions = ['compact', 'comfortable', 'large', 'xlarge'] as const
+const chatFontSizeOptions = ['compact', 'comfortable', 'large', 'xlarge'] as const
 export type ChatFontSize = (typeof chatFontSizeOptions)[number]
 
-export const monoFontOptions = [
+const monoFontOptions = [
   'jetbrains',
   'fira',
   'plex',

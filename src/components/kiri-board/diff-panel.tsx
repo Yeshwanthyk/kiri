@@ -12,7 +12,13 @@ import { isEditableTarget } from './board-types'
 
 type DiffStyle = 'unified' | 'split'
 
-export function DiffPanel({ agent, themeMode }: { agent: AgentCell; themeMode: ThemeMode }) {
+type DiffPanelProps = {
+  agent: AgentCell
+  themeMode: ThemeMode
+  preloadedDiffHtmlById?: ReadonlyMap<string, string>
+}
+
+export function DiffPanel({ agent, themeMode, preloadedDiffHtmlById }: DiffPanelProps) {
   const [selectedDiffId, setSelectedDiffId] = React.useState<string | null>(null)
   const [diffStyle, setDiffStyle] = React.useState<DiffStyle>('unified')
   const [fullscreen, setFullscreen] = React.useState(false)
@@ -170,6 +176,7 @@ export function DiffPanel({ agent, themeMode }: { agent: AgentCell; themeMode: T
             key={`${diff.id}:${diffStyle}:${themeMode}`}
             patch={diff.patch}
             disableWorkerPool
+            prerenderedHTML={preloadedDiffHtmlById?.get(diff.id)}
             options={{
               diffStyle,
               overflow: 'wrap',

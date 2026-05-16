@@ -35,6 +35,10 @@ export type TimelineWorkEntry = {
   timestamp: string
 }
 
+type TimelineRowsOptions = {
+  readonly maxRows?: number
+}
+
 export function timelineRowsContentVersion(rows: AgentTimelineRow[]) {
   return rows.map((row) => {
     if (row.kind === 'message') return `${row.id}:${row.message.text.length}`
@@ -46,11 +50,16 @@ export function timelineRowsContentVersion(rows: AgentTimelineRow[]) {
   }).join('|')
 }
 
-export function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTimelineRow[] {
+export function deriveAgentTimelineRows(
+  agent: AgentCell,
+  cwd: string,
+  options: TimelineRowsOptions = {},
+): AgentTimelineRow[] {
   const rows: AgentTimelineRow[] = []
   let workEntries: TimelineWorkEntry[] = []
   const usedDiffIds = new Set<string>()
   const diffByPath = createDiffPathMap(agent.diffs, cwd)
+  const maxRows = options.maxRows
   const timeline = agent.timeline.length
     ? agent.timeline
     : agent.messages.map((message) => ({
@@ -60,9 +69,15 @@ export function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTim
         message,
       }))
 
+  function pushRow(row: AgentTimelineRow) {
+    rows.push(row)
+    if (maxRows === undefined) return
+    while (rows.length > maxRows) rows.shift()
+  }
+
   function flushWork() {
     if (workEntries.length === 0) return
-    rows.push({
+    pushRow({
       kind: 'work',
       id: `work:${workEntries[0]?.id}`,
       startedAt: workEntries[0]?.timestamp ?? new Date(0).toISOString(),
@@ -104,7 +119,7 @@ export function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTim
     }
 
     flushWork()
-    rows.push({
+    pushRow({
       kind: 'message',
       id: `message:${item.message.id}`,
       message: item.message,
@@ -112,11 +127,11 @@ export function deriveAgentTimelineRows(agent: AgentCell, cwd: string): AgentTim
   }
 
   flushWork()
-  appendUnmatchedDiffEntries(rows, agent.diffs, usedDiffIds, cwd)
+  appendUnmatchedDiffEntries(rows, agent.diffs, usedDiffIds, cwd, pushRow)
 
   if (agent.status === 'running') {
     const lastRow = rows[rows.length - 1]
-    rows.push({
+    pushRow({
       kind: 'working',
       id: 'working-indicator',
       startedAt: lastRow?.kind === 'message' ? lastRow.message.timestamp : null,
@@ -131,6 +146,7 @@ function appendUnmatchedDiffEntries(
   diffs: DiffArtifact[],
   usedDiffIds: Set<string>,
   cwd: string,
+  pushRow: (row: AgentTimelineRow) => void,
 ) {
   const entries = diffs.flatMap((diff) =>
     usedDiffIds.has(diff.id) ? [] : [diffArtifactToWorkEntry(diff, cwd)],
@@ -144,7 +160,7 @@ function appendUnmatchedDiffEntries(
     return
   }
 
-  rows.push({
+  pushRow({
     kind: 'work',
     id: `work:${entries[0]?.id}`,
     startedAt: entries[0]?.timestamp ?? new Date(0).toISOString(),

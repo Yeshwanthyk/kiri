@@ -76,15 +76,6 @@ export function readStoredThemeSelection(storage?: StorageLike): ThemeSelection 
   }
 }
 
-export function saveThemeSelection(
-  selection: ThemeSelection,
-  storage?: StorageLike,
-): ThemeSelection {
-  const store = storage ?? window.localStorage
-  store.setItem(themeStorageKey, JSON.stringify(selection))
-  return selection
-}
-
 export function readStoredChatTypography(
   storage?: StorageLike,
 ): ChatTypographySettings {
@@ -173,18 +164,6 @@ export function readStoredAgentByProject(
     cleaned[snapshot.selected.projectId] = snapshot.selected.agentId
   }
   return cleaned
-}
-
-export function writeStoredAgentByProject(
-  map: Record<string, string>,
-  storage?: StorageLike,
-): void {
-  try {
-    const store = storage ?? window.localStorage
-    store.setItem(agentByProjectStorageKey, JSON.stringify(map))
-  } catch {
-    // ignore quota / private-mode failures, same as other writers
-  }
 }
 
 export function applyChatTypography(element: HTMLElement, settings: ChatTypographySettings): void {

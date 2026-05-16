@@ -5,6 +5,7 @@ import {
   readStoredChatDraft,
   readStoredChatDrafts,
   readStoredChatTypography,
+  readStoredAgentByProject,
   readStoredThemeSelection,
   readStoredKeymap,
   saveChatTypography,
@@ -105,5 +106,44 @@ describe('chat draft storage', () => {
     })
 
     expect(readStoredChatDrafts(storage)).toEqual({ good: 'draft' })
+  })
+})
+
+describe('selected agent storage migration', () => {
+  it('keeps only remembered agents that still exist in the workspace', () => {
+    const storage = memoryStorage({
+      'kiri:agent-by-project:v1': JSON.stringify({
+        alpha: 'agent-alpha',
+        beta: 'missing-agent',
+      }),
+    })
+    const snapshot = {
+      projects: [
+        { id: 'alpha', agents: [{ id: 'agent-alpha' }] },
+        { id: 'beta', agents: [{ id: 'agent-beta' }] },
+      ],
+      selected: { projectId: 'beta', agentId: 'agent-beta' },
+    }
+
+    expect(readStoredAgentByProject(snapshot as Parameters<typeof readStoredAgentByProject>[0], storage))
+      .toEqual({
+        alpha: 'agent-alpha',
+        beta: 'agent-beta',
+      })
+  })
+
+  it('seeds the selected agent when remembered agent storage is malformed', () => {
+    const storage = memoryStorage({
+      'kiri:agent-by-project:v1': '{',
+    })
+    const snapshot = {
+      projects: [
+        { id: 'alpha', agents: [{ id: 'agent-alpha' }] },
+      ],
+      selected: { projectId: 'alpha', agentId: 'agent-alpha' },
+    }
+
+    expect(readStoredAgentByProject(snapshot as Parameters<typeof readStoredAgentByProject>[0], storage))
+      .toEqual({ alpha: 'agent-alpha' })
   })
 })

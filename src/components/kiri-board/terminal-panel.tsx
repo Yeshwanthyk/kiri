@@ -106,7 +106,7 @@ export function TerminalPanel({
           cursorBlink: true,
           convertEol: true,
           scrollback: 1000,
-          theme: terminalTheme(themeModeRef.current),
+          theme: terminalTheme(),
         })
         terminalRef.current = term
         fitAddon = new FitAddon()
@@ -277,7 +277,7 @@ function terminalWebSocketUrl(
   return url.toString()
 }
 
-function terminalTheme(_themeMode: ThemeMode) {
+function terminalTheme() {
   return {
     background: '#101216',
     foreground: '#e6e8ef',

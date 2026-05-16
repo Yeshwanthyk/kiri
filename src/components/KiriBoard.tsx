@@ -1,22 +1,8 @@
 'use client'
 
-import {
-  Bot,
-  Eye,
-  EyeOff,
-  FolderOpen,
-  NotebookPen,
-  Plus,
-  Settings2,
-  Shuffle,
-  TerminalSquare,
-  Trash2,
-} from 'lucide-react'
 import * as React from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import type {
-  AgentCell,
-  ArchivedSessionSummary,
   ProjectRow,
   ReviewTarget,
   RuntimeKind,
@@ -26,12 +12,8 @@ import type {
   ThinkingLevel,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
-import { getKiriHostBridge, pickProjectDirectory } from '~/lib/host-capabilities'
-import {
-  applyKiriTheme,
-  defaultThemeSelection,
-  type ThemeSelection,
-} from '~/theme/kiri-themes'
+import { pickProjectDirectory } from '~/lib/host-capabilities'
+import type { ThemeSelection } from '~/theme/kiri-themes'
 import {
   addProjectMutation,
   addScratchpadBlockMutation,
@@ -40,7 +22,6 @@ import {
   deleteProjectMutation,
   deleteScratchpadBlockMutation,
   deleteSessionMutation,
-  agentDetailQueryOptions,
   fetchWorkspaceSnapshot,
   forkSessionMutation,
   hideProjectMutation,
@@ -59,61 +40,35 @@ import {
   setThinkingLevelMutation,
   startSessionMutation,
   steerMessageMutation,
-  terminalConfigQuery,
   triggerScratchpadBlockMutation,
   unhideProjectMutation,
 } from '~/server/workspace'
-import { errorMessage } from './kiri-board/format'
-import {
-  actionForKey,
-  defaultKeymap,
-  formatKey,
-  keymapGroups,
-  keyOptions,
-  moveAgent,
-  moveProject,
-  updateKeymap,
-  type KeymapAction,
-  type KeymapSettings,
-  type Selection,
-} from './kiri-board/navigation'
-import {
-  applyChatTypography,
-  defaultChatTypography,
-  readStoredAgentByProject,
-  readStoredChatTypography,
-  readStoredKeymap,
-  readStoredThemeSelection,
-  type ChatTypographySettings,
-} from './kiri-board/storage'
+import type { KeymapSettings } from './kiri-board/navigation'
+import type { ChatTypographySettings } from './kiri-board/storage'
 
-export { mergeAgentDetail } from './kiri-board/agent-detail'
 import { AgentSwitcherSheet, MobileTopBar } from './kiri-board/board-navigation'
-import {
-  CommandPalette,
-  ConfirmDialog,
-  InlineSessionLauncher,
-  ProjectManagerDialog,
-  SettingsScreen,
-} from './kiri-board/dialogs'
-import { ProjectLane } from './kiri-board/project-lane'
+import { useBoardKeyboardShortcuts } from './kiri-board/board-keyboard-shortcuts'
+import { useBoardPreferenceEffects } from './kiri-board/board-preferences'
+import { resolveBoardSelection } from './kiri-board/board-selection'
+import { fallbackAgentAfterSessionDelete } from './kiri-board/board-session-actions'
+import { buildBoardCommandActions } from './kiri-board/command-actions'
+import { useHostMenuActions } from './kiri-board/host-menu-actions'
+import { CommandPalette } from './kiri-board/command-palette'
+import { ConfirmDialog } from './kiri-board/confirm-dialog'
+import { EmptyProjectState } from './kiri-board/empty-project-state'
+import { ProjectManagerDialog } from './kiri-board/project-manager-dialog'
+import { ProjectBoardPane } from './kiri-board/project-board-pane'
+import { InlineSessionLauncher } from './kiri-board/session-launcher'
+import { useSettingsPreferenceActions } from './kiri-board/settings-preference-actions'
+import { SettingsScreen } from './kiri-board/settings-screen'
 import { SelectedAgentPane } from './kiri-board/selected-agent-pane'
 import {
-  isEditableTarget,
-  runtimeCopy,
-  settingsRuntimeDetail,
-  sessionRuntimeOrder,
-  type CommandPaletteAction,
   type RefreshAgentDetail,
   type SidebarTab,
 } from './kiri-board/board-types'
-
-const workspacePollInitialDelayMs = 250
-const workspacePollIntervalMs = 750
-const workspacePollMaxDurationMs = 120_000
+import { pollWorkspaceDuringAction } from './kiri-board/workspace-polling'
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
-  const migrationAttemptedRef = React.useRef(false)
   const boardScrollRef = React.useRef<HTMLDivElement | null>(null)
   const previousSelectedProjectIdRef = React.useRef<string | null>(null)
   const [workspace, setWorkspace] = React.useState(snapshot)
@@ -173,20 +128,9 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const triggerScratchpadBlock = useServerFn(triggerScratchpadBlockMutation)
   const unhideProject = useServerFn(unhideProjectMutation)
 
-  const selectedProject =
-    workspace.projects.find((project) => project.id === activeProjectId) ??
-    workspace.projects[0]
-  const rememberedAgentId = selectedProject ? agentByProject[selectedProject.id] : undefined
-  const selectedAgent =
-    (rememberedAgentId
-      ? selectedProject?.agents.find((agent) => agent.id === rememberedAgentId)
-      : undefined) ?? selectedProject?.agents[0]
-  const selection = React.useMemo<Selection>(
-    () => ({
-      projectId: selectedProject?.id ?? '',
-      agentId: selectedAgent?.id ?? '',
-    }),
-    [selectedAgent, selectedProject],
+  const { selectedProject, selectedAgent, selection } = React.useMemo(
+    () => resolveBoardSelection(workspace, activeProjectId, agentByProject),
+    [activeProjectId, agentByProject, workspace],
   )
   const visibleTerminalSelected = Boolean(
     selectedAgent && (tab === 'terminal' || (tab === 'chat' && selectedAgent.interfaceMode === 'terminal')),
@@ -210,7 +154,8 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const forgetProject = React.useCallback((projectId: string) => {
     const previous = agentByProjectRef.current
     if (!(projectId in previous)) return
-    const { [projectId]: _omitted, ...next } = previous
+    const next = { ...previous }
+    delete next[projectId]
     persistAgentByProject(next, previous)
   }, [])
 
@@ -232,62 +177,20 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setWorkspace(snapshot)
   }, [snapshot])
 
-  React.useEffect(() => {
-    if (migrationAttemptedRef.current) return
-    migrationAttemptedRef.current = true
-    setHydrated(true)
-    const storedTheme = readStoredThemeSelection()
-    if (sameJson(snapshot.preferences.theme, defaultThemeSelection) && !sameJson(storedTheme, defaultThemeSelection)) {
-      setThemeSelection(storedTheme)
-      void setThemePreference({ data: storedTheme }).catch((error) => {
-        console.error('Failed to migrate theme preference', error)
-      })
-    }
-
-    const storedKeymap = readStoredKeymap()
-    if (sameJson(snapshot.preferences.keymap, defaultKeymap) && !sameJson(storedKeymap, defaultKeymap)) {
-      setKeymap(storedKeymap)
-      void setKeymapPreference({ data: storedKeymap }).catch((error) => {
-        console.error('Failed to migrate keymap preference', error)
-      })
-    }
-
-    const storedTypography = readStoredChatTypography()
-    if (
-      sameJson(snapshot.preferences.chatTypography, defaultChatTypography) &&
-      !sameJson(storedTypography, defaultChatTypography)
-    ) {
-      setChatTypography(storedTypography)
-      void setChatTypographyPreference({ data: storedTypography }).catch((error) => {
-        console.error('Failed to migrate chat typography preference', error)
-      })
-    }
-
-    const storedAgentByProject = readStoredAgentByProject(snapshot)
-    if (
-      Object.keys(snapshot.preferences.agentByProject).length === 0 &&
-      Object.keys(storedAgentByProject).length > 0
-    ) {
-      setAgentByProject(storedAgentByProject)
-      void setAgentByProjectPreference({ data: storedAgentByProject }).catch((error) => {
-        console.error('Failed to migrate selected session preference', error)
-      })
-    }
-  }, [
-    setAgentByProjectPreference,
-    setChatTypographyPreference,
-    setKeymapPreference,
-    setThemePreference,
+  useBoardPreferenceEffects({
     snapshot,
-  ])
-
-  React.useEffect(() => {
-    applyKiriTheme(document.documentElement, themeSelection)
-  }, [themeSelection])
-
-  React.useEffect(() => {
-    applyChatTypography(document.documentElement, chatTypography)
-  }, [chatTypography])
+    themeSelection,
+    chatTypography,
+    setHydrated,
+    setThemeSelection,
+    setKeymap,
+    setChatTypography,
+    setAgentByProject,
+    persistTheme: setThemePreference,
+    persistKeymap: setKeymapPreference,
+    persistChatTypography: setChatTypographyPreference,
+    persistAgentByProject: setAgentByProjectPreference,
+  })
 
   React.useEffect(() => {
     const previousProjectId = previousSelectedProjectIdRef.current
@@ -313,128 +216,28 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
   }, [selection.projectId])
 
-  React.useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      const key = event.key.toLowerCase()
-      if ((event.metaKey || event.ctrlKey) && key === 'k') {
-        event.preventDefault()
-        setSettingsOpen(false)
-        setSessionLauncherOpen(false)
-        setAgentSwitcherOpen(false)
-        setCommandPaletteOpen((open) => !open)
-        return
-      }
-
-      if (
-        event.key === 'Escape' &&
-        (commandPaletteOpen || agentSwitcherOpen || projectManagerOpen)
-      ) {
-        event.preventDefault()
-        setCommandPaletteOpen(false)
-        setAgentSwitcherOpen(false)
-        setProjectManagerOpen(false)
-        return
-      }
-
-      if (commandPaletteOpen || agentSwitcherOpen || !event.shiftKey || isEditableTarget(event.target)) return
-
-      const action = actionForKey(keymap, key)
-      if (!action) return
-
-      if (action === 'toggleTerminalFocus') {
-        if (!visibleTerminalSelected) return
-        event.preventDefault()
-        setTerminalFocusRequest((request) => request + 1)
-        return
-      }
-
-      event.preventDefault()
-
-      if (action === 'focusChat') {
-        setSettingsOpen(false)
-        setSessionLauncherOpen(false)
-        setAgentSwitcherOpen(false)
-        setCommandPaletteOpen(false)
-        setTab('chat')
-        setChatFocusRequest((request) => request + 1)
-        return
-      }
-
-      if (action === 'openDiffs') {
-        setTab('diffs')
-        return
-      }
-
-      if (action === 'openTerminal') {
-        setTab('terminal')
-        return
-      }
-
-      if (action === 'openScratchpad') {
-        setTab('scratchpad')
-        return
-      }
-
-      if (action === 'startSession') {
-        if (!selectedProject) {
-          setSettingsOpen(false)
-          setAgentSwitcherOpen(false)
-          setCommandPaletteOpen(false)
-          setProjectManagerOpen(true)
-          return
-        }
-        openSessionLauncher()
-        return
-      }
-
-      if (action === 'deleteSession') {
-        const project =
-          workspace.projects.find((row) => row.id === selection.projectId) ??
-          workspace.projects[0]
-        const agent = project?.agents.find((row) => row.id === selection.agentId)
-        if (agent?.isSession) {
-          void handleDeleteSession(agent.id)
-        }
-        return
-      }
-
-      if (action === 'projectPrev' || action === 'projectNext') {
-        const nextProjectId = moveProject(
-          workspace.projects,
-          selection.projectId,
-          action === 'projectNext' ? 1 : -1,
-        )
-        if (nextProjectId !== selection.projectId) selectProject(nextProjectId)
-        return
-      }
-
-      const project =
-        workspace.projects.find((row) => row.id === selection.projectId) ??
-        workspace.projects[0]
-      if (!project) return
-      const nextAgentId = moveAgent(
-        project,
-        selection.agentId,
-        action === 'agentNext' ? 1 : -1,
-      )
-      if (nextAgentId && nextAgentId !== selection.agentId) {
-        selectAgent(project.id, nextAgentId)
-      }
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [
+  useBoardKeyboardShortcuts({
     agentSwitcherOpen,
     commandPaletteOpen,
     projectManagerOpen,
     keymap,
+    projects: workspace.projects,
     selectedProject,
-    selection.agentId,
-    selection.projectId,
+    selection,
     visibleTerminalSelected,
-    workspace.projects,
-  ])
+    onOpenSessionLauncher: openSessionLauncher,
+    onDeleteSession: handleDeleteSession,
+    onSelectProject: selectProject,
+    onSelectAgent: selectAgent,
+    setAgentSwitcherOpen,
+    setChatFocusRequest,
+    setCommandPaletteOpen,
+    setProjectManagerOpen,
+    setSessionLauncherOpen,
+    setSettingsOpen,
+    setTab,
+    setTerminalFocusRequest,
+  })
 
   async function handleAddProject(input: { id?: string; name: string; cwd: string }) {
     const next = await addProject({ data: input })
@@ -517,8 +320,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       const project =
         next.projects.find((item) => item.id === currentProjectId) ?? next.projects[0]
       if (!project) return
-      const fallbackAgent =
-        project.agents[Math.max(0, Math.min(currentIndex - 1, project.agents.length - 1))]
+      const fallbackAgent = fallbackAgentAfterSessionDelete(project, currentIndex)
       if (fallbackAgent) {
         selectAgent(project.id, fallbackAgent.id)
       } else {
@@ -537,34 +339,17 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     onResult: (result: T) => void,
     onPoll?: RefreshAgentDetail,
   ) {
-    let stopped = false
-    let timer: number | undefined
-    const startedAt = Date.now()
-    const poll = async () => {
-      if (stopped) return
-      if (Date.now() - startedAt >= workspacePollMaxDurationMs) {
-        stopped = true
-        return
-      }
-      try {
-        const next = await refreshWorkspace()
-        if (stopped) return
-        setWorkspace(next)
-        await onPoll?.()
-      } finally {
-        if (!stopped) {
-          timer = window.setTimeout(poll, workspacePollIntervalMs)
-        }
-      }
-    }
-    timer = window.setTimeout(poll, workspacePollInitialDelayMs)
-    try {
-      const result = await action()
-      onResult(result)
-    } finally {
-      stopped = true
-      if (timer) window.clearTimeout(timer)
-    }
+    await pollWorkspaceDuringAction({
+      action,
+      refreshWorkspace,
+      onResult,
+      onWorkspace: setWorkspace,
+      onPoll,
+    })
+  }
+
+  async function refreshDetailAfterSend(onDetailRefresh?: RefreshAgentDetail) {
+    await onDetailRefresh?.()
   }
 
   async function handleSendMessage(
@@ -578,7 +363,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       (next) => setWorkspace(next),
       onDetailRefresh,
     )
-    await onDetailRefresh?.()
+    await refreshDetailAfterSend(onDetailRefresh)
   }
 
   async function handleRefreshTerminalDiffs(
@@ -735,215 +520,58 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   const commandActions = React.useMemo(
-    () => [
-      {
-        id: 'start-session',
-        title: 'Start session',
-        detail: selectedProject?.name ?? 'Current project',
-        icon: Plus,
-        disabled: !selectedProject,
-        run: () => openSessionLauncher(),
+    () => buildBoardCommandActions({
+      workspace,
+      selectedProject,
+      selectedAgent,
+      openSessionLauncher,
+      requestDeleteSession: handleDeleteSession,
+      openSettings: () => {
+        setSessionLauncherOpen(false)
+        setAgentSwitcherOpen(false)
+        setCommandPaletteOpen(false)
+        setProjectManagerOpen(false)
+        setSettingsOpen(true)
       },
-      {
-        id: 'end-session',
-        title: 'End selected session',
-        detail: selectedAgent?.isSession ? selectedAgent.title : 'No selected session',
-        icon: Trash2,
-        disabled: !selectedAgent?.isSession,
-        run: () => {
-          if (!selectedAgent?.isSession) return
-          setCommandPaletteOpen(false)
-          void handleDeleteSession(selectedAgent.id)
-        },
+      openProjectManager: () => {
+        setSessionLauncherOpen(false)
+        setAgentSwitcherOpen(false)
+        setCommandPaletteOpen(false)
+        setSettingsOpen(false)
+        setProjectManagerOpen(true)
       },
-      {
-        id: 'settings',
-        title: 'Open settings',
-        detail: 'Keymaps and theme',
-        icon: Settings2,
-        disabled: false,
-        run: () => {
-          setSessionLauncherOpen(false)
-          setAgentSwitcherOpen(false)
-          setCommandPaletteOpen(false)
-          setProjectManagerOpen(false)
-          setSettingsOpen(true)
-        },
-      },
-      {
-        id: 'terminal',
-        title: 'Open terminal',
-        detail: selectedProject?.cwd ?? 'Selected project cwd',
-        icon: TerminalSquare,
-        disabled: !selectedAgent,
-        run: () => {
-          setCommandPaletteOpen(false)
-          setTab('terminal')
-        },
-      },
-      {
-        id: 'scratchpad',
-        title: 'Open scratchpad',
-        detail:
-          workspace.scratchpadBlocks.length > 0
-            ? `${workspace.scratchpadBlocks.length} block${workspace.scratchpadBlocks.length === 1 ? '' : 's'}`
-            : 'No blocks yet',
-        icon: NotebookPen,
-        disabled: false,
-        run: () => {
-          setCommandPaletteOpen(false)
-          setTab('scratchpad')
-        },
-      },
-      {
-        id: 'add-project',
-        title: 'Add project',
-        detail: 'Choose or paste a directory',
-        icon: FolderOpen,
-        disabled: false,
-        run: () => {
-          setSessionLauncherOpen(false)
-          setAgentSwitcherOpen(false)
-          setCommandPaletteOpen(false)
-          setSettingsOpen(false)
-          setProjectManagerOpen(true)
-        },
-      },
-      {
-        id: 'hide-project',
-        title: `Hide ${selectedProject?.name ?? 'current project'}`,
-        detail: 'Keep sessions, remove from board',
-        icon: EyeOff,
-        disabled: !selectedProject || workspace.projects.length <= 1,
-        run: () => {
-          if (!selectedProject) return
-          setCommandPaletteOpen(false)
-          void handleHideProject(selectedProject.id)
-        },
-      },
-      ...workspace.hiddenProjects.map((project) => ({
-        id: `unhide-project-${project.id}`,
-        title: `Unhide ${project.name}`,
-        detail: 'Hidden project',
-        icon: Eye,
-        disabled: false,
-        run: () => {
-          setCommandPaletteOpen(false)
-          void handleUnhideProject(project.id)
-        },
-      })),
-      ...workspace.projects.map((project) => ({
-
-        id: `delete-project-${project.id}`,
-        title: `Remove ${project.name}`,
-        detail: 'Project',
-        icon: Trash2,
-        disabled: !selectedProject || workspace.projects.length <= 1,
-        run: () => {
-          setCommandPaletteOpen(false)
-          setPendingProjectDelete(project)
-        },
-      })),
-      ...workspace.projects.flatMap((project) => [
-        ...sessionRuntimeOrder.map((runtime) => ({
-          id: `start-${runtime}-${project.id}`,
-          title: `Start ${runtimeCopy[runtime].label} in ${project.name}`,
-          detail: settingsRuntimeDetail(workspace.settings, runtime),
-          icon: Plus,
-          disabled: false,
-          run: () => openSessionLauncher(project.id, runtime),
-        })),
-        {
-          id: `switch-project-${project.id}`,
-          title: `Switch to ${project.name}`,
-          detail: 'Project',
-          icon: Shuffle,
-          disabled: false,
-          run: () => {
-            selectProject(project.id)
-            setCommandPaletteOpen(false)
-          },
-        },
-        ...project.agents.map((agent) => ({
-          id: `switch-agent-${agent.id}`,
-          title: `Switch to ${agent.title}`,
-          detail: project.name,
-          icon: Bot,
-          disabled: false,
-          run: () => {
-            selectAgent(project.id, agent.id)
-            setCommandPaletteOpen(false)
-          },
-        })),
-      ]),
-    ],
+      hideProject: (projectId) => void handleHideProject(projectId),
+      unhideProject: (projectId) => void handleUnhideProject(projectId),
+      requestDeleteProject: setPendingProjectDelete,
+      selectProject,
+      selectAgent,
+      setTab,
+      closeCommandPalette: () => setCommandPaletteOpen(false),
+    }),
     [
       selectedAgent,
       selectedProject,
-      workspace.hiddenProjects,
-      workspace.projects,
-      workspace.scratchpadBlocks,
-      workspace.settings,
+      workspace,
     ],
   )
 
-  React.useEffect(() => {
-    const unsubscribe = getKiriHostBridge()?.onMenuAction?.((actionId) => {
-      const action = commandActions.find((item) => item.id === actionId)
-      if (!action || action.disabled) return
-      action.run()
-    })
-    return unsubscribe
-  }, [commandActions])
-
-  async function handleThemePreferenceChange(next: ThemeSelection) {
-    const previous = themeSelection
-    setThemeSelection(next)
-    try {
-      const preferences = await setThemePreference({ data: next })
-      setThemeSelection(preferences.theme)
-    } catch (error) {
-      console.error('Failed to save theme preference', error)
-      setThemeSelection(previous)
-    }
-  }
-
-  async function handleKeymapPreferenceChange(action: KeymapAction, value: string) {
-    const previous = keymap
-    const next = updateKeymap(keymap, action, value)
-    setKeymap(next)
-    try {
-      const preferences = await setKeymapPreference({ data: next })
-      setKeymap(preferences.keymap)
-    } catch (error) {
-      console.error('Failed to save keymap preference', error)
-      setKeymap(previous)
-    }
-  }
-
-  async function handleKeymapPreferenceReset() {
-    const previous = keymap
-    setKeymap(defaultKeymap)
-    try {
-      const preferences = await setKeymapPreference({ data: defaultKeymap })
-      setKeymap(preferences.keymap)
-    } catch (error) {
-      console.error('Failed to reset keymap preference', error)
-      setKeymap(previous)
-    }
-  }
-
-  async function handleChatTypographyPreferenceChange(next: ChatTypographySettings) {
-    const previous = chatTypography
-    setChatTypography(next)
-    try {
-      const preferences = await setChatTypographyPreference({ data: next })
-      setChatTypography(preferences.chatTypography)
-    } catch (error) {
-      console.error('Failed to save chat typography preference', error)
-      setChatTypography(previous)
-    }
-  }
+  useHostMenuActions(commandActions)
+  const {
+    changeThemePreference,
+    changeKeymapPreference,
+    resetKeymapPreference,
+    changeChatTypographyPreference,
+  } = useSettingsPreferenceActions({
+    keymap,
+    themeSelection,
+    chatTypography,
+    setKeymap,
+    setThemeSelection,
+    setChatTypography,
+    persistKeymap: setKeymapPreference,
+    persistTheme: setThemePreference,
+    persistChatTypography: setChatTypographyPreference,
+  })
 
   if (settingsOpen) {
     return (
@@ -951,10 +579,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         keymap={keymap}
         themeSelection={themeSelection}
         chatTypography={chatTypography}
-        onKeymapChange={(action, value) => void handleKeymapPreferenceChange(action, value)}
-        onKeymapReset={() => void handleKeymapPreferenceReset()}
-        onThemeChange={(next) => void handleThemePreferenceChange(next)}
-        onChatTypographyChange={(next) => void handleChatTypographyPreferenceChange(next)}
+        onKeymapChange={(action, value) => void changeKeymapPreference(action, value)}
+        onKeymapReset={() => void resetKeymapPreference()}
+        onThemeChange={(next) => void changeThemePreference(next)}
+        onChatTypographyChange={(next) => void changeChatTypographyPreference(next)}
         onClose={() => setSettingsOpen(false)}
       />
     )
@@ -962,62 +590,24 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
   if (!selectedProject) {
     return (
-      <main
-        className="empty-project-shell"
-        data-hydrated={hydrated ? 'true' : 'false'}
-        data-testid="empty-project-state"
-      >
-        {commandPaletteOpen ? (
-          <CommandPalette
-            actions={commandActions}
-            onClose={() => setCommandPaletteOpen(false)}
-          />
-        ) : null}
-
-        {projectManagerOpen ? (
-          <ProjectManagerDialog
-            projects={workspace.projects}
-            hiddenProjects={workspace.hiddenProjects}
-            onAdd={handleAddProject}
-            onChooseDirectory={handleChooseProjectDirectory}
-            onDelete={handleDeleteProject}
-            onHide={handleHideProject}
-            onReorderProjects={handleReorderProjects}
-            onUnhide={handleUnhideProject}
-            onClose={() => setProjectManagerOpen(false)}
-          />
-        ) : null}
-
-        <section className="empty-project-state" aria-label="No projects configured">
-          <div className="empty-project-mark" aria-hidden="true">
-            <FolderOpen size={22} />
-          </div>
-          <div>
-            <p className="empty-project-kicker">kiri</p>
-            <h1>No projects yet</h1>
-            <p>Add a local repo to start sessions on this machine.</p>
-          </div>
-          <div className="empty-project-actions">
-            <button
-              type="button"
-              className="project-add-button"
-              onClick={() => setProjectManagerOpen(true)}
-              data-testid="empty-add-project"
-            >
-              <Plus size={14} />
-              Add project
-            </button>
-            <button
-              type="button"
-              className="empty-project-secondary"
-              onClick={() => setSettingsOpen(true)}
-            >
-              <Settings2 size={14} />
-              Settings
-            </button>
-          </div>
-        </section>
-      </main>
+      <EmptyProjectState
+        commandPaletteOpen={commandPaletteOpen}
+        commandActions={commandActions}
+        projectManagerOpen={projectManagerOpen}
+        projects={workspace.projects}
+        hiddenProjects={workspace.hiddenProjects}
+        hydrated={hydrated}
+        onAddProject={handleAddProject}
+        onChooseDirectory={handleChooseProjectDirectory}
+        onCloseCommandPalette={() => setCommandPaletteOpen(false)}
+        onCloseProjectManager={() => setProjectManagerOpen(false)}
+        onDeleteProject={handleDeleteProject}
+        onHideProject={handleHideProject}
+        onOpenProjectManager={() => setProjectManagerOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onReorderProjects={handleReorderProjects}
+        onUnhideProject={handleUnhideProject}
+      />
     )
   }
 
@@ -1136,72 +726,28 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         />
       ) : null}
 
-      <section
-        className="board-pane"
-        aria-label="Projects and agents"
-        data-hydrated={hydrated ? 'true' : 'false'}
-        data-testid="board-pane"
-      >
-        <header className="topbar">
-          <div className="topbar-actions">
-            <button
-              type="button"
-              className="topbar-trigger"
-              aria-label="Projects"
-              aria-expanded={projectManagerOpen}
-              onClick={() => {
-                setSettingsOpen(false)
-                setProjectManagerOpen((open) => !open)
-              }}
-            >
-              <FolderOpen size={14} />
-              <span>Projects</span>
-            </button>
-            <button
-              type="button"
-              className="topbar-trigger"
-              aria-label="Settings"
-              aria-expanded={settingsOpen}
-              onClick={() => {
-                setProjectManagerOpen(false)
-                setSettingsOpen((open) => !open)
-              }}
-            >
-              <Settings2 size={14} />
-              <span>Settings</span>
-            </button>
-          </div>
-        </header>
-
-        <div className="board-scroll" ref={boardScrollRef}>
-          <div
-            className="board-grid"
-            data-has-selection={selection.projectId ? 'true' : 'false'}
-            data-testid="board-grid"
-          >
-            {workspace.projects.map((project) => (
-              <ProjectLane
-                key={project.id}
-                project={project}
-                selectedAgentId={selection.agentId}
-                selectedProjectId={selection.projectId}
-                startSessionKey={keymap.startSession}
-                hideDisabled={workspace.projects.length <= 1 || projectVisibilityPendingId === project.id}
-                onHide={handleHideProject}
-                onSelect={selectAgent}
-              />
-            ))}
-          </div>
-        </div>
-
-        {workspace.hiddenProjects.length > 0 ? (
-          <HiddenProjectDock
-            projects={workspace.hiddenProjects}
-            pendingProjectId={projectVisibilityPendingId}
-            onUnhide={(projectId) => void handleUnhideProject(projectId)}
-          />
-        ) : null}
-      </section>
+      <ProjectBoardPane
+        projects={workspace.projects}
+        hiddenProjects={workspace.hiddenProjects}
+        hydrated={hydrated}
+        selection={selection}
+        startSessionKey={keymap.startSession}
+        projectManagerOpen={projectManagerOpen}
+        settingsOpen={settingsOpen}
+        projectVisibilityPendingId={projectVisibilityPendingId}
+        boardScrollRef={boardScrollRef}
+        onToggleProjects={() => {
+          setSettingsOpen(false)
+          setProjectManagerOpen((open) => !open)
+        }}
+        onToggleSettings={() => {
+          setProjectManagerOpen(false)
+          setSettingsOpen((open) => !open)
+        }}
+        onHideProject={(projectId) => void handleHideProject(projectId)}
+        onSelectAgent={selectAgent}
+        onUnhideProject={(projectId) => void handleUnhideProject(projectId)}
+      />
 
       <SelectedAgentPane
         selectedProject={selectedProject}
@@ -1234,42 +780,4 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       />
     </main>
   )
-}
-
-function HiddenProjectDock({
-  projects,
-  pendingProjectId,
-  onUnhide,
-}: {
-  projects: ProjectRow[]
-  pendingProjectId: string | null
-  onUnhide: (projectId: string) => void
-}) {
-  return (
-    <section className="hidden-project-dock" aria-label="Hidden projects" data-testid="hidden-project-shelf">
-      <div className="hidden-project-dock-head">
-        <span>Hidden</span>
-        <small>{projects.length}</small>
-      </div>
-      <div className="hidden-project-chips">
-        {projects.map((project) => (
-          <button
-            key={project.id}
-            type="button"
-            className="hidden-project-chip"
-            disabled={pendingProjectId === project.id}
-            onClick={() => onUnhide(project.id)}
-            aria-label={`Restore ${project.name}`}
-            title={`Restore ${project.name}`}
-          >
-            <span>{project.name}</span>
-          </button>
-        ))}
-      </div>
-    </section>
-  )
-}
-
-function sameJson(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right)
 }

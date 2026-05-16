@@ -128,7 +128,8 @@ export function SelectedAgentPane({
   React.useEffect(() => {
     detailBasisRef.current = selectedAgent ? { agentId: selectedAgent.id, revision } : null
   }, [selectedAgent, revision])
-  const latestAgent = mergeAgentDetail(selectedAgent, detailQuery.data)
+  const detailAgent = detailQuery.isPlaceholderData ? undefined : detailQuery.data
+  const latestAgent = mergeAgentDetail(selectedAgent, detailAgent)
   const olderPagesForAgent = React.useMemo(
     () =>
       olderDetailPages
@@ -213,9 +214,11 @@ export function SelectedAgentPane({
   }, [agent, onRefreshTerminalDiffs, refreshDetail, tab])
 
   const tabBar = (
-    <div className="sidebar-tabs" role="tablist">
+    <div className="sidebar-tabs" role="tablist" aria-label="Selected agent view">
       <button
         type="button"
+        role="tab"
+        aria-selected={tab === 'chat'}
         className={tab === 'chat' ? 'active' : ''}
         onClick={() => onTabChange('chat')}
         disabled={!agent}
@@ -226,6 +229,8 @@ export function SelectedAgentPane({
       </button>
       <button
         type="button"
+        role="tab"
+        aria-selected={tab === 'diffs'}
         className={tab === 'diffs' ? 'active' : ''}
         onClick={() => onTabChange('diffs')}
         disabled={!agent}
@@ -236,6 +241,8 @@ export function SelectedAgentPane({
       </button>
       <button
         type="button"
+        role="tab"
+        aria-selected={tab === 'terminal'}
         className={tab === 'terminal' ? 'active' : ''}
         onClick={() => onTabChange('terminal')}
         disabled={!agent}
@@ -246,6 +253,8 @@ export function SelectedAgentPane({
       </button>
       <button
         type="button"
+        role="tab"
+        aria-selected={tab === 'scratchpad'}
         className={tab === 'scratchpad' ? 'active' : ''}
         onClick={() => onTabChange('scratchpad')}
         data-testid="tab-scratchpad"

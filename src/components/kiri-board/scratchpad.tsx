@@ -5,7 +5,7 @@ import { sessionInterfaceModeForRuntime } from '~/lib/contracts'
 import { errorMessage, formatBlockDay, formatBlockTime, formatTokenCount } from './format'
 import { supportsThinking } from './slash-commands'
 
-const scratchpadRuntimeOrder = ['codex', 'pi', 'claude'] as const satisfies readonly RuntimeKind[]
+export const scratchpadRuntimeOrder = ['codex', 'pi', 'claude'] as const satisfies readonly RuntimeKind[]
 const scratchpadThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
 
 type ScratchpadState = {

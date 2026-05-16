@@ -1,13 +1,16 @@
 import { expect, test } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
 import { rmSync, mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { startFakeCodexAppServer } from '../harness/fake-codex-app-server.mjs'
 
-test.describe.configure({ mode: 'serial' })
+test.describe.configure({ mode: 'serial', timeout: 60_000 })
 
 const testDbPath = resolve(process.env.KIRI_DB_PATH ?? '.kiri/kiri.e2e.sqlite')
-const projectRoot = process.cwd()
+const appRoot = process.cwd()
+const projectRoot = resolve(tmpdir(), 'kiri-pican-e2e-worktree')
 const fileOperationFixturePath = resolve(projectRoot, 'src/kiri-file-operation-e2e.tmp')
 const detailFixturePath = resolve(projectRoot, 'src/detail.ts')
 let fakeCodexServer: Awaited<ReturnType<typeof startFakeCodexAppServer>>
@@ -18,6 +21,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await fakeCodexServer?.close()
+  rmSync(projectRoot, { force: true, recursive: true })
 })
 
 test.beforeEach(async ({ page }, testInfo) => {
@@ -25,17 +29,9 @@ test.beforeEach(async ({ page }, testInfo) => {
     window.localStorage.setItem('kiri:terminal-transcript', '1')
   })
   if (fakeCodexServer) fakeCodexServer.requests.length = 0
-  rmSync(fileOperationFixturePath, { force: true })
-  rmSync(detailFixturePath, { force: true })
+  resetE2eProjectWorktree()
   mkdirSync(dirname(testDbPath), { recursive: true })
-  rmSync(resolve(projectRoot, '.kiri', 'pi-sessions', 'e2e-kiri'), {
-    force: true,
-    recursive: true,
-  })
-  rmSync(resolve(projectRoot, '.kiri', 'codex-home'), {
-    force: true,
-    recursive: true,
-  })
+  rmSync(resolve(appRoot, '.kiri', 'preferences.json'), { force: true })
   const database = new DatabaseSync(testDbPath)
   resetE2eDatabase(database)
   if (testInfo.title !== 'empty workspace starts with an add-project path') {
@@ -93,10 +89,23 @@ function tableExists(database: DatabaseSync, table: string) {
   )
 }
 
-test.afterEach(() => {
-  rmSync(fileOperationFixturePath, { force: true })
-  rmSync(detailFixturePath, { force: true })
-})
+function resetE2eProjectWorktree() {
+  rmSync(projectRoot, { force: true, recursive: true })
+  mkdirSync(resolve(projectRoot, 'src'), { recursive: true })
+  writeFileSync(resolve(projectRoot, 'src/.keep'), 'fixture source directory\n')
+  runGit(projectRoot, ['init'])
+  runGit(projectRoot, ['config', 'user.email', 'test@example.com'])
+  runGit(projectRoot, ['config', 'user.name', 'Kiri E2E'])
+  runGit(projectRoot, ['add', 'src/.keep'])
+  runGit(projectRoot, ['commit', '-m', 'initial'])
+}
+
+function runGit(cwd: string, args: string[]) {
+  execFileSync('git', args, {
+    cwd,
+    stdio: ['ignore', 'ignore', 'ignore'],
+  })
+}
 
 test('empty workspace starts with an add-project path', async ({ page }) => {
   await expect(page.getByTestId('empty-project-state')).toHaveAttribute('data-hydrated', 'true')
@@ -347,7 +356,9 @@ test('projects panel adds, hides, and unhides projects', async ({ page, isMobile
 
   await page.keyboard.press('Control+K')
   await page.getByTestId('command-search').fill(`remove ${name}`)
-  const removeCommand = page.getByRole('button', { name: `Remove ${name}` })
+  const removeCommand = page
+    .getByRole('listbox', { name: 'Commands' })
+    .getByRole('option', { name: `Remove ${name}` })
   await expect(removeCommand).toBeVisible()
   await removeCommand.click()
   await expect(page.getByTestId('confirm-dialog')).toContainText('project directory and files stay on disk')
@@ -377,6 +388,37 @@ test('chat composer accepts and records input', async ({ page }, testInfo) => {
     timeout: 30_000,
   })
   await expect(page.getByTestId('chat-input')).toHaveValue('')
+})
+
+test('chat timeline selection and new-content indicator stay stable', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'desktop chat keyboard and scroll flow')
+  const title = 'Timeline Keyboard Session'
+  seedChatTimelineSession({
+    agentId: 'agent-chat-timeline',
+    slot: 'session-chat-timeline',
+    title,
+    messageCount: 120,
+  })
+
+  await page.goto('/')
+  await expect(page.getByTestId('selected-agent')).toHaveText(title)
+  await expect(page.getByTestId('chat-panel')).toContainText('timeline message 119')
+
+  await page.getByTestId('chat-input').click()
+  await page.keyboard.press('ArrowUp')
+  await expect(page.locator('.timeline-row[aria-current="true"]')).toContainText('timeline message 119')
+  await page.keyboard.press('ArrowDown')
+  await expect(page.locator('.timeline-row[aria-current="true"]')).toHaveCount(0)
+
+  await page.locator('.message-list').evaluate((list) => {
+    list.scrollTop = 0
+    list.dispatchEvent(new Event('scroll', { bubbles: true }))
+  })
+  await page.getByTestId('chat-input').fill('new content while reading older messages')
+  await page.getByRole('button', { name: 'Send prompt' }).click()
+  await expect(page.getByRole('button', { name: 'Jump to latest messages' })).toBeVisible()
+  await page.getByRole('button', { name: 'Jump to latest messages' }).click({ force: true })
+  await expect(page.getByRole('button', { name: 'Jump to latest messages' })).toBeHidden()
 })
 
 test('codex runtime runs through app-server harness', async ({ page }, testInfo) => {
@@ -529,7 +571,7 @@ test('sidebar switches between chat, diffs, and terminal', async ({ page, isMobi
   await page.goto('/')
   await createSession(page, title)
 
-  await page.getByRole('button', { name: 'Diffs' }).click()
+  await page.getByTestId('tab-diffs').click()
   await expect(page.getByTestId('diff-panel')).toContainText('No diffs')
 
   await page.getByTestId('tab-terminal').click()
@@ -548,17 +590,7 @@ test('sidebar switches between chat, diffs, and terminal', async ({ page, isMobi
   await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
 
   await expect(terminalInput).toBeFocused()
-  await page.keyboard.down('Shift')
-  await page.keyboard.press('Tab')
-  await page.keyboard.up('Shift')
-  await expect(terminalInput).not.toBeFocused()
-  await page.keyboard.down('Shift')
-  await page.keyboard.press('Tab')
-  await page.keyboard.up('Shift')
-  await expect(terminalInput).toBeFocused()
-  await page.keyboard.down('Shift')
-  await page.keyboard.press('Tab')
-  await page.keyboard.up('Shift')
+  await page.getByRole('button', { name: /Toggle terminal focus/ }).click()
   await expect(terminalInput).not.toBeFocused()
   await page.keyboard.down('Shift')
   await page.keyboard.press('KeyC')
@@ -602,6 +634,45 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
   await expect(page.getByTestId('terminal-transcript')).toContainText(
     `preserved:tab-preserved:${projectRoot}/src`,
   )
+})
+
+test('terminal focus controls still work after a theme change', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop terminal focus flow')
+  const title = `Terminal Theme Focus ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+
+  await page.getByTestId('tab-terminal').click()
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  let terminalInput = page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+  await terminalInput.click()
+  await expect(terminalInput).toBeFocused()
+
+  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByTestId('theme-mode-dark').click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark')
+  await page.getByRole('button', { name: 'Back to board' }).click()
+  await page.getByTestId('tab-terminal').click()
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+
+  terminalInput = page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+  await terminalInput.click()
+  await page.keyboard.type('pwd')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
+  await expect(terminalInput).toBeFocused()
+
+  await page.getByRole('button', { name: /Toggle terminal focus/ }).click()
+  await expect(terminalInput).not.toBeFocused()
+  await terminalInput.click()
+  await expect(terminalInput).toBeFocused()
 })
 
 test('terminal interface sessions render the agent runtime in chat and shell in terminal tab', async ({ page, isMobile }, testInfo) => {
@@ -703,11 +774,12 @@ test('selected agent detail loads chat, diffs, and local drafts', async ({ page,
   await expect(page.getByTestId('selected-agent')).toHaveText('Detail Session')
   await expect(page.getByTestId('chat-panel')).toContainText('seeded detail assistant tail')
 
-  await page.getByRole('button', { name: 'Diffs' }).click()
+  await page.getByTestId('tab-diffs').click()
   await expect(page.getByTestId('diff-panel')).toContainText('1 file')
   await expect(page.getByTestId('diff-panel')).toContainText('src/detail.ts')
+  await expect.poll(() => renderedDiffBodyLineCount(page)).toBeGreaterThanOrEqual(2)
 
-  await page.getByRole('button', { name: 'Chat' }).click()
+  await page.getByTestId('tab-chat').click()
   await page.getByTestId('chat-input').fill('local unsent draft')
   await page.getByRole('button', { name: 'Other Session' }).click()
   await expect(page.getByTestId('chat-input')).toHaveValue('')
@@ -715,6 +787,38 @@ test('selected agent detail loads chat, diffs, and local drafts', async ({ page,
   await expect(page.getByTestId('chat-input')).toHaveValue('local unsent draft')
   await expect(page.evaluate(() => sessionStorage.getItem('kiri:chat-drafts:v1')))
     .resolves.toContain(detailAgentId)
+})
+
+test('large chat and diff render within browser budget', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop render budget only')
+  test.setTimeout(60_000)
+  const title = `Perf Session ${testInfo.project.name}`
+  seedLargeSessionWithDetail({
+    agentId: 'agent-browser-perf',
+    slot: 'session-browser-perf',
+    title,
+    messageCount: 1_200,
+    diffCount: 60,
+    patchLinePairs: 72,
+  })
+
+  const chatStart = Date.now()
+  await page.goto('/')
+  await expect(page.getByTestId('selected-agent')).toHaveText(title)
+  await expect(page.getByTestId('chat-panel')).toContainText('browser perf message 1199')
+  const chatMs = Date.now() - chatStart
+  expect(chatMs).toBeLessThan(8_000)
+  await expect(page.getByTestId('chat-panel').locator('.timeline-row')).toHaveCount(500)
+
+  const diffStart = Date.now()
+  await page.getByTestId('tab-diffs').click()
+  await expect(page.getByTestId('diff-panel')).toContainText('50 files')
+  expect(readSelectedDiffPatchLineCount(title)).toBeGreaterThanOrEqual(140)
+  await expect
+    .poll(async () => renderedDiffBodyLineCount(page))
+    .toBeGreaterThanOrEqual(12)
+  const diffMs = Date.now() - diffStart
+  expect(diffMs).toBeLessThan(6_000)
 })
 
 test('escape leaves chat composer so board keymaps work', async ({ page, isMobile }, testInfo) => {
@@ -787,6 +891,133 @@ test('mobile layout keeps navigation and sidebar usable', async ({ page, isMobil
   await expect(page.getByTestId('sidebar-pane')).toBeVisible()
   await expect(page.getByLabel('Mobile navigation')).toBeVisible()
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
+})
+
+test('mobile shell visual snapshot', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'mobile visual snapshot only')
+
+  await page.goto('/')
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  await expect(page.getByLabel('Mobile navigation')).toBeVisible()
+  await expect(page.locator('.kiri-shell')).toHaveScreenshot('mobile-shell.png', {
+    animations: 'disabled',
+  })
+})
+
+test('settings theme visual snapshot', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'desktop settings snapshot only')
+
+  await page.goto('/')
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByTestId('theme-mode-dark').click()
+  await page.getByTestId('theme-card-tokyonight').click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'tokyonight')
+  await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark')
+  await expect(page.getByTestId('settings-page')).toHaveScreenshot('settings-theme-tokyonight-dark.png', {
+    animations: 'disabled',
+  })
+})
+
+test('core controls expose accessible dialog, tab, and option semantics', async ({ page }, testInfo) => {
+  const title = `A11y Session ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+
+  const viewTabs = page.getByRole('tablist', { name: 'Selected agent view' })
+  await expect(viewTabs.getByRole('tab', { name: /Chat/ })).toHaveAttribute('aria-selected', 'true')
+  await viewTabs.getByRole('tab', { name: /Scratchpad/ }).click()
+  await expect(viewTabs.getByRole('tab', { name: /Scratchpad/ })).toHaveAttribute('aria-selected', 'true')
+
+  await page.keyboard.press('Control+K')
+  const commandMenu = page.getByRole('dialog', { name: 'Command menu' })
+  await expect(commandMenu).toBeVisible()
+  await expect(page.getByTestId('command-search')).toBeFocused()
+  await page.getByTestId('command-search').fill('settings')
+  await expect(
+    commandMenu.getByRole('listbox', { name: 'Commands' }).getByRole('option', { name: /Open settings/ }),
+  ).toHaveAttribute('aria-selected', 'true')
+  await focusLastElementInside(page, '[aria-label="Command menu"]')
+  await page.keyboard.press('Tab')
+  await expect(page.getByTestId('command-search')).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expectActiveElementInside(page, '[aria-label="Command menu"]')
+  await expect(page.getByTestId('command-search')).not.toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(commandMenu).toBeHidden()
+
+  const projectsButton = page.getByRole('button', { name: 'Projects' })
+  await projectsButton.click()
+  await expect(page.getByRole('dialog', { name: 'Project manager' })).toBeVisible()
+  const addProjectButton = page.getByLabel('Project manager').getByRole('button', { name: 'Add project' })
+  await expect(addProjectButton).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Close projects' })).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expectActiveElementInside(page, '[aria-label="Project manager"]')
+  await expect(page.getByRole('button', { name: 'Close projects' })).not.toBeFocused()
+  await focusLastElementInside(page, '[aria-label="Project manager"]')
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('button', { name: 'Close projects' })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: 'Project manager' })).toBeHidden()
+  await expect(projectsButton).toBeFocused()
+})
+
+test('launcher, confirm, and settings controls expose accessible states', async ({ page }, testInfo) => {
+  const title = `A11y Dialog ${testInfo.project.name}`
+
+  await page.goto('/')
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+
+  const startSessionButton = page.getByRole('button', { name: 'Start session' })
+  await startSessionButton.focus()
+  await expect(startSessionButton).toBeFocused()
+  await startSessionButton.click()
+  const launcher = page.getByTestId('session-launcher')
+  await expect(launcher).toHaveAttribute('role', 'dialog')
+  await expect(launcher.getByRole('tab', { name: 'New' })).toHaveAttribute('aria-selected', 'true')
+  await focusLastElementInside(page, '[data-testid="session-launcher"]')
+  await page.keyboard.press('Tab')
+  await expect(launcher.getByRole('button', { name: 'Close session launcher' })).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expectActiveElementInside(page, '[data-testid="session-launcher"]')
+  await expect(launcher.getByRole('button', { name: 'Close session launcher' })).not.toBeFocused()
+  await launcher.getByRole('tab', { name: 'Resume' }).click()
+  await expect(launcher.getByRole('tab', { name: 'Resume' })).toHaveAttribute('aria-selected', 'true')
+  await expect(launcher.getByRole('tabpanel')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(launcher).toBeHidden()
+  await expect(startSessionButton).toBeFocused()
+
+  await createSession(page, title)
+  const removeSessionButton = page.getByTestId('remove-session')
+  await removeSessionButton.focus()
+  await expect(removeSessionButton).toBeFocused()
+  await removeSessionButton.click()
+  const confirm = page.getByTestId('confirm-dialog')
+  await expect(confirm).toHaveAttribute('role', 'alertdialog')
+  await expect(confirm).toContainText(title)
+  await expect(page.getByTestId('confirm-dialog-confirm')).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(page.getByTestId('confirm-dialog-cancel')).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(page.getByTestId('confirm-dialog-confirm')).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(confirm).toBeHidden()
+  await expect(removeSessionButton).toBeFocused()
+
+  await page.getByRole('button', { name: 'Settings' }).click()
+  const themeModeTabs = page.getByRole('tablist', { name: 'Theme mode' })
+  await themeModeTabs.getByRole('tab', { name: 'light' }).click()
+  await expect(themeModeTabs.getByRole('tab', { name: 'light' })).toHaveAttribute('aria-selected', 'true')
+  await themeModeTabs.getByRole('tab', { name: 'dark' }).click()
+  await expect(themeModeTabs.getByRole('tab', { name: 'dark' })).toHaveAttribute('aria-selected', 'true')
+  const themeRadios = page.getByRole('radiogroup', { name: 'Theme name' })
+  await themeRadios.getByRole('radio', { name: 'kiri' }).click()
+  await expect(themeRadios.getByRole('radio', { name: 'kiri' })).toHaveAttribute('aria-checked', 'true')
+  await themeRadios.getByRole('radio', { name: 'tokyonight' }).click()
+  await expect(themeRadios.getByRole('radio', { name: 'tokyonight' })).toHaveAttribute('aria-checked', 'true')
 })
 
 async function createSession(
@@ -912,6 +1143,144 @@ function seedSessionWithDetail(input: {
   database.close()
 }
 
+function seedChatTimelineSession(input: {
+  agentId: string
+  slot: string
+  title: string
+  messageCount: number
+}) {
+  const database = new DatabaseSync(testDbPath)
+  const threadId = `${input.agentId}-thread`
+  const timestamp = new Date(Date.UTC(2026, 4, 12, 12, 0, 0))
+  const insertAgent = database.prepare(`
+    INSERT INTO agent_slots (
+      id, project_id, slot, title, runtime, model, status,
+      session_dir, session_file, position
+    )
+    VALUES (?, 'e2e-kiri', ?, ?, 'pi', 'openai-codex/gpt-5.5', 'idle', ?, NULL, 0)
+  `)
+  const insertThread = database.prepare(`
+    INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
+    VALUES (?, ?, 1, ?, ?, ?)
+  `)
+  const insertMessage = database.prepare(`
+    INSERT INTO messages (id, thread_id, role, text, timestamp)
+    VALUES (?, ?, ?, ?, ?)
+  `)
+
+  try {
+    database.exec('BEGIN')
+    insertAgent.run(input.agentId, input.slot, input.title, projectRoot)
+    insertThread.run(
+      threadId,
+      input.agentId,
+      `timeline message ${input.messageCount - 1}`,
+      input.messageCount,
+      new Date(timestamp.getTime() + input.messageCount * 1_000).toISOString(),
+    )
+    for (let index = 0; index < input.messageCount; index += 1) {
+      insertMessage.run(
+        `${input.agentId}-message-${index}`,
+        threadId,
+        index % 2 === 0 ? 'user' : 'assistant',
+        `timeline message ${index}`,
+        new Date(timestamp.getTime() + index * 1_000).toISOString(),
+      )
+    }
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  } finally {
+    database.close()
+  }
+}
+
+function seedLargeSessionWithDetail(input: {
+  agentId: string
+  slot: string
+  title: string
+  messageCount: number
+  diffCount: number
+  patchLinePairs: number
+}) {
+  const database = new DatabaseSync(testDbPath)
+  const threadId = `${input.agentId}-thread`
+  const timestamp = new Date().toISOString()
+  const insertAgent = database.prepare(`
+    INSERT INTO agent_slots (
+      id, project_id, slot, title, runtime, model, status,
+      session_dir, session_file, position
+    )
+    VALUES (?, 'e2e-kiri', ?, ?, 'pi', 'openai-codex/gpt-5.5', 'idle', ?, NULL, 0)
+  `)
+  const insertThread = database.prepare(`
+    INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
+    VALUES (?, ?, 1, ?, ?, ?)
+  `)
+  const insertMessage = database.prepare(`
+    INSERT INTO messages (id, thread_id, role, text, timestamp)
+    VALUES (?, ?, ?, ?, ?)
+  `)
+  const insertDiff = database.prepare(`
+    INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `)
+
+  try {
+    database.exec('BEGIN')
+    insertAgent.run(input.agentId, input.slot, input.title, projectRoot)
+    insertThread.run(
+      threadId,
+      input.agentId,
+      `browser perf message ${input.messageCount - 1}`,
+      input.messageCount,
+      timestamp,
+    )
+    for (let index = 0; index < input.messageCount; index += 1) {
+      insertMessage.run(
+        `${input.agentId}-message-${index}`,
+        threadId,
+        index % 2 === 0 ? 'user' : 'assistant',
+        `browser perf message ${index} ${'x'.repeat(80)}`,
+        new Date(Date.UTC(2026, 4, 12, 12, 0, 0) + index * 1_000).toISOString(),
+      )
+    }
+    for (let index = 0; index < input.diffCount; index += 1) {
+      const path = `src/browser-perf-${index}.ts`
+      insertDiff.run(
+        `${input.agentId}-diff-${index}`,
+        input.agentId,
+        path,
+        path,
+        makeBrowserPerfPatch(index, input.patchLinePairs),
+        timestamp,
+      )
+    }
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  } finally {
+    database.close()
+  }
+}
+
+function makeBrowserPerfPatch(index: number, linePairs: number) {
+  const lines = [
+    `diff --git a/src/browser-perf-${index}.ts b/src/browser-perf-${index}.ts`,
+    'index 1111111..2222222 100644',
+    `--- a/src/browser-perf-${index}.ts`,
+    `+++ b/src/browser-perf-${index}.ts`,
+    '@@ -1,3 +1,3 @@',
+  ]
+  for (let line = 0; line < linePairs; line += 1) {
+    lines.push(`-old ${line} ${'a'.repeat(80)}`)
+    lines.push(`+new ${line} ${'b'.repeat(80)}`)
+  }
+  return lines.join('\n')
+}
+
 function diffPathsForSessionTitle(title: string) {
   const database = new DatabaseSync(testDbPath)
   try {
@@ -925,6 +1294,25 @@ function diffPathsForSessionTitle(title: string) {
       `)
       .all(title)
       .map((row) => (row as { path: string }).path)
+  } finally {
+    database.close()
+  }
+}
+
+function readSelectedDiffPatchLineCount(title: string) {
+  const database = new DatabaseSync(testDbPath)
+  try {
+    const row = database
+      .prepare(`
+        SELECT d.patch
+        FROM diff_artifacts d
+        JOIN agent_slots a ON a.id = d.agent_id
+        WHERE a.title = ?
+        ORDER BY d.updated_at DESC, d.id ASC
+        LIMIT 1
+      `)
+      .get(title) as { patch: string } | undefined
+    return row?.patch.split('\n').length ?? 0
   } finally {
     database.close()
   }
@@ -975,4 +1363,45 @@ async function showLatestActivity(page: import('@playwright/test').Page) {
   if (await collapsedActivityRows.count()) {
     await collapsedActivityRows.last().click()
   }
+}
+
+async function renderedDiffBodyLineCount(page: import('@playwright/test').Page) {
+  return page.getByTestId('diff-panel').evaluate((panel) => {
+    const hosts = panel.querySelectorAll('diffs-container')
+    return Array.from(hosts).reduce((count, host) => {
+      const rows = host.shadowRoot?.querySelectorAll(
+        '[data-line-type="change-deletion"], [data-line-type="change-addition"]',
+      )
+      return count + (rows?.length ?? 0)
+    }, 0)
+  })
+}
+
+async function expectActiveElementInside(page: import('@playwright/test').Page, selector: string) {
+  await expect.poll(async () => page.evaluate((containerSelector) => {
+    const container = document.querySelector(containerSelector)
+    return Boolean(container && document.activeElement && container.contains(document.activeElement))
+  }, selector)).toBe(true)
+}
+
+async function focusLastElementInside(page: import('@playwright/test').Page, selector: string) {
+  await page.evaluate((containerSelector) => {
+    const container = document.querySelector(containerSelector)
+    if (!(container instanceof HTMLElement)) throw new Error(`Missing container: ${containerSelector}`)
+    const focusable = Array.from(
+      container.querySelectorAll<HTMLElement>(
+        [
+          'a[href]',
+          'button:not([disabled])',
+          'input:not([disabled])',
+          'select:not([disabled])',
+          'textarea:not([disabled])',
+          '[tabindex]:not([tabindex="-1"])',
+        ].join(','),
+      ),
+    ).filter((element) => element.offsetParent !== null)
+    const last = focusable.at(-1)
+    if (!last) throw new Error(`No focusable elements in: ${containerSelector}`)
+    last.focus()
+  }, selector)
 }

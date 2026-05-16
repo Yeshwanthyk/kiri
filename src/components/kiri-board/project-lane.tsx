@@ -220,7 +220,7 @@ function AgentCellState({
   if (status === 'idle') {
     const ago = formatAgo(updatedAt)
     if (!ago) return null
-    return <span className="agent-cell-state">{ago}</span>
+    return <span className="agent-cell-state" suppressHydrationWarning>{ago}</span>
   }
   const showLabel = status === 'blocked' || status === 'failed'
   return (
