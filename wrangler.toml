@@ -1,0 +1,3 @@
+name = "kiri"
+pages_build_output_dir = "dist/site"
+compatibility_date = "2026-05-17"
