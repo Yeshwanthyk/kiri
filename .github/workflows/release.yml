@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos-desktop:
+    name: macOS desktop
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Assert release tag
+        if: github.ref_type == 'tag'
+        run: node scripts/assert-release-version.mjs "${GITHUB_REF_NAME}"
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build desktop DMG
+        run: pnpm dist:desktop
+
+      - name: Verify packaged app
+        run: KIRI_ASSERT_PACKAGED_APP=1 pnpm exec vitest run tests/server/desktop-package-contract.test.ts tests/server/kiri-mcp.test.ts
+
+      - name: Audit packaged app privacy
+        run: |
+          if strings "dist/mac-arm64/kiri.app/Contents/Resources/app.asar" | grep -E '(/Users/yesh|Users/yesh|\.kiri/userdata|Documents/work/ResQlaw|ResQlaw)'; then
+            echo "Packaged app contains local/private strings"
+            exit 1
+          fi
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiri-macos-arm64
+          path: dist/kiri-*-arm64.dmg
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/kiri-*-arm64.dmg
+          generate_release_notes: true
