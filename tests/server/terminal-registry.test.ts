@@ -133,6 +133,51 @@ describe('terminal registry', () => {
     expect(closed.send).not.toHaveBeenCalledWith('next')
   })
 
+  it('trims replay on chunk boundaries before slicing a single oversized chunk', () => {
+    const { registry } = createRegistry()
+    const session = registry.register({
+      key: 'agent-1:runtime',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: proc(),
+      initialBuffer: '',
+    })
+
+    registry.append(session, 'abcde')
+    registry.append(session, 'fghij')
+    registry.append(session, 'klm')
+
+    expect(session.buffer).toBe('fghijklm')
+    expect(session.replayBytes).toBe(8)
+
+    registry.append(session, 'mnopqrstuvwxyz')
+
+    expect(session.buffer).toBe('opqrstuvwxyz')
+    expect(session.replayChunks).toEqual(['opqrstuvwxyz'])
+    expect(session.replayBytes).toBe(12)
+  })
+
+  it('sends the chunk-trimmed replay buffer on attach', () => {
+    const { registry } = createRegistry()
+    const session = registry.register({
+      key: 'agent-1:runtime',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: proc(),
+      initialBuffer: '',
+    })
+    registry.append(session, 'abcde')
+    registry.append(session, 'fghij')
+    registry.append(session, 'klm')
+    const attached = socket(1)
+
+    registry.attach(session, attached)
+
+    expect(attached.send).toHaveBeenCalledWith('fghijklm')
+  })
+
   it('kills idle sessions after the last socket detaches and cancels idle kill on reattach', () => {
     const timers: Array<() => void> = []
     const activeTimers = new Set<ReturnType<typeof setTimeout>>()

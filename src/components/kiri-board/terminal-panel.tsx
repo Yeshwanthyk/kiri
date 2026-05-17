@@ -19,6 +19,19 @@ type TerminalDisposable = { dispose: () => void }
 const wheelDeltaPixel = 0
 const wheelDeltaLine = 1
 const wheelDeltaPage = 2
+const terminalScrollbackRows = 10_000
+
+type TerminalDebugSnapshot = {
+  readonly bufferType: 'normal' | 'alternate'
+  readonly baseY: number
+  readonly viewportY: number
+  readonly length: number
+  readonly replayBytes: number
+  readonly clearScrollbackCount: number
+  readonly resetCount: number
+  readonly alternateEnterCount: number
+  readonly alternateExitCount: number
+}
 
 export function TerminalPanel({
   agent,
@@ -48,9 +61,19 @@ export function TerminalPanel({
   const typographyRef = React.useRef(typography)
   const transcriptEnabledRef = React.useRef(false)
   const previousVisibleRef = React.useRef(visible)
+  const debugEnabledRef = React.useRef(false)
+  const replayBytesRef = React.useRef(0)
+  const firstPayloadSeenRef = React.useRef(false)
+  const sequenceCountsRef = React.useRef({
+    clearScrollback: 0,
+    reset: 0,
+    alternateEnter: 0,
+    alternateExit: 0,
+  })
   const [status, setStatus] = React.useState('Connecting')
   const [transcript, setTranscript] = React.useState<string | null>(null)
   const [connectionGeneration, setConnectionGeneration] = React.useState(0)
+  const [debugSnapshot, setDebugSnapshot] = React.useState<TerminalDebugSnapshot | null>(null)
 
   React.useEffect(() => {
     getTerminalConfigRef.current = getTerminalConfig
@@ -95,7 +118,33 @@ export function TerminalPanel({
     let resizeObserver: ResizeObserver | null = null
     let pendingWrite = ''
     let writeFrame: number | null = null
+    let debugFrame: number | null = null
     const terminalDisposables: TerminalDisposable[] = []
+
+    function captureDebugSnapshot() {
+      if (!debugEnabledRef.current || !term) return
+      const buffer = term.buffer.active
+      const counts = sequenceCountsRef.current
+      setDebugSnapshot({
+        bufferType: buffer.type,
+        baseY: buffer.baseY,
+        viewportY: buffer.viewportY,
+        length: buffer.length,
+        replayBytes: replayBytesRef.current,
+        clearScrollbackCount: counts.clearScrollback,
+        resetCount: counts.reset,
+        alternateEnterCount: counts.alternateEnter,
+        alternateExitCount: counts.alternateExit,
+      })
+    }
+
+    function scheduleDebugSnapshot() {
+      if (!debugEnabledRef.current || debugFrame !== null) return
+      debugFrame = window.requestAnimationFrame(() => {
+        debugFrame = null
+        captureDebugSnapshot()
+      })
+    }
 
     function enqueueWrite(data: string) {
       if (!term) return
@@ -105,8 +154,21 @@ export function TerminalPanel({
         writeFrame = null
         const chunk = pendingWrite
         pendingWrite = ''
-        term?.write(chunk)
+        term?.write(chunk, scheduleDebugSnapshot)
       })
+    }
+
+    function recordTerminalPayload(data: string) {
+      if (!debugEnabledRef.current) return
+      if (!firstPayloadSeenRef.current) {
+        firstPayloadSeenRef.current = true
+        replayBytesRef.current = data.length
+      }
+      const counts = sequenceCountsRef.current
+      counts.clearScrollback += countOccurrences(data, '\x1b[3J')
+      counts.reset += countOccurrences(data, '\x1bc')
+      counts.alternateEnter += countOccurrences(data, '\x1b[?1049h')
+      counts.alternateExit += countOccurrences(data, '\x1b[?1049l')
     }
 
     function appendTranscript(data: string) {
@@ -119,6 +181,16 @@ export function TerminalPanel({
       if (!host) return
       host.textContent = ''
       transcriptEnabledRef.current = window.localStorage.getItem('kiri:terminal-transcript') === '1'
+      debugEnabledRef.current = window.localStorage.getItem('kiri:terminal-debug') === '1'
+      replayBytesRef.current = 0
+      firstPayloadSeenRef.current = false
+      sequenceCountsRef.current = {
+        clearScrollback: 0,
+        reset: 0,
+        alternateEnter: 0,
+        alternateExit: 0,
+      }
+      setDebugSnapshot(null)
       setTranscript(transcriptEnabledRef.current ? '' : null)
       setStatus('Loading')
 
@@ -136,7 +208,7 @@ export function TerminalPanel({
           fontFamily: typographyOptions.fontFamily,
           cursorBlink: true,
           convertEol: true,
-          scrollback: 1000,
+          scrollback: terminalScrollbackRows,
           theme: terminalTheme(),
         })
         terminalRef.current = term
@@ -183,6 +255,7 @@ export function TerminalPanel({
         }
         socket.onmessage = (event) => {
           if (typeof event.data === 'string') {
+            recordTerminalPayload(event.data)
             enqueueWrite(event.data)
             appendTranscript(event.data)
           }
@@ -201,6 +274,9 @@ export function TerminalPanel({
             if (socket?.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify({ type: 'input', data }))
             }
+          }),
+          term.onScroll(() => {
+            scheduleDebugSnapshot()
           }),
           term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
             if (socket?.readyState === WebSocket.OPEN) {
@@ -226,6 +302,7 @@ export function TerminalPanel({
       }
       socket?.close()
       if (writeFrame !== null) window.cancelAnimationFrame(writeFrame)
+      if (debugFrame !== null) window.cancelAnimationFrame(debugFrame)
       resizeObserver?.disconnect()
       for (const disposable of terminalDisposables) {
         disposable.dispose()
@@ -234,6 +311,7 @@ export function TerminalPanel({
       fitAddonRef.current = null
       terminalRef.current = null
       transcriptEnabledRef.current = false
+      debugEnabledRef.current = false
       term?.dispose()
     }
   }, [agent.id, connectionGeneration, mode, project.cwd, toggleFocusKey])
@@ -245,6 +323,15 @@ export function TerminalPanel({
       className="terminal-panel"
       data-terminal-mode={mode}
       data-testid={visible ? 'terminal-panel' : undefined}
+      data-terminal-buffer-type={debugSnapshot?.bufferType}
+      data-terminal-base-y={debugSnapshot?.baseY}
+      data-terminal-viewport-y={debugSnapshot?.viewportY}
+      data-terminal-buffer-length={debugSnapshot?.length}
+      data-terminal-replay-bytes={debugSnapshot?.replayBytes}
+      data-terminal-clear-scrollback-count={debugSnapshot?.clearScrollbackCount}
+      data-terminal-reset-count={debugSnapshot?.resetCount}
+      data-terminal-alternate-enter-count={debugSnapshot?.alternateEnterCount}
+      data-terminal-alternate-exit-count={debugSnapshot?.alternateExitCount}
       hidden={!visible}
     >
       <div className="terminal-header">
@@ -311,6 +398,16 @@ export function terminalShouldCustomScrollWheel(
   buffer: { readonly type: 'normal' | 'alternate'; readonly baseY: number } | undefined,
 ) {
   return buffer?.type === 'normal' && buffer.baseY > 0
+}
+
+function countOccurrences(value: string, pattern: string) {
+  let count = 0
+  let index = value.indexOf(pattern)
+  while (index !== -1) {
+    count += 1
+    index = value.indexOf(pattern, index + pattern.length)
+  }
+  return count
 }
 
 function isTerminalToggleFocusEvent(event: KeyboardEvent, key: string) {

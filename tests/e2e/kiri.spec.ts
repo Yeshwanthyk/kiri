@@ -27,6 +27,7 @@ test.afterAll(async () => {
 test.beforeEach(async ({ page }, testInfo) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('kiri:terminal-transcript', '1')
+    window.localStorage.setItem('kiri:terminal-debug', '1')
   })
   if (fakeCodexServer) fakeCodexServer.requests.length = 0
   resetE2eProjectWorktree()
@@ -637,6 +638,12 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
   )
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('terminal-transcript')).toContainText('KIRI_SCROLL_1200')
+  await expect.poll(async () =>
+    Number(await page.getByTestId('terminal-panel').getAttribute('data-terminal-base-y') ?? 0),
+  ).toBeGreaterThan(0)
+  const baseYBeforeSwitch = Number(
+    await page.getByTestId('terminal-panel').getAttribute('data-terminal-base-y') ?? 0,
+  )
 
   await page.getByTestId('tab-chat').click()
   await expect(page.getByTestId('chat-panel')).toBeVisible()
@@ -649,6 +656,9 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
       element === document.querySelector('[data-testid="terminal-panel"] .xterm-helper-textarea'),
     ),
   ).toBe(true)
+  await expect.poll(async () =>
+    Number(await page.getByTestId('terminal-panel').getAttribute('data-terminal-base-y') ?? 0),
+  ).toBeGreaterThanOrEqual(baseYBeforeSwitch)
   await terminalInput.click()
   await page.keyboard.type(
     'kill -0 "$KIRI_E2E_PID" && echo preserved:$KIRI_E2E_MARKER:$PWD; kill "$KIRI_E2E_PID"',

@@ -26,7 +26,9 @@ export type TerminalRegistrySession = {
   readonly label: string
   readonly proc: TerminalRegistryProc
   readonly sockets: Set<TerminalRegistrySocket>
+  readonly replayChunks: string[]
   buffer: string
+  replayBytes: number
   idleTimer: ReturnType<typeof setTimeout> | null
   exited: boolean
 }
@@ -84,10 +86,14 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       label: inputSession.label,
       proc: inputSession.proc,
       sockets: new Set(),
+      replayChunks: inputSession.initialBuffer ? [inputSession.initialBuffer] : [],
       buffer: inputSession.initialBuffer,
+      replayBytes: inputSession.initialBuffer.length,
       idleTimer: null,
       exited: false,
     }
+    trimReplay(session)
+    session.buffer = session.replayChunks.join('')
     sessions.set(session.key, session)
     return session
   }
@@ -122,7 +128,11 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   }
 
   function append(session: TerminalRegistrySession, data: string) {
-    session.buffer = `${session.buffer}${data}`.slice(-input.maxReplayBytes)
+    if (!data) return
+    session.replayChunks.push(data)
+    session.replayBytes += data.length
+    trimReplay(session)
+    session.buffer = session.replayChunks.join('')
   }
 
   function broadcast(session: TerminalRegistrySession, data: string) {
@@ -170,6 +180,20 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     exit,
     closeAgentRuntime,
     closeAll,
+  }
+
+  function trimReplay(session: TerminalRegistrySession) {
+    while (
+      session.replayBytes > input.maxReplayBytes &&
+      session.replayChunks.length > 1
+    ) {
+      const removed = session.replayChunks.shift() ?? ''
+      session.replayBytes -= removed.length
+    }
+    if (session.replayBytes <= input.maxReplayBytes) return
+    const tail = session.replayChunks[0]?.slice(-input.maxReplayBytes) ?? ''
+    session.replayChunks.splice(0, session.replayChunks.length, tail)
+    session.replayBytes = tail.length
   }
 
   function deleteOwnedSession(session: TerminalRegistrySession) {
