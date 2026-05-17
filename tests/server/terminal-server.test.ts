@@ -1,4 +1,7 @@
 import { createServer, type Server } from 'node:http'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Effect } from 'effect'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -50,6 +53,109 @@ describe('terminal server', () => {
     } finally {
       await first.close()
       await second.close()
+    }
+  })
+
+  it('spawns a runtime PTY and writes queued workflow paste input', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-terminal-paste-'))
+    const capturePath = join(root, 'capture.txt')
+    const scriptPath = join(root, 'fake-agent.sh')
+    writeFileSync(scriptPath, [
+      '#!/bin/sh',
+      'IFS= read -r line',
+      'printf "%s" "$line" > "$KIRI_CAPTURE_PATH"',
+      'sleep 5',
+    ].join('\n'))
+    chmodSync(scriptPath, 0o755)
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'pi',
+        sessionDir: root,
+        sessionFile: null,
+        model: 'test-model',
+        cwd: root,
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: scriptPath,
+        args: [],
+        cwd: root,
+        env: {
+          ...process.env,
+          KIRI_CAPTURE_PATH: capturePath,
+        },
+        label: 'pi',
+      }),
+      takeAgentTerminalInputs: () => [{
+        text: 'workflow terminal body',
+        submit: true,
+        createdAt: '2026-01-01T00:00:00.000Z',
+      }],
+    })
+
+    try {
+      await expect(service.spawnAgentRuntime({
+        agentId: 'agent-1',
+      })).resolves.toMatchObject({
+        agentId: 'agent-1',
+        mode: 'runtime',
+      })
+      await expect.poll(() => readFileSync(capturePath, 'utf8')).toBe('workflow terminal body')
+    } finally {
+      await service.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('requeues pending workflow paste input when PTY write fails', async () => {
+    const pending = [{
+      text: 'retry me',
+      submit: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]
+    const requeue = vi.fn()
+    const kill = vi.fn()
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'pi',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake',
+        args: [],
+        cwd: '/tmp/project',
+        env: process.env,
+        label: 'pi',
+      }),
+      spawnPty: () => ({
+        write: () => {
+          throw new Error('write failed')
+        },
+        resize: vi.fn(),
+        kill,
+        onData: vi.fn(),
+        onExit: vi.fn(),
+      } as never),
+      takeAgentTerminalInputs: () => pending,
+      requeueAgentTerminalInputs: requeue,
+    })
+
+    try {
+      await expect(service.spawnAgentRuntime({ agentId: 'agent-1' }))
+        .rejects.toThrow('write failed')
+      expect(requeue).toHaveBeenCalledWith('agent-1', pending)
+      expect(kill).toHaveBeenCalledTimes(1)
+      await expect(service.spawnAgentRuntime({ agentId: 'agent-1' }))
+        .rejects.toThrow('write failed')
+      expect(requeue).toHaveBeenCalledTimes(2)
+    } finally {
+      await service.close()
     }
   })
 

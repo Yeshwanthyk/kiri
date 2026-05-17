@@ -191,8 +191,8 @@ export type KiriControlDependencies = {
   readonly getWorkflowRun: (id: string) => unknown
   readonly validateWorkflow: (input: CreateWorkflowRunInput) => unknown
   readonly createWorkflowRun: (input: CreateWorkflowRunInput) => unknown
-  readonly dispatchWorkflowRun: (input: WorkflowRunOperationInput) => unknown
-  readonly retriggerWorkflowItem: (input: WorkflowItemOperationInput) => unknown
+  readonly dispatchWorkflowRun: (input: WorkflowRunOperationInput) => unknown | Promise<unknown>
+  readonly retriggerWorkflowItem: (input: WorkflowItemOperationInput) => unknown | Promise<unknown>
   readonly trackWorkflowItem: (input: Pick<WorkflowItemOperationInput, 'itemId'>) => unknown
   readonly untrackWorkflowItem: (input: Pick<WorkflowItemOperationInput, 'itemId'>) => unknown
   readonly archiveWorkflowRun: (input: WorkflowRunOperationInput) => unknown
@@ -346,13 +346,13 @@ export function makeKiriControl(
 
   const dispatchWorkflowRunEffect = Effect.fn('KiriControl.dispatchWorkflowRun')(
     function* (input: WorkflowRunOperationInput) {
-      return yield* fromSync(() => dependencies.dispatchWorkflowRun(input))
+      return yield* fromMaybePromise(() => dependencies.dispatchWorkflowRun(input))
     },
   )
 
   const retriggerWorkflowItemEffect = Effect.fn('KiriControl.retriggerWorkflowItem')(
     function* (input: WorkflowItemOperationInput) {
-      return yield* fromSync(() => dependencies.retriggerWorkflowItem(input))
+      return yield* fromMaybePromise(() => dependencies.retriggerWorkflowItem(input))
     },
   )
 
@@ -478,6 +478,13 @@ function sessionSummaryFromAgent(
 function fromSync<A>(evaluate: () => A) {
   return Effect.try({
     try: evaluate,
+    catch: normalizeError,
+  })
+}
+
+function fromMaybePromise<A>(evaluate: () => A | Promise<A>) {
+  return Effect.tryPromise({
+    try: async () => evaluate(),
     catch: normalizeError,
   })
 }

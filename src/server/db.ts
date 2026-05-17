@@ -69,10 +69,13 @@ import {
   getAgentLaunchConfig as getAgentLaunchConfigFromDb,
   getAgentRuntimeState as getAgentRuntimeStateFromDb,
   getAgentThinkingLevel as getAgentThinkingLevelFromDb,
+  queueAgentTerminalInput as queueAgentTerminalInputInDb,
+  requeueAgentTerminalInputs as requeueAgentTerminalInputsInDb,
   readContextUsage,
   readPendingQuestion,
   setAgentRuntimeState as setAgentRuntimeStateInDb,
   setAgentStatus as setAgentStatusInDb,
+  takeAgentTerminalInputs as takeAgentTerminalInputsFromDb,
   upsertAgentContextUsage,
 } from './db/runtime-state'
 import {
@@ -475,6 +478,25 @@ export function getAgentRuntimeState(agentId: string) {
 
 export function setAgentRuntimeState(agentId: string, state: Record<string, unknown>) {
   setAgentRuntimeStateInDb(getDb(), agentId, state)
+}
+
+export function queueAgentTerminalInput(input: {
+  readonly agentId: string
+  readonly text: string
+  readonly submit: boolean
+}) {
+  queueAgentTerminalInputInDb(getDb(), input.agentId, input)
+}
+
+export function takeAgentTerminalInputs(agentId: string) {
+  return takeAgentTerminalInputsFromDb(getDb(), agentId)
+}
+
+export function requeueAgentTerminalInputs(
+  agentId: string,
+  inputs: ReturnType<typeof takeAgentTerminalInputsFromDb>,
+) {
+  requeueAgentTerminalInputsInDb(getDb(), agentId, inputs)
 }
 
 export function clearAgentRuntimeState(agentId: string) {

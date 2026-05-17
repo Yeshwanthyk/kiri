@@ -13,10 +13,13 @@ import {
   getAgentLaunchConfig,
   getAgentRuntimeState,
   getAgentThinkingLevel,
+  queueAgentTerminalInput,
   readContextUsage,
   readPendingQuestion,
+  requeueAgentTerminalInputs,
   setAgentRuntimeState,
   setAgentStatus,
+  takeAgentTerminalInputs,
   upsertAgentContextUsage,
 } from '../../src/server/db/runtime-state'
 
@@ -99,6 +102,7 @@ describe('runtime state repository', () => {
       expect(() => getAgentRuntimeState(database, agentId)).toThrow(
         `Invalid runtime state JSON for agent ${agentId}`,
       )
+      clearAgentRuntimeState(database, agentId)
 
       setAgentStatus(database, agentId, 'running')
       expect(database.prepare('SELECT status FROM agent_slots WHERE id = ?').get(agentId))
@@ -153,6 +157,37 @@ describe('runtime state repository', () => {
       clearAgentContextUsage(database, agentId)
       expect(database.prepare('SELECT COUNT(*) AS count FROM agent_context_usage').get())
         .toEqual({ count: 0 })
+
+      queueAgentTerminalInput(database, agentId, {
+        text: 'first',
+        submit: true,
+        createdAt: '2026-01-04T00:00:00.000Z',
+      })
+      queueAgentTerminalInput(database, agentId, {
+        text: 'second',
+        submit: false,
+        createdAt: '2026-01-04T00:00:01.000Z',
+      })
+      expect(takeAgentTerminalInputs(database, agentId)).toEqual([{
+        text: 'first',
+        submit: true,
+        createdAt: '2026-01-04T00:00:00.000Z',
+      }, {
+        text: 'second',
+        submit: false,
+        createdAt: '2026-01-04T00:00:01.000Z',
+      }])
+      expect(takeAgentTerminalInputs(database, agentId)).toEqual([])
+      requeueAgentTerminalInputs(database, agentId, [{
+        text: 'retry',
+        submit: true,
+        createdAt: '2026-01-04T00:00:02.000Z',
+      }])
+      expect(takeAgentTerminalInputs(database, agentId)).toEqual([{
+        text: 'retry',
+        submit: true,
+        createdAt: '2026-01-04T00:00:02.000Z',
+      }])
     } finally {
       database.close()
       rmSync(root, { recursive: true, force: true })

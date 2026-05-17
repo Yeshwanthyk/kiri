@@ -30,6 +30,12 @@ type RuntimeModel = {
   readonly model: string
 }
 
+export type PendingTerminalInput = {
+  readonly text: string
+  readonly submit: boolean
+  readonly createdAt: string
+}
+
 export function getAgentLaunchConfig(database: DatabaseSync, agentId: string) {
   const row = database
     .prepare(
@@ -78,6 +84,60 @@ export function setAgentRuntimeState(
   database
     .prepare('UPDATE agent_slots SET runtime_state_json = ? WHERE id = ?')
     .run(JSON.stringify(state), agentId)
+}
+
+export function queueAgentTerminalInput(
+  database: DatabaseSync,
+  agentId: string,
+  input: {
+    readonly text: string
+    readonly submit: boolean
+    readonly createdAt?: string
+  },
+) {
+  const state = getAgentRuntimeState(database, agentId)
+  const pending = pendingTerminalInputs(state.pendingTerminalInputs)
+  replaceAgentTerminalInputs(database, agentId, state, [
+    ...pending,
+    {
+      text: input.text,
+      submit: input.submit,
+      createdAt: input.createdAt ?? new Date().toISOString(),
+    },
+  ])
+}
+
+export function requeueAgentTerminalInputs(
+  database: DatabaseSync,
+  agentId: string,
+  inputs: readonly PendingTerminalInput[],
+) {
+  if (inputs.length === 0) return
+  const state = getAgentRuntimeState(database, agentId)
+  const pending = pendingTerminalInputs(state.pendingTerminalInputs)
+  replaceAgentTerminalInputs(database, agentId, state, [...inputs, ...pending])
+}
+
+function replaceAgentTerminalInputs(
+  database: DatabaseSync,
+  agentId: string,
+  state: Record<string, unknown>,
+  inputs: readonly PendingTerminalInput[],
+) {
+  setAgentRuntimeState(database, agentId, {
+    ...state,
+    pendingTerminalInputs: inputs,
+  })
+}
+
+export function takeAgentTerminalInputs(database: DatabaseSync, agentId: string): PendingTerminalInput[] {
+  const state = getAgentRuntimeState(database, agentId)
+  const pending = pendingTerminalInputs(state.pendingTerminalInputs)
+  if (pending.length === 0) return []
+  const nextState = { ...state }
+  delete nextState.pendingTerminalInputs
+  setAgentRuntimeState(database, agentId, nextState)
+  return pending
 }
 
 export function clearAgentRuntimeState(database: DatabaseSync, agentId: string) {
@@ -169,4 +229,20 @@ export function readPendingQuestion(database: DatabaseSync, agentId: string) {
     getAgentRuntimeState(database, agentId).pendingQuestion,
   )
   return parsed.success ? parsed.data : null
+}
+
+function pendingTerminalInputs(value: unknown): PendingTerminalInput[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const text = 'text' in item && typeof item.text === 'string' ? item.text : null
+    if (text === null) return []
+    return [{
+      text,
+      submit: 'submit' in item && typeof item.submit === 'boolean' ? item.submit : true,
+      createdAt: 'createdAt' in item && typeof item.createdAt === 'string'
+        ? item.createdAt
+        : new Date(0).toISOString(),
+    }]
+  })
 }

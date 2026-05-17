@@ -8,8 +8,16 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import * as pty from 'node-pty'
 import { terminalModeSchema, type TerminalMode } from '~/lib/contracts'
 import { rememberCodexTerminalSession } from './codex-cli-sessions'
-import { getAgentLaunchConfig } from './db'
-import { buildTerminalProcessLaunch, type TerminalAgentLaunchConfig } from './terminal-launch'
+import {
+  getAgentLaunchConfig,
+  requeueAgentTerminalInputs,
+  takeAgentTerminalInputs,
+} from './db'
+import {
+  buildTerminalProcessLaunch,
+  type TerminalAgentLaunchConfig,
+  type TerminalProcessLaunch,
+} from './terminal-launch'
 import { makeTerminalRegistry, type TerminalRegistrySession } from './terminal-registry'
 
 type TerminalServerInfo = {
@@ -32,6 +40,14 @@ type TerminalClientMessage =
 
 export type TerminalServerApi = {
   readonly ensure: () => Promise<TerminalServerInfo>
+  readonly spawnAgentRuntime: (input: {
+    readonly agentId: string
+    readonly cols?: number
+    readonly rows?: number
+  }) => Promise<{
+    readonly agentId: string
+    readonly mode: 'runtime'
+  }>
   readonly closeAgentRuntime: (agentId: string) => void
   readonly close: () => Promise<void>
 }
@@ -39,9 +55,29 @@ export type TerminalServerApi = {
 type TerminalServerRuntime = {
   readonly token: string
   readonly registry: ReturnType<typeof makeTerminalRegistry>
+  readonly dependencies: TerminalServerDependencies
   setInfo: (info: TerminalServerInfo | null) => void
   setHttpServer: (server: Server | null) => void
   setWebSocketServer: (server: WebSocketServer | null) => void
+}
+
+type TerminalPtyProcess = ReturnType<typeof pty.spawn>
+
+export type TerminalServerDependencies = {
+  readonly getAgentLaunchConfig: (agentId: string) => TerminalAgentLaunchConfig
+  readonly buildTerminalProcessLaunch: (
+    config: TerminalAgentLaunchConfig,
+    mode: TerminalMode,
+    shell: { readonly command: string; readonly args: string[] },
+  ) => TerminalProcessLaunch
+  readonly spawnPty: (
+    command: string,
+    args: readonly string[],
+    options: Parameters<typeof pty.spawn>[2],
+  ) => TerminalPtyProcess
+  readonly rememberCodexTerminalSession: typeof rememberCodexTerminalSession
+  readonly takeAgentTerminalInputs: typeof takeAgentTerminalInputs
+  readonly requeueAgentTerminalInputs: typeof requeueAgentTerminalInputs
 }
 
 const terminalPath = '/terminal'
@@ -74,11 +110,19 @@ export function closeAgentRuntimeTerminal(agentId: string) {
   defaultTerminalServerService.closeAgentRuntime(agentId)
 }
 
+export function pasteAgentRuntimeTerminal(input: {
+  readonly agentId: string
+}) {
+  return defaultTerminalServerService.spawnAgentRuntime(input)
+}
+
 export function closeTerminalServerForTests() {
   return defaultTerminalServerService.close()
 }
 
-export function makeTerminalServerService(): TerminalServerApi {
+export function makeTerminalServerService(
+  dependencies: Partial<TerminalServerDependencies> = {},
+): TerminalServerApi {
   let terminalServer: TerminalServerInfo | null = null
   let httpServer: Server | null = null
   let webSocketServer: WebSocketServer | null = null
@@ -90,6 +134,15 @@ export function makeTerminalServerService(): TerminalServerApi {
       idleKillMs,
       socketOpenState: WebSocket.OPEN,
     }),
+    dependencies: {
+      getAgentLaunchConfig,
+      buildTerminalProcessLaunch,
+      spawnPty: (command, args, options) => pty.spawn(command, [...args], options),
+      rememberCodexTerminalSession,
+      takeAgentTerminalInputs,
+      requeueAgentTerminalInputs,
+      ...dependencies,
+    },
     setInfo: (info) => {
       terminalServer = info
     },
@@ -111,6 +164,22 @@ export function makeTerminalServerService(): TerminalServerApi {
       })
       return terminalServerPromise
     },
+    spawnAgentRuntime: async (input) => {
+      await ensureRuntimeTerminalServer(runtime)
+      const config = runtime.dependencies.getAgentLaunchConfig(input.agentId)
+      const session = await getOrCreateTerminalSession(
+        runtime,
+        config,
+        'runtime',
+        input.cols ?? 100,
+        input.rows ?? 30,
+      )
+      scheduleHeadlessIdleKill(runtime, session)
+      return {
+        agentId: input.agentId,
+        mode: 'runtime',
+      }
+    },
     closeAgentRuntime: (agentId) => {
       runtime.registry.closeAgentRuntime(agentId)
     },
@@ -129,6 +198,16 @@ export function makeTerminalServerService(): TerminalServerApi {
         closeHttpServer(server),
       ])
     },
+  }
+
+  function ensureRuntimeTerminalServer(runtime: TerminalServerRuntime) {
+    if (terminalServer) return Promise.resolve(terminalServer)
+    if (terminalServerPromise) return terminalServerPromise
+    terminalServerPromise = startTerminalServer(runtime).catch((error) => {
+      terminalServerPromise = null
+      throw error
+    })
+    return terminalServerPromise
   }
 }
 
@@ -206,7 +285,7 @@ async function handleTerminalConnection(
 
   let session: TerminalRegistrySession
   try {
-    const config = getAgentLaunchConfig(agentId)
+    const config = runtime.dependencies.getAgentLaunchConfig(agentId)
     const mode = parseTerminalMode(query.mode)
     const cols = positiveInt(query.cols, 100)
     const rows = positiveInt(query.rows, 30)
@@ -241,13 +320,16 @@ async function getOrCreateTerminalSession(
 ) {
   const key = runtime.registry.sessionKey(config, mode)
   const existing = runtime.registry.getReusable(config, mode, cols, rows)
-  if (existing) return existing
+  if (existing) {
+    writePendingTerminalInputs(runtime, config.id, existing, mode)
+    return existing
+  }
 
-  const launch = buildTerminalProcessLaunch(config, mode, defaultShell())
+  const launch = runtime.dependencies.buildTerminalProcessLaunch(config, mode, defaultShell())
   await cleanupStaleClaudeSession(launch)
   const launchedAtMs = Date.now()
   const launchToken = `${launchedAtMs}:${randomBytes(8).toString('hex')}`
-  const proc = pty.spawn(launch.command, launch.args, {
+  const proc = runtime.dependencies.spawnPty(launch.command, launch.args, {
     name: 'xterm-256color',
     cols,
     rows,
@@ -263,7 +345,7 @@ async function getOrCreateTerminalSession(
     initialBuffer: `\r\n[kiri terminal: ${launch.label} @ ${config.cwd}]\r\n`,
   })
   if (mode === 'runtime' && launch.label === 'codex') {
-    void rememberCodexTerminalSession(config, launch.env, {
+    void runtime.dependencies.rememberCodexTerminalSession(config, launch.env, {
       launchedAtMs,
       launchToken,
     }).catch((error) => {
@@ -280,6 +362,12 @@ async function getOrCreateTerminalSession(
     runtime.registry.exit(session, message)
   })
 
+  try {
+    writePendingTerminalInputs(runtime, config.id, session, mode)
+  } catch (error) {
+    runtime.registry.kill(session)
+    throw error
+  }
   return session
 }
 
@@ -369,6 +457,41 @@ function defaultShell() {
 
 function parseTerminalMode(value: unknown): TerminalMode {
   return terminalModeSchema.catch('shell').parse(value)
+}
+
+function terminalPasteData(text: string, submit: boolean) {
+  return submit ? `${text}\r` : text
+}
+
+function writePendingTerminalInputs(
+  runtime: TerminalServerRuntime,
+  agentId: string,
+  session: TerminalRegistrySession,
+  mode: TerminalMode,
+) {
+  if (mode !== 'runtime') return
+  const inputs = runtime.dependencies.takeAgentTerminalInputs(agentId)
+  const unwritten: typeof inputs = []
+  for (const [index, input] of inputs.entries()) {
+    const data = terminalPasteData(input.text, input.submit)
+    try {
+      if (data) session.proc.write(data)
+    } catch (error) {
+      unwritten.push(input, ...inputs.slice(index + 1))
+      runtime.dependencies.requeueAgentTerminalInputs(agentId, unwritten)
+      throw error
+    }
+  }
+}
+
+function scheduleHeadlessIdleKill(
+  runtime: TerminalServerRuntime,
+  session: TerminalRegistrySession,
+) {
+  if (session.exited || session.sockets.size > 0 || session.idleTimer) return
+  session.idleTimer = setTimeout(() => {
+    if (session.sockets.size === 0) runtime.registry.kill(session)
+  }, idleKillMs)
 }
 
 async function cleanupStaleClaudeSession(launch: ReturnType<typeof buildTerminalProcessLaunch>) {

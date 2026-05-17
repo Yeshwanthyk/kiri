@@ -19,6 +19,7 @@ import {
   getWorkflowRun,
   listProjectSummaries,
   listWorkflowRuns,
+  queueAgentTerminalInput,
   recordWorkflowItemAttempt,
   restoreWorkflowRun,
   setWorkflowItemTracking,
@@ -85,10 +86,10 @@ export function createWorkflowRun(input: CreateWorkflowRunInput) {
   })
 }
 
-export function dispatchWorkflowRun(input: { readonly id: string }) {
+export async function dispatchWorkflowRun(input: { readonly id: string }) {
   const run = getWorkflowRun(input.id)
   assertRunMutable(run)
-  const results = run.items.map((item) => {
+  const results = await Promise.all(run.items.map(async (item) => {
     if (!item.tracked) {
       return { itemId: item.id, status: 'skipped', reason: 'untracked' }
     }
@@ -104,7 +105,7 @@ export function dispatchWorkflowRun(input: { readonly id: string }) {
       return { itemId: item.id, status: 'skipped', reason: 'already_launched', agentId: item.activeAgentId }
     }
     return launchWorkflowItem(item)
-  })
+  }))
   const refreshed = getWorkflowRun(run.id)
   return {
     id: refreshed.id,
@@ -116,7 +117,7 @@ export function dispatchWorkflowRun(input: { readonly id: string }) {
   }
 }
 
-export function retriggerWorkflowItem(input: {
+export async function retriggerWorkflowItem(input: {
   readonly itemId: string
   readonly runtime?: RuntimeKind
   readonly interfaceMode?: SessionInterfaceMode
@@ -159,10 +160,11 @@ export {
   restoreWorkflowRun,
 }
 
-function launchWorkflowItem(item: {
+async function launchWorkflowItem(item: {
   readonly id: string
   readonly runId: string
   readonly title: string
+  readonly body: string
   readonly runtime: RuntimeKind | null
   readonly interfaceMode: SessionInterfaceMode | null
   readonly model: string | null
@@ -180,6 +182,13 @@ function launchWorkflowItem(item: {
       title: item.title,
       thinkingLevel: parseThinkingLevel(item.thinkingLevel),
     })
+    const terminalPaste = session.interfaceMode === 'terminal'
+      ? queueTerminalPaste({
+        agentId: session.id,
+        text: item.body,
+        submit: item.terminalPaste?.submit ?? true,
+      })
+      : null
     const attempt = recordWorkflowItemAttempt({
       itemId: item.id,
       agentId: session.id,
@@ -190,6 +199,7 @@ function launchWorkflowItem(item: {
       status: 'launched',
       agentId: session.id,
       attemptId: attempt?.id ?? null,
+      terminalPaste,
     }
   } catch (error) {
     const attempt = recordWorkflowItemAttempt({
@@ -203,6 +213,19 @@ function launchWorkflowItem(item: {
       attemptId: attempt?.id ?? null,
       error: error instanceof Error ? error.message : String(error),
     }
+  }
+}
+
+function queueTerminalPaste(input: {
+  readonly agentId: string
+  readonly text: string
+  readonly submit: boolean
+}) {
+  queueAgentTerminalInput(input)
+  return {
+    queued: true,
+    submitted: input.submit,
+    bytes: input.text.length + (input.submit ? 1 : 0),
   }
 }
 

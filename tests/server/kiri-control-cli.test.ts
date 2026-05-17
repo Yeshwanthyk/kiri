@@ -340,6 +340,52 @@ describe('kirictl call', () => {
       params: { id: workflow.id },
     })).archivedAt).toBeNull()
 
+    const terminalWorkflow = workflowRunSchema.parse(callResult(env, {
+      operation: 'workflow.create',
+      params: {
+        projectId: project.id,
+        title: 'CLI Terminal Workflow',
+        defaults: {
+          runtime: 'pi',
+          interfaceMode: 'terminal',
+          model: 'openai-codex/gpt-5.5',
+          attachScratchpad: false,
+          terminalPaste: { submit: false },
+        },
+        items: [{
+          id: 'terminal-build',
+          action: 'launch',
+          title: 'Terminal Build',
+          body: 'run terminal workflow',
+        }],
+      },
+    }))
+    const terminalDispatch = z.object({
+      launched: z.number(),
+      results: z.array(z.object({
+        status: z.string(),
+        terminalPaste: z.object({
+          queued: z.boolean(),
+          submitted: z.boolean(),
+          bytes: z.number(),
+        }).nullable(),
+      }).passthrough()),
+    }).parse(callResult(env, {
+      operation: 'workflow.dispatch',
+      params: { id: terminalWorkflow.id },
+    }))
+    expect(terminalDispatch).toMatchObject({
+      launched: 1,
+      results: [{
+        status: 'launched',
+        terminalPaste: {
+          queued: true,
+          submitted: false,
+          bytes: 'run terminal workflow'.length,
+        },
+      }],
+    })
+
     const archived = sessionSummarySchema.parse(callResult(env, {
       operation: 'session.archive',
       params: { agentId: session.id },

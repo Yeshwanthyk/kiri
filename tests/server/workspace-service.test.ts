@@ -178,6 +178,10 @@ describe('WorkspaceService', () => {
           token: 'provided-token',
         })
       },
+      spawnAgentRuntime: () => Promise.resolve({
+        agentId: 'agent-1',
+        mode: 'runtime' as const,
+      }),
       closeAgentRuntime: () => undefined,
       close: () => Promise.resolve(),
     })
