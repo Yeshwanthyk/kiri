@@ -233,7 +233,7 @@ function claudeKiriTerminalPrompt(agentId: string) {
     'Kiri integration:',
     `- This terminal Claude Code session is Kiri session ${agentId}.`,
     '- Keep TodoWrite current for multi-step work; Kiri projects TodoWrite into its Tasks view where supported.',
-    `- Use the Kiri MCP server, especially kiri_rename_session with agentId "${agentId}", when the Kiri session title is generic, stale, or no longer matches the work.`,
+    `- Use the Kiri MCP server, especially kiri_do with operation "session.rename" and agentId "${agentId}", when the Kiri session title is generic, stale, or no longer matches the work.`,
   ].join('\n')
 }
 

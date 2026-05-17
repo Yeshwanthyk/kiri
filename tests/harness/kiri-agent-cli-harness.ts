@@ -15,13 +15,28 @@ const env = {
   KIRI_SETTINGS_PATH: resolve(repoRoot, 'settings.json'),
 }
 
+const responseSchema = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    operation: z.string(),
+    result: z.unknown(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    operation: z.string(),
+    error: z.object({
+      code: z.string(),
+      message: z.string(),
+      path: z.string().optional(),
+    }),
+  }),
+])
 const modelRowsSchema = z.array(z.object({
   runtime: z.string(),
   model: z.string(),
   isDefault: z.boolean(),
   contextWindow: z.number().nullable(),
 }))
-
 const projectSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -30,7 +45,6 @@ const projectSchema = z.object({
   sessionCount: z.number(),
 })
 const projectRowsSchema = z.array(projectSchema)
-
 const sessionSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -59,190 +73,161 @@ const scratchpadRowsSchema = z.array(scratchpadSchema)
 try {
   assertSkillTeachesAgents()
 
-  const models = modelRowsSchema.parse(runCtl(['models', 'list', '--runtime', 'pi', '--json']))
-  const kiriModels = modelRowsSchema.parse(runKiri(['models', 'list', '--runtime', 'pi', '--json']))
-  const kiriCliModels = modelRowsSchema.parse(runKiriCli(['models', 'list', '--runtime', 'pi', '--json']))
+  const models = modelRowsSchema.parse(runCall('kiri:ctl', {
+    operation: 'model.list',
+    params: { runtime: 'pi' },
+  }))
+  const kiriModels = modelRowsSchema.parse(runCall('kiri', {
+    operation: 'model.list',
+    params: { runtime: 'pi' },
+  }))
+  const kiriCliModels = modelRowsSchema.parse(runCall('kiricli', {
+    operation: 'model.list',
+    params: { runtime: 'pi' },
+  }))
   if (models.length !== kiriModels.length || models.length !== kiriCliModels.length) {
     throw new Error('Kiri CLI aliases do not return the same model set')
   }
   const defaultPiModel = models.find((model) => model.runtime === 'pi' && model.isDefault)
   if (!defaultPiModel) throw new Error('No default pi model found')
 
-  const primary = projectSchema.parse(runCtl([
-    'projects',
-    'add',
-    '--name',
-    'Agent Harness Primary',
-    '--cwd',
-    repoRoot,
-    '--id',
-    'agent-harness-primary',
-    '--json',
-  ]))
+  const primary = projectSchema.parse(runCall('kiri:ctl', {
+    operation: 'project.add',
+    params: {
+      name: 'Agent Harness Primary',
+      cwd: repoRoot,
+      id: 'agent-harness-primary',
+    },
+  }))
   if (primary.id !== 'agent-harness-primary' || primary.hidden) {
     throw new Error('Primary project was not added as visible')
   }
 
-  const secondary = projectSchema.parse(runCtl([
-    'projects',
-    'add',
-    '--name',
-    'Agent Harness Secondary',
-    '--cwd',
-    repoRoot,
-    '--id',
-    'agent-harness-secondary',
-    '--json',
-  ]))
+  const secondary = projectSchema.parse(runCall('kiri:ctl', {
+    operation: 'project.add',
+    params: {
+      name: 'Agent Harness Secondary',
+      cwd: repoRoot,
+      id: 'agent-harness-secondary',
+    },
+  }))
   if (secondary.id !== 'agent-harness-secondary') {
     throw new Error('Secondary project was not added')
   }
 
-  const hidden = projectSchema.parse(runCtl([
-    'projects',
-    'hide',
-    '--id',
-    secondary.id,
-    '--json',
-  ]))
+  const hidden = projectSchema.parse(runCall('kiri:ctl', {
+    operation: 'project.hide',
+    params: { id: secondary.id },
+  }))
   if (!hidden.hidden) throw new Error('Secondary project was not hidden')
 
-  const unhidden = projectSchema.parse(runCtl([
-    'projects',
-    'unhide',
-    '--id',
-    secondary.id,
-    '--json',
-  ]))
+  const unhidden = projectSchema.parse(runCall('kiri:ctl', {
+    operation: 'project.unhide',
+    params: { id: secondary.id },
+  }))
   if (unhidden.hidden) throw new Error('Secondary project was not unhidden')
 
-  const compatProjects = projectRowsSchema.parse(runProjectsCompat(['list', '--all', '--json']))
-  if (!compatProjects.some((project) => project.id === primary.id)) {
-    throw new Error('pnpm kiri:projects compatibility command did not see CLI-created project')
+  const projects = projectRowsSchema.parse(runCall('kiri:ctl', {
+    operation: 'project.list',
+    params: { includeHidden: true },
+  }))
+  if (!projects.some((project) => project.id === primary.id)) {
+    throw new Error('project.list did not see CLI-created project')
   }
 
-  const session = sessionSchema.parse(runCtl([
-    'sessions',
-    'create',
-    '--project',
-    primary.id,
-    '--runtime',
-    defaultPiModel.runtime,
-    '--model',
-    defaultPiModel.model,
-    '--title',
-    'Agent Harness Session',
-    '--json',
-  ]))
+  const session = sessionSchema.parse(runCall('kiri:ctl', {
+    operation: 'session.create',
+    params: {
+      projectId: primary.id,
+      runtime: defaultPiModel.runtime,
+      model: defaultPiModel.model,
+      title: 'Agent Harness Session',
+    },
+  }))
   if (session.projectId !== primary.id || session.archivedAt !== null) {
     throw new Error('Session was not created as an active primary-project session')
   }
 
-  const renamed = sessionSchema.parse(runCtl([
-    'sessions',
-    'rename',
-    '--agent',
-    session.id,
-    '--title',
-    'Agent Harness Session Renamed',
-    '--json',
-  ]))
+  const renamed = sessionSchema.parse(runCall('kiri:ctl', {
+    operation: 'session.rename',
+    params: {
+      agentId: session.id,
+      title: 'Agent Harness Session Renamed',
+    },
+  }))
   if (renamed.title !== 'Agent Harness Session Renamed') {
     throw new Error('Session rename did not persist')
   }
 
-  const activeSessions = sessionRowsSchema.parse(runCtl([
-    'sessions',
-    'list',
-    '--project',
-    primary.id,
-    '--json',
-  ]))
+  const activeSessions = sessionRowsSchema.parse(runCall('kiri:ctl', {
+    operation: 'session.list',
+    params: { projectId: primary.id },
+  }))
   if (!activeSessions.some((candidate) => candidate.id === session.id)) {
     throw new Error('Session list did not include active session')
   }
 
-  const archived = sessionSchema.parse(runCtl([
-    'sessions',
-    'delete',
-    '--agent',
-    session.id,
-    '--yes',
-    '--json',
-  ]))
-  if (archived.archivedAt === null) throw new Error('Session delete did not archive')
+  const archived = sessionSchema.parse(runCall('kiri:ctl', {
+    operation: 'session.archive',
+    params: { agentId: session.id },
+  }))
+  if (archived.archivedAt === null) throw new Error('Session archive did not archive')
 
-  const restored = sessionSchema.parse(runCtl([
-    'sessions',
-    'resume',
-    '--agent',
-    session.id,
-    '--json',
-  ]))
-  if (restored.archivedAt !== null) throw new Error('Session resume did not restore')
+  const restored = sessionSchema.parse(runCall('kiri:ctl', {
+    operation: 'session.restore',
+    params: { agentId: session.id },
+  }))
+  if (restored.archivedAt !== null) throw new Error('Session restore did not restore')
 
-  const block = scratchpadSchema.parse(runCtl([
-    'scratchpad',
-    'add',
-    '--project',
-    primary.id,
-    '--body',
-    'Agent harness scratchpad block',
-    '--json',
-  ]))
+  const block = scratchpadSchema.parse(runCall('kiri:ctl', {
+    operation: 'scratchpad.add',
+    params: {
+      projectId: primary.id,
+      body: 'Agent harness scratchpad block',
+    },
+  }))
   if (block.projectId !== primary.id || block.body !== 'Agent harness scratchpad block') {
     throw new Error('Scratchpad add did not persist the expected block')
   }
 
-  const blocks = scratchpadRowsSchema.parse(runCtl([
-    'scratchpad',
-    'list',
-    '--project',
-    primary.id,
-    '--json',
-  ]))
+  const blocks = scratchpadRowsSchema.parse(runCall('kiri:ctl', {
+    operation: 'scratchpad.list',
+    params: { projectId: primary.id },
+  }))
   if (!blocks.some((candidate) => candidate.id === block.id)) {
     throw new Error('Scratchpad list did not include created block')
   }
 
-  const deletedBlock = scratchpadSchema.parse(runCtl([
-    'scratchpad',
-    'delete',
-    '--id',
-    block.id,
-    '--json',
-  ]))
+  const deletedBlock = scratchpadSchema.parse(runCall('kiri:ctl', {
+    operation: 'scratchpad.delete',
+    params: { id: block.id },
+  }))
   if (deletedBlock.id !== block.id) throw new Error('Scratchpad delete returned the wrong block')
 
-  const deleted = projectSchema.parse(runCtl([
-    'projects',
-    'delete',
-    '--id',
-    secondary.id,
-    '--yes',
-    '--json',
-  ]))
+  const deleted = projectSchema.parse(runCall('kiri:ctl', {
+    operation: 'project.delete',
+    params: { id: secondary.id },
+  }))
   if (deleted.id !== secondary.id) throw new Error('Project delete returned the wrong project')
 
   process.stdout.write(JSON.stringify({
     ok: true,
     checked: [
       'skill',
-      'models',
+      'model.list',
       'kiri alias',
       'kiricli alias',
-      'projects:add',
-      'projects:hide',
-      'projects:unhide',
-      'projects:delete',
-      'sessions:create',
-      'sessions:rename',
-      'sessions:delete',
-      'sessions:resume',
-      'scratchpad:add',
-      'scratchpad:list',
-      'scratchpad:delete',
-      'kiri:projects compatibility',
+      'project.add',
+      'project.hide',
+      'project.unhide',
+      'project.delete',
+      'session.create',
+      'session.rename',
+      'session.archive',
+      'session.restore',
+      'scratchpad.add',
+      'scratchpad.list',
+      'scratchpad.delete',
     ],
     projectId: primary.id,
     sessionId: session.id,
@@ -255,17 +240,19 @@ try {
 function assertSkillTeachesAgents() {
   const body = readFileSync(resolve(repoRoot, '.agents/skills/kiri-control/SKILL.md'), 'utf8')
   const required = [
-    'pnpm kiri models list --json',
-    'pnpm kiricli',
-    'pnpm kiri:ctl models list --json',
-    'pnpm kiri:ctl projects add',
-    'pnpm kiri:ctl sessions create',
-    'pnpm kiri:ctl sessions rename',
-    'pnpm kiri:ctl sessions delete',
-    'pnpm kiri:ctl sessions resume',
-    'pnpm kiri:ctl scratchpad add',
-    'pnpm kiri:ctl scratchpad list',
-    'pnpm kiri:ctl scratchpad delete',
+    'kiri_get',
+    'kiri_do',
+    'pnpm kiri:ctl call',
+    'operations.list',
+    'model.list',
+    'project.add',
+    'session.create',
+    'session.rename',
+    'session.archive',
+    'session.restore',
+    'scratchpad.add',
+    'scratchpad.list',
+    'scratchpad.delete',
     'pnpm kiricli mcp',
   ]
   for (const phrase of required) {
@@ -279,20 +266,14 @@ function escapedPhrasePattern(phrase: string) {
   return new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
 }
 
-function runCtl(args: string[]) {
-  return runJson(['kiri:ctl', ...args])
-}
-
-function runKiri(args: string[]) {
-  return runJson(['kiri', ...args])
-}
-
-function runKiriCli(args: string[]) {
-  return runJson(['kiricli', ...args])
-}
-
-function runProjectsCompat(args: string[]) {
-  return runJson(['kiri:projects', ...args])
+function runCall(script: string, request: unknown) {
+  const response = responseSchema.parse(runJson([
+    script,
+    'call',
+    JSON.stringify(request),
+  ]))
+  if (!response.ok) throw new Error(response.error.message)
+  return response.result
 }
 
 function runJson(args: string[]) {

@@ -55,7 +55,7 @@ describe('buildTerminalProcessLaunch', () => {
         'Kiri integration:',
         '- This terminal Claude Code session is Kiri session agent-1.',
         '- Keep TodoWrite current for multi-step work; Kiri projects TodoWrite into its Tasks view where supported.',
-        '- Use the Kiri MCP server, especially kiri_rename_session with agentId "agent-1", when the Kiri session title is generic, stale, or no longer matches the work.',
+        '- Use the Kiri MCP server, especially kiri_do with operation "session.rename" and agentId "agent-1", when the Kiri session title is generic, stale, or no longer matches the work.',
       ].join('\n'),
       '--model',
       'test-model',

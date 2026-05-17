@@ -39,11 +39,11 @@ pnpm verify:desktop
 ## Projects
 
 ```sh
-pnpm kiri:projects list [--all]
-pnpm kiri:projects add --name "kiri Orchestrator" --cwd /path/to/repo --id kiri
-pnpm kiri:projects hide --id kiri
-pnpm kiri:projects unhide --id kiri
-pnpm kiri:projects delete --id kiri --yes
+pnpm kiri:ctl call '{"operation":"project.list","params":{"includeHidden":true}}'
+pnpm kiri:ctl call '{"operation":"project.add","params":{"name":"kiri Orchestrator","cwd":"/path/to/repo","id":"kiri"}}'
+pnpm kiri:ctl call '{"operation":"project.hide","params":{"id":"kiri"}}'
+pnpm kiri:ctl call '{"operation":"project.unhide","params":{"id":"kiri"}}'
+pnpm kiri:ctl call '{"operation":"project.delete","params":{"id":"kiri"}}'
 ```
 
 Adding a project creates a project row with no sessions. Hiding removes a

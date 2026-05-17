@@ -175,8 +175,8 @@ Branch: `chore/simple-audit`
 
 - [x] Remove or explicitly keep `scripts/kiri-projects.mjs`.
   - Status: likely legacy raw-SQLite project CLI.
-  - Current script `kiri:projects` points to `tsx src/cli/kirictl.ts projects`, not this file.
-  - Removed the legacy script and its Knip entry; project registry usage stays on `kirictl projects`.
+  - Current project registry usage stays on the agent-first `pnpm kiri:ctl call '{"operation":"project.*"}'` surface.
+  - Removed the legacy script and its Knip entry.
 
 - [x] Remove or wire `reactDoctor` config in `package.json`.
   - It referenced the legacy project script.
@@ -590,7 +590,7 @@ Scripts/desktop/resources:
 - `scripts/effect-migration-audit.mjs` - works; tracker must stay current.
 - `scripts/install-desktop-app.mjs` - passed `node --check`.
 - `scripts/kiri-desktop-backend.mjs` - kept as desktop bootstrap boundary; covered by desktop package/smoke gates.
-- `scripts/kiri-projects.mjs` - removed; legacy duplicate of `kirictl projects`.
+- `scripts/kiri-projects.mjs` - removed; legacy duplicate of the project operation surface.
 - `scripts/normalize-desktop-app.mjs` - build-time; package contract keeps it out of app bundle files.
 - `scripts/sync-models-dev.mjs` - passed `node --check`.
 - `src/desktop/main.mjs`, `src/desktop/preload.cjs` - desktop package contract and smoke gate exist; broader app-open verification remains in `pnpm install:desktop`.

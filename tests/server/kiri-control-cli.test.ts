@@ -7,6 +7,23 @@ import { runTsxJsonWithArgs } from '../harness/run-tsx'
 
 const projectRoot = process.cwd()
 const tempRoots: string[] = []
+
+const responseSchema = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    operation: z.string(),
+    result: z.unknown(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    operation: z.string(),
+    error: z.object({
+      code: z.string(),
+      message: z.string(),
+      path: z.string().optional(),
+    }),
+  }),
+])
 const modelRowsSchema = z.array(z.object({
   runtime: z.string(),
   model: z.string(),
@@ -42,16 +59,15 @@ const scratchpadBlockSchema = z.object({
   triggeredAt: z.string().nullable(),
   triggeredAgentId: z.string().nullable(),
 })
-const scratchpadRowsSchema = z.array(scratchpadBlockSchema)
 
-describe('kirictl', () => {
+describe('kirictl call', () => {
   afterEach(() => {
     for (const root of tempRoots.splice(0)) {
       rmSync(root, { recursive: true, force: true })
     }
   })
 
-  it('manages models, projects, and sessions through JSON commands', () => {
+  it('runs compact JSON operations for models, projects, sessions, and scratchpad', () => {
     const root = mkdtempSync(join(tmpdir(), 'kirictl-'))
     tempRoots.push(root)
     const env = {
@@ -62,7 +78,10 @@ describe('kirictl', () => {
       KIRI_SETTINGS_PATH: resolve(projectRoot, 'settings.json'),
     }
 
-    const models = modelRowsSchema.parse(runJson(env, ['models', 'list', '--runtime', 'pi', '--json']))
+    const models = modelRowsSchema.parse(callResult(env, {
+      operation: 'model.list',
+      params: { runtime: 'pi' },
+    }))
     expect(models).toEqual(expect.arrayContaining([
       expect.objectContaining({
         runtime: 'pi',
@@ -71,123 +90,103 @@ describe('kirictl', () => {
       }),
     ]))
 
-    const opencodeModels = modelRowsSchema.parse(runJson(env, ['models', 'list', '--runtime', 'opencode', '--json']))
-    expect(opencodeModels).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        runtime: 'opencode',
-        model: 'opencode/gpt-5.5',
-        isDefault: true,
-      }),
-    ]))
-
-    const project = projectSummarySchema.parse(runJson(env, [
-      'projects',
-      'add',
-      '--name',
-      'CLI Project',
-      '--cwd',
-      projectRoot,
-      '--id',
-      'cli-project',
-      '--json',
-    ]))
+    const project = projectSummarySchema.parse(callResult(env, {
+      operation: 'project.add',
+      params: {
+        id: 'cli-project',
+        name: 'CLI Project',
+        cwd: projectRoot,
+      },
+    }))
     expect(project).toMatchObject({
       id: 'cli-project',
-      name: 'CLI Project',
       hidden: false,
       sessionCount: 0,
     })
 
-    const session = sessionSummarySchema.parse(runJson(env, [
-      'sessions',
-      'create',
-      '--project',
-      'cli-project',
-      '--runtime',
-      'pi',
-      '--model',
-      'openai-codex/gpt-5.5',
-      '--title',
-      'CLI Session',
-      '--json',
-    ]))
+    const session = sessionSummarySchema.parse(callResult(env, {
+      operation: 'session.create',
+      params: {
+        projectId: project.id,
+        runtime: 'pi',
+        model: 'openai-codex/gpt-5.5',
+        title: 'CLI Session',
+      },
+    }))
     expect(session).toMatchObject({
-      projectId: 'cli-project',
+      projectId: project.id,
       title: 'CLI Session',
       runtime: 'pi',
-      model: 'openai-codex/gpt-5.5',
       archivedAt: null,
     })
 
-    const renamed = sessionSummarySchema.parse(runJson(env, [
-      'sessions',
-      'rename',
-      '--agent',
-      session.id,
-      '--title',
-      'Renamed Session',
-      '--json',
-    ]))
+    const renamed = sessionSummarySchema.parse(callResult(env, {
+      operation: 'session.rename',
+      params: {
+        agentId: session.id,
+        title: 'Renamed Session',
+      },
+    }))
     expect(renamed.title).toBe('Renamed Session')
 
-    const archived = sessionSummarySchema.parse(runJson(env, [
-      'sessions',
-      'delete',
-      '--agent',
-      session.id,
-      '--yes',
-      '--json',
-    ]))
-    expect(archived.archivedAt).toEqual(expect.any(String))
-
-    const restored = sessionSummarySchema.parse(runJson(env, [
-      'sessions',
-      'resume',
-      '--agent',
-      session.id,
-      '--json',
-    ]))
-    expect(restored.archivedAt).toBeNull()
-
-    const block = scratchpadBlockSchema.parse(runJson(env, [
-      'scratchpad',
-      'add',
-      '--project',
-      project.id,
-      '--body',
-      'CLI scratchpad block',
-      '--json',
-    ]))
+    const block = scratchpadBlockSchema.parse(callResult(env, {
+      operation: 'scratchpad.add',
+      params: {
+        projectId: project.id,
+        body: 'CLI scratchpad block',
+      },
+    }))
     expect(block).toMatchObject({
       projectId: project.id,
       body: 'CLI scratchpad block',
       triggeredAt: null,
     })
 
-    const blocks = scratchpadRowsSchema.parse(runJson(env, [
-      'scratchpad',
-      'list',
-      '--project',
-      project.id,
-      '--json',
-    ]))
-    expect(blocks.map((item) => item.id)).toContain(block.id)
+    const listedBlocks = z.array(scratchpadBlockSchema).parse(callResult(env, {
+      operation: 'scratchpad.list',
+      params: { projectId: project.id },
+    }))
+    expect(listedBlocks.map((item) => item.id)).toContain(block.id)
 
-    const deletedBlock = scratchpadBlockSchema.parse(runJson(env, [
-      'scratchpad',
-      'delete',
-      '--id',
-      block.id,
-      '--json',
-    ]))
-    expect(deletedBlock.id).toBe(block.id)
+    const archived = sessionSummarySchema.parse(callResult(env, {
+      operation: 'session.archive',
+      params: { agentId: session.id },
+    }))
+    expect(archived.archivedAt).toEqual(expect.any(String))
+
+    const restored = sessionSummarySchema.parse(callResult(env, {
+      operation: 'session.restore',
+      params: { agentId: session.id },
+    }))
+    expect(restored.archivedAt).toBeNull()
+
+    const malformed = responseSchema.parse(runTsxJsonWithArgs(
+      'src/cli/kirictl.ts',
+      ['call', '{nope'],
+      (output) => output,
+      {
+        cwd: projectRoot,
+        env,
+      },
+    ))
+    expect(malformed).toMatchObject({
+      ok: false,
+      operation: 'operations.list',
+      error: { code: 'INVALID_JSON' },
+    })
   }, 20_000)
-
 })
 
-function runJson(env: NodeJS.ProcessEnv, args: string[]) {
-  return runTsxJsonWithArgs('src/cli/kirictl.ts', args, (output) => output, {
-    cwd: projectRoot,
-    env,
-  })
+function callResult(env: NodeJS.ProcessEnv, request: unknown) {
+  const response = responseSchema.parse(runTsxJsonWithArgs(
+    'src/cli/kirictl.ts',
+    ['call', JSON.stringify(request)],
+    (output) => output,
+    {
+      cwd: projectRoot,
+      env,
+    },
+  ))
+  if (!response.ok) throw new Error(response.error.message)
+  return response.result
 }

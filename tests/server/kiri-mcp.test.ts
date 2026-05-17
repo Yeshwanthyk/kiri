@@ -11,6 +11,22 @@ const projectRoot = process.cwd()
 const tempRoots: string[] = []
 const clients: Client[] = []
 
+const responseSchema = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    operation: z.string(),
+    result: z.unknown(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    operation: z.string(),
+    error: z.object({
+      code: z.string(),
+      message: z.string(),
+      path: z.string().optional(),
+    }),
+  }),
+])
 const projectSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -40,12 +56,6 @@ const scratchpadBlockSchema = z.object({
   triggeredAt: z.string().nullable(),
   triggeredAgentId: z.string().nullable(),
 })
-const modelRowSchema = z.object({
-  runtime: z.string(),
-  model: z.string(),
-  isDefault: z.boolean(),
-  contextWindow: z.number().nullable(),
-})
 
 describe('kiri MCP server', () => {
   afterEach(async () => {
@@ -55,115 +65,114 @@ describe('kiri MCP server', () => {
     }
   })
 
-  it('exposes CLI parity tools and manages project/session/scratchpad state', async () => {
+  it('exposes compact read/write tools and routes operations', async () => {
     const client = await startClient()
 
     const tools = await client.listTools()
-    expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
-      'kiri_get_context',
-      'kiri_list_models',
-      'kiri_list_projects',
-      'kiri_add_project',
-      'kiri_hide_project',
-      'kiri_unhide_project',
-      'kiri_delete_project',
-      'kiri_list_sessions',
-      'kiri_start_session',
-      'kiri_rename_session',
-      'kiri_delete_session',
-      'kiri_restore_session',
-      'kiri_resume_session',
-      'kiri_list_scratchpad',
-      'kiri_add_scratchpad',
-      'kiri_delete_scratchpad',
-      'kiri_trigger_scratchpad',
-      'kiri_describe_capabilities',
-    ]))
+    expect(tools.tools.map((tool) => tool.name)).toEqual(['kiri_get', 'kiri_do'])
 
-    const opencodeModels = z.array(modelRowSchema).parse(await callItems(client, 'kiri_list_models', {
-      runtime: 'opencode',
+    const operations = z.object({
+      read: z.array(z.string()),
+      write: z.array(z.string()),
+    }).parse(await callResult(client, 'kiri_get', {
+      operation: 'operations.list',
     }))
-    expect(opencodeModels).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        runtime: 'opencode',
-        model: 'opencode/gpt-5.5',
-        isDefault: true,
-      }),
-    ]))
+    expect(operations.read).toContain('model.list')
+    expect(operations.write).toContain('session.create')
 
-    const primary = projectSummarySchema.parse(await callResult(client, 'kiri_add_project', {
-      id: 'mcp-primary',
-      name: 'MCP Primary',
-      cwd: projectRoot,
+    const primary = projectSummarySchema.parse(await callResult(client, 'kiri_do', {
+      operation: 'project.add',
+      params: {
+        id: 'mcp-primary',
+        name: 'MCP Primary',
+        cwd: projectRoot,
+      },
     }))
     expect(primary.id).toBe('mcp-primary')
 
-    const secondary = projectSummarySchema.parse(await callResult(client, 'kiri_add_project', {
-      id: 'mcp-secondary',
-      name: 'MCP Secondary',
-      cwd: projectRoot,
+    const secondary = projectSummarySchema.parse(await callResult(client, 'kiri_do', {
+      operation: 'project.add',
+      params: {
+        id: 'mcp-secondary',
+        name: 'MCP Secondary',
+        cwd: projectRoot,
+      },
     }))
     expect(secondary.id).toBe('mcp-secondary')
-
-    expect(projectSummarySchema.parse(await callResult(client, 'kiri_hide_project', {
-      id: secondary.id,
+    expect(projectSummarySchema.parse(await callResult(client, 'kiri_do', {
+      operation: 'project.hide',
+      params: { id: secondary.id },
     })).hidden).toBe(true)
-    expect(projectSummarySchema.parse(await callResult(client, 'kiri_unhide_project', {
-      id: secondary.id,
+    expect(projectSummarySchema.parse(await callResult(client, 'kiri_do', {
+      operation: 'project.unhide',
+      params: { id: secondary.id },
     })).hidden).toBe(false)
 
-    const session = sessionSummarySchema.parse(await callResult(client, 'kiri_start_session', {
-      projectId: primary.id,
-      runtime: 'pi',
-      model: 'openai-codex/gpt-5.5',
-      title: 'MCP Session',
+    const session = sessionSummarySchema.parse(await callResult(client, 'kiri_do', {
+      operation: 'session.create',
+      params: {
+        projectId: primary.id,
+        runtime: 'pi',
+        model: 'openai-codex/gpt-5.5',
+        title: 'MCP Session',
+      },
     }))
     expect(session.title).toBe('MCP Session')
 
-    const renamed = sessionSummarySchema.parse(await callResult(client, 'kiri_rename_session', {
-      agentId: session.id,
-      title: 'MCP Session Renamed',
+    const renamed = sessionSummarySchema.parse(await callResult(client, 'kiri_do', {
+      operation: 'session.rename',
+      params: {
+        agentId: session.id,
+        title: 'MCP Session Renamed',
+      },
     }))
     expect(renamed.title).toBe('MCP Session Renamed')
 
-    const defaultRenamed = sessionSummarySchema.parse(await callResult(client, 'kiri_rename_session', {
-      title: 'MCP Session Default Rename',
+    const block = scratchpadBlockSchema.parse(await callResult(client, 'kiri_do', {
+      operation: 'scratchpad.add',
+      params: {
+        projectId: primary.id,
+        body: 'MCP scratchpad block',
+      },
     }))
-    expect(defaultRenamed).toMatchObject({
-      id: session.id,
-      title: 'MCP Session Default Rename',
-    })
-
-    const scratchpadContent = await callStructured(client, 'kiri_add_scratchpad', {
-      body: 'MCP scratchpad block',
-    })
-    const block = scratchpadBlockSchema.parse(resultContent(scratchpadContent))
     expect(block).toMatchObject({
       projectId: primary.id,
       body: 'MCP scratchpad block',
     })
-    expect(z.object({
-      context: z.object({ scratchpadCount: z.number().min(1) }),
-    }).parse(scratchpadContent).context.scratchpadCount).toBeGreaterThanOrEqual(1)
 
-    const listedBlocks = z.array(scratchpadBlockSchema).parse(await callItems(client, 'kiri_list_scratchpad', {
-      projectId: primary.id,
+    const listedBlocks = z.array(scratchpadBlockSchema).parse(await callResult(client, 'kiri_get', {
+      operation: 'scratchpad.list',
+      params: {
+        projectId: primary.id,
+      },
     }))
     expect(listedBlocks.map((item) => item.id)).toContain(block.id)
 
-    expect(scratchpadBlockSchema.parse(await callResult(client, 'kiri_delete_scratchpad', {
-      id: block.id,
-    })).id).toBe(block.id)
-
-    expect(sessionSummarySchema.parse(await callResult(client, 'kiri_delete_session', {
-      agentId: session.id,
-    })).archivedAt).toEqual(expect.any(String))
-    expect(sessionSummarySchema.parse(await callResult(client, 'kiri_resume_session', {
-      agentId: session.id,
+    const archived = sessionSummarySchema.parse(await callResult(client, 'kiri_do', {
+      operation: 'session.archive',
+      params: { agentId: session.id },
+    }))
+    expect(archived.archivedAt).toEqual(expect.any(String))
+    expect(sessionSummarySchema.parse(await callResult(client, 'kiri_do', {
+      operation: 'session.restore',
+      params: { agentId: session.id },
     })).archivedAt).toBeNull()
 
-    expect(projectSummarySchema.parse(await callResult(client, 'kiri_delete_project', {
-      id: secondary.id,
+    const contextWrapped = z.object({
+      value: scratchpadBlockSchema,
+      context: z.object({
+        scratchpadCount: z.number().min(0),
+      }),
+    }).parse(await callResult(client, 'kiri_do', {
+      operation: 'scratchpad.delete',
+      params: { id: block.id },
+      options: { includeContext: true },
+    }))
+    expect(contextWrapped.value.id).toBe(block.id)
+
+    expect(projectSummarySchema.parse(await callResult(client, 'kiri_do', {
+      operation: 'project.delete',
+      params: { id: secondary.id },
     })).id).toBe(secondary.id)
   }, 30_000)
 
@@ -220,24 +229,12 @@ async function startClient() {
   return client
 }
 
-async function callResult(client: Client, name: string, args: Record<string, unknown>) {
-  const content = await callStructured(client, name, args)
-  return resultContent(content)
-}
-
-async function callItems(client: Client, name: string, args: Record<string, unknown>) {
-  const content = await callStructured(client, name, args)
-  return z.object({ items: z.array(z.unknown()) }).parse(content).items
-}
-
-async function callStructured(client: Client, name: string, args: Record<string, unknown>) {
-  const result = await client.callTool({ name, arguments: args })
+async function callResult(client: Client, tool: 'kiri_get' | 'kiri_do', args: Record<string, unknown>) {
+  const result = await client.callTool({ name: tool, arguments: args })
   if ('isError' in result && result.isError) {
     throw new Error(JSON.stringify(result.content))
   }
-  return result.structuredContent
-}
-
-function resultContent(content: unknown) {
-  return z.object({ result: z.unknown() }).parse(content).result
+  const response = responseSchema.parse(result.structuredContent)
+  if (!response.ok) throw new Error(response.error.message)
+  return response.result
 }

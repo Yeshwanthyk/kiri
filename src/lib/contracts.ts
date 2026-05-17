@@ -432,6 +432,78 @@ export const triggerScratchpadBlockInputSchema = z.object({
 })
 type TriggerScratchpadBlockInput = z.infer<typeof triggerScratchpadBlockInputSchema>
 
+export const kiriReadOperations = [
+  'operations.list',
+  'context.show',
+  'model.list',
+  'project.list',
+  'session.list',
+  'scratchpad.list',
+] as const
+export const kiriReadOperationSchema = z.enum(kiriReadOperations)
+export type KiriReadOperation = z.infer<typeof kiriReadOperationSchema>
+
+export const kiriWriteOperations = [
+  'project.add',
+  'project.hide',
+  'project.unhide',
+  'project.delete',
+  'session.create',
+  'session.rename',
+  'session.archive',
+  'session.restore',
+  'scratchpad.add',
+  'scratchpad.delete',
+  'scratchpad.trigger',
+] as const
+export const kiriWriteOperationSchema = z.enum(kiriWriteOperations)
+export type KiriWriteOperation = z.infer<typeof kiriWriteOperationSchema>
+
+export const kiriOperationSchema = z.union([
+  kiriReadOperationSchema,
+  kiriWriteOperationSchema,
+])
+export type KiriOperation = z.infer<typeof kiriOperationSchema>
+
+export const kiriOperationOptionsSchema = z.object({
+  compact: z.boolean().default(true),
+  fields: z.array(z.string().trim().min(1)).optional(),
+  includeContext: z.boolean().default(false),
+  limit: z.number().int().positive().max(500).optional(),
+})
+export type KiriOperationOptions = z.infer<typeof kiriOperationOptionsSchema>
+
+export const kiriOperationRequestSchema = z.object({
+  operation: kiriOperationSchema,
+  params: z.record(z.string(), z.unknown()).default({}),
+  options: kiriOperationOptionsSchema.default({
+    compact: true,
+    includeContext: false,
+  }),
+})
+export type KiriOperationRequest = z.infer<typeof kiriOperationRequestSchema>
+
+export const kiriOperationErrorSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  path: z.string().optional(),
+})
+export type KiriOperationError = z.infer<typeof kiriOperationErrorSchema>
+
+export const kiriOperationResponseSchema = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    operation: kiriOperationSchema,
+    result: z.unknown(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    operation: kiriOperationSchema,
+    error: kiriOperationErrorSchema,
+  }),
+])
+export type KiriOperationResponse = z.infer<typeof kiriOperationResponseSchema>
+
 export type AgentRuntimeState = {
   kind: RuntimeKind
   sessionId?: string

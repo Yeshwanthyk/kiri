@@ -40,7 +40,6 @@
     "kiri:agent-harness": "tsx tests/harness/kiri-agent-cli-harness.ts",
     "kiri:history-harness": "tsx tests/harness/kiri-agent-detail-history-harness.ts",
     "kiri:models": "node scripts/sync-models-dev.mjs",
-    "kiri:projects": "tsx src/cli/kirictl.ts projects",
     "effect:audit": "node scripts/effect-migration-audit.mjs",
     "preview": "vite preview",
     "start": "pnpx srvx --prod -s ../client dist/server/server.js"

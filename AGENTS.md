@@ -19,11 +19,11 @@ Never guess at Effect patterns - check the guide first.
 Use the CLI instead of editing `~/.kiri/userdata/kiri.sqlite` by hand.
 
 ```sh
-pnpm kiri:projects list [--all]
-pnpm kiri:projects add --name "Project Name" --cwd /absolute/path --id stable-id
-pnpm kiri:projects hide --id stable-id
-pnpm kiri:projects unhide --id stable-id
-pnpm kiri:projects delete --id stable-id --yes
+pnpm kiri:ctl call '{"operation":"project.list","params":{"includeHidden":true}}'
+pnpm kiri:ctl call '{"operation":"project.add","params":{"name":"Project Name","cwd":"/absolute/path","id":"stable-id"}}'
+pnpm kiri:ctl call '{"operation":"project.hide","params":{"id":"stable-id"}}'
+pnpm kiri:ctl call '{"operation":"project.unhide","params":{"id":"stable-id"}}'
+pnpm kiri:ctl call '{"operation":"project.delete","params":{"id":"stable-id"}}'
 ```
 
 Rules:
