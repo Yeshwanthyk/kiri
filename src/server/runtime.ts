@@ -174,10 +174,14 @@ function unsupportedCapabilityMessage(
   key: keyof ProviderRuntimeAdapter,
   unsupported: string,
 ) {
-  if (runtime === 'claude' && key === 'prompt') {
-    return 'Claude sessions run in terminal mode only'
+  if ((runtime === 'claude' || runtime === 'opencode') && key === 'prompt') {
+    return `${runtimeDisplayName(runtime)} sessions run in terminal mode only`
   }
   return `${runtime} agents do not support ${unsupported}`
+}
+
+function runtimeDisplayName(runtime: RuntimeKind) {
+  return runtime === 'opencode' ? 'OpenCode' : 'Claude'
 }
 
 function normalizeRuntimeCommandFailure(error: unknown) {

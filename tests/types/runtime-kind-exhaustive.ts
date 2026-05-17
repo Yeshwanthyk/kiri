@@ -13,6 +13,7 @@ const dbRuntimeCheckMigrationCoversAll = {
   pi: true,
   codex: true,
   claude: true,
+  opencode: true,
 } satisfies Record<RuntimeKind, true>
 
 void sessionRuntimeOrderCoversAll

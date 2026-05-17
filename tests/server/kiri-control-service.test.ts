@@ -16,6 +16,7 @@ const settings: KiriSettings = {
     pi: { models: ['sonnet'], defaultModel: 'sonnet', contextWindows: { sonnet: 200_000 } },
     codex: { models: ['gpt-5.3-codex'], defaultModel: 'gpt-5.3-codex' },
     claude: { models: ['sonnet'], defaultModel: 'sonnet' },
+    opencode: { models: ['opencode/gpt-5.5'], defaultModel: 'opencode/gpt-5.5' },
   },
 }
 

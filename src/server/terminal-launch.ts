@@ -137,6 +137,8 @@ function buildTerminalProcessLaunchEffect(
         return yield* claudeLaunch(config, context)
       case 'codex':
         return yield* codexLaunch(config, context)
+      case 'opencode':
+        return yield* opencodeLaunch(config, context)
       case 'pi':
         return yield* piLaunch(config, context)
       default:
@@ -304,6 +306,26 @@ function piLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchCont
     cwd: config.cwd,
     env: yield* baseTerminalEnv(config, context),
     label: 'pi',
+  }
+  })
+}
+
+function opencodeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
+  return Effect.gen(function* () {
+  const state = yield* parseRuntimeState(config.runtimeStateJson)
+  const args = [config.cwd]
+  const resume = stringValue(state.resume) ?? stringValue(state.opencodeSessionId)
+  if (config.model) args.push('--model', config.model)
+  if (resume) args.push('--session', resume)
+  const env = yield* baseTerminalEnv(config, context)
+  const homePath = context.env.KIRI_OPENCODE_HOME ?? stringValue(state.homePath)
+  if (homePath) env.HOME = homePath
+  return {
+    command: yield* resolveExecutable(context, 'opencode', context.env.KIRI_OPENCODE_BIN ?? stringValue(state.binaryPath)),
+    args,
+    cwd: config.cwd,
+    env,
+    label: 'opencode',
   }
   })
 }

@@ -96,6 +96,7 @@ describe('runtime binaries', () => {
         '/opt/homebrew/bin',
         '/usr/local/bin',
         '/Users/yesh/.local/bin',
+        '/Users/yesh/.opencode/bin',
         '/Users/yesh/.bun/bin',
         '/Users/yesh/.npm-global/bin',
         '/custom/bin',

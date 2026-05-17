@@ -214,6 +214,40 @@ describe('buildTerminalProcessLaunch', () => {
     ])
   })
 
+  it('launches OpenCode TUI against the project cwd', () => {
+    vi.stubEnv('KIRI_OPENCODE_BIN', '/tmp/bin/opencode')
+    vi.stubEnv('KIRI_OPENCODE_HOME', '/tmp/opencode-home')
+
+    const launch = buildTerminalProcessLaunch(launchConfig('opencode'), 'runtime', shell)
+
+    expect(launch.command).toBe('/tmp/bin/opencode')
+    expect(launch.args).toEqual([
+      '/tmp/project',
+      '--model',
+      'test-model',
+    ])
+    expect(launch.cwd).toBe('/tmp/project')
+    expect(launch.label).toBe('opencode')
+    expect(launch.env.HOME).toBe('/tmp/opencode-home')
+    expect(launch.env.KIRI_RUNTIME).toBe('opencode')
+    expect(launch.env.KIRI_MODEL).toBe('test-model')
+  })
+
+  it('resumes OpenCode when runtime state carries a session id', () => {
+    const launch = buildTerminalProcessLaunch({
+      ...launchConfig('opencode'),
+      runtimeStateJson: JSON.stringify({ resume: 'ses_123' }),
+    }, 'runtime', shell)
+
+    expect(launch.args).toEqual([
+      '/tmp/project',
+      '--model',
+      'test-model',
+      '--session',
+      'ses_123',
+    ])
+  })
+
   it('keeps shell mode as a separate terminal profile', () => {
     const launch = buildTerminalProcessLaunch(launchConfig('claude'), 'shell', shell)
 

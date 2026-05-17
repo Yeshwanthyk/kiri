@@ -5,7 +5,7 @@ import { sessionInterfaceModeForRuntime } from '~/lib/contracts'
 import { errorMessage, formatBlockDay, formatBlockTime, formatTokenCount } from './format'
 import { supportsThinking } from './slash-commands'
 
-export const scratchpadRuntimeOrder = ['codex', 'pi', 'claude'] as const satisfies readonly RuntimeKind[]
+export const scratchpadRuntimeOrder = ['codex', 'pi', 'claude', 'opencode'] as const satisfies readonly RuntimeKind[]
 const scratchpadThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
 
 type ScratchpadState = {
@@ -115,7 +115,8 @@ export function ScratchpadPanel({
   const captureRef = React.useRef<HTMLTextAreaElement>(null)
   const triggerModels = settings.runtimes[triggerRuntime].models
   const triggerSupportsThinking = supportsThinking(triggerRuntime)
-  const triggerInterfaceModes = triggerRuntime === 'claude' ? ['terminal'] as const : ['gui', 'terminal'] as const
+  const triggerRuntimeIsTerminalOnly = sessionInterfaceModeForRuntime(triggerRuntime, 'gui') === 'terminal'
+  const triggerInterfaceModes = triggerRuntimeIsTerminalOnly ? ['terminal'] as const : ['gui', 'terminal'] as const
   const selectedTriggerInterfaceMode = sessionInterfaceModeForRuntime(triggerRuntime, triggerInterfaceMode)
 
   React.useEffect(() => {
@@ -140,7 +141,7 @@ export function ScratchpadPanel({
     setTriggerRuntime(runtime)
     setTriggerModel(settings.runtimes[runtime].defaultModel)
     setTriggerInterfaceMode((current) =>
-      triggerRuntime === 'claude' && runtime !== 'claude'
+      triggerRuntimeIsTerminalOnly && sessionInterfaceModeForRuntime(runtime, 'gui') !== 'terminal'
         ? 'gui'
         : sessionInterfaceModeForRuntime(runtime, current))
   }

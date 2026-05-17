@@ -7,7 +7,7 @@ import {
   uiPreferencesSchema,
 } from './ui-preferences'
 
-export const runtimeKinds = ['pi', 'codex', 'claude'] as const
+export const runtimeKinds = ['pi', 'codex', 'claude', 'opencode'] as const
 export const runtimeKindSchema = z.enum(runtimeKinds)
 export type RuntimeKind = z.infer<typeof runtimeKindSchema>
 
@@ -21,6 +21,7 @@ export function sessionInterfaceModeForRuntime(
 ): SessionInterfaceMode {
   switch (runtime) {
     case 'claude':
+    case 'opencode':
       return 'terminal'
     case 'codex':
     case 'pi':
@@ -213,6 +214,7 @@ const runtimeSettingsSchemaByKind = {
   pi: runtimeSettingsSchema,
   codex: runtimeSettingsSchema,
   claude: runtimeSettingsSchema,
+  opencode: runtimeSettingsSchema,
 } satisfies Record<RuntimeKind, typeof runtimeSettingsSchema>
 
 export const kiriSettingsSchema = z.object({

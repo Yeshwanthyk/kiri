@@ -30,6 +30,13 @@ describe('provider runtime registry', () => {
     expect(runtimeAdapters.claude.setThinkingLevel).toBeUndefined()
     expect(runtimeAdapters.claude.reset).toBeUndefined()
     expect(runtimeAdapters.claude.answerQuestion).toBeUndefined()
+
+    expect(runtimeAdapters.opencode.prompt).toBeUndefined()
+    expect(runtimeAdapters.opencode.steer).toBeUndefined()
+    expect(runtimeAdapters.opencode.interrupt).toBeUndefined()
+    expect(runtimeAdapters.opencode.setThinkingLevel).toBeUndefined()
+    expect(runtimeAdapters.opencode.reset).toBeUndefined()
+    expect(runtimeAdapters.opencode.answerQuestion).toBeUndefined()
   })
 
   it.effect('exposes the registry as an Effect service', () =>
@@ -70,6 +77,7 @@ describe('provider runtime registry', () => {
 
       yield* registry.forget('codex', 'agent-1')
       yield* registry.forget('claude', 'agent-2')
+      yield* registry.forget('opencode', 'agent-3')
 
       expect(cleaned).toEqual(['codex:agent-1'])
     }),

@@ -71,6 +71,15 @@ describe('kirictl', () => {
       }),
     ]))
 
+    const opencodeModels = modelRowsSchema.parse(runJson(env, ['models', 'list', '--runtime', 'opencode', '--json']))
+    expect(opencodeModels).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runtime: 'opencode',
+        model: 'opencode/gpt-5.5',
+        isDefault: true,
+      }),
+    ]))
+
     const project = projectSummarySchema.parse(runJson(env, [
       'projects',
       'add',

@@ -112,5 +112,6 @@ describe('supportsThinking', () => {
     expect(supportsThinking('pi')).toBe(true)
     expect(supportsThinking('codex')).toBe(true)
     expect(supportsThinking('claude')).toBe(true)
+    expect(supportsThinking('opencode')).toBe(false)
   })
 })

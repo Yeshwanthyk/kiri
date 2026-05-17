@@ -24,6 +24,7 @@ describe('runtime commands', () => {
           pi: piAdapter,
           codex: { prompt: () => Promise.resolve('codex-ok') },
           claude: { prompt: () => Promise.resolve('claude-ok') },
+          opencode: {},
         }),
         getLaunchConfig: () => ({ runtime: 'pi' }),
       })
@@ -42,6 +43,7 @@ describe('runtime commands', () => {
           pi: { prompt: () => Promise.resolve(undefined) },
           codex: { prompt: () => Promise.resolve(undefined) },
           claude: {},
+          opencode: {},
         }),
         getLaunchConfig: () => ({ runtime: 'claude' }),
       })
@@ -62,6 +64,7 @@ describe('runtime commands', () => {
           pi: { prompt: () => Promise.resolve(undefined) },
           codex: { prompt: () => Promise.resolve(undefined) },
           claude: {},
+          opencode: {},
         }),
         getLaunchConfig: () => ({ runtime: 'claude' }),
       })
@@ -75,6 +78,27 @@ describe('runtime commands', () => {
     }),
   )
 
+  it.effect('fails OpenCode prompts as terminal-only', () =>
+    Effect.gen(function* () {
+      const commands = makeRuntimeCommands({
+        registry: makeRuntimeRegistry({
+          pi: { prompt: () => Promise.resolve(undefined) },
+          codex: { prompt: () => Promise.resolve(undefined) },
+          claude: {},
+          opencode: {},
+        }),
+        getLaunchConfig: () => ({ runtime: 'opencode' }),
+      })
+
+      const error = yield* commands.prompt({ agentId: 'agent-1', text: 'hello' }).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(RuntimeCommandError)
+      if (error instanceof RuntimeCommandError) {
+        expect(error.message).toBe('OpenCode sessions run in terminal mode only')
+      }
+    }),
+  )
+
   it.effect('wraps adapter promise rejections in a typed runtime command error', () =>
     Effect.gen(function* () {
       const commands = makeRuntimeCommands({
@@ -84,6 +108,7 @@ describe('runtime commands', () => {
           },
           codex: { prompt: () => Promise.resolve(undefined) },
           claude: {},
+          opencode: {},
         }),
         getLaunchConfig: () => ({ runtime: 'pi' }),
       })

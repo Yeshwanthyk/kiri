@@ -33,11 +33,13 @@ describe('buildBoardCommandActions', () => {
       'start-codex-alpha',
       'start-pi-alpha',
       'start-claude-alpha',
+      'start-opencode-alpha',
       'switch-project-alpha',
       'switch-agent-agent-a',
       'start-codex-beta',
       'start-pi-beta',
       'start-claude-beta',
+      'start-opencode-beta',
       'switch-project-beta',
     ])
     expect(actions.find((action) => action.id === 'scratchpad')?.detail).toBe('1 block')
@@ -106,6 +108,7 @@ function workspaceWithProjects(
         pi: { models: ['pi-model'], defaultModel: 'pi-model' },
         codex: { models: ['codex-model'], defaultModel: 'codex-model' },
         claude: { models: ['claude-model'], defaultModel: 'claude-model' },
+        opencode: { models: ['opencode-model'], defaultModel: 'opencode-model' },
       },
     },
     preferences: {

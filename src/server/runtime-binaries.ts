@@ -73,6 +73,7 @@ function desktopPathEntries(homeDir: string) {
     '/opt/homebrew/bin',
     '/usr/local/bin',
     join(homeDir, '.local', 'bin'),
+    join(homeDir, '.opencode', 'bin'),
     join(homeDir, '.bun', 'bin'),
     join(homeDir, '.npm-global', 'bin'),
   ]

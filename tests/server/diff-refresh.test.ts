@@ -17,6 +17,7 @@ function workspaceSnapshot(): WorkspaceSnapshot {
         pi: { models: ['pi-model'], defaultModel: 'pi-model' },
         codex: { models: ['codex-model'], defaultModel: 'codex-model' },
         claude: { models: ['claude-model'], defaultModel: 'claude-model' },
+        opencode: { models: ['opencode-model'], defaultModel: 'opencode-model' },
       },
     },
     preferences: defaultUiPreferences,

@@ -40,6 +40,12 @@ const scratchpadBlockSchema = z.object({
   triggeredAt: z.string().nullable(),
   triggeredAgentId: z.string().nullable(),
 })
+const modelRowSchema = z.object({
+  runtime: z.string(),
+  model: z.string(),
+  isDefault: z.boolean(),
+  contextWindow: z.number().nullable(),
+})
 
 describe('kiri MCP server', () => {
   afterEach(async () => {
@@ -72,6 +78,17 @@ describe('kiri MCP server', () => {
       'kiri_delete_scratchpad',
       'kiri_trigger_scratchpad',
       'kiri_describe_capabilities',
+    ]))
+
+    const opencodeModels = z.array(modelRowSchema).parse(await callItems(client, 'kiri_list_models', {
+      runtime: 'opencode',
+    }))
+    expect(opencodeModels).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runtime: 'opencode',
+        model: 'opencode/gpt-5.5',
+        isDefault: true,
+      }),
     ]))
 
     const primary = projectSummarySchema.parse(await callResult(client, 'kiri_add_project', {

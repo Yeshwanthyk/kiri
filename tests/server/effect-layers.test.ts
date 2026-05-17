@@ -16,6 +16,6 @@ describe('Effect service layers', () => {
       'tests/harness/effect-layers.ts',
       (output) => harnessOutputSchema.parse(output),
     )
-    expect(result.runtimeKinds).toEqual(['claude', 'codex', 'pi'])
+    expect(result.runtimeKinds).toEqual(['claude', 'codex', 'opencode', 'pi'])
   }, 20_000)
 })

@@ -37,6 +37,11 @@ const settings: KiriSettings = {
       defaultModel: 'claude-model',
       contextWindows: { 'claude-model': 800 },
     },
+    opencode: {
+      models: ['opencode-model'],
+      defaultModel: 'opencode-model',
+      contextWindows: { 'opencode-model': 600 },
+    },
   },
 }
 

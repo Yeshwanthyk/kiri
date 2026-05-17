@@ -15,7 +15,7 @@ export type CommandPaletteAction = {
 }
 
 export const sessionThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
-export const sessionRuntimeOrder = ['codex', 'pi', 'claude'] as const satisfies readonly RuntimeKind[]
+export const sessionRuntimeOrder = ['codex', 'pi', 'claude', 'opencode'] as const satisfies readonly RuntimeKind[]
 
 export const runtimeCopy = {
   codex: {
@@ -32,6 +32,11 @@ export const runtimeCopy = {
     label: 'Claude',
     meta: 'terminal',
     detail: 'Run Claude Code in the agent terminal for this project.',
+  },
+  opencode: {
+    label: 'OpenCode',
+    meta: 'terminal',
+    detail: 'Run OpenCode TUI in the agent terminal for this project.',
   },
 } as const satisfies Record<RuntimeKind, { label: string; meta: string; detail: string }>
 

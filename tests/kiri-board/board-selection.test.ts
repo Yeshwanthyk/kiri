@@ -45,6 +45,7 @@ function workspaceWithProjects(projects: ProjectRow[]): WorkspaceSnapshot {
         pi: { models: ['pi-model'], defaultModel: 'pi-model' },
         codex: { models: ['codex-model'], defaultModel: 'codex-model' },
         claude: { models: ['claude-model'], defaultModel: 'claude-model' },
+        opencode: { models: ['opencode-model'], defaultModel: 'opencode-model' },
       },
     },
     preferences: {

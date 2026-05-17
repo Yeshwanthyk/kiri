@@ -120,7 +120,7 @@ export function migrate(database: DatabaseSync) {
   addRuntimeStateColumn(database)
   addAgentArchivedAtColumn(database)
   addAgentInterfaceModeColumn(database)
-  normalizeClaudeInterfaceMode(database)
+  normalizeTerminalOnlyInterfaceMode(database)
   repairAgentSlotReferences(database)
   removeLegacyDefaultAgentSlots(database)
 }
@@ -165,9 +165,9 @@ function addAgentInterfaceModeColumn(database: DatabaseSync) {
   database.exec("ALTER TABLE agent_slots ADD COLUMN interface_mode TEXT NOT NULL DEFAULT 'gui'")
 }
 
-function normalizeClaudeInterfaceMode(database: DatabaseSync) {
+function normalizeTerminalOnlyInterfaceMode(database: DatabaseSync) {
   database
-    .prepare("UPDATE agent_slots SET interface_mode = 'terminal' WHERE runtime = 'claude' AND interface_mode <> 'terminal'")
+    .prepare("UPDATE agent_slots SET interface_mode = 'terminal' WHERE runtime IN ('claude', 'opencode') AND interface_mode <> 'terminal'")
     .run()
 }
 
@@ -176,10 +176,20 @@ function removeLegacyDefaultAgentSlots(database: DatabaseSync) {
 }
 
 function widenRuntimeCheck(database: DatabaseSync) {
+  widenAgentSlotsRuntimeCheck(database)
+  widenAgentTasksSourceCheck(database)
+}
+
+function widenAgentSlotsRuntimeCheck(database: DatabaseSync) {
   const row = database
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_slots'")
     .get() as { sql?: string } | undefined
-  if (!row?.sql?.includes("CHECK (runtime = 'pi')")) return
+  if (!needsRuntimeCheckWidening(row?.sql)) return
+
+  const columns = tableColumns(database, 'agent_slots')
+  const interfaceMode = columns.has('interface_mode') ? 'interface_mode' : "'gui'"
+  const runtimeStateJson = columns.has('runtime_state_json') ? 'runtime_state_json' : 'NULL'
+  const archivedAt = columns.has('archived_at') ? 'archived_at' : 'NULL'
 
   database.exec(`
     PRAGMA foreign_keys = OFF;
@@ -205,13 +215,60 @@ function widenRuntimeCheck(database: DatabaseSync) {
     INSERT INTO agent_slots (
       id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, runtime_state_json, archived_at, position
     )
-    SELECT id, project_id, slot, title, runtime, 'gui', model, status, session_dir, session_file, NULL, NULL, position
+    SELECT id, project_id, slot, title, runtime, ${interfaceMode}, model, status, session_dir, session_file, ${runtimeStateJson}, ${archivedAt}, position
     FROM agent_slots_old;
 
     DROP TABLE agent_slots_old;
     PRAGMA legacy_alter_table = OFF;
     PRAGMA foreign_keys = ON;
   `)
+}
+
+function widenAgentTasksSourceCheck(database: DatabaseSync) {
+  const row = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_tasks'")
+    .get() as { sql?: string } | undefined
+  if (!needsRuntimeCheckWidening(row?.sql)) return
+
+  database.exec(`
+    PRAGMA foreign_keys = OFF;
+    PRAGMA legacy_alter_table = ON;
+    ALTER TABLE agent_tasks RENAME TO agent_tasks_old;
+
+    CREATE TABLE agent_tasks (
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      source TEXT NOT NULL CHECK (source IN (${runtimeCheckValues})),
+      task_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'inProgress', 'completed', 'failed')),
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (thread_id, source, task_id)
+    );
+
+    INSERT INTO agent_tasks (
+      thread_id, source, task_id, position, title, status, updated_at
+    )
+    SELECT thread_id, source, task_id, position, title, status, updated_at
+    FROM agent_tasks_old;
+
+    DROP TABLE agent_tasks_old;
+    CREATE INDEX IF NOT EXISTS agent_tasks_thread_position
+      ON agent_tasks(thread_id, position, task_id);
+    PRAGMA legacy_alter_table = OFF;
+    PRAGMA foreign_keys = ON;
+  `)
+}
+
+function needsRuntimeCheckWidening(sql: string | undefined) {
+  return sql !== undefined && !runtimeKinds.every((runtime) => sql.includes(`'${runtime}'`))
+}
+
+function tableColumns(database: DatabaseSync, tableName: string) {
+  return new Set(
+    (database.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>)
+      .map((column) => column.name),
+  )
 }
 
 function repairAgentSlotReferences(database: DatabaseSync) {

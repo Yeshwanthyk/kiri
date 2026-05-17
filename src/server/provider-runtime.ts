@@ -88,6 +88,8 @@ export const runtimeAdapters: Record<RuntimeKind, ProviderRuntimeAdapter> = {
   },
   claude: {
   },
+  opencode: {
+  },
 }
 
 export class RuntimeRegistry extends Context.Tag('@kiri/RuntimeRegistry')<

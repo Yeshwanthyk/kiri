@@ -261,6 +261,16 @@ test('session launcher keeps runtime presets isolated from normal starts', async
   await expect(page.getByTestId('session-interface-mode').getByRole('button', { name: 'Terminal' })).toBeVisible()
 
   await page.keyboard.press('Escape')
+  await page.keyboard.press('Control+K')
+  await page.getByTestId('command-search').fill('Start OpenCode in kiri')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('session-launcher')).toBeVisible()
+  await expectRuntimeSelected(page, 'opencode')
+  await expect(page.getByTestId('session-model')).toContainText('opencode/gpt-5.5')
+  await expect(page.getByTestId('session-interface-mode').getByRole('button')).toHaveCount(1)
+  await expect(page.getByTestId('session-interface-mode').getByRole('button', { name: 'Terminal' })).toBeVisible()
+
+  await page.keyboard.press('Escape')
   await pressShiftKey(page, 'KeyN')
   await expect(page.getByTestId('session-launcher')).toBeVisible()
   await expectRuntimeSelected(page, 'codex')
@@ -1037,14 +1047,14 @@ test('launcher, confirm, and settings controls expose accessible states', async 
 async function createSession(
   page: import('@playwright/test').Page,
   title: string,
-  runtime: 'pi' | 'codex' | 'claude' = 'pi',
+  runtime: 'pi' | 'codex' | 'claude' | 'opencode' = 'pi',
   thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh',
   interfaceMode: 'gui' | 'terminal' = 'gui',
 ) {
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
   await pressShiftKey(page, 'KeyN')
   await clickRuntime(page, runtime)
-  await clickInterfaceMode(page, runtime === 'claude' ? 'terminal' : interfaceMode)
+  await clickInterfaceMode(page, terminalOnlyRuntime(runtime) ? 'terminal' : interfaceMode)
   if (thinkingLevel) {
     await clickThinkingLevel(page, thinkingLevel)
   }
@@ -1070,11 +1080,12 @@ const runtimeLabels = {
   codex: 'Codex',
   pi: 'Pi',
   claude: 'Claude',
+  opencode: 'OpenCode',
 } as const
 
 async function clickRuntime(
   page: import('@playwright/test').Page,
-  runtime: 'pi' | 'codex' | 'claude',
+  runtime: 'pi' | 'codex' | 'claude' | 'opencode',
 ) {
   await page
     .getByTestId('session-runtime')
@@ -1084,13 +1095,17 @@ async function clickRuntime(
 
 async function expectRuntimeSelected(
   page: import('@playwright/test').Page,
-  runtime: 'pi' | 'codex' | 'claude',
+  runtime: 'pi' | 'codex' | 'claude' | 'opencode',
 ) {
   await expect(
     page
       .getByTestId('session-runtime')
       .getByRole('button', { name: new RegExp(`^${runtimeLabels[runtime]}\\b`) }),
   ).toHaveAttribute('aria-pressed', 'true')
+}
+
+function terminalOnlyRuntime(runtime: 'pi' | 'codex' | 'claude' | 'opencode') {
+  return runtime === 'claude' || runtime === 'opencode'
 }
 
 async function clickThinkingLevel(

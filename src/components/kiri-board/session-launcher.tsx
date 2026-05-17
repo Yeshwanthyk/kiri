@@ -74,7 +74,8 @@ export function InlineSessionLauncher({
   const models = settings.runtimes[runtime].models
   const launchProject = projects.find((item) => item.id === launchProjectId) ?? project
   const runtimeSupportsThinking = supportsThinking(runtime)
-  const availableInterfaceModes = runtime === 'claude' ? ['terminal'] as const : ['gui', 'terminal'] as const
+  const runtimeIsTerminalOnly = sessionInterfaceModeForRuntime(runtime, 'gui') === 'terminal'
+  const availableInterfaceModes = runtimeIsTerminalOnly ? ['terminal'] as const : ['gui', 'terminal'] as const
   const selectedInterfaceMode = sessionInterfaceModeForRuntime(runtime, interfaceMode)
   const normalizedProjectQuery = projectQuery.trim().toLowerCase()
   const visibleTargetProjects = projects.filter((item) => {
@@ -147,7 +148,7 @@ export function InlineSessionLauncher({
     setRuntime(nextRuntime)
     setModel(settings.runtimes[nextRuntime].defaultModel)
     setInterfaceMode((current) =>
-      runtime === 'claude' && nextRuntime !== 'claude'
+      runtimeIsTerminalOnly && sessionInterfaceModeForRuntime(nextRuntime, 'gui') !== 'terminal'
         ? 'gui'
         : sessionInterfaceModeForRuntime(nextRuntime, current))
   }

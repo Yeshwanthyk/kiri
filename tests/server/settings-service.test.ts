@@ -22,6 +22,10 @@ const validSettingsJson = JSON.stringify({
       models: ['claude-default'],
       defaultModel: 'claude-default',
     },
+    opencode: {
+      models: ['opencode-default'],
+      defaultModel: 'opencode-default',
+    },
   },
 })
 
@@ -75,6 +79,7 @@ describe('settings service', () => {
             pi: { models: ['pi-alt'], defaultModel: 'pi-default' },
             codex: { models: ['codex-default'], defaultModel: 'codex-default' },
             claude: { models: ['claude-default'], defaultModel: 'claude-default' },
+            opencode: { models: ['opencode-default'], defaultModel: 'opencode-default' },
           },
         }),
       })
