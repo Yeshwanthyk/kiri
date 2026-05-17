@@ -439,6 +439,8 @@ export const kiriReadOperations = [
   'project.list',
   'session.list',
   'scratchpad.list',
+  'workflow.list',
+  'workflow.show',
 ] as const
 export const kiriReadOperationSchema = z.enum(kiriReadOperations)
 export type KiriReadOperation = z.infer<typeof kiriReadOperationSchema>
@@ -455,6 +457,14 @@ export const kiriWriteOperations = [
   'scratchpad.add',
   'scratchpad.delete',
   'scratchpad.trigger',
+  'workflow.validate',
+  'workflow.create',
+  'workflow.dispatch',
+  'workflow.retrigger',
+  'workflow.track',
+  'workflow.untrack',
+  'workflow.archive',
+  'workflow.restore',
 ] as const
 export const kiriWriteOperationSchema = z.enum(kiriWriteOperations)
 export type KiriWriteOperation = z.infer<typeof kiriWriteOperationSchema>
@@ -503,6 +513,108 @@ export const kiriOperationResponseSchema = z.discriminatedUnion('ok', [
   }),
 ])
 export type KiriOperationResponse = z.infer<typeof kiriOperationResponseSchema>
+
+export const workflowItemActions = ['launch', 'scratchpad'] as const
+export const workflowItemActionSchema = z.enum(workflowItemActions)
+export type WorkflowItemAction = z.infer<typeof workflowItemActionSchema>
+
+export const workflowRunStatuses = [
+  'validated',
+  'running',
+  'completed',
+  'failed',
+  'archived',
+] as const
+export const workflowRunStatusSchema = z.enum(workflowRunStatuses)
+export type WorkflowRunStatus = z.infer<typeof workflowRunStatusSchema>
+
+export const workflowItemStatuses = [
+  'pending',
+  'running',
+  'completed',
+  'failed',
+  'untracked',
+] as const
+export const workflowItemStatusSchema = z.enum(workflowItemStatuses)
+export type WorkflowItemStatus = z.infer<typeof workflowItemStatusSchema>
+
+export const workflowAttemptStatuses = [
+  'launched',
+  'failed',
+] as const
+export const workflowAttemptStatusSchema = z.enum(workflowAttemptStatuses)
+export type WorkflowAttemptStatus = z.infer<typeof workflowAttemptStatusSchema>
+
+export const workflowTerminalPasteSchema = z.object({
+  submit: z.boolean().default(true),
+})
+export type WorkflowTerminalPaste = z.infer<typeof workflowTerminalPasteSchema>
+
+export const workflowDefaultsSchema = z.object({
+  runtime: runtimeKindSchema.optional(),
+  interfaceMode: sessionInterfaceModeSchema.optional(),
+  model: z.string().trim().optional(),
+  thinkingLevel: thinkingLevelSchema.optional(),
+  attachScratchpad: z.boolean().default(true),
+  terminalPaste: workflowTerminalPasteSchema.optional(),
+}).default({ attachScratchpad: true })
+export type WorkflowDefaults = z.infer<typeof workflowDefaultsSchema>
+
+const workflowBaseItemInputSchema = z.object({
+  id: z.string().trim().min(1).max(80).optional(),
+  title: z.string().trim().min(1).max(160),
+  body: z.string().trim().min(1).max(4000),
+  tracked: z.boolean().default(true),
+  attachScratchpad: z.boolean().optional(),
+})
+
+export const workflowLaunchItemInputSchema = workflowBaseItemInputSchema.extend({
+  action: z.literal('launch'),
+  runtime: runtimeKindSchema.optional(),
+  interfaceMode: sessionInterfaceModeSchema.optional(),
+  model: z.string().trim().optional(),
+  thinkingLevel: thinkingLevelSchema.optional(),
+  terminalPaste: workflowTerminalPasteSchema.optional(),
+})
+
+export const workflowScratchpadItemInputSchema = workflowBaseItemInputSchema.extend({
+  action: z.literal('scratchpad'),
+})
+
+export const workflowItemInputSchema = z.discriminatedUnion('action', [
+  workflowLaunchItemInputSchema,
+  workflowScratchpadItemInputSchema,
+])
+export type WorkflowItemInput = z.infer<typeof workflowItemInputSchema>
+
+export const createWorkflowRunInputSchema = z.object({
+  projectId: z.string().trim().min(1),
+  title: z.string().trim().min(1).max(160),
+  defaults: workflowDefaultsSchema,
+  items: z.array(workflowItemInputSchema).min(1).max(50),
+})
+export type CreateWorkflowRunInput = z.infer<typeof createWorkflowRunInputSchema>
+
+export const workflowRunOperationInputSchema = z.object({
+  id: z.string().trim().min(1),
+})
+export type WorkflowRunOperationInput = z.infer<typeof workflowRunOperationInputSchema>
+
+export const workflowItemOperationInputSchema = z.object({
+  itemId: z.string().trim().min(1),
+  runtime: runtimeKindSchema.optional(),
+  interfaceMode: sessionInterfaceModeSchema.optional(),
+  model: z.string().trim().optional(),
+  thinkingLevel: thinkingLevelSchema.optional(),
+  terminalPaste: workflowTerminalPasteSchema.optional(),
+})
+export type WorkflowItemOperationInput = z.infer<typeof workflowItemOperationInputSchema>
+
+export const listWorkflowRunsInputSchema = z.object({
+  projectId: z.string().trim().min(1).optional(),
+  includeArchived: z.boolean().default(false),
+})
+export type ListWorkflowRunsInput = z.infer<typeof listWorkflowRunsInputSchema>
 
 export type AgentRuntimeState = {
   kind: RuntimeKind

@@ -3,13 +3,17 @@ import type {
   AddProjectInput,
   AddScratchpadBlockInput,
   AgentCell,
+  CreateWorkflowRunInput,
   KiriSettings,
+  ListWorkflowRunsInput,
   ScratchpadBlock,
   RestoreSessionInput,
   RuntimeKind,
   SessionInterfaceMode,
   StartSessionInput,
   ThinkingLevel,
+  WorkflowItemOperationInput,
+  WorkflowRunOperationInput,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import {
@@ -32,6 +36,18 @@ import {
   deleteProjectSummaryWithRuntimeCleanup,
   deleteSessionSummaryWithRuntimeCleanup,
 } from './runtime-cleanup'
+import {
+  archiveWorkflowRun as archiveWorkflowRunById,
+  createWorkflowRun,
+  dispatchWorkflowRun,
+  getWorkflowRun,
+  listWorkflowRuns,
+  restoreWorkflowRun as restoreWorkflowRunById,
+  retriggerWorkflowItem,
+  trackWorkflowItem,
+  untrackWorkflowItem,
+  validateWorkflow,
+} from './workflow-orchestration'
 
 type ModelChoice = {
   readonly runtime: RuntimeKind
@@ -127,6 +143,16 @@ export type KiriControlApi = {
   readonly addScratchpad: (input: AddScratchpadBlockInput) => ControlEffect<ScratchpadBlock>
   readonly deleteScratchpad: (id: string) => ControlEffect<ScratchpadBlock>
   readonly triggerScratchpad: (input: TriggerScratchpadInput) => ControlEffect<TriggerScratchpadResult>
+  readonly listWorkflowRuns: (input?: ListWorkflowRunsInput) => ControlEffect<unknown>
+  readonly getWorkflowRun: (id: string) => ControlEffect<unknown>
+  readonly validateWorkflow: (input: CreateWorkflowRunInput) => ControlEffect<unknown>
+  readonly createWorkflowRun: (input: CreateWorkflowRunInput) => ControlEffect<unknown>
+  readonly dispatchWorkflowRun: (input: WorkflowRunOperationInput) => ControlEffect<unknown>
+  readonly retriggerWorkflowItem: (input: WorkflowItemOperationInput) => ControlEffect<unknown>
+  readonly trackWorkflowItem: (input: Pick<WorkflowItemOperationInput, 'itemId'>) => ControlEffect<unknown>
+  readonly untrackWorkflowItem: (input: Pick<WorkflowItemOperationInput, 'itemId'>) => ControlEffect<unknown>
+  readonly archiveWorkflowRun: (input: WorkflowRunOperationInput) => ControlEffect<unknown>
+  readonly restoreWorkflowRun: (input: WorkflowRunOperationInput) => ControlEffect<unknown>
 }
 
 export class KiriControl extends Context.Tag('@kiri/KiriControl')<
@@ -161,6 +187,16 @@ export type KiriControlDependencies = {
   readonly addScratchpadBlockSummary: (input: AddScratchpadBlockInput) => ScratchpadBlock
   readonly deleteScratchpadBlockSummary: (id: string) => ScratchpadBlock
   readonly triggerScratchpadSession: (input: TriggerScratchpadInput) => Promise<TriggerScratchpadResult>
+  readonly listWorkflowRuns: (input?: ListWorkflowRunsInput) => unknown
+  readonly getWorkflowRun: (id: string) => unknown
+  readonly validateWorkflow: (input: CreateWorkflowRunInput) => unknown
+  readonly createWorkflowRun: (input: CreateWorkflowRunInput) => unknown
+  readonly dispatchWorkflowRun: (input: WorkflowRunOperationInput) => unknown
+  readonly retriggerWorkflowItem: (input: WorkflowItemOperationInput) => unknown
+  readonly trackWorkflowItem: (input: Pick<WorkflowItemOperationInput, 'itemId'>) => unknown
+  readonly untrackWorkflowItem: (input: Pick<WorkflowItemOperationInput, 'itemId'>) => unknown
+  readonly archiveWorkflowRun: (input: WorkflowRunOperationInput) => unknown
+  readonly restoreWorkflowRun: (input: WorkflowRunOperationInput) => unknown
 }
 
 const liveKiriControlDependencies: KiriControlDependencies = {
@@ -180,6 +216,16 @@ const liveKiriControlDependencies: KiriControlDependencies = {
   addScratchpadBlockSummary,
   deleteScratchpadBlockSummary,
   triggerScratchpadSession,
+  listWorkflowRuns,
+  getWorkflowRun,
+  validateWorkflow,
+  createWorkflowRun,
+  dispatchWorkflowRun,
+  retriggerWorkflowItem,
+  trackWorkflowItem,
+  untrackWorkflowItem,
+  archiveWorkflowRun: (input) => archiveWorkflowRunById(input.id),
+  restoreWorkflowRun: (input) => restoreWorkflowRunById(input.id),
 }
 
 export function makeKiriControl(
@@ -276,6 +322,64 @@ export function makeKiriControl(
     },
   )
 
+  const listWorkflowRunsEffect = Effect.fn('KiriControl.listWorkflowRuns')(
+    function* (input: ListWorkflowRunsInput = { includeArchived: false }) {
+      return yield* fromSync(() => dependencies.listWorkflowRuns(input))
+    },
+  )
+
+  const getWorkflowRunEffect = Effect.fn('KiriControl.getWorkflowRun')(function* (id: string) {
+    return yield* fromSync(() => dependencies.getWorkflowRun(id))
+  })
+
+  const validateWorkflowEffect = Effect.fn('KiriControl.validateWorkflow')(
+    function* (input: CreateWorkflowRunInput) {
+      return yield* fromSync(() => dependencies.validateWorkflow(input))
+    },
+  )
+
+  const createWorkflowRunEffect = Effect.fn('KiriControl.createWorkflowRun')(
+    function* (input: CreateWorkflowRunInput) {
+      return yield* fromSync(() => dependencies.createWorkflowRun(input))
+    },
+  )
+
+  const dispatchWorkflowRunEffect = Effect.fn('KiriControl.dispatchWorkflowRun')(
+    function* (input: WorkflowRunOperationInput) {
+      return yield* fromSync(() => dependencies.dispatchWorkflowRun(input))
+    },
+  )
+
+  const retriggerWorkflowItemEffect = Effect.fn('KiriControl.retriggerWorkflowItem')(
+    function* (input: WorkflowItemOperationInput) {
+      return yield* fromSync(() => dependencies.retriggerWorkflowItem(input))
+    },
+  )
+
+  const trackWorkflowItemEffect = Effect.fn('KiriControl.trackWorkflowItem')(
+    function* (input: Pick<WorkflowItemOperationInput, 'itemId'>) {
+      return yield* fromSync(() => dependencies.trackWorkflowItem(input))
+    },
+  )
+
+  const untrackWorkflowItemEffect = Effect.fn('KiriControl.untrackWorkflowItem')(
+    function* (input: Pick<WorkflowItemOperationInput, 'itemId'>) {
+      return yield* fromSync(() => dependencies.untrackWorkflowItem(input))
+    },
+  )
+
+  const archiveWorkflowRunEffect = Effect.fn('KiriControl.archiveWorkflowRun')(
+    function* (input: WorkflowRunOperationInput) {
+      return yield* fromSync(() => dependencies.archiveWorkflowRun(input))
+    },
+  )
+
+  const restoreWorkflowRunEffect = Effect.fn('KiriControl.restoreWorkflowRun')(
+    function* (input: WorkflowRunOperationInput) {
+      return yield* fromSync(() => dependencies.restoreWorkflowRun(input))
+    },
+  )
+
   return {
     snapshot,
     getContext,
@@ -294,6 +398,16 @@ export function makeKiriControl(
     addScratchpad,
     deleteScratchpad,
     triggerScratchpad,
+    listWorkflowRuns: listWorkflowRunsEffect,
+    getWorkflowRun: getWorkflowRunEffect,
+    validateWorkflow: validateWorkflowEffect,
+    createWorkflowRun: createWorkflowRunEffect,
+    dispatchWorkflowRun: dispatchWorkflowRunEffect,
+    retriggerWorkflowItem: retriggerWorkflowItemEffect,
+    trackWorkflowItem: trackWorkflowItemEffect,
+    untrackWorkflowItem: untrackWorkflowItemEffect,
+    archiveWorkflowRun: archiveWorkflowRunEffect,
+    restoreWorkflowRun: restoreWorkflowRunEffect,
   }
 }
 

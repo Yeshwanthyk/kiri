@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
   addProjectInputSchema,
   addScratchpadBlockInputSchema,
+  createWorkflowRunInputSchema,
   deleteProjectInputSchema,
   deleteScratchpadBlockInputSchema,
   hideProjectInputSchema,
@@ -10,12 +11,15 @@ import {
   kiriOperationRequestSchema,
   kiriReadOperations,
   kiriWriteOperations,
+  listWorkflowRunsInputSchema,
   renameSessionInputSchema,
   restoreSessionInputSchema,
   runtimeKindSchema,
   startSessionInputSchema,
   triggerScratchpadBlockInputSchema,
   unhideProjectInputSchema,
+  workflowItemOperationInputSchema,
+  workflowRunOperationInputSchema,
   type KiriOperation,
   type KiriOperationError,
   type KiriOperationOptions,
@@ -126,6 +130,12 @@ async function dispatchReadOperation(
       const input = parseParams(listScratchpadParamsSchema, params)
       return shapeResult(await run(control.listScratchpad({ projectId: input.projectId })), options)
     }
+    case 'workflow.list': {
+      const input = parseParams(listWorkflowRunsInputSchema, params)
+      return shapeResult(await run(control.listWorkflowRuns(input)), options)
+    }
+    case 'workflow.show':
+      return shapeResult(await run(control.getWorkflowRun(parseParams(idParamsSchema, params).id)), options)
     default:
       throw new Error(`Unsupported read operation: ${operation}`)
   }
@@ -171,6 +181,30 @@ async function dispatchWriteOperation(
       break
     case 'scratchpad.trigger':
       result = await run(control.triggerScratchpad(parseParams(triggerScratchpadBlockInputSchema, params)))
+      break
+    case 'workflow.validate':
+      result = await run(control.validateWorkflow(parseParams(createWorkflowRunInputSchema, params)))
+      break
+    case 'workflow.create':
+      result = await run(control.createWorkflowRun(parseParams(createWorkflowRunInputSchema, params)))
+      break
+    case 'workflow.dispatch':
+      result = await run(control.dispatchWorkflowRun(parseParams(workflowRunOperationInputSchema, params)))
+      break
+    case 'workflow.retrigger':
+      result = await run(control.retriggerWorkflowItem(parseParams(workflowItemOperationInputSchema, params)))
+      break
+    case 'workflow.track':
+      result = await run(control.trackWorkflowItem(parseParams(workflowItemOperationInputSchema, params)))
+      break
+    case 'workflow.untrack':
+      result = await run(control.untrackWorkflowItem(parseParams(workflowItemOperationInputSchema, params)))
+      break
+    case 'workflow.archive':
+      result = await run(control.archiveWorkflowRun(parseParams(workflowRunOperationInputSchema, params)))
+      break
+    case 'workflow.restore':
+      result = await run(control.restoreWorkflowRun(parseParams(workflowRunOperationInputSchema, params)))
       break
     default:
       throw new Error(`Unsupported write operation: ${operation}`)

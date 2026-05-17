@@ -6,6 +6,11 @@ import {
   runtimeKindSchema,
   sessionInterfaceModeSchema,
   timelineEventToneSchema,
+  thinkingLevelSchema,
+  workflowAttemptStatusSchema,
+  workflowItemActionSchema,
+  workflowItemStatusSchema,
+  workflowRunStatusSchema,
 } from '~/lib/contracts'
 
 export const projectDbRowSchema = z.object({
@@ -121,6 +126,52 @@ export const scratchpadBlockDbRowSchema = z.object({
   createdAt: z.string(),
   triggeredAt: z.string().nullable(),
   triggeredAgentId: z.string().nullable(),
+})
+
+export const workflowRunSummaryDbRowSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  projectName: z.string(),
+  title: z.string(),
+  status: workflowRunStatusSchema,
+  itemCount: z.number().int().nonnegative(),
+  launchedCount: z.number().int().nonnegative(),
+  failedCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().nullable(),
+})
+
+export const workflowItemDbRowSchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  position: z.number().int().nonnegative(),
+  clientId: z.string().nullable(),
+  action: workflowItemActionSchema,
+  title: z.string(),
+  body: z.string(),
+  runtime: runtimeKindSchema.nullable(),
+  interfaceMode: sessionInterfaceModeSchema.nullable(),
+  model: z.string().nullable(),
+  thinkingLevel: thinkingLevelSchema.nullable(),
+  terminalPasteJson: z.string().nullable(),
+  scratchpadBlockId: z.string().nullable(),
+  activeAgentId: z.string().nullable(),
+  tracked: z.union([z.literal(0), z.literal(1)]),
+  status: workflowItemStatusSchema,
+  error: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export const workflowAttemptDbRowSchema = z.object({
+  id: z.string(),
+  itemId: z.string(),
+  agentId: z.string().nullable(),
+  status: workflowAttemptStatusSchema,
+  error: z.string().nullable(),
+  createdAt: z.string(),
+  completedAt: z.string().nullable(),
 })
 
 export const agentLaunchConfigSchema = z.object({

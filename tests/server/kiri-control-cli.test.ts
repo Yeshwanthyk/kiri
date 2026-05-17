@@ -59,6 +59,40 @@ const scratchpadBlockSchema = z.object({
   triggeredAt: z.string().nullable(),
   triggeredAgentId: z.string().nullable(),
 })
+const workflowItemSchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  clientId: z.string().nullable(),
+  action: z.string(),
+  title: z.string(),
+  body: z.string(),
+  runtime: z.string().nullable(),
+  interfaceMode: z.string().nullable(),
+  model: z.string().nullable(),
+  terminalPaste: z.object({ submit: z.boolean() }).nullable(),
+  scratchpadBlockId: z.string().nullable(),
+  activeAgentId: z.string().nullable(),
+  tracked: z.boolean(),
+  status: z.string(),
+  attempts: z.array(z.object({
+    id: z.string(),
+    agentId: z.string().nullable(),
+    status: z.string(),
+  })),
+})
+const workflowRunSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  projectName: z.string(),
+  title: z.string(),
+  status: z.string(),
+  itemCount: z.number(),
+  launchedCount: z.number(),
+  failedCount: z.number(),
+  archivedAt: z.string().nullable(),
+  items: z.array(workflowItemSchema),
+})
+const workflowSummarySchema = workflowRunSchema.omit({ items: true })
 
 describe('kirictl call', () => {
   afterEach(() => {
@@ -148,6 +182,164 @@ describe('kirictl call', () => {
     }))
     expect(listedBlocks.map((item) => item.id)).toContain(block.id)
 
+    expect(callResult(env, {
+      operation: 'workflow.validate',
+      params: {
+        projectId: project.id,
+        title: 'CLI Workflow',
+        defaults: {
+          runtime: 'pi',
+          model: 'openai-codex/gpt-5.5',
+          attachScratchpad: true,
+        },
+        items: [{
+          id: 'build',
+          action: 'launch',
+          title: 'Build',
+          body: 'Build this in parallel',
+        }, {
+          id: 'note',
+          action: 'scratchpad',
+          title: 'Note',
+          body: 'Track this note',
+        }],
+      },
+    })).toMatchObject({
+      valid: true,
+      launchCount: 1,
+      scratchpadCount: 2,
+    })
+
+    const workflow = workflowRunSchema.parse(callResult(env, {
+      operation: 'workflow.create',
+      params: {
+        projectId: project.id,
+        title: 'CLI Workflow',
+        defaults: {
+          runtime: 'pi',
+          model: 'openai-codex/gpt-5.5',
+          attachScratchpad: true,
+        },
+        items: [{
+          id: 'build',
+          action: 'launch',
+          title: 'Build',
+          body: 'Build this in parallel',
+        }, {
+          id: 'note',
+          action: 'scratchpad',
+          title: 'Note',
+          body: 'Track this note',
+        }],
+      },
+    }))
+    expect(workflow).toMatchObject({
+      projectId: project.id,
+      status: 'validated',
+      itemCount: 2,
+      launchedCount: 0,
+    })
+    expect(workflow.items.map((item) => item.scratchpadBlockId)).toEqual([
+      expect.any(String),
+      expect.any(String),
+    ])
+
+    const dispatch = z.object({
+      id: z.string(),
+      status: z.string(),
+      launched: z.number(),
+      scratchpadOnly: z.number(),
+      failed: z.number(),
+      results: z.array(z.object({
+        itemId: z.string(),
+        status: z.string(),
+        agentId: z.string().optional(),
+      }).passthrough()),
+    }).parse(callResult(env, {
+      operation: 'workflow.dispatch',
+      params: { id: workflow.id },
+    }))
+    expect(dispatch).toMatchObject({
+      id: workflow.id,
+      status: 'running',
+      launched: 1,
+      scratchpadOnly: 1,
+      failed: 0,
+    })
+
+    const shownWorkflow = workflowRunSchema.parse(callResult(env, {
+      operation: 'workflow.show',
+      params: { id: workflow.id },
+    }))
+    expect(shownWorkflow.launchedCount).toBe(1)
+    expect(shownWorkflow.items.find((item) => item.action === 'launch')?.activeAgentId)
+      .toEqual(expect.any(String))
+    expect(shownWorkflow.items.find((item) => item.action === 'scratchpad')?.status)
+      .toBe('completed')
+
+    const workflows = z.array(workflowSummarySchema).parse(callResult(env, {
+      operation: 'workflow.list',
+      params: { projectId: project.id },
+    }))
+    expect(workflows.map((item) => item.id)).toContain(workflow.id)
+
+    expect(workflowItemSchema.parse(callResult(env, {
+      operation: 'workflow.untrack',
+      params: { itemId: shownWorkflow.items[0]?.id },
+    }))).toMatchObject({
+      tracked: false,
+      status: 'untracked',
+    })
+    expect(workflowItemSchema.parse(callResult(env, {
+      operation: 'workflow.track',
+      params: { itemId: shownWorkflow.items[0]?.id },
+    }))).toMatchObject({
+      tracked: true,
+      status: 'running',
+    })
+    const scratchpadItem = shownWorkflow.items.find((item) => item.action === 'scratchpad')
+    expect(responseSchema.parse(runTsxJsonWithArgs(
+      'src/cli/kirictl.ts',
+      ['call', JSON.stringify({
+        operation: 'workflow.retrigger',
+        params: { itemId: scratchpadItem?.id },
+      })],
+      (output) => output,
+      {
+        cwd: projectRoot,
+        env,
+      },
+    ))).toMatchObject({
+      ok: false,
+      operation: 'workflow.retrigger',
+      error: { message: expect.stringContaining('not launchable') },
+    })
+
+    expect(workflowRunSchema.parse(callResult(env, {
+      operation: 'workflow.archive',
+      params: { id: workflow.id },
+    })).archivedAt).toEqual(expect.any(String))
+    expect(responseSchema.parse(runTsxJsonWithArgs(
+      'src/cli/kirictl.ts',
+      ['call', JSON.stringify({
+        operation: 'workflow.dispatch',
+        params: { id: workflow.id },
+      })],
+      (output) => output,
+      {
+        cwd: projectRoot,
+        env,
+      },
+    ))).toMatchObject({
+      ok: false,
+      operation: 'workflow.dispatch',
+      error: { message: expect.stringContaining('archived') },
+    })
+    expect(workflowRunSchema.parse(callResult(env, {
+      operation: 'workflow.restore',
+      params: { id: workflow.id },
+    })).archivedAt).toBeNull()
+
     const archived = sessionSummarySchema.parse(callResult(env, {
       operation: 'session.archive',
       params: { agentId: session.id },
@@ -174,7 +366,7 @@ describe('kirictl call', () => {
       operation: 'operations.list',
       error: { code: 'INVALID_JSON' },
     })
-  }, 20_000)
+  }, 40_000)
 })
 
 function callResult(env: NodeJS.ProcessEnv, request: unknown) {

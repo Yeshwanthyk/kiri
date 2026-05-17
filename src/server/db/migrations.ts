@@ -113,6 +113,57 @@ export function migrate(database: DatabaseSync) {
 
     CREATE INDEX IF NOT EXISTS scratchpad_blocks_created_at
       ON scratchpad_blocks(created_at);
+
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('validated', 'running', 'completed', 'failed', 'archived')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS workflow_runs_project_updated
+      ON workflow_runs(project_id, updated_at);
+
+    CREATE TABLE IF NOT EXISTS workflow_items (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      client_id TEXT,
+      action TEXT NOT NULL CHECK (action IN ('launch', 'scratchpad')),
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      runtime TEXT CHECK (runtime IN (${runtimeCheckValues})),
+      interface_mode TEXT CHECK (interface_mode IN ('gui', 'terminal')),
+      model TEXT,
+      thinking_level TEXT,
+      terminal_paste_json TEXT,
+      scratchpad_block_id TEXT REFERENCES scratchpad_blocks(id) ON DELETE SET NULL,
+      active_agent_id TEXT REFERENCES agent_slots(id) ON DELETE SET NULL,
+      tracked INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'untracked')),
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS workflow_items_run_position
+      ON workflow_items(run_id, position);
+
+    CREATE TABLE IF NOT EXISTS workflow_item_attempts (
+      id TEXT PRIMARY KEY,
+      item_id TEXT NOT NULL REFERENCES workflow_items(id) ON DELETE CASCADE,
+      agent_id TEXT REFERENCES agent_slots(id) ON DELETE SET NULL,
+      status TEXT NOT NULL CHECK (status IN ('launched', 'failed')),
+      error TEXT,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS workflow_item_attempts_item_created
+      ON workflow_item_attempts(item_id, created_at);
   `)
   widenRuntimeCheck(database)
   addContextUsageWindowTokensColumn(database)

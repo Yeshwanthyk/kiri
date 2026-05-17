@@ -44,6 +44,17 @@ import {
   markScratchpadBlockTriggered as markScratchpadBlockTriggeredInDb,
 } from './db/scratchpad'
 import {
+  completeScratchpadWorkflowItem as completeScratchpadWorkflowItemInDb,
+  getWorkflowItem as getWorkflowItemFromDb,
+  getWorkflowRun as getWorkflowRunFromDb,
+  insertWorkflowRun,
+  listWorkflowRuns as listWorkflowRunsFromDb,
+  recordWorkflowItemAttempt as recordWorkflowItemAttemptInDb,
+  setWorkflowItemTracking as setWorkflowItemTrackingInDb,
+  setWorkflowRunArchiveState,
+  type PersistWorkflowRunInput,
+} from './db/workflows'
+import {
   archiveSessionRow,
   assertSessionProjectExists,
   insertSessionRow,
@@ -404,6 +415,50 @@ export function markScratchpadBlockTriggered(blockId: string, agentId: string) {
 
 export function getScratchpadBlock(id: string) {
   return getScratchpadBlockFromDb(getDb(), id)
+}
+
+export function listWorkflowRuns(input: {
+  readonly projectId?: string
+  readonly includeArchived?: boolean
+} = {}) {
+  return listWorkflowRunsFromDb(getDb(), input)
+}
+
+export function getWorkflowRun(id: string) {
+  return getWorkflowRunFromDb(getDb(), id)
+}
+
+export function getWorkflowItem(id: string) {
+  return getWorkflowItemFromDb(getDb(), id)
+}
+
+export function addWorkflowRun(input: PersistWorkflowRunInput) {
+  return insertWorkflowRun(getDb(), input)
+}
+
+export function recordWorkflowItemAttempt(input: {
+  readonly itemId: string
+  readonly agentId?: string | null
+  readonly status: 'launched' | 'failed'
+  readonly error?: string | null
+}) {
+  return recordWorkflowItemAttemptInDb(getDb(), input)
+}
+
+export function completeScratchpadWorkflowItem(itemId: string) {
+  return completeScratchpadWorkflowItemInDb(getDb(), itemId)
+}
+
+export function setWorkflowItemTracking(itemId: string, tracked: boolean) {
+  return setWorkflowItemTrackingInDb(getDb(), itemId, tracked)
+}
+
+export function archiveWorkflowRun(id: string) {
+  return setWorkflowRunArchiveState(getDb(), id, true)
+}
+
+export function restoreWorkflowRun(id: string) {
+  return setWorkflowRunArchiveState(getDb(), id, false)
 }
 
 export function startSessionAndGetId(input: StartSessionInput) {

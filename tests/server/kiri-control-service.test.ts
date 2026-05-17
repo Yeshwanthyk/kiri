@@ -133,6 +133,54 @@ describe('KiriControl service construction', () => {
     expect(calls).toEqual(['trigger:block-1:project-1'])
   })
 
+  it('routes workflow operations through injected dependencies', async () => {
+    const calls: string[] = []
+    const control = makeKiriControl(testDependencies({
+      validateWorkflow: (input) => {
+        calls.push(`validate:${input.title}`)
+        return { valid: true }
+      },
+      createWorkflowRun: (input) => {
+        calls.push(`create:${input.items.length}`)
+        return { id: 'workflow-1' }
+      },
+      dispatchWorkflowRun: (input) => {
+        calls.push(`dispatch:${input.id}`)
+        return { id: input.id, status: 'running' }
+      },
+      retriggerWorkflowItem: (input) => {
+        calls.push(`retrigger:${input.itemId}`)
+        return { itemId: input.itemId, status: 'launched' }
+      },
+    }))
+    const workflowInput = {
+      projectId: 'project-1',
+      title: 'Workflow',
+      defaults: { attachScratchpad: true },
+      items: [{
+        action: 'launch' as const,
+        title: 'Build',
+        body: 'Build it',
+        tracked: true,
+      }],
+    }
+
+    await expect(Effect.runPromise(control.validateWorkflow(workflowInput)))
+      .resolves.toMatchObject({ valid: true })
+    await expect(Effect.runPromise(control.createWorkflowRun(workflowInput)))
+      .resolves.toMatchObject({ id: 'workflow-1' })
+    await expect(Effect.runPromise(control.dispatchWorkflowRun({ id: 'workflow-1' })))
+      .resolves.toMatchObject({ status: 'running' })
+    await expect(Effect.runPromise(control.retriggerWorkflowItem({ itemId: 'item-1' })))
+      .resolves.toMatchObject({ status: 'launched' })
+    expect(calls).toEqual([
+      'validate:Workflow',
+      'create:1',
+      'dispatch:workflow-1',
+      'retrigger:item-1',
+    ])
+  })
+
   it('wraps injected sync failures with the original message', async () => {
     const control = makeKiriControl(testDependencies({
       listProjectSummaries: () => {
@@ -182,6 +230,16 @@ function testDependencies(
       session: sessionSummary('agent-1'),
       block: scratchpadBlock,
     }),
+    listWorkflowRuns: () => [],
+    getWorkflowRun: (id) => ({ id }),
+    validateWorkflow: () => ({ valid: true }),
+    createWorkflowRun: () => ({ id: 'workflow-1' }),
+    dispatchWorkflowRun: (input) => ({ id: input.id, status: 'running' }),
+    retriggerWorkflowItem: (input) => ({ itemId: input.itemId, status: 'launched' }),
+    trackWorkflowItem: (input) => ({ itemId: input.itemId, tracked: true }),
+    untrackWorkflowItem: (input) => ({ itemId: input.itemId, tracked: false }),
+    archiveWorkflowRun: (input) => ({ id: input.id, status: 'archived' }),
+    restoreWorkflowRun: (input) => ({ id: input.id, status: 'running' }),
     ...overrides,
   }
 }
