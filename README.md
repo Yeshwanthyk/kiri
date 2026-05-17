@@ -51,6 +51,23 @@ project from the board while preserving its sessions and metadata. Deleting a
 project removes kiri metadata for that project; it does not delete the project
 working directory.
 
+## Workflows
+
+Workflows are durable Kiri runs for splitting a plan into tracked launch items
+and scratchpad-only notes.
+
+```sh
+pnpm kiri:ctl call '{"operation":"workflow.create","params":{"projectId":"kiri","title":"Parallel plan","defaults":{"runtime":"pi","model":"openai-codex/gpt-5.5","attachScratchpad":true},"items":[{"id":"impl","action":"launch","title":"Implement","body":"Implement the accepted plan"},{"id":"review","action":"launch","title":"Review","body":"Review the implementation"},{"id":"notes","action":"scratchpad","title":"Notes","body":"Track this note without launching a session"}]}}'
+pnpm kiri:ctl call '{"operation":"workflow.dispatch","params":{"id":"workflow-id"}}'
+pnpm kiri:ctl call '{"operation":"workflow.show","params":{"id":"workflow-id"}}'
+pnpm kiri:ctl call '{"operation":"workflow.archive","params":{"id":"workflow-id"}}'
+```
+
+When the desktop backend is running, CLI/MCP calls route through it and terminal
+workflow items spawn the Kiri-owned runtime terminal and paste the item body.
+If no backend is reachable, the item body stays queued on the session and is
+written when Kiri opens that terminal.
+
 ## Settings
 
 Runtime model lists live in `settings.json`. Start a session from the selected

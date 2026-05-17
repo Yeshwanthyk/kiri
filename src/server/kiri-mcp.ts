@@ -9,6 +9,7 @@ import type { KiriControlApi } from './kiri-control'
 import { readOperationRequest, runKiriOperation } from './kiri-router'
 
 const version = '0.1.0'
+type OperationRunner = (request: unknown) => Promise<unknown>
 
 const paramsSchema = z.record(z.string(), z.unknown()).optional()
 const optionsSchema = z.object({
@@ -18,13 +19,13 @@ const optionsSchema = z.object({
   limit: z.number().int().positive().max(500).optional(),
 }).optional()
 
-export async function runKiriMcpServer(control: KiriControlApi) {
-  const server = createKiriMcpServer(control)
+export async function runKiriMcpServer(control: KiriControlApi, runOperation?: OperationRunner) {
+  const server = createKiriMcpServer(control, runOperation)
   const transport = new StdioServerTransport()
   await server.connect(transport)
 }
 
-function createKiriMcpServer(control: KiriControlApi) {
+function createKiriMcpServer(control: KiriControlApi, runOperation: OperationRunner = (request) => runKiriOperation(control, request)) {
   const server = new McpServer({
     name: 'kiri',
     version,
@@ -41,7 +42,7 @@ function createKiriMcpServer(control: KiriControlApi) {
     annotations: { readOnlyHint: true },
   }, async (input) => {
     const request = readOperationRequest(input)
-    return toolResult(await runKiriOperation(control, request))
+    return toolResult(await runOperation(request))
   })
 
   server.registerTool('kiri_do', {
@@ -54,7 +55,7 @@ function createKiriMcpServer(control: KiriControlApi) {
     },
   }, async (input) => {
     const request = readOperationRequest(input)
-    return toolResult(await runKiriOperation(control, request))
+    return toolResult(await runOperation(request))
   })
 
   return server

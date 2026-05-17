@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { createServer, type Server } from 'node:http'
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
@@ -176,6 +177,95 @@ describe('kiri MCP server', () => {
     })).id).toBe(secondary.id)
   }, 30_000)
 
+  it('routes MCP workflow dispatch through the backend control endpoint when available', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-mcp-proxy-'))
+    tempRoots.push(root)
+    const token = 'mcp-test-token'
+    const requests: Array<{ authorization: string | undefined; body: unknown }> = []
+    const server = createServer((request, response) => {
+      let body = ''
+      request.on('data', (chunk) => {
+        body += chunk.toString()
+      })
+      request.on('end', () => {
+        requests.push({
+          authorization: request.headers.authorization,
+          body: JSON.parse(body),
+        })
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({
+          ok: true,
+          operation: 'workflow.dispatch',
+          result: {
+            id: 'mcp-workflow',
+            status: 'running',
+            launched: 1,
+            scratchpadOnly: 0,
+            failed: 0,
+            results: [{
+              itemId: 'terminal',
+              status: 'launched',
+              agentId: 'mcp-session',
+              terminalPaste: {
+                queued: true,
+                submitted: false,
+                bytes: 18,
+              },
+              terminalSpawn: {
+                agentId: 'mcp-session',
+                mode: 'runtime',
+              },
+            }],
+          },
+        }))
+      })
+    })
+    const port = await listen(server)
+    try {
+      const controlPath = join(root, 'backend-control.json')
+      writeFileSync(controlPath, JSON.stringify({
+        url: `http://127.0.0.1:${port}/`,
+        token,
+      }))
+      const client = await startClient({
+        KIRI_BACKEND_CONTROL_PATH: controlPath,
+        KIRI_DISABLE_BACKEND_PROXY: '0',
+      })
+      const dispatch = await callResult(client, 'kiri_do', {
+        operation: 'workflow.dispatch',
+        params: { id: 'mcp-workflow' },
+      })
+      expect(dispatch).toMatchObject({
+        id: 'mcp-workflow',
+        launched: 1,
+        results: [{
+          terminalPaste: {
+            queued: true,
+            submitted: false,
+            bytes: 18,
+          },
+          terminalSpawn: {
+            agentId: 'mcp-session',
+            mode: 'runtime',
+          },
+        }],
+      })
+      expect(requests).toEqual([{
+        authorization: `Bearer ${token}`,
+        body: {
+          operation: 'workflow.dispatch',
+          params: { id: 'mcp-workflow' },
+          options: {
+            compact: true,
+            includeContext: false,
+          },
+        },
+      }])
+    } finally {
+      await close(server)
+    }
+  }, 30_000)
+
   it('runs the packaged helper through Electron node mode', () => {
     const root = mkdtempSync(join(tmpdir(), 'kiri-helper-'))
     tempRoots.push(root)
@@ -205,7 +295,7 @@ describe('kiri MCP server', () => {
   })
 })
 
-async function startClient() {
+async function startClient(extraEnv: Record<string, string> = {}) {
   const root = mkdtempSync(join(tmpdir(), 'kiri-mcp-'))
   tempRoots.push(root)
   const env = Object.fromEntries(
@@ -215,6 +305,7 @@ async function startClient() {
       KIRI_DB_PATH: join(root, 'kiri.sqlite'),
       KIRI_STATE_DIR: join(root, 'state'),
       KIRI_SETTINGS_PATH: resolve(projectRoot, 'settings.json'),
+      ...extraEnv,
     }).flatMap(([key, value]) => value === undefined ? [] : [[key, value]]),
   )
   const client = new Client({ name: 'kiri-mcp-test', version: '0.1.0' })
@@ -227,6 +318,33 @@ async function startClient() {
     stderr: 'pipe',
   }))
   return client
+}
+
+function listen(server: Server) {
+  return new Promise<number>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('Expected TCP address'))
+        return
+      }
+      resolve(address.port)
+    })
+  })
+}
+
+function close(server: Server) {
+  if (!server.listening) return Promise.resolve()
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error)
+        return
+      }
+      resolve()
+    })
+  })
 }
 
 async function callResult(client: Client, tool: 'kiri_get' | 'kiri_do', args: Record<string, unknown>) {

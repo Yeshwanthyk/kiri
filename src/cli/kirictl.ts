@@ -1,10 +1,13 @@
 #!/usr/bin/env tsx
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { Args, Command, Options } from '@effect/cli'
 import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { Console, Effect, Layer, Option } from 'effect'
-import { KiriControl } from '~/server/kiri-control'
+import { KiriControl, type KiriControlApi } from '~/server/kiri-control'
 import { runKiriMcpServer } from '~/server/kiri-mcp'
 import { runKiriOperation } from '~/server/kiri-router'
 
@@ -30,7 +33,7 @@ const callCommand = Command.make(
         yield* Console.log(globalThis.JSON.stringify(input.response))
         return
       }
-      const response = yield* Effect.promise(() => runKiriOperation(control, input.value))
+      const response = yield* Effect.promise(() => runKiriOperationWithBackendFallback(control, input.value))
       yield* Console.log(globalThis.JSON.stringify(response))
     }),
 ).pipe(Command.withDescription('Run one JSON Kiri operation'))
@@ -38,7 +41,10 @@ const callCommand = Command.make(
 const mcpCommand = Command.make('mcp', {}, () =>
   Effect.gen(function* () {
     const control = yield* KiriControl
-    yield* Effect.promise(() => runKiriMcpServer(control))
+    yield* Effect.promise(() => runKiriMcpServer(
+      control,
+      (request) => runKiriOperationWithBackendFallback(control, request),
+    ))
   }),
 ).pipe(Command.withDescription('Run the Kiri MCP server over stdio'))
 
@@ -50,17 +56,35 @@ export const kirictlCommand = Command.make('kirictl', {}).pipe(
   ]),
 )
 
-const cli = Command.run(kirictlCommand, {
-  name: 'kirictl',
-  version,
-})
-
 const MainLayer = Layer.merge(KiriControl.layer, NodeContext.layer)
 
-cli(process.argv).pipe(
-  Effect.provide(MainLayer),
-  NodeRuntime.runMain,
-)
+export async function runKiriOperationRequest(request: unknown) {
+  return Effect.runPromise(Effect.gen(function* () {
+    const control = yield* KiriControl
+    return yield* Effect.promise(() => runKiriOperation(control, request))
+  }).pipe(Effect.provide(MainLayer)))
+}
+
+export async function runKiriOperationWithBackendFallback(
+  control: KiriControlApi,
+  request: unknown,
+) {
+  const backend = await tryRunBackendOperation(request)
+  if (backend.kind === 'handled') return backend.response
+  return runKiriOperation(control, request)
+}
+
+if (isMainModule()) {
+  const cli = Command.run(kirictlCommand, {
+    name: 'kirictl',
+    version,
+  })
+
+  cli(process.argv).pipe(
+    Effect.provide(MainLayer),
+    NodeRuntime.runMain,
+  )
+}
 
 function optionValue<A>(value: Option.Option<A>): A | undefined {
   return Option.getOrUndefined(value)
@@ -88,4 +112,119 @@ function parseRequest(input: string) {
       },
     }
   }
+}
+
+async function tryRunBackendOperation(request: unknown) {
+  const info = readBackendControlInfo()
+  if (!info) return { kind: 'none' as const }
+  try {
+    const response = await fetch(new URL('/.well-known/kiri/control', info.url), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${info.token}`,
+      },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(2_000),
+    })
+    if (response.ok) {
+      return {
+        kind: 'handled' as const,
+        response: await response.json(),
+      }
+    }
+    return {
+      kind: 'handled' as const,
+      response: await backendErrorResponse(response, request),
+    }
+  } catch (error) {
+    return {
+      kind: 'handled' as const,
+      response: {
+        ok: false,
+        operation: operationName(request),
+        error: {
+          code: 'BACKEND_CONTROL_UNREACHABLE',
+          message: error instanceof Error
+            ? `Kiri backend control endpoint was unavailable: ${error.message}`
+            : 'Kiri backend control endpoint was unavailable',
+        },
+      },
+    }
+  }
+}
+
+async function backendErrorResponse(response: Response, request: unknown) {
+  const parsed = await parseBackendErrorBody(response)
+  if (parsed) return parsed
+  return {
+    ok: false,
+    operation: operationName(request),
+    error: {
+      code: response.status === 401 || response.status === 403
+        ? 'BACKEND_CONTROL_UNAUTHORIZED'
+        : 'BACKEND_CONTROL_FAILED',
+      message: `Kiri backend control endpoint rejected the operation: ${response.status} ${response.statusText}`.trim(),
+    },
+  }
+}
+
+async function parseBackendErrorBody(response: Response) {
+  try {
+    const value: unknown = await response.json()
+    if (isOperationResponse(value)) return value
+  } catch {
+    // Fall through to a normalized control error.
+  }
+  return null
+}
+
+function isOperationResponse(value: unknown) {
+  if (!value || typeof value !== 'object') return false
+  if (!('ok' in value) || typeof value.ok !== 'boolean') return false
+  if (!('operation' in value) || typeof value.operation !== 'string') return false
+  if (value.ok === true) return 'result' in value
+  if (!('error' in value) || !value.error || typeof value.error !== 'object') return false
+  return 'code' in value.error
+    && typeof value.error.code === 'string'
+    && 'message' in value.error
+    && typeof value.error.message === 'string'
+}
+
+function operationName(request: unknown) {
+  if (request && typeof request === 'object' && 'operation' in request && typeof request.operation === 'string') {
+    return request.operation
+  }
+  return 'operations.list'
+}
+
+function readBackendControlInfo() {
+  if (process.env.KIRI_DISABLE_BACKEND_PROXY === '1') return null
+  const path = backendControlPath()
+  if (!path || !existsSync(path)) return null
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!parsed || typeof parsed !== 'object') return null
+    const url = 'url' in parsed && typeof parsed.url === 'string' ? parsed.url : null
+    const token = 'token' in parsed && typeof parsed.token === 'string' ? parsed.token : null
+    if (!url || !token) return null
+    return { url, token }
+  } catch {
+    return null
+  }
+}
+
+function backendControlPath() {
+  const explicit = process.env.KIRI_BACKEND_CONTROL_PATH?.trim()
+  if (explicit) return resolve(explicit)
+  const stateDir = process.env.KIRI_STATE_DIR?.trim()
+    ? resolve(process.env.KIRI_STATE_DIR)
+    : resolve(process.env.KIRI_HOME?.trim() || join(homedir(), '.kiri'), 'userdata')
+  return join(stateDir, 'backend-control.json')
+}
+
+function isMainModule() {
+  const entry = process.argv[1]
+  if (!entry) return false
+  return import.meta.url === pathToFileURL(resolve(entry)).href
 }

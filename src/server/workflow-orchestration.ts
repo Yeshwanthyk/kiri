@@ -26,6 +26,7 @@ import {
   startSessionSummary,
 } from './db'
 import { getSettings } from './settings'
+import { pasteAgentRuntimeTerminal } from './terminal-server'
 
 type NormalizedWorkflowItem = {
   readonly clientId: string | null
@@ -189,6 +190,9 @@ async function launchWorkflowItem(item: {
         submit: item.terminalPaste?.submit ?? true,
       })
       : null
+    const terminalSpawn = terminalPaste && process.env.KIRI_WORKFLOW_SPAWN_TERMINALS === '1'
+      ? await pasteAgentRuntimeTerminal({ agentId: session.id })
+      : null
     const attempt = recordWorkflowItemAttempt({
       itemId: item.id,
       agentId: session.id,
@@ -200,6 +204,7 @@ async function launchWorkflowItem(item: {
       agentId: session.id,
       attemptId: attempt?.id ?? null,
       terminalPaste,
+      terminalSpawn,
     }
   } catch (error) {
     const attempt = recordWorkflowItemAttempt({

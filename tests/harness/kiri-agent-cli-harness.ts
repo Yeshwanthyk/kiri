@@ -69,6 +69,25 @@ const scratchpadSchema = z.object({
   triggeredAgentId: z.string().nullable(),
 })
 const scratchpadRowsSchema = z.array(scratchpadSchema)
+const workflowItemSchema = z.object({
+  id: z.string(),
+  action: z.string(),
+  activeAgentId: z.string().nullable(),
+  status: z.string(),
+  tracked: z.boolean(),
+  terminalPaste: z.object({ submit: z.boolean() }).nullable(),
+})
+const workflowSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  title: z.string(),
+  status: z.string(),
+  itemCount: z.number(),
+  launchedCount: z.number(),
+  archivedAt: z.string().nullable(),
+  items: z.array(workflowItemSchema),
+})
+const workflowRowsSchema = z.array(workflowSchema.omit({ items: true }))
 
 try {
   assertSkillTeachesAgents()
@@ -198,6 +217,114 @@ try {
     throw new Error('Scratchpad list did not include created block')
   }
 
+  const workflow = workflowSchema.parse(runCall('kiri:ctl', {
+    operation: 'workflow.create',
+    params: {
+      projectId: primary.id,
+      title: 'Agent Harness Workflow',
+      defaults: {
+        runtime: defaultPiModel.runtime,
+        model: defaultPiModel.model,
+        attachScratchpad: true,
+      },
+      items: [{
+        id: 'impl',
+        action: 'launch',
+        title: 'Harness Implement',
+        body: 'Implement from harness',
+      }, {
+        id: 'note',
+        action: 'scratchpad',
+        title: 'Harness Note',
+        body: 'Remember from harness',
+      }],
+    },
+  }))
+  if (workflow.projectId !== primary.id || workflow.itemCount !== 2) {
+    throw new Error('Workflow create did not persist expected run')
+  }
+
+  const dispatch = z.object({
+    id: z.string(),
+    status: z.string(),
+    launched: z.number(),
+    scratchpadOnly: z.number(),
+    failed: z.number(),
+  }).parse(runCall('kiri:ctl', {
+    operation: 'workflow.dispatch',
+    params: { id: workflow.id },
+  }))
+  if (dispatch.launched !== 1 || dispatch.scratchpadOnly !== 1 || dispatch.failed !== 0) {
+    throw new Error('Workflow dispatch did not launch and complete expected items')
+  }
+
+  const shownWorkflow = workflowSchema.parse(runCall('kiri:ctl', {
+    operation: 'workflow.show',
+    params: { id: workflow.id },
+  }))
+  if (shownWorkflow.launchedCount !== 1) {
+    throw new Error('workflow.show did not include launched item count')
+  }
+  const workflowRows = workflowRowsSchema.parse(runCall('kiri:ctl', {
+    operation: 'workflow.list',
+    params: { projectId: primary.id },
+  }))
+  if (!workflowRows.some((candidate) => candidate.id === workflow.id)) {
+    throw new Error('workflow.list did not include created workflow')
+  }
+
+  const terminalWorkflow = workflowSchema.parse(runCall('kiri:ctl', {
+    operation: 'workflow.create',
+    params: {
+      projectId: primary.id,
+      title: 'Agent Harness Terminal Workflow',
+      defaults: {
+        runtime: defaultPiModel.runtime,
+        interfaceMode: 'terminal',
+        model: defaultPiModel.model,
+        attachScratchpad: false,
+        terminalPaste: { submit: false },
+      },
+      items: [{
+        id: 'terminal',
+        action: 'launch',
+        title: 'Harness Terminal',
+        body: 'terminal body from harness',
+      }],
+    },
+  }))
+  const terminalDispatch = z.object({
+    launched: z.number(),
+    results: z.array(z.object({
+      terminalPaste: z.object({
+        queued: z.boolean(),
+        submitted: z.boolean(),
+        bytes: z.number(),
+      }).nullable(),
+    }).passthrough()),
+  }).parse(runCall('kiri:ctl', {
+    operation: 'workflow.dispatch',
+    params: { id: terminalWorkflow.id },
+  }))
+  if (
+    terminalDispatch.launched !== 1 ||
+    terminalDispatch.results[0]?.terminalPaste?.queued !== true ||
+    terminalDispatch.results[0]?.terminalPaste?.submitted !== false
+  ) {
+    throw new Error('Terminal workflow dispatch did not queue terminal input')
+  }
+
+  const archivedWorkflow = workflowSchema.parse(runCall('kiri:ctl', {
+    operation: 'workflow.archive',
+    params: { id: workflow.id },
+  }))
+  if (archivedWorkflow.archivedAt === null) throw new Error('Workflow archive did not archive')
+  const restoredWorkflow = workflowSchema.parse(runCall('kiri:ctl', {
+    operation: 'workflow.restore',
+    params: { id: workflow.id },
+  }))
+  if (restoredWorkflow.archivedAt !== null) throw new Error('Workflow restore did not restore')
+
   const deletedBlock = scratchpadSchema.parse(runCall('kiri:ctl', {
     operation: 'scratchpad.delete',
     params: { id: block.id },
@@ -228,6 +355,13 @@ try {
       'scratchpad.add',
       'scratchpad.list',
       'scratchpad.delete',
+      'workflow.create',
+      'workflow.dispatch',
+      'workflow.show',
+      'workflow.list',
+      'workflow.archive',
+      'workflow.restore',
+      'terminal paste queue',
     ],
     projectId: primary.id,
     sessionId: session.id,
@@ -253,6 +387,12 @@ function assertSkillTeachesAgents() {
     'scratchpad.add',
     'scratchpad.list',
     'scratchpad.delete',
+    'workflow.create',
+    'workflow.dispatch',
+    'workflow.show',
+    'workflow.list',
+    'workflow.archive',
+    'workflow.restore',
     'pnpm kiricli mcp',
   ]
   for (const phrase of required) {

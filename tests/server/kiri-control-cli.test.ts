@@ -1,8 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { createServer, type Server } from 'node:http'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { runKiriOperationRequest, runKiriOperationWithBackendFallback } from '~/cli/kirictl'
+import { closeTerminalServerForTests } from '~/server/terminal-server'
 import { runTsxJsonWithArgs } from '../harness/run-tsx'
 
 const projectRoot = process.cwd()
@@ -101,7 +104,269 @@ describe('kirictl call', () => {
     }
   })
 
-  it('runs compact JSON operations for models, projects, sessions, and scratchpad', () => {
+  it('routes workflow dispatch through a running backend control endpoint when available', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kirictl-proxy-'))
+    tempRoots.push(root)
+    const token = 'test-token'
+    const requests: Array<{ authorization: string | undefined; body: unknown }> = []
+    const server = createServer((request, response) => {
+      let body = ''
+      request.on('data', (chunk) => {
+        body += chunk.toString()
+      })
+      request.on('end', () => {
+        requests.push({
+          authorization: request.headers.authorization,
+          body: JSON.parse(body),
+        })
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({
+          ok: true,
+          operation: 'workflow.dispatch',
+          result: {
+            id: 'workflow-proxy',
+            status: 'running',
+            launched: 1,
+            scratchpadOnly: 0,
+            failed: 0,
+            results: [{
+              itemId: 'terminal-build',
+              status: 'launched',
+              agentId: 'session-proxy',
+              terminalPaste: {
+                queued: true,
+                submitted: false,
+                bytes: 13,
+              },
+              terminalSpawn: {
+                agentId: 'session-proxy',
+                mode: 'runtime',
+              },
+            }],
+          },
+        }))
+      })
+    })
+    const port = await listen(server)
+    try {
+      writeFileSync(join(root, 'backend-control.json'), JSON.stringify({
+        url: `http://127.0.0.1:${port}/`,
+        token,
+      }))
+      const previousEnv = {
+        KIRI_DISABLE_BACKEND_PROXY: process.env.KIRI_DISABLE_BACKEND_PROXY,
+        KIRI_BACKEND_CONTROL_PATH: process.env.KIRI_BACKEND_CONTROL_PATH,
+      }
+      process.env.KIRI_DISABLE_BACKEND_PROXY = '0'
+      process.env.KIRI_BACKEND_CONTROL_PATH = join(root, 'backend-control.json')
+      const response = responseSchema.parse(
+        await runKiriOperationWithBackendFallback({} as never, {
+          operation: 'workflow.dispatch',
+          params: { id: 'workflow-proxy' },
+        }).finally(() => {
+          restoreEnv('KIRI_DISABLE_BACKEND_PROXY', previousEnv.KIRI_DISABLE_BACKEND_PROXY)
+          restoreEnv('KIRI_BACKEND_CONTROL_PATH', previousEnv.KIRI_BACKEND_CONTROL_PATH)
+        }),
+      )
+      if (!response.ok) throw new Error(response.error.message)
+      expect(response.result).toMatchObject({
+        id: 'workflow-proxy',
+        status: 'running',
+        launched: 1,
+        results: [{
+          terminalPaste: {
+            queued: true,
+            submitted: false,
+            bytes: 13,
+          },
+          terminalSpawn: {
+            agentId: 'session-proxy',
+            mode: 'runtime',
+          },
+        }],
+      })
+      expect(requests).toEqual([{
+        authorization: `Bearer ${token}`,
+        body: {
+          operation: 'workflow.dispatch',
+          params: { id: 'workflow-proxy' },
+        },
+      }])
+    } finally {
+      await close(server)
+    }
+  })
+
+  it('does not fall back to local execution when backend control rejects auth', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kirictl-proxy-auth-'))
+    tempRoots.push(root)
+    const server = createServer((_request, response) => {
+      response.writeHead(401, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ ok: false, error: 'unauthorized' }))
+    })
+    const port = await listen(server)
+    try {
+      writeFileSync(join(root, 'backend-control.json'), JSON.stringify({
+        url: `http://127.0.0.1:${port}/`,
+        token: 'stale-token',
+      }))
+      const previousEnv = {
+        KIRI_DISABLE_BACKEND_PROXY: process.env.KIRI_DISABLE_BACKEND_PROXY,
+        KIRI_BACKEND_CONTROL_PATH: process.env.KIRI_BACKEND_CONTROL_PATH,
+      }
+      process.env.KIRI_DISABLE_BACKEND_PROXY = '0'
+      process.env.KIRI_BACKEND_CONTROL_PATH = join(root, 'backend-control.json')
+      const response = responseSchema.parse(
+        await runKiriOperationWithBackendFallback({} as never, {
+          operation: 'workflow.dispatch',
+          params: { id: 'workflow-proxy' },
+        }).finally(() => {
+          restoreEnv('KIRI_DISABLE_BACKEND_PROXY', previousEnv.KIRI_DISABLE_BACKEND_PROXY)
+          restoreEnv('KIRI_BACKEND_CONTROL_PATH', previousEnv.KIRI_BACKEND_CONTROL_PATH)
+        }),
+      )
+      expect(response).toMatchObject({
+        ok: false,
+        operation: 'workflow.dispatch',
+        error: {
+          code: 'BACKEND_CONTROL_UNAUTHORIZED',
+          message: expect.stringContaining('401'),
+        },
+      })
+    } finally {
+      await close(server)
+    }
+  })
+
+  it('does not fall back to local execution when configured backend control is unreachable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kirictl-proxy-unreachable-'))
+    tempRoots.push(root)
+    writeFileSync(join(root, 'backend-control.json'), JSON.stringify({
+      url: 'http://127.0.0.1:1/',
+      token: 'missing-backend',
+    }))
+    const previousEnv = {
+      KIRI_DISABLE_BACKEND_PROXY: process.env.KIRI_DISABLE_BACKEND_PROXY,
+      KIRI_BACKEND_CONTROL_PATH: process.env.KIRI_BACKEND_CONTROL_PATH,
+    }
+    process.env.KIRI_DISABLE_BACKEND_PROXY = '0'
+    process.env.KIRI_BACKEND_CONTROL_PATH = join(root, 'backend-control.json')
+    const response = responseSchema.parse(
+      await runKiriOperationWithBackendFallback({} as never, {
+        operation: 'workflow.dispatch',
+        params: { id: 'workflow-proxy' },
+      }).finally(() => {
+        restoreEnv('KIRI_DISABLE_BACKEND_PROXY', previousEnv.KIRI_DISABLE_BACKEND_PROXY)
+        restoreEnv('KIRI_BACKEND_CONTROL_PATH', previousEnv.KIRI_BACKEND_CONTROL_PATH)
+      }),
+    )
+    expect(response).toMatchObject({
+      ok: false,
+      operation: 'workflow.dispatch',
+      error: {
+        code: 'BACKEND_CONTROL_UNREACHABLE',
+      },
+    })
+  })
+
+  it('spawns and pastes terminal workflow input through a real PTY when backend-owned spawning is enabled', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kirictl-terminal-spawn-'))
+    tempRoots.push(root)
+    const capturePath = join(root, 'terminal-capture.txt')
+    const fakePiPath = join(root, 'fake-pi.sh')
+    writeFileSync(fakePiPath, [
+      '#!/bin/sh',
+      'IFS= read -r line',
+      'printf "%s" "$line" > "$KIRI_TERMINAL_CAPTURE"',
+      'sleep 20',
+    ].join('\n'))
+    chmodSync(fakePiPath, 0o755)
+    const previousEnv = snapshotEnv([
+      'KIRI_ROOT_DIR',
+      'KIRI_DB_PATH',
+      'KIRI_STATE_DIR',
+      'KIRI_SETTINGS_PATH',
+      'KIRI_PI_BIN',
+      'KIRI_TERMINAL_CAPTURE',
+      'KIRI_WORKFLOW_SPAWN_TERMINALS',
+    ])
+
+    try {
+      process.env.KIRI_ROOT_DIR = root
+      process.env.KIRI_DB_PATH = join(root, 'kiri.sqlite')
+      process.env.KIRI_STATE_DIR = join(root, 'state')
+      process.env.KIRI_SETTINGS_PATH = resolve(projectRoot, 'settings.json')
+      process.env.KIRI_PI_BIN = fakePiPath
+      process.env.KIRI_TERMINAL_CAPTURE = capturePath
+      process.env.KIRI_WORKFLOW_SPAWN_TERMINALS = '1'
+
+      const project = projectSummarySchema.parse(await operationResult({
+        operation: 'project.add',
+        params: {
+          id: 'spawn-project',
+          name: 'Spawn Project',
+          cwd: projectRoot,
+        },
+      }))
+      const workflow = workflowRunSchema.parse(await operationResult({
+        operation: 'workflow.create',
+        params: {
+          projectId: project.id,
+          title: 'Spawn Workflow',
+          defaults: {
+            runtime: 'pi',
+            interfaceMode: 'terminal',
+            model: 'openai-codex/gpt-5.5',
+            attachScratchpad: false,
+            terminalPaste: { submit: true },
+          },
+          items: [{
+            id: 'terminal',
+            action: 'launch',
+            title: 'Spawn Terminal',
+            body: 'spawn terminal workflow',
+          }],
+        },
+      }))
+      const dispatch = z.object({
+        launched: z.number(),
+        results: z.array(z.object({
+          terminalPaste: z.object({
+            queued: z.boolean(),
+            submitted: z.boolean(),
+            bytes: z.number(),
+          }),
+          terminalSpawn: z.object({
+            agentId: z.string(),
+            mode: z.literal('runtime'),
+          }),
+        }).passthrough()),
+      }).parse(await operationResult({
+        operation: 'workflow.dispatch',
+        params: { id: workflow.id },
+      }))
+
+      expect(dispatch).toMatchObject({
+        launched: 1,
+        results: [{
+          terminalPaste: {
+            queued: true,
+            submitted: true,
+            bytes: 'spawn terminal workflow'.length + 1,
+          },
+          terminalSpawn: {
+            mode: 'runtime',
+          },
+        }],
+      })
+      await expect.poll(() => readFileSync(capturePath, 'utf8')).toBe('spawn terminal workflow')
+    } finally {
+      await closeTerminalServerForTests()
+      restoreEnvSnapshot(previousEnv)
+    }
+  })
+
+  it('runs compact JSON operations for models, projects, sessions, and scratchpad', async () => {
     const root = mkdtempSync(join(tmpdir(), 'kirictl-'))
     tempRoots.push(root)
     const env = {
@@ -414,6 +679,57 @@ describe('kirictl call', () => {
     })
   }, 40_000)
 })
+
+function listen(server: Server) {
+  return new Promise<number>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('Expected TCP address'))
+        return
+      }
+      resolve(address.port)
+    })
+  })
+}
+
+function close(server: Server) {
+  if (!server.listening) return Promise.resolve()
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error)
+        return
+      }
+      resolve()
+    })
+  })
+}
+
+function restoreEnv(name: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[name]
+    return
+  }
+  process.env[name] = value
+}
+
+function snapshotEnv(names: readonly string[]) {
+  return Object.fromEntries(names.map((name) => [name, process.env[name]]))
+}
+
+function restoreEnvSnapshot(snapshot: Record<string, string | undefined>) {
+  for (const [name, value] of Object.entries(snapshot)) {
+    restoreEnv(name, value)
+  }
+}
+
+async function operationResult(request: unknown) {
+  const response = responseSchema.parse(await runKiriOperationRequest(request))
+  if (!response.ok) throw new Error(response.error.message)
+  return response.result
+}
 
 function callResult(env: NodeJS.ProcessEnv, request: unknown) {
   const response = responseSchema.parse(runTsxJsonWithArgs(
