@@ -47,8 +47,10 @@ export function TerminalPanel({
   const themeModeRef = React.useRef(themeMode)
   const typographyRef = React.useRef(typography)
   const transcriptEnabledRef = React.useRef(false)
+  const previousVisibleRef = React.useRef(visible)
   const [status, setStatus] = React.useState('Connecting')
   const [transcript, setTranscript] = React.useState<string | null>(null)
+  const [connectionGeneration, setConnectionGeneration] = React.useState(0)
 
   React.useEffect(() => {
     getTerminalConfigRef.current = getTerminalConfig
@@ -70,6 +72,15 @@ export function TerminalPanel({
     if (!visible) return
     fitAddonRef.current?.fit()
   }, [visible])
+
+  React.useEffect(() => {
+    const wasVisible = previousVisibleRef.current
+    previousVisibleRef.current = visible
+    if (!wasVisible && visible && status === 'Closed') {
+      setStatus('Connecting')
+      setConnectionGeneration((generation) => generation + 1)
+    }
+  }, [status, visible])
 
   React.useEffect(() => {
     if (focusRequest === 0 || !visible) return
@@ -225,12 +236,17 @@ export function TerminalPanel({
       transcriptEnabledRef.current = false
       term?.dispose()
     }
-  }, [agent.id, mode, project.cwd, toggleFocusKey])
+  }, [agent.id, connectionGeneration, mode, project.cwd, toggleFocusKey])
 
   const label = mode === 'runtime' ? 'Agent terminal' : 'Shell terminal'
   const toggleFocusLabel = `Toggle terminal focus (Shift+${formatTerminalKey(toggleFocusKey)})`
   return (
-    <section className="terminal-panel" data-testid="terminal-panel" hidden={!visible}>
+    <section
+      className="terminal-panel"
+      data-terminal-mode={mode}
+      data-testid={visible ? 'terminal-panel' : undefined}
+      hidden={!visible}
+    >
       <div className="terminal-header">
         <div>
           <strong>{label}</strong>
@@ -251,7 +267,11 @@ export function TerminalPanel({
       </div>
       <div ref={hostRef} className="terminal-host" />
       {transcript !== null ? (
-        <pre className="terminal-transcript" data-testid="terminal-transcript" aria-live="polite">
+        <pre
+          className="terminal-transcript"
+          data-testid={visible ? 'terminal-transcript' : undefined}
+          aria-live={visible ? 'polite' : 'off'}
+        >
           {transcript}
         </pre>
       ) : null}

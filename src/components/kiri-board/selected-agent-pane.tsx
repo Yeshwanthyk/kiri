@@ -149,6 +149,19 @@ export function SelectedAgentPane({
     : agent && tab === 'chat' && chatUsesTerminal
       ? 'runtime'
       : null
+  const [mountedTerminalModes, setMountedTerminalModes] = React.useState<{
+    readonly runtime: boolean
+    readonly shell: boolean
+  }>({ runtime: false, shell: false })
+  React.useEffect(() => {
+    setMountedTerminalModes({ runtime: false, shell: false })
+  }, [selectedProject.id, selectedAgent?.id])
+  React.useEffect(() => {
+    if (!visibleTerminalMode) return
+    setMountedTerminalModes((current) => current[visibleTerminalMode]
+      ? current
+      : { ...current, [visibleTerminalMode]: true })
+  }, [visibleTerminalMode])
   const refreshDetail = React.useCallback(async () => {
     if (!selectedAgent) return
     await detailQuery.refetch()
@@ -337,19 +350,30 @@ export function SelectedAgentPane({
         />
       ) : null}
 
-      {agent && visibleTerminalMode ? (
+      {agent && mountedTerminalModes.runtime ? (
         <TerminalPanel
-          key={visibleTerminalMode === 'shell'
-            ? `terminal-${selectedProject.id}-shell`
-            : `terminal-${agent.id}-runtime`}
+          key={`terminal-${agent.id}-runtime`}
           agent={agent}
           focusRequest={terminalFocusRequest}
           toggleFocusKey={keymap.toggleTerminalFocus}
           typography={chatTypography}
-          mode={visibleTerminalMode}
+          mode="runtime"
           project={selectedProject}
           themeMode={themeMode}
-          visible
+          visible={visibleTerminalMode === 'runtime'}
+        />
+      ) : null}
+      {agent && mountedTerminalModes.shell ? (
+        <TerminalPanel
+          key={`terminal-${selectedProject.id}-shell`}
+          agent={agent}
+          focusRequest={terminalFocusRequest}
+          toggleFocusKey={keymap.toggleTerminalFocus}
+          typography={chatTypography}
+          mode="shell"
+          project={selectedProject}
+          themeMode={themeMode}
+          visible={visibleTerminalMode === 'shell'}
         />
       ) : null}
     </aside>

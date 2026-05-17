@@ -613,6 +613,8 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
     .getByRole('textbox', { name: 'Terminal input' })
     .first()
   await terminalInput.click()
+  const terminalInputElement = await terminalInput.elementHandle()
+  if (!terminalInputElement) throw new Error('Terminal input was not mounted')
   await page.keyboard.type(
     'export KIRI_E2E_MARKER=tab-preserved; cd src; sleep 30 & export KIRI_E2E_PID=$!; echo ready:$KIRI_E2E_MARKER:$PWD:$KIRI_E2E_PID',
   )
@@ -620,11 +622,23 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
   await expect(page.getByTestId('terminal-transcript')).toContainText(
     `ready:tab-preserved:${projectRoot}/src`,
   )
+  await page.keyboard.type(
+    "for i in $(seq 1 1200); do printf 'KIRI_SCROLL_%04d\\n' \"$i\"; done",
+  )
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText('KIRI_SCROLL_1200')
 
   await page.getByTestId('tab-chat').click()
   await expect(page.getByTestId('chat-panel')).toBeVisible()
+  await expect.poll(async () => terminalInputElement.evaluate((element) => element.isConnected))
+    .toBe(true)
   await page.getByTestId('tab-terminal').click()
   await expect(page.getByTestId('terminal-panel')).toBeVisible()
+  await expect.poll(async () =>
+    terminalInputElement.evaluate((element) =>
+      element === document.querySelector('[data-testid="terminal-panel"] .xterm-helper-textarea'),
+    ),
+  ).toBe(true)
   await terminalInput.click()
   await page.keyboard.type(
     'kill -0 "$KIRI_E2E_PID" && echo preserved:$KIRI_E2E_MARKER:$PWD; kill "$KIRI_E2E_PID"',
