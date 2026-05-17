@@ -2,7 +2,7 @@
   "name": "kiri",
   "productName": "kiri",
   "private": true,
-  "version": "0.1.6",
+  "version": "0.1.7",
   "main": "src/desktop/main.mjs",
   "sideEffects": false,
   "type": "module",
@@ -103,6 +103,16 @@
         "dmg"
       ]
     }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@parcel/watcher",
+      "electron",
+      "electron-winstaller",
+      "esbuild",
+      "msgpackr-extract",
+      "node-pty"
+    ]
   },
   "devDependencies": {
     "@effect/language-service": "^0.85.1",
