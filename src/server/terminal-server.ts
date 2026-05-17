@@ -45,7 +45,7 @@ type TerminalServerRuntime = {
 }
 
 const terminalPath = '/terminal'
-const maxReplayBytes = 32_000
+const maxReplayBytes = 1_000_000
 const idleKillMs = 5 * 60 * 1000
 
 export class TerminalServerService extends Context.Tag('@kiri/TerminalServer')<
