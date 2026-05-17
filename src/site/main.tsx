@@ -2,20 +2,16 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   ArrowDownToLine,
-  Boxes,
   Check,
   ChevronRight,
-  CircleDot,
   Command,
   Download,
   ExternalLink,
   FolderKanban,
   GitPullRequest,
-  Layers2,
+  Keyboard,
   NotebookPen,
-  Play,
   TerminalSquare,
-  Workflow,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import './site.css'
@@ -54,6 +50,7 @@ const fallbackReleases: readonly Release[] = [
 ]
 
 const repoUrl = 'https://github.com/Yeshwanthyk/kiri'
+const supportedRuntimes = ['Codex', 'Claude Code', 'Pi', 'OpenCode'] as const
 
 const capabilities: ReadonlyArray<{
   readonly icon: LucideIcon
@@ -66,19 +63,14 @@ const capabilities: ReadonlyArray<{
     body: 'Keep each repo, session, cwd, runtime, and hidden state in one board.',
   },
   {
+    icon: Keyboard,
+    title: 'Keyboard-first',
+    body: 'Jump projects, switch tabs, send prompts, and keep terminal flows moving without reaching for the mouse.',
+  },
+  {
     icon: TerminalSquare,
     title: 'Terminal agents',
-    body: 'Run Claude, OpenCode, Codex, and shell flows in persistent terminal panes.',
-  },
-  {
-    icon: NotebookPen,
-    title: 'Scratchpad launches',
-    body: 'Capture work, attach it to a target project, then trigger it into a session.',
-  },
-  {
-    icon: Workflow,
-    title: 'Workflow runs',
-    body: 'Break plans into launchable items, track them, retrigger them, and archive the done work.',
+    body: 'Open the runtime terminal, paste the prompt, and keep the session alive in Kiri.',
   },
   {
     icon: GitPullRequest,
@@ -88,7 +80,12 @@ const capabilities: ReadonlyArray<{
   {
     icon: Command,
     title: 'Agent-first control',
-    body: 'CLI and MCP expose compact operations for models, projects, sessions, and workflows.',
+    body: 'CLI operations are shaped for agents first, with compact inputs and durable outputs.',
+  },
+  {
+    icon: NotebookPen,
+    title: 'Scratchpad and MCP',
+    body: 'Attach scratchpad work and MCP control after the core session surface is in place.',
   },
 ]
 
@@ -170,11 +167,16 @@ function LandingPage() {
       <section className="hero">
         <div className="hero-copy">
           <p className="eyebrow">Local agent control plane</p>
-          <h1>kiri keeps agent work shaped like your workspace.</h1>
+          <h1>kiri is a keyboard-first control plane for local agent work.</h1>
           <p className="hero-lede">
             Start, watch, steer, review, and clean up AI coding sessions across
-            projects without losing terminals, diffs, scratchpad, or run state.
+            projects without losing terminals, diffs, scratchpad, shortcuts, or run state.
           </p>
+          <div className="runtime-badges" aria-label="Supported runtimes">
+            {supportedRuntimes.map((runtime) => (
+              <span key={runtime}>{runtime}</span>
+            ))}
+          </div>
           <div className="hero-actions">
             <a className="primary-action" href={dmg.browserDownloadUrl}>
               <Download size={17} aria-hidden="true" />
@@ -186,7 +188,7 @@ function LandingPage() {
             </a>
           </div>
         </div>
-        <ProductFrame />
+        <ScreenshotShowcase />
       </section>
 
       <section className="release-strip" aria-label="Latest release">
@@ -201,10 +203,26 @@ function LandingPage() {
         </a>
       </section>
 
+      <section className="section">
+        <div className="section-head">
+          <p className="eyebrow">Features</p>
+          <h2>The daily surface stays fast, local, and keyboard-first.</h2>
+        </div>
+        <div className="capability-grid">
+          {capabilities.map(({ icon: Icon, title, body }) => (
+            <article className="capability-card" key={title}>
+              <Icon size={18} aria-hidden="true" />
+              <h3>{title}</h3>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
       <section className="section" id="workflow">
         <div className="section-head">
           <p className="eyebrow">Workflow runs</p>
-          <h2>Break a plan apart, then launch the pieces where they belong.</h2>
+          <h2>Then break a plan apart and launch the pieces where they belong.</h2>
         </div>
         <div className="workflow-grid">
           <div className="workflow-card">
@@ -224,21 +242,6 @@ function LandingPage() {
         </div>
       </section>
 
-      <section className="section">
-        <div className="section-head">
-          <p className="eyebrow">Working surface</p>
-          <h2>Everything agents need stays reachable.</h2>
-        </div>
-        <div className="capability-grid">
-          {capabilities.map(({ icon: Icon, title, body }) => (
-            <article className="capability-card" key={title}>
-              <Icon size={18} aria-hidden="true" />
-              <h3>{title}</h3>
-              <p>{body}</p>
-            </article>
-          ))}
-        </div>
-      </section>
     </main>
   )
 }
@@ -322,53 +325,21 @@ function ReleaseCard({ release }: { readonly release: Release }) {
   )
 }
 
-function ProductFrame() {
+function ScreenshotShowcase() {
   return (
-    <div className="product-frame" aria-label="Kiri product preview">
-      <aside>
-        <div className="frame-top">
-          <img src="/favicon.png" alt="" />
-          <strong>kiri</strong>
-        </div>
-        <ProjectCard title="api-service" runtime="claude" active />
-        <ProjectCard title="kiri" runtime="codex" />
-        <ProjectCard title="merlin" runtime="opencode" />
-      </aside>
-      <section>
-        <div className="frame-toolbar">
-          <span><CircleDot size={11} /> api-service</span>
-          <b>terminal</b>
-        </div>
-        <div className="frame-tabs">
-          <span data-active="true"><Boxes size={14} /> Chat</span>
-          <span><GitPullRequest size={14} /> Diffs</span>
-          <span><TerminalSquare size={14} /> Terminal</span>
-        </div>
-        <div className="frame-terminal">
-          <p><b>Workflow run</b></p>
-          <p>1. split the release notes</p>
-          <p>2. launch terminal runtime</p>
-          <p>3. paste prompt into xterm PTY</p>
-          <p>4. archive completed run</p>
-        </div>
-        <div className="frame-bottom">
-          <span><Layers2 size={14} /> scratchpad attached</span>
-          <span><Play size={14} /> running</span>
-        </div>
-      </section>
-    </div>
-  )
-}
-
-function ProjectCard({ title, runtime, active }: {
-  readonly title: string
-  readonly runtime: string
-  readonly active?: boolean
-}) {
-  return (
-    <div className="project-card" data-active={active ? 'true' : undefined}>
-      <strong>{title}</strong>
-      <span>{runtime} · 1 session</span>
+    <div className="screenshot-showcase" aria-label="Kiri app screenshots">
+      <figure className="screenshot-card screenshot-card-dark">
+        <img
+          src="/site/kiri-dark-terminal.png"
+          alt="Kiri dark theme showing a Claude terminal session inside a project board."
+        />
+      </figure>
+      <figure className="screenshot-card screenshot-card-light">
+        <img
+          src="/site/kiri-light-chat.png"
+          alt="Kiri light theme showing chat, project sessions, scratchpad, and release notes."
+        />
+      </figure>
     </div>
   )
 }

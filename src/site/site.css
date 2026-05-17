@@ -122,7 +122,7 @@ a {
 .download-hero h1 {
   margin: 12px 0 0;
   max-width: 620px;
-  font-size: clamp(3rem, 5vw, 5.2rem);
+  font-size: 5.2rem;
   line-height: 0.94;
   letter-spacing: 0;
 }
@@ -153,6 +153,27 @@ a {
   margin-top: 30px;
 }
 
+.runtime-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.runtime-badges span {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgb(12 17 23 / 10%);
+  border-radius: 7px;
+  padding: 0 10px;
+  background: rgb(255 255 255 / 70%);
+  color: var(--green-ink);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
 .primary-action,
 .secondary-action,
 .download-button,
@@ -181,136 +202,39 @@ a {
   color: var(--ink);
 }
 
-.product-frame {
-  min-height: 610px;
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+.screenshot-showcase {
+  position: relative;
+  min-height: 640px;
+}
+
+.screenshot-card {
+  position: absolute;
   overflow: hidden;
-  border: 1px solid rgb(12 17 23 / 12%);
+  margin: 0;
+  border: 1px solid rgb(12 17 23 / 14%);
   border-radius: 8px;
-  background: #10151b;
+  background: #0c1117;
   box-shadow: var(--shadow);
 }
 
-.product-frame aside {
-  padding: 16px;
-  background: #f4f2ea;
-  border-right: 1px solid rgb(12 17 23 / 10%);
+.screenshot-card img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
-.frame-top {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-bottom: 18px;
+.screenshot-card-dark {
+  right: 0;
+  top: 18px;
+  width: min(100%, 760px);
 }
 
-.frame-top img {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-}
-
-.project-card {
-  display: grid;
-  gap: 6px;
-  padding: 14px;
-  margin-bottom: 10px;
-  border: 1px solid rgb(12 17 23 / 10%);
-  border-radius: 7px;
-  background: #fff;
-}
-
-.project-card[data-active='true'] {
-  background: #0c1117;
-  color: #fff;
-}
-
-.project-card span {
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.project-card[data-active='true'] span {
-  color: rgb(255 255 255 / 62%);
-}
-
-.product-frame > section {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 16px;
-  color: #edf1f4;
-}
-
-.frame-toolbar,
-.frame-tabs,
-.frame-bottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.frame-toolbar span,
-.frame-bottom span,
-.frame-tabs span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.frame-toolbar {
-  color: rgb(255 255 255 / 78%);
-  font-size: 0.86rem;
-}
-
-.frame-tabs {
-  justify-content: flex-start;
-  margin: 18px 0;
-  overflow: auto;
-}
-
-.frame-tabs span {
-  min-height: 36px;
-  padding: 0 12px;
-  border: 1px solid rgb(255 255 255 / 10%);
-  border-radius: 7px;
-  color: rgb(255 255 255 / 58%);
-  white-space: nowrap;
-}
-
-.frame-tabs span[data-active='true'] {
-  background: #edf1f4;
-  color: #0c1117;
-}
-
-.frame-terminal {
-  flex: 1;
-  padding: 22px;
-  border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgb(255 255 255 / 4%), transparent),
-    #070a0e;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 0.92rem;
-  line-height: 1.8;
-}
-
-.frame-terminal p {
-  margin: 0;
-  color: rgb(237 241 244 / 74%);
-}
-
-.frame-terminal b {
-  color: var(--amber);
-}
-
-.frame-bottom {
-  margin-top: 14px;
-  color: rgb(255 255 255 / 64%);
-  font-size: 0.84rem;
+.screenshot-card-light {
+  left: 0;
+  bottom: 0;
+  width: min(58%, 480px);
+  background: #fbfaf5;
+  box-shadow: 0 18px 60px rgb(26 32 38 / 16%);
 }
 
 .release-strip {
@@ -368,7 +292,7 @@ a {
 .install-panel h2 {
   max-width: 760px;
   margin: 8px 0 0;
-  font-size: clamp(2rem, 4.4vw, 4.3rem);
+  font-size: 4.3rem;
   line-height: 0.98;
   letter-spacing: 0;
 }
@@ -471,7 +395,7 @@ a {
 }
 
 .download-hero h1 {
-  font-size: clamp(3rem, 6vw, 6rem);
+  font-size: 6rem;
 }
 
 .download-button {
@@ -497,7 +421,7 @@ a {
 }
 
 .install-panel h2 {
-  font-size: clamp(1.8rem, 3vw, 2.8rem);
+  font-size: 2.8rem;
 }
 
 .install-steps {
@@ -577,16 +501,24 @@ a {
 
   .hero-copy h1,
   .download-hero h1 {
-    font-size: clamp(3rem, 16vw, 5.5rem);
+    font-size: 4.3rem;
   }
 
-  .product-frame {
-    grid-template-columns: 1fr;
+  .section-head h2 {
+    font-size: 3.4rem;
   }
 
-  .product-frame aside {
-    border-right: 0;
-    border-bottom: 1px solid rgb(12 17 23 / 10%);
+  .screenshot-showcase {
+    min-height: 680px;
+  }
+
+  .screenshot-card-dark {
+    top: 0;
+    width: 100%;
+  }
+
+  .screenshot-card-light {
+    width: min(62%, 520px);
   }
 
   .capability-grid,
@@ -625,8 +557,31 @@ a {
     padding-top: 36px;
   }
 
-  .product-frame {
-    min-height: 0;
+  .hero-copy h1,
+  .download-hero h1 {
+    font-size: 2.9rem;
+    line-height: 0.98;
+  }
+
+  .section-head h2,
+  .install-panel h2 {
+    font-size: 2.3rem;
+  }
+
+  .screenshot-showcase {
+    min-height: 340px;
+  }
+
+  .screenshot-card {
+    position: relative;
+  }
+
+  .screenshot-card-dark {
+    width: 100%;
+  }
+
+  .screenshot-card-light {
+    display: none;
   }
 
   .download-button {
