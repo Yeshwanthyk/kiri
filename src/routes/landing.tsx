@@ -28,7 +28,7 @@ export const Route = createFileRoute('/landing')({
 
 const agentGroups = [
   {
-    name: 'ResQlaw',
+    name: 'api-service',
     count: '1 session',
     cards: [
       {
@@ -269,7 +269,7 @@ function AppPreview() {
         <header className="landing-detail-topbar">
           <p>
             <span />
-            ResQlaw
+            api-service
             <b>session-mp79j1in-071hvr</b>
             claude-opus-4-7:medium
           </p>
@@ -294,7 +294,7 @@ function AppPreview() {
             <header>
               <div>
                 <p className="landing-kicker">Agent terminal</p>
-                <h2>/Users/yesh/Documents/work/ResQlaw</h2>
+                <h2>~/projects/api-service</h2>
               </div>
               <span>Connected</span>
             </header>
@@ -324,7 +324,7 @@ function AppPreview() {
             </div>
 
             <footer className="landing-prompt-bar">
-              <span>~/Documents/work/ResQlaw [kyendamuri/codex-live-workstream-chat]</span>
+              <span>~/projects/api-service [feature/agent-session-board]</span>
               <strong>bypass permissions on</strong>
             </footer>
           </section>

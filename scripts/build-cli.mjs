@@ -19,7 +19,7 @@ await build({
   banner: {
     js: 'import { createRequire as __kiriCreateRequire } from "node:module"; const require = __kiriCreateRequire(import.meta.url);',
   },
-  sourcemap: true,
+  sourcemap: false,
   external: [
     'node-pty',
   ],
