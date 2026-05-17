@@ -184,13 +184,14 @@ describe('kiri MCP server', () => {
     const requests: Array<{ authorization: string | undefined; body: unknown }> = []
     const server = createServer((request, response) => {
       let body = ''
-      request.on('data', (chunk) => {
-        body += chunk.toString()
+      request.on('data', (chunk: Buffer) => {
+        body += String(chunk)
       })
       request.on('end', () => {
+        const parsedBody: unknown = JSON.parse(body)
         requests.push({
           authorization: request.headers.authorization,
-          body: JSON.parse(body),
+          body: parsedBody,
         })
         response.writeHead(200, { 'content-type': 'application/json' })
         response.end(JSON.stringify({

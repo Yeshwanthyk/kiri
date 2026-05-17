@@ -139,10 +139,12 @@ describe('workflow repository', () => {
         failedCount: 1,
       })
 
-      expect(setWorkflowRunArchiveState(database, 'workflow-1', true)).toMatchObject({
-        status: 'archived',
-        archivedAt: expect.any(String),
-      })
+      const archived = setWorkflowRunArchiveState(database, 'workflow-1', true) as unknown as {
+        readonly status: string
+        readonly archivedAt: unknown
+      }
+      expect(archived.status).toBe('archived')
+      expect(typeof archived.archivedAt).toBe('string')
       expect(listWorkflowRuns(database, { projectId })).toEqual([])
       expect(() =>
         recordWorkflowItemAttempt(database, {

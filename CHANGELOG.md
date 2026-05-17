@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.8 - 2026-05-17
+## 0.1.9 - 2026-05-17
 
 - Added compact agent-first MCP/CLI controls with `kiri_get`, `kiri_do`, `pnpm kiri:ctl call`, and `pnpm kiricli mcp`.
 - Added durable workflow runs with validation, creation, dispatch, retrigger, track/untrack, archive, and restore operations.
@@ -11,7 +11,9 @@
 - Added OpenCode as a terminal runtime.
 - Improved terminal scrollback retention and replay behavior across tab changes.
 - Added/expanded agent harness and server tests for workflow operations, MCP proxy dispatch, terminal input queueing, real PTY paste, archive/restore, and backend-control failure handling.
+- Added the new Kiri leaf terminal app icon and generated desktop/web icon assets from a tracked SVG source.
 - Added explicit pnpm workspace build-script approvals required for CI desktop packaging.
+- Fixed strict CI lint issues in the new workflow and MCP test coverage.
 
 ## 0.1.1 - 2026-05-12
 

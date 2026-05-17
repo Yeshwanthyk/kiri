@@ -8,7 +8,10 @@ yarn.lock
 .env
 .vercel
 .output
-/build/
+/build/*
+!/build/icon.svg
+!/build/icon.png
+!/build/icon.icns
 /dist/
 /.kiri/
 /.aether/

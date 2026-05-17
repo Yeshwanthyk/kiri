@@ -111,13 +111,14 @@ describe('kirictl call', () => {
     const requests: Array<{ authorization: string | undefined; body: unknown }> = []
     const server = createServer((request, response) => {
       let body = ''
-      request.on('data', (chunk) => {
-        body += chunk.toString()
+      request.on('data', (chunk: Buffer) => {
+        body += String(chunk)
       })
       request.on('end', () => {
+        const parsedBody: unknown = JSON.parse(body)
         requests.push({
           authorization: request.headers.authorization,
-          body: JSON.parse(body),
+          body: parsedBody,
         })
         response.writeHead(200, { 'content-type': 'application/json' })
         response.end(JSON.stringify({
@@ -225,14 +226,12 @@ describe('kirictl call', () => {
           restoreEnv('KIRI_BACKEND_CONTROL_PATH', previousEnv.KIRI_BACKEND_CONTROL_PATH)
         }),
       )
-      expect(response).toMatchObject({
-        ok: false,
-        operation: 'workflow.dispatch',
-        error: {
-          code: 'BACKEND_CONTROL_UNAUTHORIZED',
-          message: expect.stringContaining('401'),
-        },
-      })
+      expect(response.ok).toBe(false)
+      expect(response.operation).toBe('workflow.dispatch')
+      if (!response.ok) {
+        expect(response.error.code).toBe('BACKEND_CONTROL_UNAUTHORIZED')
+        expect(response.error.message).toContain('401')
+      }
     } finally {
       await close(server)
     }
@@ -366,7 +365,7 @@ describe('kirictl call', () => {
     }
   })
 
-  it('runs compact JSON operations for models, projects, sessions, and scratchpad', async () => {
+  it('runs compact JSON operations for models, projects, sessions, and scratchpad', () => {
     const root = mkdtempSync(join(tmpdir(), 'kirictl-'))
     tempRoots.push(root)
     const env = {
@@ -563,7 +562,7 @@ describe('kirictl call', () => {
       status: 'running',
     })
     const scratchpadItem = shownWorkflow.items.find((item) => item.action === 'scratchpad')
-    expect(responseSchema.parse(runTsxJsonWithArgs(
+    const scratchpadRetrigger = responseSchema.parse(runTsxJsonWithArgs(
       'src/cli/kirictl.ts',
       ['call', JSON.stringify({
         operation: 'workflow.retrigger',
@@ -574,17 +573,19 @@ describe('kirictl call', () => {
         cwd: projectRoot,
         env,
       },
-    ))).toMatchObject({
-      ok: false,
-      operation: 'workflow.retrigger',
-      error: { message: expect.stringContaining('not launchable') },
-    })
+    ))
+    expect(scratchpadRetrigger.ok).toBe(false)
+    expect(scratchpadRetrigger.operation).toBe('workflow.retrigger')
+    if (!scratchpadRetrigger.ok) {
+      expect(scratchpadRetrigger.error.message).toContain('not launchable')
+    }
 
-    expect(workflowRunSchema.parse(callResult(env, {
+    const archivedWorkflow = workflowRunSchema.parse(callResult(env, {
       operation: 'workflow.archive',
       params: { id: workflow.id },
-    })).archivedAt).toEqual(expect.any(String))
-    expect(responseSchema.parse(runTsxJsonWithArgs(
+    }))
+    expect(typeof archivedWorkflow.archivedAt).toBe('string')
+    const archivedDispatch = responseSchema.parse(runTsxJsonWithArgs(
       'src/cli/kirictl.ts',
       ['call', JSON.stringify({
         operation: 'workflow.dispatch',
@@ -595,11 +596,12 @@ describe('kirictl call', () => {
         cwd: projectRoot,
         env,
       },
-    ))).toMatchObject({
-      ok: false,
-      operation: 'workflow.dispatch',
-      error: { message: expect.stringContaining('archived') },
-    })
+    ))
+    expect(archivedDispatch.ok).toBe(false)
+    expect(archivedDispatch.operation).toBe('workflow.dispatch')
+    if (!archivedDispatch.ok) {
+      expect(archivedDispatch.error.message).toContain('archived')
+    }
     expect(workflowRunSchema.parse(callResult(env, {
       operation: 'workflow.restore',
       params: { id: workflow.id },
