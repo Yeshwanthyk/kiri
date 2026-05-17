@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { Context, Data, Effect, Layer } from 'effect'
 import type { KiriSettings, RuntimeKind } from '~/lib/contracts'
 import { kiriSettingsSchema } from '~/lib/contracts'
+import bundledSettings from '../../settings.json' with { type: 'json' }
 import {
   KiriConfigService,
   type KiriConfigApi,
@@ -87,7 +88,7 @@ export function loadSettings(
 }
 
 function parseSettings(_settingsPath: string, raw: string): KiriSettings {
-  const parsed = kiriSettingsSchema.parse(JSON.parse(raw))
+  const parsed = kiriSettingsSchema.parse(normalizeSettings(JSON.parse(raw)))
   validateSettings(parsed)
   return parsed
 }
@@ -120,6 +121,27 @@ function validateSettings(settings: KiriSettings) {
         `settings.json ${runtime}.defaultModel must be listed in ${runtime}.models`,
       )
     }
+  }
+}
+
+function normalizeSettings(settings: unknown): unknown {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    return settings
+  }
+  if (!('runtimes' in settings)) {
+    return settings
+  }
+  const runtimes = settings.runtimes
+  if (!runtimes || typeof runtimes !== 'object' || Array.isArray(runtimes)) {
+    return settings
+  }
+  const defaults = kiriSettingsSchema.parse(bundledSettings)
+  return {
+    ...settings,
+    runtimes: {
+      ...defaults.runtimes,
+      ...runtimes,
+    },
   }
 }
 

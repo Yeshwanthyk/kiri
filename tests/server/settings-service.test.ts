@@ -57,6 +57,27 @@ describe('settings service', () => {
     expect(settings.runtimes.pi.defaultModel).toBe('pi-default')
   })
 
+  it('fills runtime defaults missing from older desktop settings files', () => {
+    const settings = loadSettings('/repo/settings.json', () => JSON.stringify({
+      runtimes: {
+        pi: {
+          models: ['pi-default'],
+          defaultModel: 'pi-default',
+        },
+        codex: {
+          models: ['codex-default'],
+          defaultModel: 'codex-default',
+        },
+        claude: {
+          models: ['claude-default'],
+          defaultModel: 'claude-default',
+        },
+      },
+    }))
+
+    expect(settings.runtimes.opencode.defaultModel).toBe('opencode/gpt-5.5')
+  })
+
   it.effect('returns runtime settings from injected readers', () =>
     Effect.gen(function* () {
       const service = makeKiriSettingsService({

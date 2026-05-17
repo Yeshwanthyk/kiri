@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.10 - 2026-05-17
+
+- Hardened CI DMG creation against transient `hdiutil` resource-busy failures.
+- Normalized older desktop `settings.json` files that are missing newly added runtime blocks.
+
 ## 0.1.9 - 2026-05-17
 
 - Added compact agent-first MCP/CLI controls with `kiri_get`, `kiri_do`, `pnpm kiri:ctl call`, and `pnpm kiricli mcp`.
