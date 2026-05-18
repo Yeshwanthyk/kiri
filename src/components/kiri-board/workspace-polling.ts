@@ -63,6 +63,63 @@ export async function pollWorkspaceDuringAction<T, Snapshot>({
   }
 }
 
+type BackgroundWorkspacePollingInput<Snapshot> = {
+  readonly refreshWorkspace: () => Promise<Snapshot>
+  readonly onWorkspace: (snapshot: Snapshot) => void
+  readonly onError?: (error: unknown) => void
+  readonly isVisible?: () => boolean
+  readonly isIdle?: () => boolean
+  readonly idleToken?: () => unknown
+  readonly timers?: Pick<WorkspacePollingTimers, 'setTimeout' | 'clearTimeout'>
+  readonly intervalMs?: number
+}
+
+export function pollWorkspaceInBackground<Snapshot>({
+  refreshWorkspace,
+  onWorkspace,
+  onError = (error) => console.error('Failed to refresh workspace snapshot', error),
+  isVisible = () => document.visibilityState === 'visible',
+  isIdle = () => true,
+  idleToken = () => undefined,
+  timers = browserTimers(),
+  intervalMs = 2_000,
+}: BackgroundWorkspacePollingInput<Snapshot>) {
+  let stopped = false
+  let timer: number | undefined
+
+  const schedule = () => {
+    if (stopped) return
+    timer = timers.setTimeout(() => {
+      void tick()
+    }, intervalMs)
+  }
+
+  const tick = async () => {
+    if (stopped) return
+    if (!isVisible() || !isIdle()) {
+      schedule()
+      return
+    }
+
+    const startedIdleToken = idleToken()
+    try {
+      const next = await refreshWorkspace()
+      if (!stopped && isIdle() && idleToken() === startedIdleToken) onWorkspace(next)
+    } catch (error) {
+      if (!stopped) onError(error)
+    } finally {
+      schedule()
+    }
+  }
+
+  schedule()
+
+  return () => {
+    stopped = true
+    if (timer !== undefined) timers.clearTimeout(timer)
+  }
+}
+
 function browserTimers(): WorkspacePollingTimers {
   return {
     setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),

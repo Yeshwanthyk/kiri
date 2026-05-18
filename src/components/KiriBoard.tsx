@@ -66,7 +66,7 @@ import {
   type RefreshAgentDetail,
   type SidebarTab,
 } from './kiri-board/board-types'
-import { pollWorkspaceDuringAction } from './kiri-board/workspace-polling'
+import { pollWorkspaceDuringAction, pollWorkspaceInBackground } from './kiri-board/workspace-polling'
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const boardScrollRef = React.useRef<HTMLDivElement | null>(null)
@@ -127,6 +127,36 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const startSession = useServerFn(startSessionMutation)
   const triggerScratchpadBlock = useServerFn(triggerScratchpadBlockMutation)
   const unhideProject = useServerFn(unhideProjectMutation)
+  const refreshWorkspaceRef = React.useRef(refreshWorkspace)
+  const activeWorkspaceMutationsRef = React.useRef(0)
+  const workspaceActivityEpochRef = React.useRef(0)
+  const applyWorkspace = React.useCallback((next: WorkspaceSnapshot) => {
+    setWorkspace(next)
+  }, [])
+  const beginWorkspaceMutation = React.useCallback(() => {
+    activeWorkspaceMutationsRef.current += 1
+    workspaceActivityEpochRef.current += 1
+    let ended = false
+    return () => {
+      if (ended) return
+      ended = true
+      activeWorkspaceMutationsRef.current -= 1
+      workspaceActivityEpochRef.current += 1
+    }
+  }, [])
+  const runWorkspaceMutation = React.useCallback(async <T,>(
+    action: () => Promise<T>,
+    onResult: (result: T) => void,
+  ) => {
+    const endWorkspaceMutation = beginWorkspaceMutation()
+    try {
+      const result = await action()
+      onResult(result)
+      return result
+    } finally {
+      endWorkspaceMutation()
+    }
+  }, [beginWorkspaceMutation])
 
   const { selectedProject, selectedAgent, selection } = React.useMemo(
     () => resolveBoardSelection(workspace, activeProjectId, agentByProject),
@@ -174,8 +204,21 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }, [agentByProject])
 
   React.useEffect(() => {
-    setWorkspace(snapshot)
-  }, [snapshot])
+    applyWorkspace(snapshot)
+  }, [applyWorkspace, snapshot])
+
+  React.useEffect(() => {
+    refreshWorkspaceRef.current = refreshWorkspace
+  }, [refreshWorkspace])
+
+  React.useEffect(() =>
+    pollWorkspaceInBackground({
+      refreshWorkspace: () => refreshWorkspaceRef.current(),
+      onWorkspace: applyWorkspace,
+      isIdle: () => activeWorkspaceMutationsRef.current === 0,
+      idleToken: () => workspaceActivityEpochRef.current,
+    }),
+  [applyWorkspace])
 
   useBoardPreferenceEffects({
     snapshot,
@@ -240,15 +283,16 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   })
 
   async function handleAddProject(input: { id?: string; name: string; cwd: string }) {
-    const next = await addProject({ data: input })
-    setWorkspace(next)
+    const next = await runWorkspaceMutation(() => addProject({ data: input }), applyWorkspace)
     const project = next.projects.find((item) => item.cwd === input.cwd) ?? next.projects.at(-1)
     if (project) selectProject(project.id)
   }
 
   async function handleDeleteProject(projectId: string) {
-    const next = await deleteProject({ data: { id: projectId } })
-    setWorkspace(next)
+    const next = await runWorkspaceMutation(
+      () => deleteProject({ data: { id: projectId } }),
+      applyWorkspace,
+    )
     forgetProject(projectId)
     if (selection.projectId === projectId) setActiveProjectId(next.selected.projectId)
   }
@@ -266,20 +310,24 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const handleHideProject = React.useCallback(async (projectId: string) => {
     setProjectVisibilityPendingId(projectId)
     try {
-      const next = await hideProject({ data: { id: projectId } })
-      setWorkspace(next)
+      const next = await runWorkspaceMutation(
+        () => hideProject({ data: { id: projectId } }),
+        applyWorkspace,
+      )
       forgetProject(projectId)
       setActiveProjectId((current) => current === projectId ? next.selected.projectId : current)
     } finally {
       setProjectVisibilityPendingId((current) => current === projectId ? null : current)
     }
-  }, [forgetProject, hideProject])
+  }, [applyWorkspace, forgetProject, hideProject, runWorkspaceMutation])
 
   async function handleUnhideProject(projectId: string) {
     setProjectVisibilityPendingId(projectId)
     try {
-      const next = await unhideProject({ data: { id: projectId } })
-      setWorkspace(next)
+      const next = await runWorkspaceMutation(
+        () => unhideProject({ data: { id: projectId } }),
+        applyWorkspace,
+      )
       const project = next.projects.find((item) => item.id === projectId)
       if (project) selectProject(project.id)
     } finally {
@@ -288,8 +336,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   async function handleReorderProjects(projectIds: string[]) {
-    const next = await reorderProjects({ data: { ids: projectIds } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => reorderProjects({ data: { ids: projectIds } }),
+      applyWorkspace,
+    )
   }
 
   async function handleChooseProjectDirectory() {
@@ -297,8 +347,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   async function handleRenameSession(agentId: string, title: string) {
-    const next = await renameSession({ data: { agentId, title } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => renameSession({ data: { agentId, title } }),
+      applyWorkspace,
+    )
   }
 
   function handleDeleteSession(agentId: string) {
@@ -315,8 +367,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     const currentIndex = currentProject.agents.findIndex((agent) => agent.id === agentId)
     setDeleteInFlight(true)
     try {
-      const next = await deleteSession({ data: { agentId } })
-      setWorkspace(next)
+      const next = await runWorkspaceMutation(
+        () => deleteSession({ data: { agentId } }),
+        applyWorkspace,
+      )
       const project =
         next.projects.find((item) => item.id === currentProjectId) ?? next.projects[0]
       if (!project) return
@@ -334,18 +388,23 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }
   }
 
-  async function withWorkspacePolling<T>(
-    action: () => Promise<T>,
-    onResult: (result: T) => void,
+  async function withWorkspacePolling(
+    action: () => Promise<WorkspaceSnapshot>,
+    onResult: (result: WorkspaceSnapshot) => void,
     onPoll?: RefreshAgentDetail,
   ) {
-    await pollWorkspaceDuringAction({
-      action,
-      refreshWorkspace,
-      onResult,
-      onWorkspace: setWorkspace,
-      onPoll,
-    })
+    const endWorkspaceMutation = beginWorkspaceMutation()
+    try {
+      await pollWorkspaceDuringAction({
+        action,
+        refreshWorkspace,
+        onResult,
+        onWorkspace: applyWorkspace,
+        onPoll,
+      })
+    } finally {
+      endWorkspaceMutation()
+    }
   }
 
   async function refreshDetailAfterSend(onDetailRefresh?: RefreshAgentDetail) {
@@ -360,7 +419,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   ) {
     await withWorkspacePolling(
       () => sendMessage({ data: { agentId, text, images } }),
-      (next) => setWorkspace(next),
+      (next) => applyWorkspace(next),
       onDetailRefresh,
     )
     await refreshDetailAfterSend(onDetailRefresh)
@@ -370,8 +429,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     agentId: string,
     onDetailRefresh?: RefreshAgentDetail,
   ) {
-    const next = await refreshTerminalDiffs({ data: { agentId } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => refreshTerminalDiffs({ data: { agentId } }),
+      applyWorkspace,
+    )
     await onDetailRefresh?.()
   }
 
@@ -380,28 +441,38 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     text: string,
     images: SendMessageImage[] = [],
   ) {
-    const next = await steerMessage({ data: { agentId, text, images } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => steerMessage({ data: { agentId, text, images } }),
+      applyWorkspace,
+    )
   }
 
   async function handleInterruptMessage(agentId: string) {
-    const next = await interruptMessage({ data: { agentId } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => interruptMessage({ data: { agentId } }),
+      applyWorkspace,
+    )
   }
 
   async function handleThinkingCommand(agentId: string, level?: ThinkingLevel) {
-    const next = await setThinkingLevel({ data: { agentId, level } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => setThinkingLevel({ data: { agentId, level } }),
+      applyWorkspace,
+    )
   }
 
   async function handleResetSession(agentId: string) {
-    const next = await resetSession({ data: { agentId } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => resetSession({ data: { agentId } }),
+      applyWorkspace,
+    )
   }
 
   async function handleForkSession(agentId: string) {
-    const result = await forkSession({ data: { agentId } })
-    setWorkspace(result.snapshot)
+    const result = await runWorkspaceMutation(
+      () => forkSession({ data: { agentId } }),
+      (next) => applyWorkspace(next.snapshot),
+    )
     const project = result.snapshot.projects.find((item) =>
       item.agents.some((agent) => agent.id === result.agentId),
     )
@@ -411,8 +482,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   async function handleReviewSession(agentId: string, target: ReviewTarget) {
-    const next = await reviewSession({ data: { agentId, target } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => reviewSession({ data: { agentId, target } }),
+      applyWorkspace,
+    )
   }
 
   async function handleAnswerQuestion(
@@ -420,8 +493,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     requestId: string,
     answers: Record<string, string | string[]>,
   ) {
-    const next = await answerQuestion({ data: { agentId, requestId, answers } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => answerQuestion({ data: { agentId, requestId, answers } }),
+      applyWorkspace,
+    )
   }
 
   async function handleStartSession(input: {
@@ -432,8 +507,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     title?: string
     thinkingLevel: ThinkingLevel
   }) {
-    const next = await startSession({ data: input })
-    setWorkspace(next)
+    const next = await runWorkspaceMutation(
+      () => startSession({ data: input }),
+      applyWorkspace,
+    )
     const project = next.projects.find((item) => item.id === input.projectId)
     const agent =
       (input.title
@@ -448,13 +525,17 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }
 
   async function handleCaptureBlock(body: string, projectId: string | null) {
-    const next = await addScratchpadBlock({ data: { body, projectId } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => addScratchpadBlock({ data: { body, projectId } }),
+      applyWorkspace,
+    )
   }
 
   async function handleDeleteBlock(id: string) {
-    const next = await deleteScratchpadBlock({ data: { id } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => deleteScratchpadBlock({ data: { id } }),
+      applyWorkspace,
+    )
   }
 
   async function handleTriggerBlock(
@@ -470,18 +551,20 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   ) {
     const projectId = overrides?.projectId ?? block.projectId ?? selectedProject?.id
     if (!projectId) throw new Error('Pick a project before triggering a block')
-    const result = await triggerScratchpadBlock({
-      data: {
-        id: block.id,
-        projectId,
-        runtime: overrides?.runtime,
-        interfaceMode: overrides?.interfaceMode,
-        model: overrides?.model,
-        title: overrides?.title,
-        thinkingLevel: overrides?.thinkingLevel ?? 'medium',
-      },
-    })
-    setWorkspace(result.snapshot)
+    const result = await runWorkspaceMutation(
+      () => triggerScratchpadBlock({
+        data: {
+          id: block.id,
+          projectId,
+          runtime: overrides?.runtime,
+          interfaceMode: overrides?.interfaceMode,
+          model: overrides?.model,
+          title: overrides?.title,
+          thinkingLevel: overrides?.thinkingLevel ?? 'medium',
+        },
+      }),
+      (next) => applyWorkspace(next.snapshot),
+    )
     selectAgent(projectId, result.agentId)
     setTab('chat')
   }
@@ -493,8 +576,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       setSessionLauncherOpen(false)
       return
     }
-    const next = await restoreSession({ data: { agentId } })
-    setWorkspace(next)
+    await runWorkspaceMutation(
+      () => restoreSession({ data: { agentId } }),
+      applyWorkspace,
+    )
     selectAgent(projectId, agentId)
     setTab('chat')
     setSessionLauncherOpen(false)
