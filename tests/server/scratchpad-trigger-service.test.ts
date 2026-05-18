@@ -17,7 +17,7 @@ const block: ScratchpadBlock = {
 }
 
 describe('ScratchpadTriggerService', () => {
-  it('starts terminal sessions without prompting', async () => {
+  it('queues and spawns terminal sessions without prompting', async () => {
     const calls: string[] = []
     const service = makeScratchpadTriggerService(testDependencies({
       startSessionAndGetId: (input) => {
@@ -26,6 +26,13 @@ describe('ScratchpadTriggerService', () => {
       },
       markScratchpadBlockTriggered: (id, agentId) => {
         calls.push(`mark:${id}:${agentId}`)
+      },
+      queueAgentTerminalInput: (input) => {
+        calls.push(`queue:${input.agentId}:${input.text}:${input.submit}`)
+      },
+      pasteAgentRuntimeTerminal: (input) => {
+        calls.push(`spawn:${input.agentId}`)
+        return Promise.resolve({ agentId: input.agentId, mode: 'runtime' })
       },
       promptAgent: () => {
         calls.push('prompt')
@@ -42,7 +49,12 @@ describe('ScratchpadTriggerService', () => {
     }))
 
     expect(result.agentId).toBe('agent-1')
-    expect(calls).toEqual(['start:codex:terminal', 'mark:block-1:agent-1'])
+    expect(calls).toEqual([
+      'start:codex:terminal',
+      'mark:block-1:agent-1',
+      'queue:agent-1:Do the work:true',
+      'spawn:agent-1',
+    ])
   })
 
   it('archives the created gui session when prompt enqueue fails', async () => {
@@ -148,6 +160,9 @@ function testDependencies(
     }],
     deleteSessionSummary: () => undefined,
     promptAgent: () => Promise.resolve(),
+    queueAgentTerminalInput: () => undefined,
+    pasteAgentRuntimeTerminal: (input) => Promise.resolve({ agentId: input.agentId, mode: 'runtime' }),
+    spawnTerminalOnTrigger: true,
     reportPromptFailure: () => undefined,
     ...overrides,
   }

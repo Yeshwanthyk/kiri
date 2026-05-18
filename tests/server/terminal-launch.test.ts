@@ -83,6 +83,26 @@ describe('buildTerminalProcessLaunch', () => {
     expect(first.env.KIRI_CLAUDE_SESSION_ID).toBe(second.env.KIRI_CLAUDE_SESSION_ID)
   })
 
+  it('passes queued terminal input to Claude Code as the initial prompt', () => {
+    const launch = buildTerminalProcessLaunch({
+      ...launchConfig('claude'),
+      runtimeStateJson: JSON.stringify({
+        pendingTerminalInputs: [{
+          text: 'Do the terminal work',
+          submit: true,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        }],
+      }),
+    }, 'runtime', shell)
+
+    expect(launch.args.at(-1)).toBe('Do the terminal work')
+    expect(launch.initialTerminalInput).toEqual({
+      text: 'Do the terminal work',
+      submit: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    })
+  })
+
   it('resumes Claude Code when the deterministic session already exists on disk', () => {
     const home = mkdtempSync(join(tmpdir(), 'kiri-claude-home-'))
     vi.stubEnv('KIRI_CLAUDE_HOME', home)
@@ -120,11 +140,41 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.command).toBe('/tmp/bin/codex')
     expect(launch.args).toEqual([
       '--dangerously-bypass-approvals-and-sandbox',
+      '--no-alt-screen',
       '--model',
       'test-model',
     ])
     expect(launch.env.CODEX_HOME).toBe('/tmp/codex-home')
     expect(launch.env.KIRI_MODEL).toBe('test-model')
+  })
+
+  it('passes queued terminal input to new Codex sessions as the initial prompt', () => {
+    vi.stubEnv('KIRI_CODEX_BIN', '/tmp/bin/codex')
+
+    const launch = buildTerminalProcessLaunch({
+      ...launchConfig('codex'),
+      runtimeStateJson: JSON.stringify({
+        pendingTerminalInputs: [{
+          text: 'Do the Codex terminal work',
+          submit: true,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        }],
+      }),
+    }, 'runtime', shell)
+
+    expect(launch.command).toBe('/tmp/bin/codex')
+    expect(launch.args).toEqual([
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--no-alt-screen',
+      '--model',
+      'test-model',
+      'Do the Codex terminal work',
+    ])
+    expect(launch.initialTerminalInput).toEqual({
+      text: 'Do the Codex terminal work',
+      submit: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    })
   })
 
   it('resumes Codex when runtime state carries a Codex session id', () => {
@@ -139,10 +189,12 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.args).toEqual([
       'resume',
       '--dangerously-bypass-approvals-and-sandbox',
+      '--no-alt-screen',
       '--model',
       'test-model',
       'codex-session-id',
     ])
+    expect(launch.initialTerminalInput).toBeNull()
   })
 
   it('prefers an explicit Codex resume state over the discovered session id', () => {
@@ -157,6 +209,7 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.args).toEqual([
       'resume',
       '--dangerously-bypass-approvals-and-sandbox',
+      '--no-alt-screen',
       '--model',
       'test-model',
       'explicit-codex-session',
@@ -349,6 +402,7 @@ describe('buildTerminalProcessLaunch', () => {
     expect(codex.command).toBe('/injected/codex')
     expect(codex.args).toEqual([
       '--dangerously-bypass-approvals-and-sandbox',
+      '--no-alt-screen',
       '--model',
       'test-model',
     ])

@@ -10,10 +10,12 @@ import {
   getScratchpadBlock,
   listSessionSummaries,
   markScratchpadBlockTriggered,
+  queueAgentTerminalInput,
   startSessionAndGetId,
 } from './db'
 import { deleteSessionSummaryWithRuntimeCleanup } from './runtime-cleanup'
 import { promptAgent } from './runtime'
+import { pasteAgentRuntimeTerminal } from './terminal-server'
 
 type TriggerScratchpadInput = {
   readonly id: string
@@ -80,6 +82,9 @@ export type ScratchpadTriggerDependencies = {
   readonly listSessionSummaries: (input: { readonly includeArchived: true }) => readonly TriggerScratchpadSession[]
   readonly deleteSessionSummary: (input: { readonly agentId: string }) => unknown
   readonly promptAgent: typeof promptAgent
+  readonly queueAgentTerminalInput: typeof queueAgentTerminalInput
+  readonly pasteAgentRuntimeTerminal: typeof pasteAgentRuntimeTerminal
+  readonly spawnTerminalOnTrigger: boolean
   readonly reportPromptFailure: (error: unknown) => void
 }
 
@@ -90,6 +95,9 @@ const liveScratchpadTriggerDependencies: ScratchpadTriggerDependencies = {
   listSessionSummaries,
   deleteSessionSummary: deleteSessionSummaryWithRuntimeCleanup,
   promptAgent,
+  queueAgentTerminalInput,
+  pasteAgentRuntimeTerminal,
+  spawnTerminalOnTrigger: true,
   reportPromptFailure: (error) => console.error('Scratchpad trigger prompt failed', error),
 }
 
@@ -98,8 +106,8 @@ export function makeScratchpadTriggerService(
 ): ScratchpadTriggerServiceApi {
   return {
     trigger: Effect.fn('ScratchpadTrigger.trigger')(function* (input) {
-      return yield* Effect.try({
-        try: () => triggerScratchpadSessionSync(input, dependencies),
+      return yield* Effect.tryPromise({
+        try: () => triggerScratchpadSessionWithDeps(input, dependencies),
         catch: normalizeScratchpadTriggerError,
       })
     }),
@@ -110,6 +118,21 @@ export async function triggerScratchpadSession(
   input: TriggerScratchpadInput,
   prompt: typeof promptAgent = promptAgent,
 ): Promise<TriggerScratchpadResult> {
+  return triggerScratchpadSessionWithDependencies(input, prompt, false)
+}
+
+export async function triggerScratchpadSessionAndSpawn(
+  input: TriggerScratchpadInput,
+  prompt: typeof promptAgent = promptAgent,
+): Promise<TriggerScratchpadResult> {
+  return triggerScratchpadSessionWithDependencies(input, prompt, true)
+}
+
+async function triggerScratchpadSessionWithDependencies(
+  input: TriggerScratchpadInput,
+  prompt: typeof promptAgent,
+  spawnTerminalOnTrigger: boolean,
+): Promise<TriggerScratchpadResult> {
   const result = await Effect.runPromise(
     ScratchpadTriggerService.pipe(
       Effect.flatMap((service) => service.trigger(input)),
@@ -117,6 +140,7 @@ export async function triggerScratchpadSession(
         ScratchpadTriggerService.of(makeScratchpadTriggerService({
           ...liveScratchpadTriggerDependencies,
           promptAgent: prompt,
+          spawnTerminalOnTrigger,
         }))),
       ),
       Effect.either,
@@ -126,10 +150,10 @@ export async function triggerScratchpadSession(
   throw normalizeScratchpadTriggerFailure(result.left)
 }
 
-function triggerScratchpadSessionSync(
+async function triggerScratchpadSessionWithDeps(
   input: TriggerScratchpadInput,
   dependencies: ScratchpadTriggerDependencies,
-) {
+): Promise<TriggerScratchpadResult> {
   const block = dependencies.getScratchpadBlock(input.id)
   if (!block) throw new Error(`Scratchpad block not found: ${input.id}`)
 
@@ -155,7 +179,18 @@ function triggerScratchpadSessionSync(
     throw error
   }
 
-  if (interfaceMode !== 'terminal') {
+  if (interfaceMode === 'terminal') {
+    dependencies.queueAgentTerminalInput({
+      agentId,
+      text: block.body,
+      submit: true,
+    })
+    if (dependencies.spawnTerminalOnTrigger) {
+      await dependencies.pasteAgentRuntimeTerminal({ agentId }).catch((error) => {
+        dependencies.reportPromptFailure(error)
+      })
+    }
+  } else {
     void dependencies.promptAgent({ agentId, text: block.body, images: [] }).catch((error) => {
       try {
         dependencies.deleteSessionSummary({ agentId })

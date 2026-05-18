@@ -363,7 +363,12 @@ async function getOrCreateTerminalSession(
   })
 
   try {
-    writePendingTerminalInputs(runtime, config.id, session, mode)
+    if (mode === 'runtime' && launch.initialTerminalInput) {
+      consumeInitialTerminalInput(runtime, config.id, launch.initialTerminalInput)
+      scheduleInitialTerminalInputSubmit(session, launch.initialTerminalInput)
+    } else {
+      writePendingTerminalInputs(runtime, config.id, session, mode)
+    }
   } catch (error) {
     runtime.registry.kill(session)
     throw error
@@ -482,6 +487,35 @@ function writePendingTerminalInputs(
       throw error
     }
   }
+}
+
+function consumeInitialTerminalInput(
+  runtime: TerminalServerRuntime,
+  agentId: string,
+  input: NonNullable<TerminalProcessLaunch['initialTerminalInput']>,
+) {
+  const inputs = runtime.dependencies.takeAgentTerminalInputs(agentId)
+  const [first, ...rest] = inputs
+  const remaining = first && sameTerminalInput(first, input) ? rest : inputs
+  if (remaining.length > 0) runtime.dependencies.requeueAgentTerminalInputs(agentId, remaining)
+}
+
+function scheduleInitialTerminalInputSubmit(
+  session: TerminalRegistrySession,
+  input: NonNullable<TerminalProcessLaunch['initialTerminalInput']>,
+) {
+  if (!input.submit) return
+  const timer = setTimeout(() => {
+    if (!session.exited) session.proc.write('\r')
+  }, 8_000)
+  timer.unref?.()
+}
+
+function sameTerminalInput(
+  left: { readonly text: string; readonly submit: boolean; readonly createdAt: string },
+  right: { readonly text: string; readonly submit: boolean; readonly createdAt: string },
+) {
+  return left.text === right.text && left.submit === right.submit && left.createdAt === right.createdAt
 }
 
 function scheduleHeadlessIdleKill(

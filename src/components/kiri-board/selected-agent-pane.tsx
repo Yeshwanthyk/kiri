@@ -154,8 +154,11 @@ export function SelectedAgentPane({
     readonly shell: boolean
   }>({ runtime: false, shell: false })
   React.useEffect(() => {
-    setMountedTerminalModes({ runtime: false, shell: false })
-  }, [selectedProject.id, selectedAgent?.id])
+    setMountedTerminalModes({
+      runtime: selectedAgent?.interfaceMode === 'terminal' && tab === 'chat',
+      shell: Boolean(selectedAgent) && tab === 'terminal',
+    })
+  }, [selectedProject.id, selectedAgent?.id, selectedAgent?.interfaceMode])
   React.useEffect(() => {
     if (!visibleTerminalMode) return
     setMountedTerminalModes((current) => current[visibleTerminalMode]

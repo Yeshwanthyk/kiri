@@ -15,6 +15,7 @@ describe('terminal server', () => {
   afterEach(async () => {
     await closeTerminalServerForTests()
     vi.unstubAllEnvs()
+    vi.useRealTimers()
   })
 
   it('clears failed startup state so listen failures can be retried', async () => {
@@ -105,6 +106,111 @@ describe('terminal server', () => {
     } finally {
       await service.close()
       rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('consumes queued input that was passed as the runtime initial prompt', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-terminal-initial-prompt-'))
+    const capturePath = join(root, 'capture.txt')
+    const scriptPath = join(root, 'fake-agent.sh')
+    writeFileSync(scriptPath, [
+      '#!/bin/sh',
+      'printf "%s" "$1" > "$KIRI_CAPTURE_PATH"',
+      'sleep 5',
+    ].join('\n'))
+    chmodSync(scriptPath, 0o755)
+    const pending = [{
+      text: 'workflow terminal body',
+      submit: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]
+    const requeue = vi.fn()
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'claude',
+        sessionDir: root,
+        sessionFile: null,
+        model: 'test-model',
+        cwd: root,
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: scriptPath,
+        args: [pending[0]!.text],
+        cwd: root,
+        env: {
+          ...process.env,
+          KIRI_CAPTURE_PATH: capturePath,
+        },
+        label: 'claude',
+        initialTerminalInput: pending[0],
+      }),
+      takeAgentTerminalInputs: () => pending,
+      requeueAgentTerminalInputs: requeue,
+    })
+
+    try {
+      await expect(service.spawnAgentRuntime({
+        agentId: 'agent-1',
+      })).resolves.toMatchObject({
+        agentId: 'agent-1',
+        mode: 'runtime',
+      })
+      await expect.poll(() => readFileSync(capturePath, 'utf8')).toBe('workflow terminal body')
+      expect(requeue).not.toHaveBeenCalled()
+    } finally {
+      await service.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('submits runtime initial prompts after the TUI has time to initialize', async () => {
+    vi.useFakeTimers()
+    const write = vi.fn()
+    const pending = {
+      text: 'workflow terminal body',
+      submit: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'codex',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake',
+        args: [pending.text],
+        cwd: '/tmp/project',
+        env: process.env,
+        label: 'codex',
+        initialTerminalInput: pending,
+      }),
+      spawnPty: () => ({
+        write,
+        resize: vi.fn(),
+        kill: vi.fn(),
+        onData: vi.fn(),
+        onExit: vi.fn(),
+      } as never),
+      takeAgentTerminalInputs: () => [pending],
+    })
+
+    try {
+      await expect(service.spawnAgentRuntime({ agentId: 'agent-1' })).resolves.toMatchObject({
+        agentId: 'agent-1',
+        mode: 'runtime',
+      })
+      expect(write).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect(write).toHaveBeenCalledWith('\r')
+    } finally {
+      await service.close()
     }
   })
 

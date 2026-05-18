@@ -65,7 +65,7 @@ import {
   deleteProjectWithRuntimeCleanup,
   deleteSessionWithRuntimeCleanup,
 } from './runtime-cleanup'
-import { triggerScratchpadSession } from './scratchpad-trigger'
+import { triggerScratchpadSessionAndSpawn } from './scratchpad-trigger'
 import { TerminalServerService, type TerminalServerApi } from './terminal-server'
 
 type AgentDetailInput = z.infer<typeof agentDetailInputSchema>
@@ -232,7 +232,7 @@ function liveWorkspaceServiceDependencies(
     startSession,
     addScratchpadBlock,
     deleteScratchpadBlock,
-    triggerScratchpadSession,
+    triggerScratchpadSession: triggerScratchpadSessionAndSpawn,
   }
 }
 

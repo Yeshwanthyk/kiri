@@ -27,6 +27,13 @@ export type TerminalProcessLaunch = {
   cwd: string
   env: NodeJS.ProcessEnv
   label: string
+  initialTerminalInput?: TerminalLaunchInitialInput | null
+}
+
+export type TerminalLaunchInitialInput = {
+  readonly text: string
+  readonly submit: boolean
+  readonly createdAt: string
 }
 
 export class TerminalLaunchError extends Data.TaggedError('TerminalLaunchError')<{
@@ -156,6 +163,7 @@ function unsupportedRuntime(runtime: never) {
 function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
   return Effect.gen(function* () {
   const state = yield* parseRuntimeState(config.runtimeStateJson)
+  const initialTerminalInput = firstPendingTerminalInput(state)
   const homePath = context.env.KIRI_CLAUDE_HOME ?? stringValue(state.homePath)
   const args = [
     '--dangerously-skip-permissions',
@@ -177,6 +185,7 @@ function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunch
       args.push('--session-id', sessionId)
     }
   }
+  if (initialTerminalInput) args.push(initialTerminalInput.text)
 
   const env = yield* baseTerminalEnv(config, context)
   if (sessionId) env.KIRI_CLAUDE_SESSION_ID = sessionId
@@ -193,6 +202,7 @@ function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunch
     cwd: config.cwd,
     env,
     label: 'claude',
+    initialTerminalInput,
   }
   })
 }
@@ -274,12 +284,14 @@ function claudeProjectKey(cwd: string) {
 function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
   return Effect.gen(function* () {
   const state = yield* parseRuntimeState(config.runtimeStateJson)
+  const initialTerminalInput = firstPendingTerminalInput(state)
   const resume = stringValue(state.resume) ?? stringValue(state.codexSessionId)
   const args = resume
-    ? ['resume', '--dangerously-bypass-approvals-and-sandbox']
-    : ['--dangerously-bypass-approvals-and-sandbox']
+    ? ['resume', '--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen']
+    : ['--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen']
   if (config.model) args.push('--model', config.model)
   if (resume) args.push(resume)
+  if (!resume && initialTerminalInput) args.push(initialTerminalInput.text)
   const env = yield* baseTerminalEnv(
     config,
     context,
@@ -291,6 +303,7 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
     cwd: config.cwd,
     env,
     label: 'codex',
+    initialTerminalInput: resume ? null : initialTerminalInput,
   }
   })
 }
@@ -379,6 +392,24 @@ function objectState(value: string | null | undefined) {
 
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function firstPendingTerminalInput(state: Record<string, unknown>): TerminalLaunchInitialInput | null {
+  const value = state.pendingTerminalInputs
+  if (!Array.isArray(value)) return null
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const text = 'text' in item && typeof item.text === 'string' ? item.text : null
+    if (!text) continue
+    return {
+      text,
+      submit: 'submit' in item && typeof item.submit === 'boolean' ? item.submit : true,
+      createdAt: 'createdAt' in item && typeof item.createdAt === 'string'
+        ? item.createdAt
+        : new Date(0).toISOString(),
+    }
+  }
+  return null
 }
 
 function resolveExecutable(
