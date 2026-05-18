@@ -146,11 +146,11 @@ describe('KiriControl service construction', () => {
       },
       dispatchWorkflowRun: (input) => {
         calls.push(`dispatch:${input.id}`)
-        return { id: input.id, status: 'running' }
+        return Promise.resolve({ id: input.id, status: 'running' })
       },
       retriggerWorkflowItem: (input) => {
         calls.push(`retrigger:${input.itemId}`)
-        return { itemId: input.itemId, status: 'launched' }
+        return Promise.resolve({ itemId: input.itemId, status: 'launched' })
       },
     }))
     const workflowInput = {
@@ -218,10 +218,17 @@ function testDependencies(
     unhideProjectSummary: (id) => projectSummary(id),
     deleteProjectSummary: (id) => projectSummary(id),
     listSessionSummaries: () => [sessionSummary('agent-1')],
+    getAgentDetail: () => snapshot.projects[0]?.agents[0] ?? (() => {
+      throw new Error('Missing test agent')
+    })(),
     startSessionSummary: () => sessionSummary('agent-1'),
     renameSessionSummary: (input) => ({ ...sessionSummary(input.agentId), title: input.title }),
     deleteSessionSummary: (input) => ({ ...sessionSummary(input.agentId), archivedAt: '2026-01-01T00:00:01.000Z' }),
     restoreSessionSummary: (input) => sessionSummary(input.agentId),
+    promptAgent: () => Promise.resolve({}),
+    steerAgent: () => Promise.resolve({}),
+    queueAgentTerminalInput: () => undefined,
+    pasteAgentRuntimeTerminal: (input) => Promise.resolve({ agentId: input.agentId, mode: 'runtime' as const }),
     listScratchpadBlocks: () => [scratchpadBlock],
     addScratchpadBlockSummary: (input) => ({ ...scratchpadBlock, body: input.body }),
     deleteScratchpadBlockSummary: (id) => ({ ...scratchpadBlock, id }),
@@ -234,8 +241,8 @@ function testDependencies(
     getWorkflowRun: (id) => ({ id }),
     validateWorkflow: () => ({ valid: true }),
     createWorkflowRun: () => ({ id: 'workflow-1' }),
-    dispatchWorkflowRun: (input) => ({ id: input.id, status: 'running' }),
-    retriggerWorkflowItem: (input) => ({ itemId: input.itemId, status: 'launched' }),
+    dispatchWorkflowRun: (input) => Promise.resolve({ id: input.id, status: 'running' }),
+    retriggerWorkflowItem: (input) => Promise.resolve({ itemId: input.itemId, status: 'launched' }),
     trackWorkflowItem: (input) => ({ itemId: input.itemId, tracked: true }),
     untrackWorkflowItem: (input) => ({ itemId: input.itemId, tracked: false }),
     archiveWorkflowRun: (input) => ({ id: input.id, status: 'archived' }),

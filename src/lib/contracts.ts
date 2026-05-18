@@ -307,6 +307,22 @@ export const sendMessageInputSchema = z.object({
 })
 type SendMessageInput = z.infer<typeof sendMessageInputSchema>
 
+export const agentPromptInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  text: z.string().trim().min(1).max(40_000),
+  images: z.array(sendMessageImageSchema).max(4).default([]),
+  mode: z.enum(['prompt', 'steer']).default('prompt'),
+})
+export type AgentPromptInput = z.infer<typeof agentPromptInputSchema>
+
+export const terminalInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  text: z.string().trim().min(1).max(40_000),
+  submit: z.boolean().default(true),
+  spawn: z.boolean().default(true),
+})
+export type TerminalInput = z.infer<typeof terminalInputSchema>
+
 export const steerMessageInputSchema = z.object({
   agentId: z.string().trim().min(1),
   text: z.string().trim().min(1),
@@ -438,6 +454,7 @@ export const kiriReadOperations = [
   'model.list',
   'project.list',
   'session.list',
+  'agent.detail',
   'scratchpad.list',
   'workflow.list',
   'workflow.show',
@@ -454,6 +471,8 @@ export const kiriWriteOperations = [
   'session.rename',
   'session.archive',
   'session.restore',
+  'agent.prompt',
+  'terminal.input',
   'scratchpad.add',
   'scratchpad.delete',
   'scratchpad.trigger',

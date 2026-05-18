@@ -3,6 +3,8 @@ import type {
   AddProjectInput,
   AddScratchpadBlockInput,
   AgentCell,
+  AgentDetail,
+  AgentPromptInput,
   CreateWorkflowRunInput,
   KiriSettings,
   ListWorkflowRunsInput,
@@ -11,6 +13,7 @@ import type {
   RuntimeKind,
   SessionInterfaceMode,
   StartSessionInput,
+  TerminalInput,
   ThinkingLevel,
   WorkflowItemOperationInput,
   WorkflowRunOperationInput,
@@ -20,6 +23,7 @@ import {
   addScratchpadBlockSummary,
   addProjectSummary,
   deleteScratchpadBlockSummary,
+  getAgentDetail,
   getWorkspaceSnapshot,
   hideProjectSummary,
   listScratchpadBlocks,
@@ -29,9 +33,12 @@ import {
   restoreSessionSummary,
   startSessionSummary,
   unhideProjectSummary,
+  queueAgentTerminalInput,
 } from './db'
+import { promptAgent, steerAgent } from './runtime'
 import { triggerScratchpadSession } from './scratchpad-trigger'
 import { getSettings } from './settings'
+import { pasteAgentRuntimeTerminal } from './terminal-server'
 import {
   deleteProjectSummaryWithRuntimeCleanup,
   deleteSessionSummaryWithRuntimeCleanup,
@@ -130,6 +137,7 @@ export type KiriControlApi = {
     readonly projectId?: string
     readonly includeArchived?: boolean
   }) => ControlEffect<readonly SessionSummary[]>
+  readonly agentDetail: (input: { readonly agentId: string; readonly limit?: number; readonly offset?: number }) => ControlEffect<AgentDetail>
   readonly startSession: (input: StartSessionInput) => ControlEffect<SessionSummary>
   readonly renameSession: (input: {
     readonly agentId: string
@@ -137,6 +145,17 @@ export type KiriControlApi = {
   }) => ControlEffect<SessionSummary>
   readonly deleteSession: (agentId: string) => ControlEffect<SessionSummary>
   readonly restoreSession: (input: RestoreSessionInput) => ControlEffect<SessionSummary>
+  readonly agentPrompt: (input: AgentPromptInput) => ControlEffect<{
+    readonly accepted: true
+    readonly agentId: string
+    readonly mode: 'prompt' | 'steer'
+  }>
+  readonly terminalInput: (input: TerminalInput) => ControlEffect<{
+    readonly accepted: true
+    readonly agentId: string
+    readonly queued: true
+    readonly spawned: boolean
+  }>
   readonly listScratchpad: (input?: {
     readonly projectId?: string
   }) => ControlEffect<readonly ScratchpadBlock[]>
@@ -174,6 +193,7 @@ export type KiriControlDependencies = {
     readonly projectId?: string
     readonly includeArchived?: boolean
   }) => readonly SessionSummary[]
+  readonly getAgentDetail: (input: { readonly agentId: string; readonly limit?: number; readonly offset?: number }) => AgentDetail
   readonly startSessionSummary: (input: StartSessionInput) => SessionSummary
   readonly renameSessionSummary: (input: {
     readonly agentId: string
@@ -181,6 +201,10 @@ export type KiriControlDependencies = {
   }) => SessionSummary
   readonly deleteSessionSummary: (input: { readonly agentId: string }) => SessionSummary
   readonly restoreSessionSummary: (input: RestoreSessionInput) => SessionSummary
+  readonly promptAgent: typeof promptAgent
+  readonly steerAgent: typeof steerAgent
+  readonly queueAgentTerminalInput: typeof queueAgentTerminalInput
+  readonly pasteAgentRuntimeTerminal: typeof pasteAgentRuntimeTerminal
   readonly listScratchpadBlocks: (input?: {
     readonly projectId?: string
   }) => readonly ScratchpadBlock[]
@@ -191,8 +215,8 @@ export type KiriControlDependencies = {
   readonly getWorkflowRun: (id: string) => unknown
   readonly validateWorkflow: (input: CreateWorkflowRunInput) => unknown
   readonly createWorkflowRun: (input: CreateWorkflowRunInput) => unknown
-  readonly dispatchWorkflowRun: (input: WorkflowRunOperationInput) => unknown | Promise<unknown>
-  readonly retriggerWorkflowItem: (input: WorkflowItemOperationInput) => unknown | Promise<unknown>
+  readonly dispatchWorkflowRun: (input: WorkflowRunOperationInput) => Promise<unknown>
+  readonly retriggerWorkflowItem: (input: WorkflowItemOperationInput) => Promise<unknown>
   readonly trackWorkflowItem: (input: Pick<WorkflowItemOperationInput, 'itemId'>) => unknown
   readonly untrackWorkflowItem: (input: Pick<WorkflowItemOperationInput, 'itemId'>) => unknown
   readonly archiveWorkflowRun: (input: WorkflowRunOperationInput) => unknown
@@ -208,10 +232,15 @@ const liveKiriControlDependencies: KiriControlDependencies = {
   unhideProjectSummary,
   deleteProjectSummary: deleteProjectSummaryWithRuntimeCleanup,
   listSessionSummaries,
+  getAgentDetail,
   startSessionSummary,
   renameSessionSummary,
   deleteSessionSummary: deleteSessionSummaryWithRuntimeCleanup,
   restoreSessionSummary,
+  promptAgent,
+  steerAgent,
+  queueAgentTerminalInput,
+  pasteAgentRuntimeTerminal,
   listScratchpadBlocks,
   addScratchpadBlockSummary,
   deleteScratchpadBlockSummary,
@@ -281,6 +310,12 @@ export function makeKiriControl(
     },
   )
 
+  const agentDetailEffect = Effect.fn('KiriControl.agentDetail')(
+    function* (input: { readonly agentId: string; readonly limit?: number; readonly offset?: number }) {
+      return yield* fromSync(() => dependencies.getAgentDetail(input))
+    },
+  )
+
   const startSessionEffect = Effect.fn('KiriControl.startSession')(function* (input: StartSessionInput) {
     return yield* fromSync(() => dependencies.startSessionSummary(input))
   })
@@ -298,6 +333,45 @@ export function makeKiriControl(
   const restoreSessionEffect = Effect.fn('KiriControl.restoreSession')(function* (input: RestoreSessionInput) {
     return yield* fromSync(() => dependencies.restoreSessionSummary(input))
   })
+
+  const agentPromptEffect = Effect.fn('KiriControl.agentPrompt')(
+    function* (input: AgentPromptInput) {
+      yield* Effect.tryPromise({
+        try: () => input.mode === 'steer' ? dependencies.steerAgent(input) : dependencies.promptAgent(input),
+        catch: normalizeError,
+      })
+      return {
+        accepted: true as const,
+        agentId: input.agentId,
+        mode: input.mode,
+      }
+    },
+  )
+
+  const terminalInputEffect = Effect.fn('KiriControl.terminalInput')(
+    function* (input: TerminalInput) {
+      let spawned = false
+      yield* fromSync(() =>
+        dependencies.queueAgentTerminalInput({
+          agentId: input.agentId,
+          text: input.text,
+          submit: input.submit,
+        }))
+      if (input.spawn) {
+        const result = yield* Effect.either(Effect.tryPromise({
+          try: () => dependencies.pasteAgentRuntimeTerminal({ agentId: input.agentId }),
+          catch: normalizeError,
+        }))
+        spawned = result._tag === 'Right'
+      }
+      return {
+        accepted: true as const,
+        agentId: input.agentId,
+        queued: true as const,
+        spawned,
+      }
+    },
+  )
 
   const listScratchpad = Effect.fn('KiriControl.listScratchpad')(
     function* (input: { readonly projectId?: string } = {}) {
@@ -390,10 +464,13 @@ export function makeKiriControl(
     unhideProject: unhideProjectEffect,
     deleteProject: deleteProjectEffect,
     listSessions,
+    agentDetail: agentDetailEffect,
     startSession: startSessionEffect,
     renameSession: renameSessionEffect,
     deleteSession: deleteSessionEffect,
     restoreSession: restoreSessionEffect,
+    agentPrompt: agentPromptEffect,
+    terminalInput: terminalInputEffect,
     listScratchpad,
     addScratchpad,
     deleteScratchpad,

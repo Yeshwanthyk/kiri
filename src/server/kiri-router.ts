@@ -3,6 +3,8 @@ import { z } from 'zod'
 import {
   addProjectInputSchema,
   addScratchpadBlockInputSchema,
+  agentDetailInputSchema,
+  agentPromptInputSchema,
   createWorkflowRunInputSchema,
   deleteProjectInputSchema,
   deleteScratchpadBlockInputSchema,
@@ -16,6 +18,7 @@ import {
   restoreSessionInputSchema,
   runtimeKindSchema,
   startSessionInputSchema,
+  terminalInputSchema,
   triggerScratchpadBlockInputSchema,
   unhideProjectInputSchema,
   workflowItemOperationInputSchema,
@@ -126,6 +129,8 @@ async function dispatchReadOperation(
         includeArchived: input.includeArchived,
       })), options)
     }
+    case 'agent.detail':
+      return shapeResult(await run(control.agentDetail(parseParams(agentDetailInputSchema, params))), options)
     case 'scratchpad.list': {
       const input = parseParams(listScratchpadParamsSchema, params)
       return shapeResult(await run(control.listScratchpad({ projectId: input.projectId })), options)
@@ -172,6 +177,12 @@ async function dispatchWriteOperation(
       break
     case 'session.restore':
       result = await run(control.restoreSession(parseParams(restoreSessionInputSchema, params)))
+      break
+    case 'agent.prompt':
+      result = await run(control.agentPrompt(parseParams(agentPromptInputSchema, params)))
+      break
+    case 'terminal.input':
+      result = await run(control.terminalInput(parseParams(terminalInputSchema, params)))
       break
     case 'scratchpad.add':
       result = await run(control.addScratchpad(parseParams(addScratchpadBlockInputSchema, params)))

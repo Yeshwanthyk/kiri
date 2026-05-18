@@ -137,7 +137,7 @@ describe('terminal server', () => {
       }),
       buildTerminalProcessLaunch: () => ({
         command: scriptPath,
-        args: [pending[0]!.text],
+        args: [pending[0]?.text ?? ''],
         cwd: root,
         env: {
           ...process.env,
