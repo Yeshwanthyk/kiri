@@ -15,6 +15,7 @@ yarn.lock
 /dist/
 /.kiri/
 /.aether/
+/.pican/
 /artifacts/
 /api/
 /server/build
