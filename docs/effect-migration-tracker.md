@@ -55,6 +55,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/timeline-format.ts` | pure | Timeline event id/tone/display derivation helpers | explicit-non-migration | not-required | Pure formatting/normalization module shared by readers and writers. |
 | `src/server/db/timeline-writes.ts` | repository | Timeline/message/task/diff write repository over DB connection | migrating | required | Extracted from `db.ts`; direct live/projection/diff persistence tests added and review passed; final status waits for DB service boundary. |
 | `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
+| `src/server/db/workflows.ts` | repository | Workflow run/item/attempt repository over DB connection | migrating | required | Added with durable workflow runs; final status waits for workflow persistence behind the DB service boundary. |
 | `src/server/db/workspace-snapshot.ts` | projection | Workspace snapshot projection over DB connection and provided settings/preferences | migrating | required | Extracted from `db.ts`; direct snapshot test added and review passed; final status waits for workspace service boundary. |
 | `src/server/directory-picker.ts` | process-adapter | typed directory picker service over osascript | migrating | required | Extracted from `workspace.ts`; review/verification pending. |
 | `src/server/diff-refresh.ts` | use-case | terminal diff refresh service command | migrating | required | Typed injectable diff refresh service added; review/verification pending. |
@@ -63,6 +64,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | migrating | required | Effect facade now has injectable dependencies and shared cleanup/trigger seams; final leaf service composition remains. |
 | `src/server/kiri-mcp-runtime.ts` | use-case | MCP runtime glue for Effect execution and context selection | migrating | required | Extracted from `kiri-mcp.ts`; review/verification pending. |
 | `src/server/kiri-mcp.ts` | transport | `transport/mcp.ts` over `KiriControl` app layer | migrating | required | Effect execution/context glue moved to MCP runtime service; tool parity preserved. |
+| `src/server/kiri-router.ts` | use-case | Compact operation router over the `KiriControl` API | migrating | required | Added for agent-first CLI/MCP operation dispatch; final status waits for transport split and service-layer dependency injection. |
 | `src/server/pi-jsonl-file.ts` | projection | Pi JSONL file reader service over pure projection | migrating | required | File IO moved out of pure Pi JSONL projection; final filesystem service injection remains. |
 | `src/server/pi-jsonl.ts` | projection | pure Pi JSONL session projection | explicit-non-migration | not-required | Pure parser/projection module after file IO split. |
 | `src/server/pi-rpc.ts` | runtime-adapter | `runtime/pi/rpc-adapter.ts` scoped process adapter | migrating | required | Prompt completion waiters now cancel on stop; full scoped process/listener lifetime remains. |
@@ -83,6 +85,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/terminal-launch.ts` | process-adapter | terminal launch resolver service | migrating | required | Typed injectable terminal launch service added; review/verification pending. |
 | `src/server/terminal-registry.ts` | runtime-adapter | terminal session registry for PTY/socket state | migrating | required | Extracted from `terminal-server.ts`; review/verification pending. |
 | `src/server/terminal-server.ts` | runtime-adapter | scoped websocket/PTY service over terminal registry | migrating | required | Scoped service boundary and Effect layer added; workspace terminal config consumes the service layer; cleanup compatibility exports remain. |
+| `src/server/workflow-orchestration.ts` | use-case | Durable workflow orchestration over workflow repository, scratchpad, sessions, and terminal paste | migrating | required | Added with workflow runs; final status waits for DB/session/scratchpad/terminal dependencies to be injected services. |
 | `src/server/workspace-service.ts` | use-case | shared workspace service over DB/runtime/preference/terminal use-cases | migrating | required | First service slice added; workspace transport delegates to it while dependency leaf services remain compatibility exports. |
 | `src/server/workspace.ts` | transport | `transport/workspace-functions.ts` over `WorkspaceService` | migrating | required | Server functions now delegate through `WorkspaceService`; final transport split/file move remains. |
 
@@ -605,7 +608,7 @@ Copy this section under `## Migration Records` for each file or inseparable file
   - `pnpm test -- --runInBand tests/server/effect-migration-audit.test.ts` - passed, 30 files and 125 tests
   - `pnpm typecheck` - passed
 - Review subagent summary:
-  - LOG.md second pass: no blockers; migration scope, exact verification, and review artifact requirements confirmed.
+  - migration log second pass: no blockers; migration scope, exact verification, and review artifact requirements confirmed.
   - tracker second pass: no blockers; state pairs, baseline/parity fields, and audit command confirmed.
   - test/package second pass: no blockers; count brittleness fixed.
   - script final pass: no blockers; Map/Set guardrail fixed for exported and typed top-level declarations.

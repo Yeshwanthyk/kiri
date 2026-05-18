@@ -1,24 +1,40 @@
 # kiri
 
-Keyboard-first kanban orchestrator for local AI coding sessions across Pi, Codex, Claude, and terminal panes.
+Keyboard-first local agent control plane for Codex, Claude Code, Pi, and
+OpenCode.
 
-## Run
+Kiri keeps local AI coding sessions organized by project, with persistent
+terminal panes, chat, diffs, scratchpad, workflow runs, and compact CLI/MCP
+controls.
+
+Website: https://kiri-8zk.pages.dev
+
+## Download
+
+The latest macOS Apple Silicon build is published on GitHub Releases:
+
+https://github.com/Yeshwanthyk/kiri/releases
+
+## Features
+
+- Project lanes for grouping local repos and sessions.
+- Keyboard-first navigation for switching projects, tabs, and sessions.
+- Runtime sessions for Codex, Claude Code, Pi, OpenCode, and shell terminals.
+- Persistent terminal panes backed by Kiri-owned PTYs.
+- Chat, terminal, diffs, and scratchpad views for each session.
+- Durable workflow runs for splitting a plan into launchable items.
+- Agent-first CLI and MCP operations for automation.
+
+## Development
 
 ```sh
 pnpm install
 pnpm dev
 ```
 
-For Tailscale access, bind Vite to all interfaces:
+The dev and desktop servers use port `3090`.
 
-```sh
-pnpm dev
-```
-
-The dev and desktop servers use port `3090` and listen on all interfaces, so a
-phone on Tailscale can open `http://<mac-tailnet-name-or-ip>:3090`.
-
-## Verify
+## Verification
 
 ```sh
 pnpm verify
@@ -31,30 +47,33 @@ pnpm typecheck
 pnpm lint
 pnpm effect:audit
 pnpm test
-pnpm verify:knip
 pnpm verify:e2e
 pnpm verify:desktop
 ```
 
-## Projects
+## Desktop Build
+
+```sh
+pnpm install:desktop
+```
+
+This builds the web/server bundles, packages the macOS app, creates the DMG,
+replaces `~/Applications/kiri.app`, and opens the installed app.
+
+## CLI
 
 ```sh
 pnpm kiri:ctl call '{"operation":"project.list","params":{"includeHidden":true}}'
-pnpm kiri:ctl call '{"operation":"project.add","params":{"name":"kiri Orchestrator","cwd":"/path/to/repo","id":"kiri"}}'
-pnpm kiri:ctl call '{"operation":"project.hide","params":{"id":"kiri"}}'
-pnpm kiri:ctl call '{"operation":"project.unhide","params":{"id":"kiri"}}'
-pnpm kiri:ctl call '{"operation":"project.delete","params":{"id":"kiri"}}'
+pnpm kiri:ctl call '{"operation":"project.add","params":{"name":"Project Name","cwd":"/absolute/path","id":"project-id"}}'
+pnpm kiri:ctl call '{"operation":"project.hide","params":{"id":"project-id"}}'
+pnpm kiri:ctl call '{"operation":"project.unhide","params":{"id":"project-id"}}'
+pnpm kiri:ctl call '{"operation":"project.delete","params":{"id":"project-id"}}'
 ```
 
-Adding a project creates a project row with no sessions. Hiding removes a
-project from the board while preserving its sessions and metadata. Deleting a
-project removes kiri metadata for that project; it does not delete the project
+Project deletion removes Kiri metadata only. It does not delete the project
 working directory.
 
 ## Workflows
-
-Workflows are durable Kiri runs for splitting a plan into tracked launch items
-and scratchpad-only notes.
 
 ```sh
 pnpm kiri:ctl call '{"operation":"workflow.create","params":{"projectId":"kiri","title":"Parallel plan","defaults":{"runtime":"pi","model":"openai-codex/gpt-5.5","attachScratchpad":true},"items":[{"id":"impl","action":"launch","title":"Implement","body":"Implement the accepted plan"},{"id":"review","action":"launch","title":"Review","body":"Review the implementation"},{"id":"notes","action":"scratchpad","title":"Notes","body":"Track this note without launching a session"}]}}'
@@ -63,32 +82,11 @@ pnpm kiri:ctl call '{"operation":"workflow.show","params":{"id":"workflow-id"}}'
 pnpm kiri:ctl call '{"operation":"workflow.archive","params":{"id":"workflow-id"}}'
 ```
 
-When the desktop backend is running, CLI/MCP calls route through it and terminal
-workflow items spawn the Kiri-owned runtime terminal and paste the item body.
-If no backend is reachable, the item body stays queued on the session and is
-written when Kiri opens that terminal.
+When the desktop backend is running, workflow dispatch opens Kiri-owned runtime
+terminals and pastes each launch item into the PTY. If the backend is not
+reachable, launch text stays queued until Kiri opens that terminal.
 
-## Settings
+## State
 
-Runtime model lists live in `settings.json`. Start a session from the selected
-project, choose a runtime/model/interface, or keep the runtime default for a
-base session. Pi launches through RPC mode with the configured model list. Codex
-sessions can run through the app-server bridge or terminal resume flow. Claude
-sessions are terminal-only.
-
-## Shape
-
-- TanStack Start app shell.
-- SQLite read model under `~/.kiri/userdata/kiri.sqlite` by default.
-- Runtime surfaces cover Pi, Codex, Claude terminal sessions, shell panes, and MCP/CLI control.
-- Started sessions store the chosen runtime/model/interface; project rows do not own default agent slots.
-- Pi JSONL is parsed as a transcript/read-model source, not the live command channel.
-- Codex app-server notifications and terminal session metadata project into the same read model.
-- Pierre diffs render review artifacts.
-
-## Keyboard
-
-- `Shift+ArrowUp` / `Shift+ArrowDown`: move between projects.
-- `Shift+H/J/K/L`: move between agents in the selected project.
-- `Shift+N`: start a session in the selected project.
-- `Shift+X`: confirm and remove the selected session.
+Kiri stores its local read model under `~/.kiri/userdata/kiri.sqlite` by
+default. Runtime model lists live in `settings.json`.

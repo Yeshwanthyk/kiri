@@ -3,6 +3,15 @@
   "productName": "kiri",
   "private": true,
   "version": "0.1.10",
+  "description": "Keyboard-first local agent control plane for Codex, Claude Code, Pi, and OpenCode.",
+  "homepage": "https://kiri-8zk.pages.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yeshwanthyk/kiri.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Yeshwanthyk/kiri/issues"
+  },
   "main": "src/desktop/main.mjs",
   "sideEffects": false,
   "type": "module",
