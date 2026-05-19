@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.11 - 2026-05-18
+
+- Added Claude Code JSONL session parsing, resolution, and projection hydration so Claude transcripts surface in the agent detail view.
+- Added Claude session JSONL file resolution and tracked the Claude projection migration in the Effect migration tracker.
+- Refreshed the Kiri board polling so externally created sessions appear without a manual reload.
+- Exposed additional Kiri agent control operations through the control router and contracts.
+- Fixed terminal session trigger delivery so scratchpad and launch triggers reliably reach spawned terminals.
+
 ## 0.1.10 - 2026-05-17
 
 - Hardened CI DMG creation against transient `hdiutil` resource-busy failures.
