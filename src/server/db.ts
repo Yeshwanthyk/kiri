@@ -25,6 +25,7 @@ import {
 import {
   applyDatabaseBootstraps,
 } from './db/bootstrap'
+import { hydrateClaudeSession } from './claude-projection'
 import { readAgentDetail } from './db/agent-detail'
 import { openKiriDatabase } from './db/connection'
 import {
@@ -183,6 +184,7 @@ export function getAgentDetail(input: { agentId: string; limit?: number; offset?
   const database = getDb()
   hydratePersistedPiSessions(database)
   const agentId = input.agentId.trim()
+  hydrateClaudeSession(database, agentId)
   const limit = Math.max(1, Math.min(input.limit ?? 500, 500))
   const offset = Math.max(0, Math.min(input.offset ?? 0, 100_000))
   const settings = getSettings()
