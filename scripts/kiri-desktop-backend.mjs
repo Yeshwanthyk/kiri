@@ -22,16 +22,12 @@ const controlInfoPath = resolve(process.env.KIRI_BACKEND_CONTROL_PATH ?? join(st
 
 const serverEntryPath = join(rootDir, 'dist', 'server', 'server.js')
 const staticDir = join(rootDir, 'dist', 'client')
+let appFetchPromise
 
 if (!existsSync(serverEntryPath)) throw new Error(`Built server entry not found: ${serverEntryPath}`)
 if (!existsSync(staticDir)) throw new Error(`Built client directory not found: ${staticDir}`)
 
 process.env.KIRI_WORKFLOW_SPAWN_TERMINALS = '1'
-const serverEntry = await import(pathToFileURL(serverEntryPath).href)
-const appFetch = serverEntry.default?.fetch
-if (typeof appFetch !== 'function') {
-  throw new Error(`Built server entry does not export default.fetch: ${serverEntryPath}`)
-}
 
 const server = serve({
   hostname: host,
@@ -63,6 +59,7 @@ const server = serve({
     if (url.pathname === controlPath) {
       return handleControlRequest(request)
     }
+    const appFetch = await loadAppFetch()
     return appFetch(request)
   },
 })
@@ -84,6 +81,17 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   })
 }
 process.once('exit', cleanupControlInfo)
+
+async function loadAppFetch() {
+  appFetchPromise ??= import(pathToFileURL(serverEntryPath).href).then((serverEntry) => {
+    const appFetch = serverEntry.default?.fetch
+    if (typeof appFetch !== 'function') {
+      throw new Error(`Built server entry does not export default.fetch: ${serverEntryPath}`)
+    }
+    return appFetch
+  })
+  return appFetchPromise
+}
 
 async function checkReadiness() {
   if (!existsSync(settingsPath)) throw new Error(`settings.json not found: ${settingsPath}`)

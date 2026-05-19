@@ -37,6 +37,13 @@ describe('desktop package contract', () => {
     expect(isExecutable(join(process.cwd(), 'resources/bin/kiri-mcp'))).toBe(true)
   })
 
+  it('defers built app-server import until after desktop readiness', () => {
+    const backendScript = readFileSync(join(process.cwd(), 'scripts/kiri-desktop-backend.mjs'), 'utf8')
+
+    expect(backendScript).toContain('async function loadAppFetch()')
+    expect(backendScript).not.toContain('const serverEntry = await import')
+  })
+
   it('keeps built packaged app contents runnable when a desktop package assertion is requested', () => {
     if (process.env.KIRI_ASSERT_PACKAGED_APP !== '1') return
 
