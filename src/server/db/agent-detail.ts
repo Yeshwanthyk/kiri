@@ -86,16 +86,16 @@ export function readAgentDetail(database: DatabaseSync, input: ReadAgentDetailIn
   const totalTimelineRows = z.object({ total: z.number() }).parse(database
     .prepare(
       `
-        SELECT COUNT(*) AS total
-        FROM (
-          SELECT m.id
-          FROM messages m
-          WHERE m.thread_id = ?
-          UNION ALL
-          SELECT e.id
-          FROM timeline_events e
-          WHERE e.thread_id = ?
-        )
+        SELECT
+          (
+            SELECT COUNT(*)
+            FROM messages m
+            WHERE m.thread_id = ?
+          ) + (
+            SELECT COUNT(*)
+            FROM timeline_events e
+            WHERE e.thread_id = ?
+          ) AS total
       `,
     )
     .get(activeThreadId, activeThreadId)).total

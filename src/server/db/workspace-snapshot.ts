@@ -4,7 +4,10 @@ import type {
   ScratchpadBlock,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
-import { workspaceSnapshotSchema } from '~/lib/contracts'
+import {
+  pendingQuestionSchema,
+  workspaceSnapshotSchema,
+} from '~/lib/contracts'
 import type { UiPreferences } from '~/lib/ui-preferences'
 import {
   agentDetailDbRowSchema,
@@ -13,8 +16,8 @@ import {
   projectDbRowSchema,
 } from './schema'
 import {
+  parseAgentRuntimeStateJson,
   readContextUsage,
-  readPendingQuestion,
 } from './runtime-state'
 
 type ReadWorkspaceSnapshotInput = {
@@ -53,6 +56,7 @@ export function readWorkspaceSnapshot(
           a.status,
           a.session_dir AS sessionDir,
           a.session_file AS sessionFile,
+          a.runtime_state_json AS runtimeStateJson,
           a.position,
           a.archived_at AS archivedAt,
           t.id AS threadId,
@@ -118,7 +122,9 @@ export function readWorkspaceSnapshot(
           input.settings,
           contextUsageByAgent.get(agent.id),
         ),
-        pendingQuestion: readPendingQuestion(database, agent.id),
+        pendingQuestion: pendingQuestionSchema.safeParse(
+          parseAgentRuntimeStateJson(agent.runtimeStateJson, agent.id).pendingQuestion,
+        ).data ?? null,
         updatedAt: agent.updatedAt ?? new Date(0).toISOString(),
         isSession: agent.slot.startsWith('session-'),
         messages: [],

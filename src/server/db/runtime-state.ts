@@ -65,9 +65,16 @@ export function getAgentRuntimeState(database: DatabaseSync, agentId: string) {
   const row = database
     .prepare('SELECT runtime_state_json AS runtimeStateJson FROM agent_slots WHERE id = ?')
     .get(agentId) as { runtimeStateJson: string | null } | undefined
-  if (!row?.runtimeStateJson) return {}
+  return parseAgentRuntimeStateJson(row?.runtimeStateJson, agentId)
+}
+
+export function parseAgentRuntimeStateJson(
+  json: string | null | undefined,
+  agentId: string,
+): Record<string, unknown> {
+  if (!json) return {}
   try {
-    const parsed: unknown = JSON.parse(row.runtimeStateJson)
+    const parsed: unknown = JSON.parse(json)
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       return parsed as Record<string, unknown>
     }
