@@ -67,6 +67,7 @@ import {
   type SidebarTab,
 } from './kiri-board/board-types'
 import { pollWorkspaceDuringAction, pollWorkspaceInBackground } from './kiri-board/workspace-polling'
+import { createWorkspaceDedupe } from './kiri-board/workspace-fingerprint'
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const boardScrollRef = React.useRef<HTMLDivElement | null>(null)
@@ -130,8 +131,9 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const refreshWorkspaceRef = React.useRef(refreshWorkspace)
   const activeWorkspaceMutationsRef = React.useRef(0)
   const workspaceActivityEpochRef = React.useRef(0)
+  const workspaceDedupeRef = React.useRef(createWorkspaceDedupe(snapshot))
   const applyWorkspace = React.useCallback((next: WorkspaceSnapshot) => {
-    setWorkspace(next)
+    workspaceDedupeRef.current.apply(next, setWorkspace)
   }, [])
   const beginWorkspaceMutation = React.useCallback(() => {
     activeWorkspaceMutationsRef.current += 1
@@ -394,13 +396,18 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     onPoll?: RefreshAgentDetail,
   ) {
     const endWorkspaceMutation = beginWorkspaceMutation()
+    const gatedOnPoll = onPoll
+      ? async () => {
+          if (workspaceDedupeRef.current.didChange()) await onPoll()
+        }
+      : undefined
     try {
       await pollWorkspaceDuringAction({
         action,
         refreshWorkspace,
         onResult,
         onWorkspace: applyWorkspace,
-        onPoll,
+        onPoll: gatedOnPoll,
       })
     } finally {
       endWorkspaceMutation()
