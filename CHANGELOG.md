@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.12 - 2026-05-19
+
+- Added the agent event stream with per-agent sequences, event contracts, storage, and `agent.events.list` through the control router.
+- Emitted agent events for message create/update, status changes, and diff updates.
+- Fixed Pi projection event dedupe so live replies are not duplicated when final JSONL projections arrive.
+- Relaxed the backend control proxy timeout to 15 seconds and added `KIRI_BACKEND_CONTROL_TIMEOUT_MS` override support.
+
 ## 0.1.11 - 2026-05-18
 
 - Added Claude Code JSONL session parsing, resolution, and projection hydration so Claude transcripts surface in the agent detail view.

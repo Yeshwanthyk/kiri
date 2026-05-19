@@ -33,17 +33,17 @@ type Release = {
 
 const fallbackReleases: readonly Release[] = [
   {
-    tagName: 'v0.1.11',
-    name: 'v0.1.11',
-    htmlUrl: 'https://github.com/Yeshwanthyk/kiri/releases/tag/v0.1.11',
+    tagName: 'v0.1.12',
+    name: 'v0.1.12',
+    htmlUrl: 'https://github.com/Yeshwanthyk/kiri/releases/tag/v0.1.12',
     publishedAt: '2026-05-19T00:00:00Z',
     prerelease: false,
     assets: [
       {
-        name: 'kiri-0.1.11-arm64.dmg',
+        name: 'kiri-0.1.12-arm64.dmg',
         browserDownloadUrl:
-          'https://github.com/Yeshwanthyk/kiri/releases/download/v0.1.11/kiri-0.1.11-arm64.dmg',
-        size: 159_857_409,
+          'https://github.com/Yeshwanthyk/kiri/releases/download/v0.1.12/kiri-0.1.12-arm64.dmg',
+        size: 160_131_257,
       },
     ],
   },

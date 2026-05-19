@@ -2,7 +2,7 @@
   "name": "kiri",
   "productName": "kiri",
   "private": true,
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Keyboard-first local agent control plane for Codex, Claude Code, Pi, and OpenCode.",
   "homepage": "https://kiri-8zk.pages.dev",
   "repository": {
