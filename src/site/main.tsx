@@ -43,7 +43,7 @@ const fallbackReleases: readonly Release[] = [
         name: 'kiri-0.1.12-arm64.dmg',
         browserDownloadUrl:
           'https://github.com/Yeshwanthyk/kiri/releases/download/v0.1.12/kiri-0.1.12-arm64.dmg',
-        size: 160_131_257,
+        size: 161_967_997,
       },
     ],
   },
