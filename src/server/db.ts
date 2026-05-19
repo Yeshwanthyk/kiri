@@ -7,6 +7,7 @@ import type {
   AgentStatus,
   AgentTask,
   AgentDetail,
+  AgentEvent,
   DiffArtifact,
   DeleteSessionInput,
   RestoreSessionInput,
@@ -27,6 +28,7 @@ import {
 } from './db/bootstrap'
 import { hydrateClaudeSession } from './claude-projection'
 import { readAgentDetail } from './db/agent-detail'
+import { listAgentEvents as listAgentEventsFromDb } from './db/agent-events'
 import { openKiriDatabase } from './db/connection'
 import {
   deleteProjectRow,
@@ -233,6 +235,14 @@ export function getAgentDetail(input: { agentId: string; limit?: number; offset?
     })),
     tasks: detail.tasks,
   })
+}
+
+export function listAgentEvents(input: {
+  agentId: string
+  afterSequence?: number
+  limit?: number
+}): AgentEvent[] {
+  return listAgentEventsFromDb(getDb(), input)
 }
 
 function agentRuntime(database: DatabaseSync, agentId: string) {

@@ -10,6 +10,7 @@ import {
   pendingQuestionSchema,
   thinkingLevelSchema,
 } from '~/lib/contracts'
+import { appendAgentEvent } from './agent-events'
 import { agentLaunchConfigSchema } from './schema'
 
 type ContextUsageInput = {
@@ -152,7 +153,18 @@ export function setAgentStatus(
   status: AgentStatus,
 ) {
   const parsed = agentStatusSchema.parse(status)
+  const row = database
+    .prepare('SELECT status FROM agent_slots WHERE id = ?')
+    .get(agentId) as { status: AgentStatus } | undefined
+  const previousStatus = row?.status
   database.prepare('UPDATE agent_slots SET status = ? WHERE id = ?').run(parsed, agentId)
+  if (previousStatus && previousStatus !== parsed) {
+    appendAgentEvent(database, {
+      agentId,
+      type: 'agent.status.changed',
+      payload: { status: parsed, previousStatus },
+    })
+  }
 }
 
 export function upsertAgentContextUsage(

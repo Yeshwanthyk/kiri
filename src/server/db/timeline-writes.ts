@@ -10,6 +10,7 @@ import {
   agentTaskSchema,
   messageRoleSchema,
 } from '~/lib/contracts'
+import { appendAgentEvent } from './agent-events'
 import type { PiSessionProjection } from '../pi-jsonl'
 import type { PiRpcEvent, PiRpcMessage } from '../pi-rpc'
 import { upsertAgentContextUsage } from './runtime-state'
@@ -37,6 +38,7 @@ export function appendUserMessageRow(
     .update(`${input.agentId}\n${timestamp}\n${text}`)
     .digest('hex')
     .slice(0, 16)
+  const id = `user-${input.agentId}-${hash}`
   withTransaction(database, () => {
     database
       .prepare(
@@ -45,7 +47,19 @@ export function appendUserMessageRow(
           VALUES (?, ?, 'user', ?, ?)
         `,
       )
-      .run(`user-${input.agentId}-${hash}`, thread.id, text, timestamp)
+      .run(id, thread.id, text, timestamp)
+    appendAgentEvent(database, {
+      agentId: input.agentId,
+      type: 'agent.message.created',
+      payload: {
+        messageId: id,
+        role: 'user',
+        text,
+        format: 'markdown',
+        final: true,
+      },
+      timestamp,
+    })
     updateThreadSummary(database, thread.id, text, timestamp)
   })
 }
@@ -65,6 +79,7 @@ export function recordRuntimeMessageRow(
 
   const threadId = ensureThreadForAgent(database, input.agentId, undefined)
   const timestamp = input.timestamp ?? new Date().toISOString()
+  const existing = readMessage(database, input.id)
   withTransaction(database, () => {
     database
       .prepare(
@@ -78,6 +93,13 @@ export function recordRuntimeMessageRow(
         `,
       )
       .run(input.id, threadId, input.role, text, timestamp)
+    recordMessageEvent(database, input.agentId, {
+      id: input.id,
+      role: input.role,
+      text,
+      timestamp,
+      existing,
+    })
     updateThreadSummary(database, threadId, input.role === 'assistant' ? text : null, timestamp)
   })
 }
@@ -126,7 +148,15 @@ export function recordRuntimeMessagesInTransaction(
   for (const message of input.messages) {
     const text = message.text.trim()
     if (!text) continue
+    const existing = readMessage(database, message.id)
     insertMessage.run(message.id, threadId, message.role, text, message.timestamp)
+    recordMessageEvent(database, input.agentId, {
+      id: message.id,
+      role: message.role,
+      text,
+      timestamp: message.timestamp,
+      existing,
+    })
   }
   updateThreadSummary(
     database,
@@ -295,7 +325,21 @@ export function recordPiLiveMessages(
 
   withTransaction(database, () => {
     for (const row of rows) {
-      insertMessage.run(row.id, thread.id, row.role, row.text, row.timestamp)
+      const result = insertMessage.run(row.id, thread.id, row.role, row.text, row.timestamp)
+      if (result.changes > 0) {
+        appendAgentEvent(database, {
+          agentId: input.agentId,
+          type: 'agent.message.created',
+          payload: {
+            messageId: row.id,
+            role: row.role,
+            text: row.text,
+            format: 'markdown',
+            final: true,
+          },
+          timestamp: row.timestamp,
+        })
+      }
     }
     const count = database
       .prepare('SELECT COUNT(*) AS count FROM messages WHERE thread_id = ?')
@@ -414,14 +458,25 @@ export function replaceAgentDiffArtifactsRows(
         .update(`${input.agentId}\n${diff.path}\n${diff.patch}`)
         .digest('hex')
         .slice(0, 16)
+      const id = `diff-${input.agentId}-${hash}`
       insert.run(
-        `diff-${input.agentId}-${hash}`,
+        id,
         input.agentId,
         diff.title,
         diff.path,
         diff.patch,
         updatedAt,
       )
+      appendAgentEvent(database, {
+        agentId: input.agentId,
+        type: 'agent.diff.updated',
+        payload: {
+          diffId: id,
+          title: diff.title,
+          path: diff.path,
+        },
+        timestamp: updatedAt,
+      })
     }
   })
 }
@@ -462,6 +517,18 @@ export function hydrateProjectionMessages(
   projection: Pick<PiSessionProjection, 'preview' | 'updatedAt' | 'messages'>,
 ) {
   const threadId = ensureThreadForAgent(database, agentId, projection)
+  const projectedPrefix = `pi-jsonl-${agentId}-`
+  const existingMessages = existingThreadMessages(database, threadId, agentId)
+  const existingById = new Map(existingMessages.map((message) => [message.id, message]))
+  const hadProjectedMessages = existingMessages.some((message) => message.id.startsWith(projectedPrefix))
+  const liveMessageCounts = new Map<string, number>()
+  if (!hadProjectedMessages) {
+    for (const message of existingMessages) {
+      if (message.id.startsWith(projectedPrefix)) continue
+      const key = messageContentKey(message)
+      liveMessageCounts.set(key, (liveMessageCounts.get(key) ?? 0) + 1)
+    }
+  }
   database
     .prepare('DELETE FROM messages WHERE thread_id = ? AND id NOT LIKE ?')
     .run(threadId, `user-${agentId}-%`)
@@ -472,13 +539,23 @@ export function hydrateProjectionMessages(
   `)
   for (const message of projection.messages) {
     if (!message.text.trim()) continue
-    insertMessage.run(
-      jsonlMessageId(agentId, message.id),
+    const id = jsonlMessageId(agentId, message.id)
+    const result = insertMessage.run(
+      id,
       threadId,
       message.role,
       message.text,
       message.timestamp,
     )
+    if (result.changes > 0) {
+      recordMessageEvent(database, agentId, {
+        id,
+        role: message.role,
+        text: message.text,
+        timestamp: message.timestamp,
+        existing: existingById.get(id) ?? consumeLiveProjectionMatch(liveMessageCounts, message),
+      })
+    }
   }
   updateThreadSummary(
     database,
@@ -486,6 +563,74 @@ export function hydrateProjectionMessages(
     projection.preview || projection.messages.at(-1)?.text || null,
     projection.updatedAt ?? projection.messages.at(-1)?.timestamp,
   )
+}
+
+function readMessage(database: DatabaseSync, id: string) {
+  return database
+    .prepare('SELECT role, text FROM messages WHERE id = ?')
+    .get(id) as { role: MessageRole; text: string } | undefined
+}
+
+function existingThreadMessages(
+  database: DatabaseSync,
+  threadId: string,
+  agentId: string,
+) {
+  return database
+    .prepare('SELECT id, role, text FROM messages WHERE thread_id = ? AND id NOT LIKE ?')
+    .all(threadId, `user-${agentId}-%`) as Array<{ id: string; role: MessageRole; text: string }>
+}
+
+function consumeLiveProjectionMatch(
+  counts: Map<string, number>,
+  message: { readonly role: MessageRole; readonly text: string },
+) {
+  const key = messageContentKey(message)
+  const count = counts.get(key) ?? 0
+  if (count <= 0) return undefined
+  if (count === 1) {
+    counts.delete(key)
+  } else {
+    counts.set(key, count - 1)
+  }
+  return {
+    role: message.role,
+    text: message.text,
+  }
+}
+
+function messageContentKey(message: { readonly role: MessageRole; readonly text: string }) {
+  return `${message.role}\0${message.text}`
+}
+
+function recordMessageEvent(
+  database: DatabaseSync,
+  agentId: string,
+  input: {
+    readonly id: string
+    readonly role: MessageRole
+    readonly text: string
+    readonly timestamp: string
+    readonly existing: { readonly role: MessageRole; readonly text: string } | undefined
+  },
+) {
+  const changed = input.existing && (
+    input.existing.role !== input.role ||
+    input.existing.text !== input.text
+  )
+  if (input.existing && !changed) return
+  appendAgentEvent(database, {
+    agentId,
+    type: input.existing ? 'agent.message.updated' : 'agent.message.created',
+    payload: {
+      messageId: input.id,
+      role: input.role,
+      text: input.text,
+      format: 'markdown',
+      final: true,
+    },
+    timestamp: input.timestamp,
+  })
 }
 
 export function replaceAgentTasksForThread(

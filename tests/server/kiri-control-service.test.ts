@@ -218,6 +218,7 @@ function testDependencies(
     unhideProjectSummary: (id) => projectSummary(id),
     deleteProjectSummary: (id) => projectSummary(id),
     listSessionSummaries: () => [sessionSummary('agent-1')],
+    listAgentEvents: () => [],
     getAgentDetail: () => snapshot.projects[0]?.agents[0] ?? (() => {
       throw new Error('Missing test agent')
     })(),

@@ -4,9 +4,11 @@ import type {
   AddScratchpadBlockInput,
   AgentCell,
   AgentDetail,
+  AgentEvent,
   AgentPromptInput,
   CreateWorkflowRunInput,
   KiriSettings,
+  ListAgentEventsInput,
   ListWorkflowRunsInput,
   ScratchpadBlock,
   RestoreSessionInput,
@@ -26,6 +28,7 @@ import {
   getAgentDetail,
   getWorkspaceSnapshot,
   hideProjectSummary,
+  listAgentEvents,
   listScratchpadBlocks,
   listProjectSummaries,
   listSessionSummaries,
@@ -138,6 +141,7 @@ export type KiriControlApi = {
     readonly includeArchived?: boolean
   }) => ControlEffect<readonly SessionSummary[]>
   readonly agentDetail: (input: { readonly agentId: string; readonly limit?: number; readonly offset?: number }) => ControlEffect<AgentDetail>
+  readonly listAgentEvents: (input: ListAgentEventsInput) => ControlEffect<readonly AgentEvent[]>
   readonly startSession: (input: StartSessionInput) => ControlEffect<SessionSummary>
   readonly renameSession: (input: {
     readonly agentId: string
@@ -194,6 +198,7 @@ export type KiriControlDependencies = {
     readonly includeArchived?: boolean
   }) => readonly SessionSummary[]
   readonly getAgentDetail: (input: { readonly agentId: string; readonly limit?: number; readonly offset?: number }) => AgentDetail
+  readonly listAgentEvents: (input: ListAgentEventsInput) => readonly AgentEvent[]
   readonly startSessionSummary: (input: StartSessionInput) => SessionSummary
   readonly renameSessionSummary: (input: {
     readonly agentId: string
@@ -233,6 +238,7 @@ const liveKiriControlDependencies: KiriControlDependencies = {
   deleteProjectSummary: deleteProjectSummaryWithRuntimeCleanup,
   listSessionSummaries,
   getAgentDetail,
+  listAgentEvents,
   startSessionSummary,
   renameSessionSummary,
   deleteSessionSummary: deleteSessionSummaryWithRuntimeCleanup,
@@ -313,6 +319,12 @@ export function makeKiriControl(
   const agentDetailEffect = Effect.fn('KiriControl.agentDetail')(
     function* (input: { readonly agentId: string; readonly limit?: number; readonly offset?: number }) {
       return yield* fromSync(() => dependencies.getAgentDetail(input))
+    },
+  )
+
+  const listAgentEventsEffect = Effect.fn('KiriControl.listAgentEvents')(
+    function* (input: ListAgentEventsInput) {
+      return yield* fromSync(() => dependencies.listAgentEvents(input))
     },
   )
 
@@ -465,6 +477,7 @@ export function makeKiriControl(
     deleteProject: deleteProjectEffect,
     listSessions,
     agentDetail: agentDetailEffect,
+    listAgentEvents: listAgentEventsEffect,
     startSession: startSessionEffect,
     renameSession: renameSessionEffect,
     deleteSession: deleteSessionEffect,

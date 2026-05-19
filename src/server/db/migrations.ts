@@ -171,6 +171,7 @@ export function migrate(database: DatabaseSync) {
   addRuntimeStateColumn(database)
   addAgentArchivedAtColumn(database)
   addAgentInterfaceModeColumn(database)
+  addAgentEventsTable(database)
   normalizeTerminalOnlyInterfaceMode(database)
   repairAgentSlotReferences(database)
   removeLegacyDefaultAgentSlots(database)
@@ -214,6 +215,23 @@ function addAgentInterfaceModeColumn(database: DatabaseSync) {
     .all() as Array<{ name: string }>
   if (columns.some((column) => column.name === 'interface_mode')) return
   database.exec("ALTER TABLE agent_slots ADD COLUMN interface_mode TEXT NOT NULL DEFAULT 'gui'")
+}
+
+function addAgentEventsTable(database: DatabaseSync) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS agent_events (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(agent_id, sequence)
+    );
+
+    CREATE INDEX IF NOT EXISTS agent_events_agent_sequence
+      ON agent_events(agent_id, sequence);
+  `)
 }
 
 function normalizeTerminalOnlyInterfaceMode(database: DatabaseSync) {

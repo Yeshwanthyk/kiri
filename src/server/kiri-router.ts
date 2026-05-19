@@ -4,6 +4,7 @@ import {
   addProjectInputSchema,
   addScratchpadBlockInputSchema,
   agentDetailInputSchema,
+  listAgentEventsInputSchema,
   agentPromptInputSchema,
   createWorkflowRunInputSchema,
   deleteProjectInputSchema,
@@ -131,6 +132,8 @@ async function dispatchReadOperation(
     }
     case 'agent.detail':
       return shapeResult(await run(control.agentDetail(parseParams(agentDetailInputSchema, params))), options)
+    case 'agent.events.list':
+      return shapeResult(await run(control.listAgentEvents(parseParams(listAgentEventsInputSchema, params))), options)
     case 'scratchpad.list': {
       const input = parseParams(listScratchpadParamsSchema, params)
       return shapeResult(await run(control.listScratchpad({ projectId: input.projectId })), options)

@@ -204,6 +204,38 @@ type AgentDetailInput = z.infer<typeof agentDetailInputSchema>
 export const agentDetailSchema = z.lazy(() => agentCellSchema)
 export type AgentDetail = z.infer<typeof agentDetailSchema>
 
+export const agentEventTypes = [
+  'agent.status.changed',
+  'agent.turn.started',
+  'agent.turn.completed',
+  'agent.turn.failed',
+  'agent.message.created',
+  'agent.message.updated',
+  'agent.tool.started',
+  'agent.tool.completed',
+  'agent.diff.updated',
+  'agent.question.requested',
+] as const
+export const agentEventTypeSchema = z.enum(agentEventTypes)
+export type AgentEventType = z.infer<typeof agentEventTypeSchema>
+
+export const agentEventSchema = z.object({
+  id: z.string().trim().min(1),
+  agentId: z.string().trim().min(1),
+  sequence: z.number().int().positive(),
+  type: agentEventTypeSchema,
+  payload: z.record(z.string(), z.unknown()),
+  createdAt: z.string(),
+})
+export type AgentEvent = z.infer<typeof agentEventSchema>
+
+export const listAgentEventsInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  afterSequence: z.number().int().nonnegative().default(0),
+  limit: z.number().int().positive().max(500).default(100),
+})
+export type ListAgentEventsInput = z.infer<typeof listAgentEventsInputSchema>
+
 const runtimeSettingsSchema = z.object({
   models: z.array(z.string().trim().min(1)).min(1),
   defaultModel: z.string().trim().min(1),
@@ -455,6 +487,7 @@ export const kiriReadOperations = [
   'project.list',
   'session.list',
   'agent.detail',
+  'agent.events.list',
   'scratchpad.list',
   'workflow.list',
   'workflow.show',
