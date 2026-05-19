@@ -103,6 +103,27 @@ describe('WorkspaceService', () => {
     })
   })
 
+  it('persists terminal layouts through dependency boundary', async () => {
+    const calls: string[] = []
+    const service = makeWorkspaceService(testDependencies({
+      saveTerminalLayout: (input) => {
+        calls.push(`${input.mode}:${input.agentId ?? input.projectId}:${input.layout.activeTabId}`)
+        return snapshot
+      },
+    }))
+
+    await expect(Effect.runPromise(service.saveTerminalLayout({
+      mode: 'runtime',
+      agentId: 'agent-1',
+      layout: {
+        activeTabId: 'main',
+        tabs: [{ id: 'main', title: 'Agent', activePaneId: 'main', paneIds: ['main'] }],
+      },
+    }))).resolves.toBe(snapshot)
+
+    expect(calls).toEqual(['runtime:agent-1:main'])
+  })
+
   it('returns scratchpad trigger id with the post-trigger snapshot', async () => {
     const calls: string[] = []
     const service = makeWorkspaceService(testDependencies({
@@ -247,6 +268,7 @@ function testDependencies(
       path: '/term',
       token: 'token',
     }),
+    saveTerminalLayout: () => snapshot,
     refreshTerminalSessionDiffs: () => snapshot,
     startSession: () => snapshot,
     addScratchpadBlock: () => snapshot,

@@ -3,8 +3,8 @@
 import { useServerFn } from '@tanstack/react-start'
 import { Columns2, KeyboardOff, Plus } from 'lucide-react'
 import * as React from 'react'
-import type { AgentCell, ProjectRow, TerminalConfig, TerminalMode } from '~/lib/contracts'
-import { terminalConfigQuery } from '~/server/workspace'
+import type { AgentCell, ProjectRow, SaveTerminalLayoutInput, TerminalConfig, TerminalLayout, TerminalMode } from '~/lib/contracts'
+import { saveTerminalLayoutMutation, terminalConfigQuery } from '~/server/workspace'
 import type { ThemeMode } from '~/theme/kiri-themes'
 import {
   chatFontSizes,
@@ -19,7 +19,6 @@ const fallbackCols = 100
 const fallbackRows = 30
 const mainTerminalInstanceId = 'main'
 const maxRenderedHistoryRows = 800
-const initialDebugSnapshot = terminalDebugSnapshot(emptySnapshot(fallbackCols, fallbackRows), null)
 
 type TerminalSnapshot = {
   readonly cols: number
@@ -85,7 +84,14 @@ type TerminalFrame =
   | { readonly type: 'snapshot'; readonly terminalId: string; readonly snapshot: TerminalSnapshot }
   | { readonly type: 'patch'; readonly terminalId: string; readonly patch: TerminalFramePatch }
   | { readonly type: 'status'; readonly terminalId: string; readonly status: string }
+  | { readonly type: 'metric'; readonly terminalId: string; readonly metric: TerminalMetric }
   | { readonly type: 'error'; readonly terminalId?: string | null; readonly message: string }
+
+type TerminalMetric = {
+  readonly name: string
+  readonly value: number
+  readonly unit: string
+}
 
 type TerminalFramePatch = {
   readonly cols: number
@@ -122,7 +128,45 @@ type TerminalDebugSnapshot = {
   readonly resetCount: number
   readonly alternateEnterCount: number
   readonly alternateExitCount: number
+  readonly frameCount: number
+  readonly patchCount: number
+  readonly snapshotCount: number
+  readonly metricCount: number
+  readonly lastFrameType: string
+  readonly lastFrameProcessMs: number
+  readonly lastRenderedRows: number
+  readonly lastMetricName: string
+  readonly lastMetricValue: number
+  readonly lastMetricUnit: string
 }
+
+type TerminalRuntimeMetrics = {
+  readonly frameCount: number
+  readonly patchCount: number
+  readonly snapshotCount: number
+  readonly metricCount: number
+  readonly lastFrameType: string
+  readonly lastFrameProcessMs: number
+  readonly lastRenderedRows: number
+  readonly lastMetricName: string
+  readonly lastMetricValue: number
+  readonly lastMetricUnit: string
+}
+
+const emptyRuntimeMetrics: TerminalRuntimeMetrics = {
+  frameCount: 0,
+  patchCount: 0,
+  snapshotCount: 0,
+  metricCount: 0,
+  lastFrameType: '',
+  lastFrameProcessMs: 0,
+  lastRenderedRows: 0,
+  lastMetricName: '',
+  lastMetricValue: 0,
+  lastMetricUnit: '',
+}
+
+const initialDebugSnapshot = terminalDebugSnapshot(emptySnapshot(fallbackCols, fallbackRows), null)
 
 type GetTerminalConfig = (input: {
   readonly data: {
@@ -130,6 +174,10 @@ type GetTerminalConfig = (input: {
     readonly mode: TerminalMode
   }
 }) => Promise<TerminalConfig>
+
+type SaveTerminalLayout = (input: {
+  readonly data: SaveTerminalLayoutInput
+}) => Promise<unknown>
 
 export function TerminalPanel({
   agent,
@@ -151,15 +199,42 @@ export function TerminalPanel({
   visible: boolean
 }) {
   const getTerminalConfig = useServerFn(terminalConfigQuery) as GetTerminalConfig
-  const [tabs, setTabs] = React.useState<readonly TerminalTabState[]>(() => [initialTerminalTab(labelForMode(mode))])
-  const [activeTabId, setActiveTabId] = React.useState(mainTerminalInstanceId)
+  const saveTerminalLayout = useServerFn(saveTerminalLayoutMutation) as SaveTerminalLayout
+  const saveTerminalLayoutRef = React.useRef(saveTerminalLayout)
+  React.useEffect(() => {
+    saveTerminalLayoutRef.current = saveTerminalLayout
+  }, [saveTerminalLayout])
+  const terminalOwnerKey = mode === 'runtime' ? `runtime:${agent.id}` : `shell:${project.id}`
+  const storedLayout = (mode === 'runtime' ? agent.terminalLayout : project.terminalLayout) ?? null
+  const storedLayoutKey = React.useMemo(() => JSON.stringify(storedLayout), [storedLayout])
+  const persistedLayout = React.useMemo(
+    () => terminalLayoutForMode(mode, agent, project),
+    [mode, storedLayoutKey, terminalOwnerKey],
+  )
+  const persistedLayoutKey = React.useMemo(() => terminalLayoutKey(persistedLayout), [persistedLayout])
+  const [layout, setLayout] = React.useState<TerminalLayout>(() => persistedLayout)
   const [paneStatuses, setPaneStatuses] = React.useState<Readonly<Record<string, string>>>({})
   const [paneDebugSnapshots, setPaneDebugSnapshots] = React.useState<Readonly<Record<string, TerminalDebugSnapshot>>>({})
 
-  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? initialTerminalTab(labelForMode(mode))
+  React.useEffect(() => {
+    setLayout((current) => terminalLayoutKey(current) === persistedLayoutKey ? current : persistedLayout)
+  }, [persistedLayout])
+
+  React.useEffect(() => {
+    if (terminalLayoutKey(layout) === persistedLayoutKey) return
+    const timer = window.setTimeout(() => {
+      const data = mode === 'runtime'
+        ? { mode, agentId: agent.id, layout }
+        : { mode, projectId: project.id, layout }
+      void saveTerminalLayoutRef.current({ data })
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [agent.id, layout, mode, persistedLayoutKey, project.id])
+
+  const activeTab = layout.tabs.find((tab) => tab.id === layout.activeTabId) ?? layout.tabs[0] ?? initialTerminalTab(labelForMode(mode))
 
   const label = mode === 'runtime' ? 'Agent terminal' : 'Shell terminal'
-  const activePaneId = activeTab.paneIds[0] ?? mainTerminalInstanceId
+  const activePaneId = activeTab.activePaneId
   const status = paneStatuses[activePaneId] ?? 'Connecting'
   const debugSnapshot = paneDebugSnapshots[activePaneId] ?? initialDebugSnapshot
   const toggleFocusLabel = `Release terminal focus (${formatTerminalKey(toggleFocusKey)})`
@@ -176,15 +251,35 @@ export function TerminalPanel({
   }, [])
   const addTab = React.useCallback(() => {
     const id = `tab-${Date.now().toString(36)}`
-    setTabs((current) => [...current, { id, title: `Term ${current.length + 1}`, paneIds: [id] }])
-    setActiveTabId(id)
+    setLayout((current) => ({
+      activeTabId: id,
+      tabs: [...current.tabs, { id, title: `Term ${current.tabs.length + 1}`, activePaneId: id, paneIds: [id] }],
+    }))
   }, [])
   const splitPane = React.useCallback(() => {
     const id = `pane-${Date.now().toString(36)}`
-    setTabs((current) => current.map((tab) => tab.id === activeTab.id
-      ? { ...tab, paneIds: [...tab.paneIds, id] }
-      : tab))
+    setLayout((current) => ({
+      ...current,
+      tabs: current.tabs.map((tab) => tab.id === activeTab.id
+        ? { ...tab, activePaneId: id, paneIds: [...tab.paneIds, id] }
+        : tab),
+    }))
   }, [activeTab.id])
+  const setActiveTabId = React.useCallback((tabId: string) => {
+    setLayout((current) => current.activeTabId === tabId ? current : { ...current, activeTabId: tabId })
+  }, [])
+  const setActivePaneId = React.useCallback((paneId: string) => {
+    setLayout((current) => {
+      const active = current.tabs.find((tab) => tab.id === current.activeTabId)
+      if (active?.activePaneId === paneId) return current
+      return {
+        ...current,
+        tabs: current.tabs.map((tab) => tab.id === current.activeTabId
+          ? { ...tab, activePaneId: paneId }
+          : tab),
+      }
+    })
+  }, [])
 
   return (
     <section
@@ -199,7 +294,19 @@ export function TerminalPanel({
       data-terminal-reset-count={debugSnapshot.resetCount}
       data-terminal-alternate-enter-count={debugSnapshot.alternateEnterCount}
       data-terminal-alternate-exit-count={debugSnapshot.alternateExitCount}
+      data-terminal-frame-count={debugSnapshot.frameCount}
+      data-terminal-patch-count={debugSnapshot.patchCount}
+      data-terminal-snapshot-count={debugSnapshot.snapshotCount}
+      data-terminal-metric-count={debugSnapshot.metricCount}
+      data-terminal-last-frame-type={debugSnapshot.lastFrameType}
+      data-terminal-last-frame-process-ms={debugSnapshot.lastFrameProcessMs.toFixed(3)}
+      data-terminal-last-rendered-rows={debugSnapshot.lastRenderedRows}
+      data-terminal-last-metric-name={debugSnapshot.lastMetricName}
+      data-terminal-last-metric-value={debugSnapshot.lastMetricValue}
+      data-terminal-last-metric-unit={debugSnapshot.lastMetricUnit}
       data-terminal-pane-count={activeTab.paneIds.length}
+      data-terminal-active-tab-id={activeTab.id}
+      data-terminal-active-pane-id={activePaneId}
       data-testid={visible ? 'terminal-panel' : undefined}
       hidden={!visible}
     >
@@ -228,7 +335,7 @@ export function TerminalPanel({
         </div>
       </div>
       <div className="terminal-tabs" role="tablist" aria-label={`${label} tabs`}>
-        {tabs.map((tab) => (
+        {layout.tabs.map((tab) => (
           <button
             key={tab.id}
             type="button"
@@ -249,12 +356,14 @@ export function TerminalPanel({
           <TerminalPane
             key={`${agent.id}-${mode}-${paneId}`}
             agent={agent}
+            active={paneId === activePaneId}
             focusRequest={focusRequest}
             getTerminalConfig={getTerminalConfig}
             instanceId={paneId}
             label={label}
             mode={mode}
             onDebugChange={handlePaneDebugChange}
+            onFocusPane={setActivePaneId}
             onStatusChange={handlePaneStatusChange}
             project={project}
             toggleFocusKey={toggleFocusKey}
@@ -268,9 +377,10 @@ export function TerminalPanel({
 }
 
 type TerminalTabState = {
-  readonly id: string
-  readonly title: string
-  readonly paneIds: readonly string[]
+  id: string
+  title: string
+  activePaneId: string
+  paneIds: string[]
 }
 
 function labelForMode(mode: TerminalMode) {
@@ -281,18 +391,59 @@ function initialTerminalTab(title: string): TerminalTabState {
   return {
     id: mainTerminalInstanceId,
     title,
+    activePaneId: mainTerminalInstanceId,
     paneIds: [mainTerminalInstanceId],
   }
 }
 
+function terminalLayoutForMode(
+  mode: TerminalMode,
+  agent: AgentCell,
+  project: ProjectRow,
+): TerminalLayout {
+  return normalizeTerminalLayout(
+    (mode === 'runtime' ? agent.terminalLayout : project.terminalLayout) ?? null,
+    labelForMode(mode),
+  )
+}
+
+function normalizeTerminalLayout(
+  layout: TerminalLayout | null,
+  title: string,
+): TerminalLayout {
+  if (!layout || layout.tabs.length === 0) {
+    return { activeTabId: mainTerminalInstanceId, tabs: [initialTerminalTab(title)] }
+  }
+  const tabs = layout.tabs.map((tab, index) => {
+    const paneIds = tab.paneIds.length > 0 ? [...new Set(tab.paneIds)] : [tab.id]
+    const activePaneId = paneIds.includes(tab.activePaneId) ? tab.activePaneId : paneIds[0] ?? tab.id
+    return {
+      id: tab.id,
+      title: tab.title || `Term ${index + 1}`,
+      activePaneId,
+      paneIds,
+    }
+  })
+  const activeTabId = tabs.some((tab) => tab.id === layout.activeTabId)
+    ? layout.activeTabId
+    : tabs[0]?.id ?? mainTerminalInstanceId
+  return { activeTabId, tabs }
+}
+
+function terminalLayoutKey(layout: TerminalLayout) {
+  return JSON.stringify(layout)
+}
+
 function TerminalPane({
   agent,
+  active,
   focusRequest,
   getTerminalConfig,
   instanceId,
   label,
   mode,
   onDebugChange,
+  onFocusPane,
   onStatusChange,
   project,
   toggleFocusKey,
@@ -300,12 +451,14 @@ function TerminalPane({
   visible,
 }: {
   readonly agent: AgentCell
+  readonly active: boolean
   readonly focusRequest: number
   readonly getTerminalConfig: GetTerminalConfig
   readonly instanceId: string
   readonly label: string
   readonly mode: TerminalMode
   readonly onDebugChange: (paneId: string, debug: TerminalDebugSnapshot) => void
+  readonly onFocusPane: (paneId: string) => void
   readonly onStatusChange: (paneId: string, status: string) => void
   readonly project: ProjectRow
   readonly toggleFocusKey: string
@@ -322,7 +475,8 @@ function TerminalPane({
   const [status, setStatus] = React.useState('Connecting')
   const [transcript, setTranscript] = React.useState<string | null>(null)
   const [snapshot, setSnapshot] = React.useState<TerminalSnapshot>(() => emptySnapshot(fallbackCols, fallbackRows))
-  const debugSnapshot = terminalDebugSnapshot(snapshot, transcript)
+  const [metrics, setMetrics] = React.useState<TerminalRuntimeMetrics>(emptyRuntimeMetrics)
+  const debugSnapshot = terminalDebugSnapshot(snapshot, transcript, metrics)
 
   React.useEffect(() => {
     onStatusChange(instanceId, status)
@@ -360,6 +514,7 @@ function TerminalPane({
     transcriptEnabledRef.current = window.localStorage.getItem('kiri:terminal-transcript') === '1'
     setTranscript(transcriptEnabledRef.current ? '' : null)
     setSnapshot(emptySnapshot(fallbackCols, fallbackRows))
+    setMetrics(emptyRuntimeMetrics)
     setStatus('Loading')
     lineBufferRef.current = ''
 
@@ -383,11 +538,13 @@ function TerminalPane({
         }
         socket.onmessage = (event) => {
           if (typeof event.data !== 'string') return
+          const startedAt = performance.now()
           const frames = parseTerminalFrames(event.data, lineBufferRef)
           appendTranscript(setTranscript, transcriptEnabledRef.current, terminalTranscriptText(frames))
           for (const frame of frames) {
             applyFrame(frame, setSnapshot, setStatus)
           }
+          recordTerminalFrames(setMetrics, frames, performance.now() - startedAt)
         }
         socket.onclose = () => {
           if (!disposed) {
@@ -437,6 +594,18 @@ function TerminalPane({
       data-terminal-reset-count={debugSnapshot.resetCount}
       data-terminal-alternate-enter-count={debugSnapshot.alternateEnterCount}
       data-terminal-alternate-exit-count={debugSnapshot.alternateExitCount}
+      data-terminal-frame-count={debugSnapshot.frameCount}
+      data-terminal-patch-count={debugSnapshot.patchCount}
+      data-terminal-snapshot-count={debugSnapshot.snapshotCount}
+      data-terminal-metric-count={debugSnapshot.metricCount}
+      data-terminal-last-frame-type={debugSnapshot.lastFrameType}
+      data-terminal-last-frame-process-ms={debugSnapshot.lastFrameProcessMs.toFixed(3)}
+      data-terminal-last-rendered-rows={debugSnapshot.lastRenderedRows}
+      data-terminal-last-metric-name={debugSnapshot.lastMetricName}
+      data-terminal-last-metric-value={debugSnapshot.lastMetricValue}
+      data-terminal-last-metric-unit={debugSnapshot.lastMetricUnit}
+      data-terminal-active={active ? 'true' : 'false'}
+      data-testid={visible ? 'terminal-pane' : undefined}
     >
       <div className="terminal-pane-status">{status}</div>
       <div
@@ -451,6 +620,7 @@ function TerminalPane({
           fontFamily: typographyOptions.fontFamily,
         }}
         onKeyDown={(event) => {
+          onFocusPane(instanceId)
           if (isTerminalToggleFocusEvent(event, toggleFocusKey)) {
             hostRef.current?.blur()
             event.preventDefault()
@@ -464,12 +634,15 @@ function TerminalPane({
           sendInput(socketRef.current, data)
         }}
         onPaste={(event) => {
+          onFocusPane(instanceId)
           const text = event.clipboardData.getData('text')
           if (!text) return
           event.preventDefault()
           event.stopPropagation()
           sendPaste(socketRef.current, text, false)
         }}
+        onFocus={() => onFocusPane(instanceId)}
+        onClick={() => onFocusPane(instanceId)}
       >
         <TerminalRows snapshot={snapshot} />
       </div>
@@ -487,13 +660,14 @@ function TerminalPane({
 }
 
 function TerminalRows({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
+  const rows = React.useMemo(() => renderedTerminalRows(snapshot), [snapshot])
   return (
     <div
       className="terminal-screen"
       data-cols={snapshot.cols}
       data-rows={snapshot.rows}
     >
-      {renderedTerminalRows(snapshot).map(({ key, row, screenRow }) => (
+      {rows.map(({ key, row, screenRow }) => (
         <div
           key={key}
           className="terminal-row"
@@ -521,13 +695,17 @@ function TerminalRows({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
   )
 }
 
+export function TerminalRowsForTests({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
+  return <TerminalRows snapshot={snapshot} />
+}
+
 function renderedTerminalRows(snapshot: TerminalSnapshot) {
   return [
-    ...snapshot.historyRows.map((historyRow) => ({
+    ...snapshot.historyRows.slice(-maxRenderedHistoryRows).map((historyRow) => ({
       key: `history-${historyRow.id}`,
       row: historyRow.row,
       screenRow: null,
-    })).slice(-maxRenderedHistoryRows),
+    })),
     ...snapshot.rowsData.map((row) => ({
       key: `screen-${row.row}`,
       row,
@@ -599,12 +777,44 @@ function applyFrame(
     setStatus(frame.status === 'running' ? 'Connected' : frame.status)
     return
   }
+  if (frame.type === 'metric') return
   if (frame.type === 'error') setStatus(frame.message)
+}
+
+function recordTerminalFrames(
+  setMetrics: React.Dispatch<React.SetStateAction<TerminalRuntimeMetrics>>,
+  frames: readonly TerminalFrame[],
+  frameProcessMs: number,
+) {
+  if (frames.length === 0) return
+  const lastFrame = frames.at(-1)
+  const lastMetric = [...frames].reverse()
+    .find((frame): frame is Extract<TerminalFrame, { readonly type: 'metric' }> => frame.type === 'metric')
+  const renderedRows = frames.reduce((count, frame) => {
+    if (frame.type === 'snapshot') return count + frame.snapshot.rowsData.length + frame.snapshot.historyRows.length
+    if (frame.type === 'patch') {
+      return count + frame.patch.ops.filter((op) => op.op === 'replaceRow' || op.op === 'replaceCells').length
+    }
+    return count
+  }, 0)
+  setMetrics((current) => ({
+    frameCount: current.frameCount + frames.length,
+    patchCount: current.patchCount + frames.filter((frame) => frame.type === 'patch').length,
+    snapshotCount: current.snapshotCount + frames.filter((frame) => frame.type === 'snapshot').length,
+    metricCount: current.metricCount + frames.filter((frame) => frame.type === 'metric').length,
+    lastFrameType: lastFrame?.type ?? current.lastFrameType,
+    lastFrameProcessMs: Math.round(frameProcessMs * 1000) / 1000,
+    lastRenderedRows: renderedRows,
+    lastMetricName: lastMetric?.metric.name ?? current.lastMetricName,
+    lastMetricValue: lastMetric?.metric.value ?? current.lastMetricValue,
+    lastMetricUnit: lastMetric?.metric.unit ?? current.lastMetricUnit,
+  }))
 }
 
 function terminalDebugSnapshot(
   snapshot: TerminalSnapshot,
   transcript: string | null,
+  metrics: TerminalRuntimeMetrics = emptyRuntimeMetrics,
 ): TerminalDebugSnapshot {
   return {
     bufferType: snapshot.bufferKind === 'alternate' ? 'alternate' : 'normal',
@@ -616,6 +826,16 @@ function terminalDebugSnapshot(
     resetCount: 0,
     alternateEnterCount: snapshot.bufferKind === 'alternate' ? 1 : 0,
     alternateExitCount: 0,
+    frameCount: metrics.frameCount,
+    patchCount: metrics.patchCount,
+    snapshotCount: metrics.snapshotCount,
+    metricCount: metrics.metricCount,
+    lastFrameType: metrics.lastFrameType,
+    lastFrameProcessMs: metrics.lastFrameProcessMs,
+    lastRenderedRows: metrics.lastRenderedRows,
+    lastMetricName: metrics.lastMetricName,
+    lastMetricValue: metrics.lastMetricValue,
+    lastMetricUnit: metrics.lastMetricUnit,
   }
 }
 
@@ -632,7 +852,17 @@ function terminalDebugSnapshotsEqual(
     left.clearScrollbackCount === right.clearScrollbackCount &&
     left.resetCount === right.resetCount &&
     left.alternateEnterCount === right.alternateEnterCount &&
-    left.alternateExitCount === right.alternateExitCount
+    left.alternateExitCount === right.alternateExitCount &&
+    left.frameCount === right.frameCount &&
+    left.patchCount === right.patchCount &&
+    left.snapshotCount === right.snapshotCount &&
+    left.metricCount === right.metricCount &&
+    left.lastFrameType === right.lastFrameType &&
+    left.lastFrameProcessMs === right.lastFrameProcessMs &&
+    left.lastRenderedRows === right.lastRenderedRows &&
+    left.lastMetricName === right.lastMetricName &&
+    left.lastMetricValue === right.lastMetricValue &&
+    left.lastMetricUnit === right.lastMetricUnit
 }
 
 function applyPatch(snapshot: TerminalSnapshot, patch: TerminalFramePatch): TerminalSnapshot {
@@ -722,6 +952,7 @@ function terminalTranscriptText(frames: readonly TerminalFrame[]) {
       .filter(Boolean)
       .join('\n')
     if (frame.type === 'status') return frame.status === 'running' ? '' : `[${frame.status}]`
+    if (frame.type === 'metric') return ''
     return `[error] ${frame.message}`
   }).filter(Boolean).join('\n')
 }
@@ -835,15 +1066,58 @@ function replaceRow(rows: readonly TerminalRow[], row: TerminalRow) {
 function replaceCells(
   rows: readonly TerminalRow[],
   rowIndex: number,
-  _col: number,
+  col: number,
   runs: readonly CellRun[],
 ) {
   const existing = rows[rowIndex] ?? emptyRow(rowIndex)
+  const cells = expandRunsToCells(existing.runs)
+  const replacement = expandRunsToCells(runs)
+  while (cells.length < col) cells.push({ text: ' ', style: {} })
+  cells.splice(col, replacement.length, ...replacement)
+  const nextRuns = coalesceCells(cells)
   return replaceRow(rows, {
     ...existing,
-    runs,
-    fingerprint: runFingerprint(runs),
+    runs: nextRuns,
+    fingerprint: runFingerprint(nextRuns),
   })
+}
+
+type RenderCell = {
+  readonly text: string
+  readonly style: TerminalCellStyle
+}
+
+function expandRunsToCells(runs: readonly CellRun[]) {
+  const cells: RenderCell[] = []
+  for (const run of runs) {
+    const chars = Array.from(run.text)
+    const width = Math.max(run.width, chars.length)
+    for (let index = 0; index < width; index += 1) {
+      cells.push({ text: chars[index] ?? ' ', style: run.style })
+    }
+  }
+  return cells
+}
+
+function coalesceCells(cells: readonly RenderCell[]) {
+  const runs: CellRun[] = []
+  for (const cell of cells) {
+    const previous = runs.at(-1)
+    if (previous && terminalStyleKey(previous.style) === terminalStyleKey(cell.style)) {
+      runs[runs.length - 1] = {
+        ...previous,
+        text: `${previous.text}${cell.text}`,
+        width: previous.width + 1,
+      }
+      continue
+    }
+    runs.push({ text: cell.text, width: 1, style: cell.style })
+  }
+  return runs
+}
+
+function terminalStyleKey(style: TerminalCellStyle) {
+  return JSON.stringify(style)
 }
 
 function runFingerprint(runs: readonly CellRun[]) {

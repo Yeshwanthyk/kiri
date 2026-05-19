@@ -182,6 +182,32 @@ describe('terminal registry', () => {
     expect(attached.send).toHaveBeenCalledWith('fghijklm')
   })
 
+  it('broadcasts metric frames without storing them in replay', () => {
+    const registry = makeTerminalRegistry({
+      maxReplayBytes: 1000,
+      idleKillMs: 100,
+      socketOpenState: 1,
+    })
+    const session = registry.register({
+      key: 'agent-1:runtime:main',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: proc(),
+      initialBuffer: '',
+    })
+    const attached = socket(1)
+    registry.attach(session, attached)
+    const metric = '{"type":"metric","terminalId":"term","metric":{"name":"terminal.pty.read_bytes","value":10,"unit":"bytes"}}\n'
+    const patch = '{"type":"patch","terminalId":"term","patch":{"ops":[]}}\n'
+
+    registry.append(session, metric + patch)
+    registry.broadcast(session, metric + patch)
+
+    expect(session.buffer).toBe(patch)
+    expect(attached.send).toHaveBeenCalledWith(metric + patch)
+  })
+
   it('kills idle sessions after the last socket detaches and cancels idle kill on reattach', () => {
     const timers: Array<() => void> = []
     const activeTimers = new Set<ReturnType<typeof setTimeout>>()

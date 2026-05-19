@@ -168,7 +168,7 @@ pub enum TerminalSignal {
     Kill,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -193,8 +193,20 @@ pub enum TerminalServerFrame {
         pid: Option<u32>,
         exit_code: Option<i32>,
     },
+    Metric {
+        terminal_id: TerminalId,
+        metric: TerminalMetric,
+    },
     Error {
         terminal_id: Option<TerminalId>,
         message: String,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalMetric {
+    pub name: String,
+    pub value: f64,
+    pub unit: String,
 }

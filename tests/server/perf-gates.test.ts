@@ -10,6 +10,7 @@ const perfOutputSchema = z.object({
   detailJsonBytes: z.number(),
   snapshotMs: z.number(),
   detailMs: z.number(),
+  heapUsedDeltaMb: z.number(),
   rssDeltaMb: z.number(),
 })
 
@@ -21,6 +22,20 @@ const clientRenderPerfOutputSchema = z.object({
   renderedDiffFiles: z.number(),
   renderedSelectedDiffPaths: z.number(),
   renderedDiffBodyLines: z.number(),
+})
+
+const terminalRenderPerfOutputSchema = z.object({
+  ok: z.literal(true),
+  patches: z.number(),
+  renderMs: z.number(),
+  avgRenderMsPerPatch: z.number(),
+  renderedRows: z.number(),
+  renderedRunSpans: z.number(),
+  htmlBytes: z.number(),
+  finalRows: z.number(),
+  finalScreenSeq: z.number(),
+  heapUsedDeltaMb: z.number(),
+  rssDeltaMb: z.number(),
 })
 
 describe('perf gates', () => {
@@ -43,5 +58,18 @@ describe('perf gates', () => {
     expect(result.renderedDiffFiles).toBeLessThanOrEqual(1)
     expect(result.renderedSelectedDiffPaths).toBeGreaterThanOrEqual(1)
     expect(result.renderedDiffBodyLines).toBeGreaterThanOrEqual(2)
+  }, 20_000)
+
+  it('keeps terminal patch application bounded', () => {
+    const result = runTsxJson(
+      'tests/perf/run-terminal-render-perf.ts',
+      (output) => terminalRenderPerfOutputSchema.parse(output),
+    )
+    expect(result.patches).toBe(2_000)
+    expect(result.finalRows).toBe(30)
+    expect(result.finalScreenSeq).toBe(2_000)
+    expect(result.renderMs).toBeLessThan(1_000)
+    expect(result.avgRenderMsPerPatch).toBeLessThan(1)
+    expect(result.renderedRunSpans).toBeGreaterThanOrEqual(result.patches)
   }, 20_000)
 })

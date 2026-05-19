@@ -12,6 +12,7 @@ import type {
   DeleteSessionInput,
   RestoreSessionInput,
   ScratchpadBlock,
+  SaveTerminalLayoutInput,
   StartSessionInput,
   ReorderProjectsInput,
   TimelineEventTone,
@@ -81,6 +82,11 @@ import {
   takeAgentTerminalInputs as takeAgentTerminalInputsFromDb,
   upsertAgentContextUsage,
 } from './db/runtime-state'
+import {
+  readAgentRuntimeTerminalLayout,
+  readProjectShellTerminalLayout,
+  upsertTerminalLayout,
+} from './db/terminal-layout'
 import {
   appendUserMessageRow,
   recordAgentInfoEventRow,
@@ -519,6 +525,19 @@ export function requeueAgentTerminalInputs(
   inputs: ReturnType<typeof takeAgentTerminalInputsFromDb>,
 ) {
   requeueAgentTerminalInputsInDb(getDb(), agentId, inputs)
+}
+
+export function saveTerminalLayout(input: SaveTerminalLayoutInput) {
+  upsertTerminalLayout(getDb(), input)
+  return getWorkspaceSnapshot()
+}
+
+export function getProjectShellTerminalLayout(projectId: string) {
+  return readProjectShellTerminalLayout(getDb(), projectId)
+}
+
+export function getAgentRuntimeTerminalLayout(agentId: string) {
+  return readAgentRuntimeTerminalLayout(getDb(), agentId)
 }
 
 export function clearAgentRuntimeState(agentId: string) {

@@ -19,6 +19,10 @@ import {
   parseAgentRuntimeStateJson,
   readContextUsage,
 } from './runtime-state'
+import {
+  readAgentRuntimeTerminalLayouts,
+  readProjectShellTerminalLayouts,
+} from './terminal-layout'
 
 type ReadWorkspaceSnapshotInput = {
   readonly settings: KiriSettings
@@ -95,6 +99,12 @@ export function readWorkspaceSnapshot(
   const contextUsageByAgent = new Map(
     contextUsages.map((usage) => [usage.agentId, usage]),
   )
+  const shellLayoutByProject = new Map(
+    readProjectShellTerminalLayouts(database).map((layout) => [layout.ownerId, layout.layout]),
+  )
+  const runtimeLayoutByAgent = new Map(
+    readAgentRuntimeTerminalLayouts(database).map((layout) => [layout.ownerId, layout.layout]),
+  )
   const activeAgentsByProject = groupBy(
     agents.filter((agent) => !agent.archivedAt),
     (agent) => agent.projectId,
@@ -102,6 +112,7 @@ export function readWorkspaceSnapshot(
 
   const snapshotProjectRows = projects.map((project) => ({
     ...project,
+    terminalLayout: shellLayoutByProject.get(project.id) ?? null,
     agents: (activeAgentsByProject.get(project.id) ?? []).map((agent) => {
       return {
         id: agent.id,
@@ -132,6 +143,7 @@ export function readWorkspaceSnapshot(
         timeline: [],
         diffs: [],
         tasks: [],
+        terminalLayout: runtimeLayoutByAgent.get(agent.id) ?? null,
       }
     }),
   }))

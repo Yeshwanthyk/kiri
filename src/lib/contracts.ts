@@ -35,6 +35,61 @@ const terminalModes = ['runtime', 'shell'] as const
 export const terminalModeSchema = z.enum(terminalModes)
 export type TerminalMode = z.infer<typeof terminalModeSchema>
 
+export const terminalPaneIdSchema = z.string().trim().min(1).max(120)
+export const terminalTabIdSchema = z.string().trim().min(1).max(120)
+
+export const terminalTabLayoutSchema = z.object({
+  id: terminalTabIdSchema,
+  title: z.string().trim().min(1).max(80),
+  activePaneId: terminalPaneIdSchema,
+  paneIds: z.array(terminalPaneIdSchema).min(1).max(8),
+}).superRefine((tab, context) => {
+  if (!tab.paneIds.includes(tab.activePaneId)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'activePaneId must belong to paneIds',
+      path: ['activePaneId'],
+    })
+  }
+})
+export type TerminalTabLayout = z.infer<typeof terminalTabLayoutSchema>
+
+export const terminalLayoutSchema = z.object({
+  activeTabId: terminalTabIdSchema,
+  tabs: z.array(terminalTabLayoutSchema).min(1).max(12),
+}).superRefine((layout, context) => {
+  if (!layout.tabs.some((tab) => tab.id === layout.activeTabId)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'activeTabId must belong to tabs',
+      path: ['activeTabId'],
+    })
+  }
+  const tabIds = new Set<string>()
+  const paneIds = new Set<string>()
+  layout.tabs.forEach((tab, tabIndex) => {
+    if (tabIds.has(tab.id)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'tab ids must be unique',
+        path: ['tabs', tabIndex, 'id'],
+      })
+    }
+    tabIds.add(tab.id)
+    tab.paneIds.forEach((paneId, paneIndex) => {
+      if (paneIds.has(paneId)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'pane ids must be unique across tabs',
+          path: ['tabs', tabIndex, 'paneIds', paneIndex],
+        })
+      }
+      paneIds.add(paneId)
+    })
+  })
+})
+export type TerminalLayout = z.infer<typeof terminalLayoutSchema>
+
 export const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
 export const thinkingLevelSchema = z.enum(thinkingLevels)
 export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>
@@ -175,6 +230,7 @@ const agentCellSchema = z.object({
   timelinePage: agentDetailPageSchema.optional(),
   diffs: z.array(diffArtifactSchema),
   tasks: z.array(agentTaskSchema).default([]),
+  terminalLayout: terminalLayoutSchema.nullable().optional(),
 })
 export type AgentCell = z.infer<typeof agentCellSchema>
 
@@ -264,6 +320,7 @@ const projectRowSchema = z.object({
   cwd: z.string(),
   position: z.number().int().nonnegative(),
   hiddenAt: z.string().nullable(),
+  terminalLayout: terminalLayoutSchema.nullable().optional(),
   agents: z.array(agentCellSchema),
 })
 export type ProjectRow = z.infer<typeof projectRowSchema>
@@ -405,6 +462,30 @@ export const terminalConfigInputSchema = z.object({
   mode: terminalModeSchema.default('shell'),
 })
 type TerminalConfigInput = z.infer<typeof terminalConfigInputSchema>
+
+export const saveTerminalLayoutInputSchema = z.object({
+  mode: terminalModeSchema,
+  agentId: z.string().trim().min(1).optional(),
+  projectId: z.string().trim().min(1).optional(),
+  layout: terminalLayoutSchema,
+}).superRefine((input, context) => {
+  if (input.mode === 'runtime') {
+    if (input.agentId && !input.projectId) return
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'runtime terminal layouts require agentId only',
+      path: ['agentId'],
+    })
+    return
+  }
+  if (input.projectId && !input.agentId) return
+  context.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'shell terminal layouts require projectId only',
+    path: ['projectId'],
+  })
+})
+export type SaveTerminalLayoutInput = z.infer<typeof saveTerminalLayoutInputSchema>
 
 export const refreshTerminalDiffsInputSchema = z.object({
   agentId: z.string().trim().min(1),

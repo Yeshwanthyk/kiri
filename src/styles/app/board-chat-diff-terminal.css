@@ -2254,6 +2254,10 @@
   border-bottom: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
 }
 
+.terminal-pane[data-terminal-active="true"] .terminal-host {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 45%, transparent);
+}
+
 .terminal-pane-status {
   position: absolute;
   z-index: 1;

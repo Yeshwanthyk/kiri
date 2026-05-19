@@ -138,9 +138,10 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   }
 
   function append(session: TerminalRegistrySession, data: string) {
-    if (!data) return
-    session.replayChunks.push(data)
-    session.replayBytes += data.length
+    const replayData = replayableTerminalData(data)
+    if (!replayData) return
+    session.replayChunks.push(replayData)
+    session.replayBytes += replayData.length
     trimReplay(session)
     session.buffer = session.replayChunks.join('')
   }
@@ -226,4 +227,28 @@ function lineSafeTail(rawTail: string) {
 function terminalInstanceSuffix(instanceId: string) {
   const normalized = instanceId.trim().replace(/[^a-zA-Z0-9_.:-]/g, '-')
   return normalized || 'main'
+}
+
+function replayableTerminalData(data: string) {
+  return data
+    .split(/(?<=\n)/)
+    .filter((chunk) => !isTerminalMetricFrame(chunk))
+    .join('')
+}
+
+function isTerminalMetricFrame(chunk: string) {
+  const line = chunk.endsWith('\n') ? chunk.slice(0, -1) : chunk
+  if (!line.trim()) return false
+  try {
+    const parsed: unknown = JSON.parse(line)
+    return Boolean(
+      parsed &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      'type' in parsed &&
+      parsed.type === 'metric',
+    )
+  } catch {
+    return false
+  }
 }

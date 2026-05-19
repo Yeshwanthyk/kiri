@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { rmSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -73,6 +73,7 @@ function resetE2eDatabase(database: DatabaseSync) {
     'threads',
     'deleted_sessions',
     'scratchpad_blocks',
+    'terminal_layouts',
     'agent_slots',
     'projects',
   ]
@@ -107,6 +108,18 @@ function runGit(cwd: string, args: string[]) {
     cwd,
     stdio: ['ignore', 'ignore', 'ignore'],
   })
+}
+
+async function dispatchTerminalPaste(page: Page, hostIndex: number, text: string) {
+  await page.getByTestId('terminal-host').nth(hostIndex).evaluate((element, value) => {
+    const data = new DataTransfer()
+    data.setData('text/plain', value)
+    element.dispatchEvent(new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    }))
+  }, text)
 }
 
 test('empty workspace starts with an add-project path', async ({ page }) => {
@@ -681,15 +694,53 @@ test('terminal tabs and split panes create independent terminal surfaces', async
   await page.getByTestId('tab-terminal').click()
   await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
   await expect(page.getByTestId('terminal-host')).toHaveCount(1)
+  await page.getByTestId('terminal-host').click()
+  await page.keyboard.type('echo tab-one')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText('tab-one')
 
   await page.getByTestId('terminal-new-tab').click()
   await expect(page.getByTestId('terminal-tab')).toHaveCount(2)
   await expect(page.getByTestId('terminal-host')).toHaveCount(1)
   await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  await page.getByTestId('terminal-host').click()
+  await page.keyboard.type('echo tab-two')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText('tab-two')
+  await expect(page.getByTestId('terminal-transcript')).not.toContainText('tab-one')
+  await page.getByTestId('terminal-tab').first().click()
+  await expect(page.getByTestId('terminal-transcript')).toContainText('tab-one')
+  await expect(page.getByTestId('terminal-transcript')).not.toContainText('tab-two')
+  await page.getByTestId('terminal-tab').nth(1).click()
+  await expect(page.getByTestId('terminal-transcript')).toContainText('tab-two')
 
   await page.getByTestId('terminal-split-pane').click()
   await expect(page.getByTestId('terminal-host')).toHaveCount(2)
   await expect(page.getByTestId('terminal-panel')).toHaveAttribute('data-terminal-pane-count', '2')
+  await page.getByTestId('terminal-host').nth(1).click()
+  await expect(page.getByTestId('terminal-pane').nth(1)).toHaveAttribute('data-terminal-active', 'true')
+  await dispatchTerminalPaste(page, 1, 'echo pasted-pane\n')
+  await expect(page.getByTestId('terminal-pane').nth(1).getByTestId('terminal-transcript')).toContainText('pasted-pane')
+  await expect(page.getByTestId('terminal-pane').first().getByTestId('terminal-transcript')).not.toContainText('pasted-pane')
+  await page.getByTestId('terminal-host').first().click()
+  await page.keyboard.type('echo left-pane')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-pane').first().getByTestId('terminal-transcript')).toContainText('left-pane')
+  await expect(page.getByTestId('terminal-pane').nth(1).getByTestId('terminal-transcript')).not.toContainText('left-pane')
+
+  await page.waitForTimeout(350)
+  await page.reload()
+  await page.getByTestId('tab-terminal').click()
+  await expect(page.getByTestId('terminal-tab')).toHaveCount(2)
+  await expect(page.getByTestId('terminal-host')).toHaveCount(2)
+  await expect(page.getByTestId('terminal-panel')).toHaveAttribute('data-terminal-pane-count', '2')
+  await expect(page.getByTestId('terminal-pane').first().getByTestId('terminal-transcript')).toContainText('tab-two')
+  await expect(page.getByTestId('terminal-pane').first().getByTestId('terminal-transcript')).toContainText('left-pane')
+  await expect(page.getByTestId('terminal-pane').nth(1).getByTestId('terminal-transcript')).toContainText('pasted-pane')
+  await page.getByTestId('terminal-host').nth(1).click()
+  await page.keyboard.type('echo after-reload-pane')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-pane').nth(1).getByTestId('terminal-transcript')).toContainText('after-reload-pane')
 })
 
 test('terminal focus controls still work after a theme change', async ({ page, isMobile }, testInfo) => {

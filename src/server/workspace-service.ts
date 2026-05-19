@@ -24,6 +24,7 @@ import {
   resetSessionInputSchema,
   reviewSessionInputSchema,
   sendMessageInputSchema,
+  saveTerminalLayoutInputSchema,
   setThinkingLevelInputSchema,
   steerMessageInputSchema,
   terminalConfigInputSchema,
@@ -42,6 +43,7 @@ import {
   renameSession,
   reorderProjects,
   restoreSession,
+  saveTerminalLayout,
   startSession,
   unhideProject,
 } from './db'
@@ -80,6 +82,7 @@ type ResetSessionInput = z.infer<typeof resetSessionInputSchema>
 type ForkSessionInput = z.infer<typeof forkSessionInputSchema>
 type ReviewSessionInput = z.infer<typeof reviewSessionInputSchema>
 type TerminalConfigInput = z.infer<typeof terminalConfigInputSchema>
+type SaveTerminalLayoutInput = z.infer<typeof saveTerminalLayoutInputSchema>
 type RefreshTerminalDiffsInput = z.infer<typeof refreshTerminalDiffsInputSchema>
 type RenameSessionInput = z.infer<typeof renameSessionInputSchema>
 type DeleteScratchpadBlockInput = z.infer<typeof deleteScratchpadBlockInputSchema>
@@ -120,6 +123,7 @@ export type WorkspaceServiceApi = {
   readonly reviewSession: (input: ReviewSessionInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly answerQuestion: (input: AnswerQuestionInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly terminalConfig: (input: TerminalConfigInput) => Effect.Effect<TerminalConfig, WorkspaceServiceError>
+  readonly saveTerminalLayout: (input: SaveTerminalLayoutInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly refreshTerminalDiffs: (input: RefreshTerminalDiffsInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly startSession: (input: StartSessionInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly addScratchpadBlock: (input: AddScratchpadBlockInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
@@ -189,6 +193,7 @@ export type WorkspaceServiceDependencies = {
   readonly answerAgentQuestion: (input: AnswerQuestionInput) => Promise<unknown>
   readonly getAgentLaunchConfig: (agentId: string) => AgentLaunchConfig
   readonly ensureTerminalServer: () => Promise<TerminalServerConfig>
+  readonly saveTerminalLayout: (input: SaveTerminalLayoutInput) => WorkspaceSnapshot
   readonly refreshTerminalSessionDiffs: (agentId: string) => WorkspaceSnapshot
   readonly startSession: (input: StartSessionInput) => WorkspaceSnapshot
   readonly addScratchpadBlock: (input: AddScratchpadBlockInput) => WorkspaceSnapshot
@@ -228,6 +233,7 @@ function liveWorkspaceServiceDependencies(
     answerAgentQuestion,
     getAgentLaunchConfig,
     ensureTerminalServer: input.terminalServer.ensure,
+    saveTerminalLayout,
     refreshTerminalSessionDiffs,
     startSession,
     addScratchpadBlock,
@@ -342,6 +348,7 @@ export function makeWorkspaceService(
         model: config.model,
       }
     }),
+    saveTerminalLayout: syncMethod('WorkspaceService.saveTerminalLayout', dependencies.saveTerminalLayout),
     refreshTerminalDiffs: syncMethod(
       'WorkspaceService.refreshTerminalDiffs',
       (input: RefreshTerminalDiffsInput) => dependencies.refreshTerminalSessionDiffs(input.agentId),

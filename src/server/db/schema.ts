@@ -5,6 +5,8 @@ import {
   messageRoleSchema,
   runtimeKindSchema,
   sessionInterfaceModeSchema,
+  terminalLayoutSchema,
+  terminalModeSchema,
   timelineEventToneSchema,
   thinkingLevelSchema,
   workflowAttemptStatusSchema,
@@ -173,6 +175,22 @@ export const workflowAttemptDbRowSchema = z.object({
   error: z.string().nullable(),
   createdAt: z.string(),
   completedAt: z.string().nullable(),
+})
+
+export const terminalLayoutDbRowSchema = z.object({
+  id: z.string(),
+  agentId: z.string().nullable(),
+  projectId: z.string().nullable(),
+  mode: terminalModeSchema,
+  layoutJson: z.string(),
+  updatedAt: z.string(),
+})
+
+export const terminalLayoutProjectionSchema = z.object({
+  ownerId: z.string(),
+  mode: terminalModeSchema,
+  layout: terminalLayoutSchema,
+  updatedAt: z.string(),
 })
 
 export const agentLaunchConfigSchema = z.object({

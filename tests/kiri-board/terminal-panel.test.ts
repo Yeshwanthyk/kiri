@@ -104,6 +104,45 @@ describe('terminal frame renderer contract', () => {
     expect(rows.map((row) => row.row.runs[0]?.text)).toEqual(['hi', 'ok'])
   })
 
+  it('applies partial cell replacements without dropping prefix or suffix cells', () => {
+    const initial = {
+      cols: 5,
+      rows: 1,
+      screenSeq: 0,
+      historySeq: 0,
+      bufferKind: 'main' as const,
+      cursor: { row: 0, col: 1, visible: true },
+      modes: { bracketedPaste: false, cursorVisible: true },
+      viewport: { historyOffset: 0, visibleRows: 1 },
+      historyRows: [],
+      rowsData: [{
+        row: 0,
+        fingerprint: 1,
+        runs: [{ text: 'abcde', width: 5, style: {} }],
+      }],
+    }
+
+    const patched = applyTerminalFrameForTests(initial, {
+      type: 'patch',
+      terminalId: 'term-1',
+      patch: {
+        cols: 5,
+        rows: 1,
+        screenSeq: 1,
+        historySeq: 0,
+        historyDelta: null,
+        ops: [{
+          op: 'replaceCells',
+          row: 0,
+          col: 2,
+          runs: [{ text: 'XY', width: 2, style: { bold: true } }],
+        }],
+      },
+    })
+
+    expect(patched.rowsData[0]?.runs.map((run) => run.text)).toEqual(['ab', 'XY', 'e'])
+  })
+
   it('maps 256-color palette indices for sidecar-rendered ANSI styles', () => {
     expect(terminalColorValueForTests({ kind: 'palette', index: 196 })).toBe('rgb(255 0 0)')
     expect(terminalColorValueForTests({ kind: 'palette', index: 232 })).toBe('rgb(8 8 8)')

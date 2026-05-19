@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Read, Write};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -66,6 +67,8 @@ type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 type SharedChild = Arc<Mutex<Box<dyn Child + Send + Sync>>>;
 type SharedOrder = Arc<Mutex<()>>;
 type SharedSessions = Arc<Mutex<HashMap<TerminalId, Weak<Mutex<Box<dyn Child + Send + Sync>>>>>>;
+
+const METRIC_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 
 struct SidecarSession {
     terminal_id: TerminalId,
@@ -377,6 +380,20 @@ fn create_session(
                     .snapshot(),
             },
         )?;
+        write_metric(
+            output,
+            &terminal_id,
+            "terminal.cols",
+            f64::from(launch.cols),
+            "cells",
+        )?;
+        write_metric(
+            output,
+            &terminal_id,
+            "terminal.rows",
+            f64::from(launch.rows),
+            "cells",
+        )?;
     }
     spawn_reader(
         terminal_id.clone(),
@@ -401,9 +418,18 @@ fn spawn_reader(
     let mut reader = std::mem::replace(reader, Box::new(io::empty()));
     thread::spawn(move || {
         let mut buffer = [0u8; 8192];
+        let mut pending_bytes: usize = 0;
+        let mut pending_ops: usize = 0;
+        let mut last_metric_flush = Instant::now();
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => {
+                    let _ = flush_reader_metrics(
+                        &output,
+                        &terminal_id,
+                        &mut pending_bytes,
+                        &mut pending_ops,
+                    );
                     let exit_code = sessions
                         .lock()
                         .expect("terminal sessions lock")
@@ -435,6 +461,8 @@ fn spawn_reader(
                         .lock()
                         .expect("terminal document lock")
                         .apply_bytes(&buffer[..n]);
+                    pending_bytes += n;
+                    pending_ops += patch.ops.len();
                     let _ = write_frame(
                         &output,
                         &TerminalServerFrame::Patch {
@@ -442,6 +470,15 @@ fn spawn_reader(
                             patch,
                         },
                     );
+                    if last_metric_flush.elapsed() >= METRIC_FLUSH_INTERVAL {
+                        let _ = flush_reader_metrics(
+                            &output,
+                            &terminal_id,
+                            &mut pending_bytes,
+                            &mut pending_ops,
+                        );
+                        last_metric_flush = Instant::now();
+                    }
                 }
                 Err(error) => {
                     let _ = write_frame(
@@ -456,6 +493,38 @@ fn spawn_reader(
             }
         }
     });
+}
+
+fn flush_reader_metrics(
+    output: &SharedOutput,
+    terminal_id: &TerminalId,
+    pending_bytes: &mut usize,
+    pending_ops: &mut usize,
+) -> Result<()> {
+    if *pending_bytes == 0 && *pending_ops == 0 {
+        return Ok(());
+    }
+    if *pending_ops > 0 {
+        write_metric(
+            output,
+            terminal_id,
+            "terminal.patch.ops",
+            *pending_ops as f64,
+            "count",
+        )?;
+    }
+    if *pending_bytes > 0 {
+        write_metric(
+            output,
+            terminal_id,
+            "terminal.pty.read_bytes",
+            *pending_bytes as f64,
+            "bytes",
+        )?;
+    }
+    *pending_bytes = 0;
+    *pending_ops = 0;
+    Ok(())
 }
 
 fn with_session(
@@ -512,6 +581,26 @@ fn write_frame(output: &SharedOutput, frame: &TerminalServerFrame) -> Result<()>
     output.write_all(b"\n")?;
     output.flush()?;
     Ok(())
+}
+
+fn write_metric(
+    output: &SharedOutput,
+    terminal_id: &TerminalId,
+    name: &str,
+    value: f64,
+    unit: &str,
+) -> Result<()> {
+    write_frame(
+        output,
+        &TerminalServerFrame::Metric {
+            terminal_id: terminal_id.clone(),
+            metric: crate::protocol::TerminalMetric {
+                name: name.to_owned(),
+                value,
+                unit: unit.to_owned(),
+            },
+        },
+    )
 }
 
 #[cfg(test)]

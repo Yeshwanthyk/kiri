@@ -4,6 +4,55 @@ import { describe, expect, it } from 'vitest'
 import { migrate } from '../../src/server/db/migrations'
 
 describe('DB migrations', () => {
+  it('creates terminal layout persistence with owner constraints', () => {
+    const database = new DatabaseSync(':memory:')
+    try {
+      migrate(database)
+
+      const tables = database
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'terminal_layouts'")
+        .all()
+      expect(tables).toHaveLength(1)
+
+      database
+        .prepare("INSERT INTO projects (id, name, cwd, position) VALUES ('project-1', 'Project', '/tmp/project', 0)")
+        .run()
+      database
+        .prepare(
+          `
+            INSERT INTO agent_slots (
+              id, project_id, slot, title, runtime, interface_mode, model, status,
+              session_dir, session_file, runtime_state_json, archived_at, position
+            )
+            VALUES (
+              'agent-1', 'project-1', 'session-1', 'Codex', 'codex', 'terminal', 'test-model', 'idle',
+              '/tmp/session', NULL, NULL, NULL, 0
+            )
+          `,
+        )
+        .run()
+      database
+        .prepare(
+          `
+            INSERT INTO terminal_layouts (id, agent_id, project_id, mode, layout_json, updated_at)
+            VALUES ('runtime:agent-1', 'agent-1', NULL, 'runtime', ?, '2026-01-01T00:00:00.000Z')
+          `,
+        )
+        .run('{"activeTabId":"main","tabs":[{"id":"main","title":"Agent","activePaneId":"main","paneIds":["main"]}]}')
+
+      expect(() => database
+        .prepare(
+          `
+            INSERT INTO terminal_layouts (id, agent_id, project_id, mode, layout_json, updated_at)
+            VALUES ('bad', 'agent-1', 'project-1', 'runtime', '{}', '2026-01-01T00:00:00.000Z')
+          `,
+        )
+        .run()).toThrow()
+    } finally {
+      database.close()
+    }
+  })
+
   it('widens legacy pi-only runtime slots without leaving renamed foreign keys', () => {
     const database = new DatabaseSync(':memory:')
     try {

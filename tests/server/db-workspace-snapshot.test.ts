@@ -12,6 +12,7 @@ import {
   setAgentRuntimeState,
   upsertAgentContextUsage,
 } from '../../src/server/db/runtime-state'
+import { upsertTerminalLayout } from '../../src/server/db/terminal-layout'
 import { readWorkspaceSnapshot } from '../../src/server/db/workspace-snapshot'
 
 const settings: KiriSettings = {
@@ -109,6 +110,19 @@ describe('workspace snapshot projection', () => {
           }],
         },
       })
+      const shellLayout = {
+        activeTabId: 'main',
+        tabs: [{ id: 'main', title: 'Shell', activePaneId: 'main', paneIds: ['main'] }],
+      }
+      const runtimeLayout = {
+        activeTabId: 'tab-2',
+        tabs: [
+          { id: 'main', title: 'Agent', activePaneId: 'main', paneIds: ['main'] },
+          { id: 'tab-2', title: 'Term 2', activePaneId: 'pane-2', paneIds: ['pane-2'] },
+        ],
+      }
+      upsertTerminalLayout(database, { mode: 'shell', projectId, layout: shellLayout })
+      upsertTerminalLayout(database, { mode: 'runtime', agentId, layout: runtimeLayout })
       const scratchpadBlocks: ScratchpadBlock[] = [{
         id: 'scratch-1',
         projectId,
@@ -130,6 +144,7 @@ describe('workspace snapshot projection', () => {
       expect(snapshot.projects[0]).toMatchObject({
         id: projectId,
         name: 'Project One',
+        terminalLayout: shellLayout,
       })
       expect(snapshot.hiddenProjects).toHaveLength(1)
       expect(snapshot.hiddenProjects[0]).toMatchObject({
@@ -150,6 +165,7 @@ describe('workspace snapshot projection', () => {
           usedPercent: 25,
         },
         pendingQuestion: { requestId: 'request-1' },
+        terminalLayout: runtimeLayout,
       })
       expect(snapshot.archivedSessions).toHaveLength(1)
       expect(snapshot.archivedSessions[0]).toMatchObject({

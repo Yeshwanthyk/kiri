@@ -7,7 +7,7 @@ import type { RuntimeKind } from '~/lib/contracts'
 import { makeTerminalServerService } from '~/server/terminal-server'
 
 type HarnessCapture = {
-  readonly runtime: RuntimeKind
+  readonly runtime: RuntimeKind | 'shell'
   readonly kind: 'ready' | 'paste'
   readonly session: string
   readonly pid: number
@@ -27,6 +27,14 @@ export type TerminalAgentHarnessResult = {
   readonly firstPaste: HarnessCapture
   readonly secondPaste: HarnessCapture
   readonly tabPastes: readonly HarnessCapture[]
+}
+
+export type TerminalShellHarnessResult = {
+  readonly cwd: string
+  readonly tabPastes: readonly HarnessCapture[]
+  readonly splitPastes: readonly HarnessCapture[]
+  readonly reconnectPaste: HarnessCapture
+  readonly editedFile: string
 }
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -95,6 +103,74 @@ export async function runTerminalAgentHarness(runtime: RuntimeKind): Promise<Ter
   }
 }
 
+export async function runTerminalShellHarness(): Promise<TerminalShellHarnessResult> {
+  const root = mkdtempSync(join(tmpdir(), 'kiri-terminal-shell-harness-'))
+  const capturePath = join(root, 'capture.log')
+  const scriptPath = resolve(repoRoot, 'tests/harness/fake-project-shell.mjs')
+  const service = makeTerminalServerService({
+    getAgentLaunchConfig: () => ({
+      id: 'agent-shell',
+      projectId: 'project-shell-harness',
+      runtime: 'codex',
+      sessionDir: root,
+      sessionFile: null,
+      model: 'harness-model',
+      cwd: root,
+    }),
+    buildTerminalProcessLaunch: (_config, mode, shell) => ({
+      command: mode === 'shell' ? process.execPath : shell.command,
+      args: mode === 'shell' ? [scriptPath] : shell.args,
+      cwd: root,
+      env: {
+        ...process.env,
+        KIRI_CAPTURE_PATH: capturePath,
+        KIRI_FAKE_TERMINAL_SESSION: 'project-shell-session',
+      },
+      label: mode,
+    }),
+  })
+
+  try {
+    const info = await service.ensure()
+    const [tabA, tabB] = await Promise.all([
+      pasteThroughWebSocket(info, 'agent-shell', 'shell-tab-a', 'edit editor.txt', 'shell'),
+      pasteThroughWebSocket(info, 'agent-shell', 'shell-tab-b', 'run long-script', 'shell'),
+    ])
+    const tabPastes = await Promise.all([
+      waitForPaste(capturePath, 'edited:editor.txt'),
+      waitForPaste(capturePath, 'running:long-script'),
+    ])
+    await tabA.close()
+    await tabB.close()
+
+    const reconnect = await pasteThroughWebSocket(info, 'agent-shell', 'shell-tab-a', 'after reconnect', 'shell')
+    const reconnectPaste = await waitForPaste(capturePath, 'after reconnect')
+    await reconnect.close()
+
+    const [splitA, splitB] = await Promise.all([
+      pasteThroughWebSocket(info, 'agent-shell', 'split-left', 'left-pane', 'shell'),
+      pasteThroughWebSocket(info, 'agent-shell', 'split-right', 'right-pane', 'shell'),
+    ])
+    const splitPastes = await Promise.all([
+      waitForPaste(capturePath, 'left-pane'),
+      waitForPaste(capturePath, 'right-pane'),
+    ])
+    await splitA.close()
+    await splitB.close()
+
+    return {
+      cwd: root,
+      tabPastes,
+      splitPastes,
+      reconnectPaste,
+      editedFile: readFileSync(join(root, 'editor.txt'), 'utf8'),
+    }
+  } finally {
+    await service.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 function paste(text: string): PendingPaste {
   return {
     text,
@@ -108,11 +184,12 @@ async function pasteThroughWebSocket(
   agentId: string,
   instanceId: string,
   text: string,
+  mode: 'runtime' | 'shell' = 'runtime',
 ) {
   const url = new URL(`ws://${info.host}:${info.port}${info.path}`)
   url.searchParams.set('token', info.token)
   url.searchParams.set('agentId', agentId)
-  url.searchParams.set('mode', 'runtime')
+  url.searchParams.set('mode', mode)
   url.searchParams.set('cols', '100')
   url.searchParams.set('rows', '30')
   url.searchParams.set('instanceId', instanceId)
@@ -121,7 +198,7 @@ async function pasteThroughWebSocket(
     socket.once('open', resolvePromise)
     socket.once('error', reject)
   })
-  socket.send(JSON.stringify({ type: 'input', data: `${text}\r` }))
+  socket.send(JSON.stringify({ type: 'paste', text, submit: true }))
   return {
     close: () => new Promise<void>((resolvePromise) => {
       socket.once('close', resolvePromise)
@@ -163,7 +240,7 @@ function readCaptures(capturePath: string): HarnessCapture[] {
 
 function parseCapture(line: string): HarnessCapture {
   const [runtime, kind, session, pid, sequence, ...textParts] = line.split(':')
-  if (!isRuntimeKind(runtime)) throw new Error(`Unknown fake runtime ${runtime}`)
+  if (!isRuntimeKind(runtime) && runtime !== 'shell') throw new Error(`Unknown fake runtime ${runtime}`)
   if (kind === 'ready') {
     return {
       runtime,

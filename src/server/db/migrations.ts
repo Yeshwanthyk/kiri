@@ -170,6 +170,27 @@ export function migrate(database: DatabaseSync) {
 
     CREATE INDEX IF NOT EXISTS workflow_item_attempts_item_created
       ON workflow_item_attempts(item_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS terminal_layouts (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT REFERENCES agent_slots(id) ON DELETE CASCADE,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      mode TEXT NOT NULL CHECK (mode IN ('runtime', 'shell')),
+      layout_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      CHECK (
+        (mode = 'runtime' AND agent_id IS NOT NULL AND project_id IS NULL) OR
+        (mode = 'shell' AND project_id IS NOT NULL AND agent_id IS NULL)
+      )
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS terminal_layouts_agent_mode
+      ON terminal_layouts(agent_id, mode)
+      WHERE agent_id IS NOT NULL;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS terminal_layouts_project_mode
+      ON terminal_layouts(project_id, mode)
+      WHERE project_id IS NOT NULL;
   `)
   widenRuntimeCheck(database)
   addContextUsageWindowTokensColumn(database)

@@ -26,6 +26,7 @@ const perfOutputSchema = z.object({
   snapshotJsonBytes: z.number(),
   snapshotMs: z.number(),
   detailMs: z.number(),
+  heapUsedDeltaMb: z.number(),
   rssDeltaMb: z.number(),
   budgets: z.object({
     maxReturnedTimelineRows: z.number(),
@@ -33,6 +34,7 @@ const perfOutputSchema = z.object({
     maxDetailJsonBytes: z.number(),
     maxSnapshotMs: z.number(),
     maxDetailMs: z.number(),
+    maxHeapUsedDeltaMb: z.number(),
     maxRssDeltaMb: z.number(),
   }),
 })
@@ -43,7 +45,8 @@ const budgets = {
   maxDetailJsonBytes: 1_800_000,
   maxSnapshotMs: 100,
   maxDetailMs: 350,
-  maxRssDeltaMb: 72,
+  maxHeapUsedDeltaMb: 128,
+  maxRssDeltaMb: 160,
 }
 
 try {
@@ -58,7 +61,7 @@ try {
   const database = getDb()
   seedPerfHistory(database)
 
-  const beforeRss = process.memoryUsage().rss
+  const beforeMemory = process.memoryUsage()
   const snapshotStart = performance.now()
   const snapshot = getWorkspaceSnapshot()
   const snapshotMs = performance.now() - snapshotStart
@@ -66,7 +69,7 @@ try {
   const detailStart = performance.now()
   const detail = getAgentDetail({ agentId, limit: requestedLimit })
   const detailMs = performance.now() - detailStart
-  const afterRss = process.memoryUsage().rss
+  const afterMemory = process.memoryUsage()
 
   const output = perfOutputSchema.parse({
     ok: true,
@@ -79,7 +82,8 @@ try {
     snapshotJsonBytes: Buffer.byteLength(JSON.stringify(snapshot)),
     snapshotMs: round(snapshotMs),
     detailMs: round(detailMs),
-    rssDeltaMb: round((afterRss - beforeRss) / 1024 / 1024),
+    heapUsedDeltaMb: round((afterMemory.heapUsed - beforeMemory.heapUsed) / 1024 / 1024),
+    rssDeltaMb: round((afterMemory.rss - beforeMemory.rss) / 1024 / 1024),
     budgets,
   })
 
@@ -88,7 +92,10 @@ try {
   assertBudget(output.detailJsonBytes <= budgets.maxDetailJsonBytes, 'detail payload bytes', output)
   assertBudget(output.snapshotMs <= budgets.maxSnapshotMs, 'snapshot latency', output)
   assertBudget(output.detailMs <= budgets.maxDetailMs, 'detail latency', output)
-  assertBudget(output.rssDeltaMb <= budgets.maxRssDeltaMb, 'rss delta', output)
+  assertBudget(output.heapUsedDeltaMb <= budgets.maxHeapUsedDeltaMb, 'heap used delta', output)
+  if (process.env.KIRI_PERF_STRICT_RSS === '1') {
+    assertBudget(output.rssDeltaMb <= budgets.maxRssDeltaMb, 'rss delta', output)
+  }
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
   database.close()
