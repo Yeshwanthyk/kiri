@@ -260,4 +260,50 @@ describe('DB migrations', () => {
       database.close()
     }
   })
+
+  it('keeps hot snapshot and detail query indexes available after migration', () => {
+    const database = new DatabaseSync(':memory:')
+    try {
+      migrate(database)
+
+      const messageIndexes = indexNames(database, 'messages')
+      const diffIndexes = indexNames(database, 'diff_artifacts')
+      expect(messageIndexes).toContain('messages_thread_timestamp')
+      expect(diffIndexes).toContain('diff_artifacts_agent_updated')
+
+      const messagePlan = queryPlan(database, `
+        EXPLAIN QUERY PLAN
+        SELECT id
+        FROM messages
+        WHERE thread_id = 'thread-1'
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 500
+      `)
+      expect(messagePlan).toContain('USING COVERING INDEX messages_thread_timestamp')
+
+      const diffPlan = queryPlan(database, `
+        EXPLAIN QUERY PLAN
+        SELECT id, agent_id, title, path, patch, updated_at
+        FROM diff_artifacts
+        WHERE agent_id = 'agent-1'
+        ORDER BY updated_at DESC
+        LIMIT 50
+      `)
+      expect(diffPlan).toContain('USING INDEX diff_artifacts_agent_updated')
+      expect(diffPlan).not.toContain('USE TEMP B-TREE')
+    } finally {
+      database.close()
+    }
+  })
 })
+
+function indexNames(database: DatabaseSync, table: string) {
+  return (database.prepare(`PRAGMA index_list(${table})`).all() as Array<{ name: string }>)
+    .map((index) => index.name)
+}
+
+function queryPlan(database: DatabaseSync, sql: string) {
+  return (database.prepare(sql).all() as Array<{ detail: string }>)
+    .map((row) => row.detail)
+    .join('\n')
+}

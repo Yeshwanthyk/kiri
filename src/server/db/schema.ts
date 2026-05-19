@@ -39,6 +39,7 @@ const agentDbRowSchema = z.object({
   diffCount: z.number().int().nonnegative(),
   threadId: z.string().nullable(),
   archivedAt: z.string().nullable(),
+  runtimeStateJson: z.string().nullable().optional(),
 })
 
 export const agentDetailDbRowSchema = agentDbRowSchema.extend({

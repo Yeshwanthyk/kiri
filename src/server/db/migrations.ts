@@ -50,6 +50,9 @@ export function migrate(database: DatabaseSync) {
       timestamp TEXT NOT NULL
     );
 
+    CREATE INDEX IF NOT EXISTS messages_thread_timestamp
+      ON messages(thread_id, timestamp, id);
+
     CREATE TABLE IF NOT EXISTS timeline_events (
       id TEXT PRIMARY KEY,
       thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
@@ -93,6 +96,9 @@ export function migrate(database: DatabaseSync) {
       patch TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS diff_artifacts_agent_updated
+      ON diff_artifacts(agent_id, updated_at DESC, id);
 
     CREATE TABLE IF NOT EXISTS agent_context_usage (
       agent_id TEXT PRIMARY KEY REFERENCES agent_slots(id) ON DELETE CASCADE,
