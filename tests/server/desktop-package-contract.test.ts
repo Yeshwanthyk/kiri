@@ -25,10 +25,14 @@ describe('desktop package contract', () => {
     expect(packageJson.build.files).not.toContain('scripts/normalize-desktop-app.mjs')
   })
 
-  it('ships the MCP helper as an extra resource next to the packaged app', () => {
+  it('ships native helpers as extra resources next to the packaged app', () => {
     expect(packageJson.build.extraResources).toContainEqual({
       from: 'resources/bin/kiri-mcp',
       to: 'bin/kiri-mcp',
+    })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'dist/bin/kiri-git-diff-collector',
+      to: 'bin/kiri-git-diff-collector',
     })
     expect(isExecutable(join(process.cwd(), 'resources/bin/kiri-mcp'))).toBe(true)
   })
@@ -49,7 +53,10 @@ describe('desktop package contract', () => {
       expect(existsSync(appAsar), `${appRoot} has app.asar`).toBe(true)
       expect(isExecutable(join(resourcesRoot, 'bin/kiri-mcp')), `${appRoot} has executable kiri-mcp`)
         .toBe(true)
-
+      expect(
+        isExecutable(join(resourcesRoot, 'bin/kiri-git-diff-collector')),
+        `${appRoot} has executable kiri-git-diff-collector`,
+      ).toBe(true)
       const header = readAsarHeader(appAsar)
       expect(hasAsarPath(header, ['scripts', 'kiri-desktop-backend.mjs'])).toBe(true)
       expect(hasAsarPath(header, ['dist', 'client'])).toBe(true)

@@ -19,6 +19,7 @@
     "dev": "vite dev",
     "build": "vite build && tsc --noEmit",
     "build:cli": "node scripts/build-cli.mjs",
+    "build:rust": "node scripts/build-rust-bins.mjs",
     "site:build": "vite build --config vite.site.config.ts",
     "site:preview": "vite preview --config vite.site.config.ts --outDir ../dist/site",
     "icons:generate": "node scripts/generate-icons.mjs",
@@ -38,13 +39,13 @@
     "verify:knip": "pnpm exec knip --reporter compact",
     "verify:e2e": "pnpm test:e2e --project=chromium",
     "verify:desktop:smoke": "node --check scripts/*.mjs && pnpm build:cli",
-    "verify:desktop:package": "pnpm build && pnpm build:cli && node scripts/sanitize-desktop-package-inputs.mjs && node -e \"for (const path of ['dist/mac','dist/mac-arm64','dist/mac-universal']) require('node:fs').rmSync(path, { recursive: true, force: true })\" && electron-builder --mac dir && KIRI_ASSERT_PACKAGED_APP=1 pnpm exec vitest run tests/server/desktop-package-contract.test.ts tests/server/kiri-mcp.test.ts",
+    "verify:desktop:package": "pnpm build && pnpm build:cli && pnpm build:rust && node scripts/sanitize-desktop-package-inputs.mjs && node -e \"for (const path of ['dist/mac','dist/mac-arm64','dist/mac-universal']) require('node:fs').rmSync(path, { recursive: true, force: true })\" && electron-builder --mac dir && KIRI_ASSERT_PACKAGED_APP=1 pnpm exec vitest run tests/server/desktop-package-contract.test.ts tests/server/kiri-mcp.test.ts",
     "verify:desktop": "pnpm verify:desktop:smoke && pnpm verify:desktop:package",
     "verify": "pnpm typecheck && pnpm lint && pnpm effect:audit && pnpm test && pnpm knip:report",
     "desktop:dev": "KIRI_DESKTOP_DEV_URL=http://127.0.0.1:3090 electron src/desktop/main.mjs",
     "desktop:start": "pnpm build && electron src/desktop/main.mjs",
     "desktop:backend": "node scripts/kiri-desktop-backend.mjs",
-    "dist:desktop": "pnpm build && pnpm build:cli && node scripts/sanitize-desktop-package-inputs.mjs && electron-builder --mac dir && node scripts/normalize-desktop-app.mjs && node scripts/create-desktop-dmg.mjs",
+    "dist:desktop": "pnpm build && pnpm build:cli && pnpm build:rust && node scripts/sanitize-desktop-package-inputs.mjs && electron-builder --mac dir && node scripts/normalize-desktop-app.mjs && node scripts/create-desktop-dmg.mjs",
     "install:desktop": "pnpm dist:desktop && node scripts/install-desktop-app.mjs",
     "prepare": "effect-language-service patch",
     "kiri": "tsx src/cli/kirictl.ts",
@@ -108,6 +109,10 @@
       {
         "from": "resources/bin/kiri-mcp",
         "to": "bin/kiri-mcp"
+      },
+      {
+        "from": "dist/bin/kiri-git-diff-collector",
+        "to": "bin/kiri-git-diff-collector"
       }
     ],
     "mac": {
