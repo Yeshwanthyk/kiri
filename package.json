@@ -54,6 +54,7 @@
     "kiri:history-harness": "tsx tests/harness/kiri-agent-detail-history-harness.ts",
     "kiri:models": "node scripts/sync-models-dev.mjs",
     "effect:audit": "node scripts/effect-migration-audit.mjs",
+    "perf:workspace-dedupe": "tsx tests/perf/run-workspace-dedupe-perf.ts",
     "preview": "vite preview",
     "start": "pnpx srvx --prod -s ../client dist/server/server.js"
   },

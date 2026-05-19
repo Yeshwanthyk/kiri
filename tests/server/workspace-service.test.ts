@@ -50,6 +50,24 @@ describe('WorkspaceService', () => {
     expect(calls).toEqual(['prompt:agent-1:hello', 'snapshot'])
   })
 
+  it('returns a cheap workspace revision without hydrating the full snapshot', async () => {
+    const calls: string[] = []
+    const service = makeWorkspaceService(testDependencies({
+      getWorkspaceRevision: () => {
+        calls.push('revision')
+        return { revision: 'rev-1' }
+      },
+      getWorkspaceSnapshot: () => {
+        calls.push('snapshot')
+        return snapshot
+      },
+    }))
+
+    await expect(Effect.runPromise(service.revision())).resolves.toEqual({ revision: 'rev-1' })
+
+    expect(calls).toEqual(['revision'])
+  })
+
   it('returns forked agent id with the post-fork snapshot', async () => {
     const calls: string[] = []
     const service = makeWorkspaceService(testDependencies({
@@ -214,6 +232,7 @@ function testDependencies(
 ): WorkspaceServiceDependencies {
   return {
     getWorkspaceSnapshot: () => snapshot,
+    getWorkspaceRevision: () => ({ revision: 'rev-1' }),
     getAgentDetail: () => {
       throw new Error('getAgentDetail not implemented')
     },

@@ -35,6 +35,10 @@ export const fetchWorkspaceSnapshot = createServerFn({ method: 'GET' }).handler(
   async () => runWorkspaceServiceMethod((workspace) => workspace.snapshot()),
 )
 
+export const fetchWorkspaceRevision = createServerFn({ method: 'GET' }).handler(
+  async () => runWorkspaceServiceMethod((workspace) => workspace.revision()),
+)
+
 export const fetchAgentDetail = createServerFn({ method: 'GET' })
   .inputValidator(agentDetailInputSchema)
   .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.agentDetail(data)))

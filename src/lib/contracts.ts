@@ -293,6 +293,11 @@ export const workspaceSnapshotSchema = z.object({
 })
 export type WorkspaceSnapshot = z.infer<typeof workspaceSnapshotSchema>
 
+export const workspaceRevisionSchema = z.object({
+  revision: z.string().min(1),
+})
+export type WorkspaceRevision = z.infer<typeof workspaceRevisionSchema>
+
 export const setThemePreferenceInputSchema = themeSelectionSchema
 export const setKeymapPreferenceInputSchema = keymapSettingsSchema
 export const setChatTypographyPreferenceInputSchema = chatTypographySchema

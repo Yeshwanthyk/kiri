@@ -23,6 +23,7 @@ import {
   deleteScratchpadBlockMutation,
   deleteSessionMutation,
   fetchWorkspaceSnapshot,
+  fetchWorkspaceRevision,
   forkSessionMutation,
   hideProjectMutation,
   interruptMessageMutation,
@@ -67,7 +68,7 @@ import {
   type SidebarTab,
 } from './kiri-board/board-types'
 import { pollWorkspaceDuringAction, pollWorkspaceInBackground } from './kiri-board/workspace-polling'
-import { createWorkspaceDedupe } from './kiri-board/workspace-fingerprint'
+import { createWorkspaceDedupe, createWorkspaceRevisionGate } from './kiri-board/workspace-fingerprint'
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const boardScrollRef = React.useRef<HTMLDivElement | null>(null)
@@ -111,6 +112,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const forkSession = useServerFn(forkSessionMutation)
   const hideProject = useServerFn(hideProjectMutation)
   const refreshWorkspace = useServerFn(fetchWorkspaceSnapshot)
+  const refreshWorkspaceRevision = useServerFn(fetchWorkspaceRevision)
   const resetSession = useServerFn(resetSessionMutation)
   const restoreSession = useServerFn(restoreSessionMutation)
   const reviewSession = useServerFn(reviewSessionMutation)
@@ -129,9 +131,11 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const triggerScratchpadBlock = useServerFn(triggerScratchpadBlockMutation)
   const unhideProject = useServerFn(unhideProjectMutation)
   const refreshWorkspaceRef = React.useRef(refreshWorkspace)
+  const refreshWorkspaceRevisionRef = React.useRef(refreshWorkspaceRevision)
   const activeWorkspaceMutationsRef = React.useRef(0)
   const workspaceActivityEpochRef = React.useRef(0)
   const workspaceDedupeRef = React.useRef(createWorkspaceDedupe(snapshot))
+  const workspaceRevisionGateRef = React.useRef(createWorkspaceRevisionGate())
   const applyWorkspace = React.useCallback((next: WorkspaceSnapshot) => {
     workspaceDedupeRef.current.apply(next, setWorkspace)
   }, [])
@@ -213,10 +217,20 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     refreshWorkspaceRef.current = refreshWorkspace
   }, [refreshWorkspace])
 
+  React.useEffect(() => {
+    refreshWorkspaceRevisionRef.current = refreshWorkspaceRevision
+  }, [refreshWorkspaceRevision])
+
   React.useEffect(() =>
     pollWorkspaceInBackground({
-      refreshWorkspace: () => refreshWorkspaceRef.current(),
-      onWorkspace: applyWorkspace,
+      refreshWorkspace: () =>
+        workspaceRevisionGateRef.current.refreshIfChanged({
+          refreshRevision: () => refreshWorkspaceRevisionRef.current(),
+          refreshWorkspace: () => refreshWorkspaceRef.current(),
+        }),
+      onWorkspace: (next) => {
+        if (next) applyWorkspace(next)
+      },
       isIdle: () => activeWorkspaceMutationsRef.current === 0,
       idleToken: () => workspaceActivityEpochRef.current,
     }),

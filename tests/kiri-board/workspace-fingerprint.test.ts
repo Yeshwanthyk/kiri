@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { AgentCell, ProjectRow, WorkspaceSnapshot } from '~/lib/contracts'
 import {
   createWorkspaceDedupe,
+  createWorkspaceRevisionGate,
   workspaceFingerprint,
 } from '~/components/kiri-board/workspace-fingerprint'
 
@@ -61,6 +62,40 @@ describe('createWorkspaceDedupe', () => {
     expect(dedupe.apply(buildSnapshot({ agentStatus: 'running' }), onChange)).toBe(false)
     expect(onChange).toHaveBeenCalledTimes(1)
     expect(dedupe.didChange()).toBe(false)
+  })
+})
+
+describe('createWorkspaceRevisionGate', () => {
+  it('skips the full snapshot refresh when the server revision is unchanged', async () => {
+    const gate = createWorkspaceRevisionGate()
+    const refreshRevision = vi.fn()
+      .mockResolvedValueOnce({ revision: 'rev-1' })
+      .mockResolvedValueOnce({ revision: 'rev-1' })
+    const refreshWorkspace = vi.fn()
+      .mockResolvedValueOnce(buildSnapshot())
+
+    await expect(gate.refreshIfChanged({ refreshRevision, refreshWorkspace }))
+      .resolves.toEqual(buildSnapshot())
+    await expect(gate.refreshIfChanged({ refreshRevision, refreshWorkspace }))
+      .resolves.toBeNull()
+
+    expect(refreshRevision).toHaveBeenCalledTimes(2)
+    expect(refreshWorkspace).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes again after a revision change', async () => {
+    const gate = createWorkspaceRevisionGate()
+    const refreshRevision = vi.fn()
+      .mockResolvedValueOnce({ revision: 'rev-1' })
+      .mockResolvedValueOnce({ revision: 'rev-2' })
+    const refreshWorkspace = vi.fn()
+      .mockResolvedValueOnce(buildSnapshot())
+      .mockResolvedValueOnce(buildSnapshot({ agentStatus: 'running' }))
+
+    await gate.refreshIfChanged({ refreshRevision, refreshWorkspace })
+    await gate.refreshIfChanged({ refreshRevision, refreshWorkspace })
+
+    expect(refreshWorkspace).toHaveBeenCalledTimes(2)
   })
 })
 

@@ -25,6 +25,7 @@ export function migrate(database: DatabaseSync) {
       session_dir TEXT NOT NULL,
       session_file TEXT,
       runtime_state_json TEXT,
+      runtime_state_updated_at TEXT,
       archived_at TEXT,
       position INTEGER NOT NULL
     );
@@ -175,6 +176,7 @@ export function migrate(database: DatabaseSync) {
   addContextUsageWindowTokensColumn(database)
   addProjectHiddenAtColumn(database)
   addRuntimeStateColumn(database)
+  addRuntimeStateUpdatedAtColumn(database)
   addAgentArchivedAtColumn(database)
   addAgentInterfaceModeColumn(database)
   addAgentEventsTable(database)
@@ -205,6 +207,14 @@ function addRuntimeStateColumn(database: DatabaseSync) {
     .all() as Array<{ name: string }>
   if (columns.some((column) => column.name === 'runtime_state_json')) return
   database.exec('ALTER TABLE agent_slots ADD COLUMN runtime_state_json TEXT')
+}
+
+function addRuntimeStateUpdatedAtColumn(database: DatabaseSync) {
+  const columns = database
+    .prepare('PRAGMA table_info(agent_slots)')
+    .all() as Array<{ name: string }>
+  if (columns.some((column) => column.name === 'runtime_state_updated_at')) return
+  database.exec('ALTER TABLE agent_slots ADD COLUMN runtime_state_updated_at TEXT')
 }
 
 function addAgentArchivedAtColumn(database: DatabaseSync) {
@@ -264,6 +274,7 @@ function widenAgentSlotsRuntimeCheck(database: DatabaseSync) {
   const columns = tableColumns(database, 'agent_slots')
   const interfaceMode = columns.has('interface_mode') ? 'interface_mode' : "'gui'"
   const runtimeStateJson = columns.has('runtime_state_json') ? 'runtime_state_json' : 'NULL'
+  const runtimeStateUpdatedAt = columns.has('runtime_state_updated_at') ? 'runtime_state_updated_at' : 'NULL'
   const archivedAt = columns.has('archived_at') ? 'archived_at' : 'NULL'
 
   database.exec(`
@@ -283,14 +294,15 @@ function widenAgentSlotsRuntimeCheck(database: DatabaseSync) {
       session_dir TEXT NOT NULL,
       session_file TEXT,
       runtime_state_json TEXT,
+      runtime_state_updated_at TEXT,
       archived_at TEXT,
       position INTEGER NOT NULL
     );
 
     INSERT INTO agent_slots (
-      id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, runtime_state_json, archived_at, position
+      id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, runtime_state_json, runtime_state_updated_at, archived_at, position
     )
-    SELECT id, project_id, slot, title, runtime, ${interfaceMode}, model, status, session_dir, session_file, ${runtimeStateJson}, ${archivedAt}, position
+    SELECT id, project_id, slot, title, runtime, ${interfaceMode}, model, status, session_dir, session_file, ${runtimeStateJson}, ${runtimeStateUpdatedAt}, ${archivedAt}, position
     FROM agent_slots_old;
 
     DROP TABLE agent_slots_old;

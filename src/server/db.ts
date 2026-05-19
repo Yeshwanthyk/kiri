@@ -92,7 +92,7 @@ import {
   replaceAgentDiffArtifactsRows,
   replaceAgentTasksRows,
 } from './db/timeline-writes'
-import { readWorkspaceSnapshot } from './db/workspace-snapshot'
+import { readWorkspaceRevision, readWorkspaceSnapshot } from './db/workspace-snapshot'
 import {
   createForkedSessionRow,
   hydratePersistedPiSessionRows,
@@ -177,6 +177,14 @@ export function getWorkspaceSnapshot() {
     settings: getSettings(),
     preferences: getUiPreferences(),
     scratchpadBlocks: listScratchpadBlocks(),
+  })
+}
+
+export function getWorkspaceRevision() {
+  const database = getDb()
+  return readWorkspaceRevision(database, {
+    settings: getSettings(),
+    preferences: getUiPreferences(),
   })
 }
 

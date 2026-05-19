@@ -10,6 +10,7 @@ import type {
   RestoreSessionInput,
   StartSessionInput,
   TerminalConfig,
+  WorkspaceRevision,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import {
@@ -37,6 +38,7 @@ import {
   deleteScratchpadBlock,
   getAgentDetail,
   getAgentLaunchConfig,
+  getWorkspaceRevision,
   getWorkspaceSnapshot,
   hideProject,
   renameSession,
@@ -90,6 +92,7 @@ type TerminalServerConfig = Awaited<ReturnType<TerminalServerApi['ensure']>>
 
 export type WorkspaceServiceApi = {
   readonly snapshot: () => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
+  readonly revision: () => Effect.Effect<WorkspaceRevision, WorkspaceServiceError>
   readonly agentDetail: (input: AgentDetailInput) => Effect.Effect<AgentDetail, WorkspaceServiceError>
   readonly addProject: (input: AddProjectInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly deleteProject: (input: DeleteProjectInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
@@ -161,6 +164,7 @@ export class WorkspaceService extends Context.Tag('@kiri/WorkspaceService')<
 
 export type WorkspaceServiceDependencies = {
   readonly getWorkspaceSnapshot: () => WorkspaceSnapshot
+  readonly getWorkspaceRevision: () => WorkspaceRevision
   readonly getAgentDetail: (input: AgentDetailInput) => AgentDetail
   readonly addProject: (input: AddProjectInput) => WorkspaceSnapshot
   readonly deleteProject: (id: string) => WorkspaceSnapshot
@@ -204,6 +208,7 @@ function liveWorkspaceServiceDependencies(
 ): WorkspaceServiceDependencies {
   return {
     getWorkspaceSnapshot,
+    getWorkspaceRevision,
     getAgentDetail,
     addProject,
     deleteProject: deleteProjectWithRuntimeCleanup,
@@ -243,6 +248,9 @@ export function makeWorkspaceService(
 ): WorkspaceServiceApi {
   const snapshot = Effect.fn('WorkspaceService.snapshot')(function* () {
     return yield* syncCall('WorkspaceService.snapshot', dependencies.getWorkspaceSnapshot)
+  })
+  const revision = Effect.fn('WorkspaceService.revision')(function* () {
+    return yield* syncCall('WorkspaceService.revision', dependencies.getWorkspaceRevision)
   })
 
   const snapshotAfter = <A>(
@@ -286,6 +294,7 @@ export function makeWorkspaceService(
 
   return {
     snapshot,
+    revision,
     agentDetail: syncMethod('WorkspaceService.agentDetail', dependencies.getAgentDetail),
     addProject: syncMethod('WorkspaceService.addProject', dependencies.addProject),
     deleteProject: syncIdMethod('WorkspaceService.deleteProject', dependencies.deleteProject),

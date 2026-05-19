@@ -90,8 +90,8 @@ export function setAgentRuntimeState(
   state: Record<string, unknown>,
 ) {
   database
-    .prepare('UPDATE agent_slots SET runtime_state_json = ? WHERE id = ?')
-    .run(JSON.stringify(state), agentId)
+    .prepare('UPDATE agent_slots SET runtime_state_json = ?, runtime_state_updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(state), new Date().toISOString(), agentId)
 }
 
 export function queueAgentTerminalInput(
@@ -150,8 +150,8 @@ export function takeAgentTerminalInputs(database: DatabaseSync, agentId: string)
 
 export function clearAgentRuntimeState(database: DatabaseSync, agentId: string) {
   database
-    .prepare('UPDATE agent_slots SET runtime_state_json = NULL WHERE id = ?')
-    .run(agentId)
+    .prepare('UPDATE agent_slots SET runtime_state_json = NULL, runtime_state_updated_at = ? WHERE id = ?')
+    .run(new Date().toISOString(), agentId)
 }
 
 export function setAgentStatus(
