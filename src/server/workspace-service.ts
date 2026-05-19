@@ -38,6 +38,7 @@ import {
   deleteScratchpadBlock,
   getAgentDetail,
   getAgentLaunchConfig,
+  refreshReadModels,
   getWorkspaceRevision,
   getWorkspaceSnapshot,
   hideProject,
@@ -165,6 +166,7 @@ export class WorkspaceService extends Context.Tag('@kiri/WorkspaceService')<
 export type WorkspaceServiceDependencies = {
   readonly getWorkspaceSnapshot: () => WorkspaceSnapshot
   readonly getWorkspaceRevision: () => WorkspaceRevision
+  readonly refreshReadModels: () => readonly unknown[]
   readonly getAgentDetail: (input: AgentDetailInput) => AgentDetail
   readonly addProject: (input: AddProjectInput) => WorkspaceSnapshot
   readonly deleteProject: (id: string) => WorkspaceSnapshot
@@ -209,6 +211,7 @@ function liveWorkspaceServiceDependencies(
   return {
     getWorkspaceSnapshot,
     getWorkspaceRevision,
+    refreshReadModels,
     getAgentDetail,
     addProject,
     deleteProject: deleteProjectWithRuntimeCleanup,
@@ -247,6 +250,7 @@ export function makeWorkspaceService(
   dependencies: WorkspaceServiceDependencies,
 ): WorkspaceServiceApi {
   const snapshot = Effect.fn('WorkspaceService.snapshot')(function* () {
+    yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
     return yield* syncCall('WorkspaceService.snapshot', dependencies.getWorkspaceSnapshot)
   })
   const revision = Effect.fn('WorkspaceService.revision')(function* () {
@@ -259,19 +263,22 @@ export function makeWorkspaceService(
   ) =>
     Effect.gen(function* () {
       yield* effect
+      yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
       return yield* syncCall(label, dependencies.getWorkspaceSnapshot)
     })
-  const syncMethod = <Input, Output>(
+  const syncSnapshotMethod = <Input>(
     label: string,
-    call: (input: Input) => Output,
+    call: (input: Input) => WorkspaceSnapshot,
   ) =>
     Effect.fn(label)(function* (input: Input) {
-      return yield* syncCall(label, () => call(input))
+      const next = yield* syncCall(label, () => call(input))
+      yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
+      return next
     })
-  const syncIdMethod = <Input extends { readonly id: string }, Output>(
+  const syncSnapshotIdMethod = <Input extends { readonly id: string }>(
     label: string,
-    call: (id: string) => Output,
-  ) => syncMethod(label, (input: Input) => call(input.id))
+    call: (id: string) => WorkspaceSnapshot,
+  ) => syncSnapshotMethod(label, (input: Input) => call(input.id))
   const snapshotAfterPromiseMethod = <Input>(
     label: string,
     call: (input: Input) => Promise<unknown>,
@@ -295,18 +302,21 @@ export function makeWorkspaceService(
   return {
     snapshot,
     revision,
-    agentDetail: syncMethod('WorkspaceService.agentDetail', dependencies.getAgentDetail),
-    addProject: syncMethod('WorkspaceService.addProject', dependencies.addProject),
-    deleteProject: syncIdMethod('WorkspaceService.deleteProject', dependencies.deleteProject),
-    hideProject: syncIdMethod('WorkspaceService.hideProject', dependencies.hideProject),
-    reorderProjects: syncMethod('WorkspaceService.reorderProjects', dependencies.reorderProjects),
-    unhideProject: syncIdMethod('WorkspaceService.unhideProject', dependencies.unhideProject),
+    agentDetail: Effect.fn('WorkspaceService.agentDetail')(function* (input: AgentDetailInput) {
+      yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
+      return yield* syncCall('WorkspaceService.agentDetail', () => dependencies.getAgentDetail(input))
+    }),
+    addProject: syncSnapshotMethod('WorkspaceService.addProject', dependencies.addProject),
+    deleteProject: syncSnapshotIdMethod('WorkspaceService.deleteProject', dependencies.deleteProject),
+    hideProject: syncSnapshotIdMethod('WorkspaceService.hideProject', dependencies.hideProject),
+    reorderProjects: syncSnapshotMethod('WorkspaceService.reorderProjects', dependencies.reorderProjects),
+    unhideProject: syncSnapshotIdMethod('WorkspaceService.unhideProject', dependencies.unhideProject),
     chooseProjectDirectory: Effect.fn('WorkspaceService.chooseProjectDirectory')(function* () {
       return yield* syncCall('WorkspaceService.chooseProjectDirectory', dependencies.chooseProjectDirectory)
     }),
-    deleteSession: syncMethod('WorkspaceService.deleteSession', dependencies.deleteSession),
-    restoreSession: syncMethod('WorkspaceService.restoreSession', dependencies.restoreSession),
-    renameSession: syncMethod('WorkspaceService.renameSession', dependencies.renameSession),
+    deleteSession: syncSnapshotMethod('WorkspaceService.deleteSession', dependencies.deleteSession),
+    restoreSession: syncSnapshotMethod('WorkspaceService.restoreSession', dependencies.restoreSession),
+    renameSession: syncSnapshotMethod('WorkspaceService.renameSession', dependencies.renameSession),
     sendMessage: snapshotAfterPromiseMethod('WorkspaceService.sendMessage', dependencies.promptAgent),
     steerMessage: snapshotAfterPromiseMethod('WorkspaceService.steerMessage', dependencies.steerAgent),
     interruptMessage: snapshotAfterPromiseMethod('WorkspaceService.interruptMessage', dependencies.interruptAgent),
@@ -327,6 +337,7 @@ export function makeWorkspaceService(
         'WorkspaceService.forkSession',
         () => dependencies.forkAgentSession(input),
       )
+      yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
       const forkSnapshot = yield* syncCall(
         'WorkspaceService.forkSession.snapshot',
         dependencies.getWorkspaceSnapshot,
@@ -351,13 +362,13 @@ export function makeWorkspaceService(
         model: config.model,
       }
     }),
-    refreshTerminalDiffs: syncMethod(
+    refreshTerminalDiffs: syncSnapshotMethod(
       'WorkspaceService.refreshTerminalDiffs',
       (input: RefreshTerminalDiffsInput) => dependencies.refreshTerminalSessionDiffs(input.agentId),
     ),
-    startSession: syncMethod('WorkspaceService.startSession', dependencies.startSession),
-    addScratchpadBlock: syncMethod('WorkspaceService.addScratchpadBlock', dependencies.addScratchpadBlock),
-    deleteScratchpadBlock: syncIdMethod(
+    startSession: syncSnapshotMethod('WorkspaceService.startSession', dependencies.startSession),
+    addScratchpadBlock: syncSnapshotMethod('WorkspaceService.addScratchpadBlock', dependencies.addScratchpadBlock),
+    deleteScratchpadBlock: syncSnapshotIdMethod(
       'WorkspaceService.deleteScratchpadBlock',
       dependencies.deleteScratchpadBlock,
     ),
@@ -366,6 +377,7 @@ export function makeWorkspaceService(
         'WorkspaceService.triggerScratchpadBlock',
         () => dependencies.triggerScratchpadSession(input),
       )
+      yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
       const triggerSnapshot = yield* syncCall(
         'WorkspaceService.triggerScratchpadBlock.snapshot',
         dependencies.getWorkspaceSnapshot,

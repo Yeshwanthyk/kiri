@@ -12,6 +12,7 @@ import {
   indexReadModelCandidatesWithTypeScript,
   listReadModelEntries,
   refreshReadModelEntries,
+  refreshReadModelEntriesIfChanged,
 } from '~/server/read-model-indexer'
 
 describe('read-model indexer', () => {
@@ -97,6 +98,25 @@ describe('read-model indexer', () => {
     })
 
     expect(entries[0]?.revision).toBe('rust-revision')
+  })
+
+  it('skips rewriting unchanged derived rows', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-read-model-skip-'))
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const first = refreshReadModelEntriesIfChanged(database, {
+        env: { KIRI_READ_MODEL_INDEXER: 'typescript' },
+      })
+      const second = refreshReadModelEntriesIfChanged(database, {
+        env: { KIRI_READ_MODEL_INDEXER: 'typescript' },
+      })
+
+      expect(first.changed).toBe(true)
+      expect(second.changed).toBe(false)
+      expect(second.entries).toEqual(first.entries)
+    } finally {
+      database.close()
+    }
   })
 
   it('keeps TypeScript fallback revisions byte-compatible with Rust', () => {

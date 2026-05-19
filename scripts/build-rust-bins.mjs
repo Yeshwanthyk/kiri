@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process'
 
 const projectRoot = resolve(process.cwd())
 const destinationDir = join(projectRoot, 'dist', 'bin')
-const binaries = ['kiri-git-diff-collector']
+const binaries = ['kiri-git-diff-collector', 'kiri-read-model-indexer']
 
 mkdirSync(destinationDir, { recursive: true })
 

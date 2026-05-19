@@ -23,6 +23,11 @@ export type RustReadModelIndexer = (
   env: NodeJS.ProcessEnv,
 ) => readonly ReadModelEntry[]
 
+export type RefreshReadModelEntriesResult = {
+  readonly entries: readonly ReadModelEntry[]
+  readonly changed: boolean
+}
+
 export function refreshReadModelEntries(
   database: DatabaseSync,
   input: {
@@ -30,9 +35,23 @@ export function refreshReadModelEntries(
     readonly runRustIndexer?: RustReadModelIndexer
   } = {},
 ) {
+  return refreshReadModelEntriesIfChanged(database, input).entries
+}
+
+export function refreshReadModelEntriesIfChanged(
+  database: DatabaseSync,
+  input: {
+    readonly env?: NodeJS.ProcessEnv
+    readonly runRustIndexer?: RustReadModelIndexer
+  } = {},
+): RefreshReadModelEntriesResult {
   const entries = indexReadModelCandidates(collectReadModelCandidates(database), input)
+  const existing = listReadModelEntries(database)
+  if (sameReadModelEntries(existing, entries)) {
+    return { entries: existing, changed: false }
+  }
   replaceReadModelEntries(database, entries)
-  return entries
+  return { entries, changed: true }
 }
 
 export function listReadModelEntries(
@@ -301,6 +320,20 @@ function replaceReadModelEntries(
     database.exec('ROLLBACK')
     throw error
   }
+}
+
+function sameReadModelEntries(
+  left: readonly ReadModelEntry[],
+  right: readonly ReadModelEntry[],
+) {
+  if (left.length !== right.length) return false
+  const leftSignatures = left.map(readModelEntrySignature).sort()
+  const rightSignatures = right.map(readModelEntrySignature).sort()
+  return leftSignatures.every((signature, index) => signature === rightSignatures[index])
+}
+
+function readModelEntrySignature(entry: ReadModelEntry) {
+  return `${entry.kind}\0${entry.entityId}\0${entry.revision}\0${entry.updatedAt}`
 }
 
 function shouldUseRustIndexer(env: NodeJS.ProcessEnv, hasInjectedRustIndexer: boolean) {
