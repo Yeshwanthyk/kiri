@@ -125,7 +125,7 @@ async function tryRunBackendOperation(request: unknown) {
         authorization: `Bearer ${info.token}`,
       },
       body: JSON.stringify(request),
-      signal: AbortSignal.timeout(2_000),
+      signal: AbortSignal.timeout(backendControlTimeoutMs()),
     })
     if (response.ok) {
       return {
@@ -152,6 +152,11 @@ async function tryRunBackendOperation(request: unknown) {
       },
     }
   }
+}
+
+function backendControlTimeoutMs() {
+  const value = Number.parseInt(process.env.KIRI_BACKEND_CONTROL_TIMEOUT_MS ?? '', 10)
+  return Number.isFinite(value) && value > 0 ? value : 15_000
 }
 
 async function backendErrorResponse(response: Response, request: unknown) {
