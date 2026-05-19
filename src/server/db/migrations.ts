@@ -1,7 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { runtimeKinds } from '~/lib/contracts'
+import { readModelKinds } from '../read-model-contract'
 
 const runtimeCheckValues = runtimeKinds.map((runtime) => `'${runtime}'`).join(', ')
+const readModelKindCheckValues = readModelKinds.map((kind) => `'${kind}'`).join(', ')
 
 export function migrate(database: DatabaseSync) {
   database.exec(`
@@ -171,6 +173,18 @@ export function migrate(database: DatabaseSync) {
 
     CREATE INDEX IF NOT EXISTS workflow_item_attempts_item_created
       ON workflow_item_attempts(item_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS read_model_entries (
+      kind TEXT NOT NULL CHECK (kind IN (${readModelKindCheckValues})),
+      entity_id TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (kind, entity_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS read_model_entries_updated
+      ON read_model_entries(updated_at);
   `)
   widenRuntimeCheck(database)
   addContextUsageWindowTokensColumn(database)
@@ -180,9 +194,60 @@ export function migrate(database: DatabaseSync) {
   addAgentArchivedAtColumn(database)
   addAgentInterfaceModeColumn(database)
   addAgentEventsTable(database)
+  addReadModelEntriesTable(database)
+  widenReadModelKindCheck(database)
   normalizeTerminalOnlyInterfaceMode(database)
   repairAgentSlotReferences(database)
   removeLegacyDefaultAgentSlots(database)
+}
+
+function addReadModelEntriesTable(database: DatabaseSync) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS read_model_entries (
+      kind TEXT NOT NULL CHECK (kind IN (${readModelKindCheckValues})),
+      entity_id TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (kind, entity_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS read_model_entries_updated
+      ON read_model_entries(updated_at);
+  `)
+}
+
+function widenReadModelKindCheck(database: DatabaseSync) {
+  const row = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'read_model_entries'")
+    .get() as { sql?: string } | undefined
+  if (!row?.sql || readModelKinds.every((kind) => row.sql?.includes(`'${kind}'`))) return
+
+  database.exec(`
+    PRAGMA foreign_keys = OFF;
+    PRAGMA legacy_alter_table = ON;
+    ALTER TABLE read_model_entries RENAME TO read_model_entries_old;
+
+    CREATE TABLE read_model_entries (
+      kind TEXT NOT NULL CHECK (kind IN (${readModelKindCheckValues})),
+      entity_id TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (kind, entity_id)
+    );
+
+    INSERT INTO read_model_entries (kind, entity_id, revision, payload_json, updated_at)
+    SELECT kind, entity_id, revision, payload_json, updated_at
+    FROM read_model_entries_old
+    WHERE kind IN (${readModelKindCheckValues});
+
+    DROP TABLE read_model_entries_old;
+    CREATE INDEX IF NOT EXISTS read_model_entries_updated
+      ON read_model_entries(updated_at);
+    PRAGMA legacy_alter_table = OFF;
+    PRAGMA foreign_keys = ON;
+  `)
 }
 
 function addProjectHiddenAtColumn(database: DatabaseSync) {

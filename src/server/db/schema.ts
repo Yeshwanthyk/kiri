@@ -12,6 +12,7 @@ import {
   workflowItemStatusSchema,
   workflowRunStatusSchema,
 } from '~/lib/contracts'
+import { readModelKindSchema } from '../read-model-contract'
 
 export const projectDbRowSchema = z.object({
   id: z.string(),
@@ -173,6 +174,14 @@ export const workflowAttemptDbRowSchema = z.object({
   error: z.string().nullable(),
   createdAt: z.string(),
   completedAt: z.string().nullable(),
+})
+
+export const readModelEntryDbRowSchema = z.object({
+  kind: readModelKindSchema,
+  entityId: z.string(),
+  revision: z.string(),
+  payloadJson: z.string(),
+  updatedAt: z.string(),
 })
 
 export const agentLaunchConfigSchema = z.object({

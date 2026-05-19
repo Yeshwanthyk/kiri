@@ -83,8 +83,12 @@ describe('DB migrations', () => {
         .prepare('PRAGMA table_info(agent_slots)')
         .all() as Array<{ name: string }>
       expect(agentColumns.map((column) => column.name)).toEqual(
-        expect.arrayContaining(['interface_mode', 'runtime_state_json', 'archived_at']),
+        expect.arrayContaining(['interface_mode', 'runtime_state_json', 'runtime_state_updated_at', 'archived_at']),
       )
+      const readModelSql = database
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'read_model_entries'")
+        .get() as { sql?: string } | undefined
+      expect(readModelSql?.sql).toContain("kind IN ('workspace.summary', 'agent.timeline.summary', 'diff.summary')")
 
       database
         .prepare(
