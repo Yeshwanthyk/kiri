@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from '@effect/vitest'
@@ -8,6 +8,7 @@ import {
   GitDiffError,
   GitDiffService,
   collectGitDiffArtifacts,
+  collectRustGitDiffArtifacts,
   diffArtifactsFromPatch,
   makeGitDiffService,
 } from '../../src/server/git-diff'
@@ -124,6 +125,47 @@ describe('git diff capture', () => {
       expect(error.message).toBe('git status exploded')
     }),
   )
+
+  it.effect('falls back to the TypeScript collector when Rust mode fails', () =>
+    Effect.gen(function* () {
+      let rustCalls = 0
+      const service = makeGitDiffService({
+        env: { KIRI_GIT_DIFF_COLLECTOR: 'rust' },
+        runRustCollector: () => {
+          rustCalls += 1
+          throw new Error('rust collector unavailable')
+        },
+        runGit: (_cwd, args) => {
+          if (args[0] === 'rev-parse') return 'true\n'
+          if (args[0] === 'status') return ''
+          return 'diff --git a/src/fallback.ts b/src/fallback.ts\n--- a/src/fallback.ts\n+++ b/src/fallback.ts'
+        },
+      })
+
+      const artifacts = yield* service.collectArtifacts('/repo')
+
+      expect(rustCalls).toBe(1)
+      expect(artifacts.map((artifact) => artifact.path)).toEqual(['src/fallback.ts'])
+    }),
+  )
+
+  it.effect('matches TypeScript output with the Rust collector on a real worktree', () =>
+    Effect.gen(function* () {
+      buildRustCollector()
+      const repo = initRepo()
+
+      writeFileSync(join(repo, 'tracked.ts'), 'export const value = 4\n')
+      writeFileSync(join(repo, 'new.ts'), 'export const created = true\n')
+      mkdirSync(join(repo, 'dist'))
+      writeFileSync(join(repo, 'dist', 'skip.js'), 'compiled\n')
+
+      const service = makeGitDiffService({ env: {} })
+      const tsArtifacts = yield* service.collectArtifacts(repo)
+      const rustArtifacts = collectRustGitDiffArtifacts(repo)
+
+      expect(normalizeArtifacts(rustArtifacts)).toEqual(normalizeArtifacts(tsArtifacts))
+    }),
+  )
 })
 
 function initRepo() {
@@ -135,6 +177,20 @@ function initRepo() {
   runGit(dir, ['add', 'tracked.ts'])
   runGit(dir, ['commit', '-m', 'initial'])
   return dir
+}
+
+function buildRustCollector() {
+  execFileSync('cargo', ['build', '-p', 'kiri-git-diff-collector'], { stdio: 'inherit' })
+}
+
+function normalizeArtifacts(artifacts: ReturnType<typeof collectGitDiffArtifacts>) {
+  return artifacts
+    .map((artifact) => ({
+      title: artifact.title,
+      path: artifact.path,
+      patch: artifact.patch.replaceAll('\r\n', '\n'),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path))
 }
 
 function runGit(cwd: string, args: string[]) {

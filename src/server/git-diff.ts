@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { basename } from 'node:path'
+import { existsSync } from 'node:fs'
+import { basename, resolve } from 'node:path'
 import { Context, Data, Effect, Layer } from 'effect'
 
 const GIT_COMMAND_TIMEOUT_MS = 3000
@@ -24,6 +25,8 @@ export type GitCommandRunner = (
   timeout: number,
 ) => string
 
+export type RustGitDiffCollector = (cwd: string) => RuntimeDiffArtifact[]
+
 export type GitDiffServiceApi = {
   readonly collectArtifacts: (cwd: string) => Effect.Effect<RuntimeDiffArtifact[], GitDiffError>
   readonly artifactsFromPatch: (patch: string) => Effect.Effect<RuntimeDiffArtifact[]>
@@ -41,13 +44,23 @@ export class GitDiffService extends Context.Tag('@kiri/GitDiff')<
 
 export function makeGitDiffService(input: {
   readonly runGit?: GitCommandRunner
+  readonly runRustCollector?: RustGitDiffCollector
+  readonly env?: NodeJS.ProcessEnv
   readonly now?: () => number
 } = {}): GitDiffServiceApi {
   const runGitCommand = input.runGit ?? runGit
+  const runRustCollector = input.runRustCollector ?? collectRustGitDiffArtifacts
+  const env = input.env ?? process.env
   const now = input.now ?? Date.now
   return {
     collectArtifacts: (cwd) => Effect.try({
-      try: () => collectGitDiffArtifactsWith({ cwd, runGit: runGitCommand, now }),
+      try: () => collectGitDiffArtifactsWith({
+        cwd,
+        env,
+        runGit: runGitCommand,
+        runRustCollector,
+        now,
+      }),
       catch: (error) => new GitDiffError({
         message: error instanceof Error ? error.message : 'Failed to collect git diffs',
         cwd,
@@ -59,10 +72,35 @@ export function makeGitDiffService(input: {
 }
 
 export function collectGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] {
-  return collectGitDiffArtifactsWith({ cwd, runGit, now: Date.now })
+  return collectGitDiffArtifactsWith({
+    cwd,
+    env: process.env,
+    runGit,
+    runRustCollector: collectRustGitDiffArtifacts,
+    now: Date.now,
+  })
 }
 
 function collectGitDiffArtifactsWith(input: {
+  readonly cwd: string
+  readonly env: NodeJS.ProcessEnv
+  readonly runGit: GitCommandRunner
+  readonly runRustCollector: RustGitDiffCollector
+  readonly now: () => number
+}): RuntimeDiffArtifact[] {
+  const { cwd, env, runGit: runGitCommand, runRustCollector, now } = input
+  const collectorMode = env.KIRI_GIT_DIFF_COLLECTOR?.trim().toLowerCase()
+  if (collectorMode === 'rust') {
+    try {
+      return runRustCollector(cwd)
+    } catch {
+      // Keep the new collector as an opt-in acceleration path until parity is proven broadly.
+    }
+  }
+  return collectGitDiffArtifactsWithTypeScript({ cwd, runGit: runGitCommand, now })
+}
+
+function collectGitDiffArtifactsWithTypeScript(input: {
   readonly cwd: string
   readonly runGit: GitCommandRunner
   readonly now: () => number
@@ -107,6 +145,53 @@ function collectGitDiffArtifactsWith(input: {
       patch,
     }]
   })
+}
+
+export function collectRustGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] {
+  const output = execFileSync(rustCollectorBinaryPath(), [cwd], {
+    encoding: 'utf8',
+    maxBuffer: 20 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: GIT_COMMAND_TIMEOUT_MS + UNTRACKED_DIFF_BUDGET_MS + 1000,
+  })
+  return parseRustDiffCollectorOutput(output)
+}
+
+function rustCollectorBinaryPath() {
+  const explicit = process.env.KIRI_GIT_DIFF_COLLECTOR_BIN?.trim()
+  if (explicit) return explicit
+
+  const binaryName = process.platform === 'win32'
+    ? 'kiri-git-diff-collector.exe'
+    : 'kiri-git-diff-collector'
+  const candidates = [
+    resolve(process.cwd(), 'target', 'debug', binaryName),
+    resolve(process.cwd(), 'target', 'release', binaryName),
+  ]
+  const found = candidates.find((candidate) => existsSync(candidate))
+  if (found) return found
+  return candidates[0]
+}
+
+function parseRustDiffCollectorOutput(output: string): RuntimeDiffArtifact[] {
+  const parsed: unknown = JSON.parse(output)
+  if (!Array.isArray(parsed)) {
+    throw new Error('Rust git diff collector returned non-array JSON')
+  }
+  return parsed.map((item) => {
+    if (!isRuntimeDiffArtifact(item)) {
+      throw new Error('Rust git diff collector returned invalid artifact JSON')
+    }
+    return item
+  })
+}
+
+function isRuntimeDiffArtifact(value: unknown): value is RuntimeDiffArtifact {
+  if (!value || typeof value !== 'object') return false
+  const artifact = value as Record<string, unknown>
+  return typeof artifact.title === 'string'
+    && typeof artifact.path === 'string'
+    && typeof artifact.patch === 'string'
 }
 
 export function diffArtifactsFromPatch(patch: string): RuntimeDiffArtifact[] {
