@@ -120,6 +120,25 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.env.KIRI_CLAUDE_SESSION_ID).toBe(sessionId)
   })
 
+  it('ignores empty Claude HOME env values when checking for existing sessions', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kiri-claude-home-'))
+    vi.stubEnv('KIRI_CLAUDE_HOME', '')
+    const config = {
+      ...launchConfig('claude'),
+      runtimeStateJson: JSON.stringify({ homePath: home }),
+    }
+    const sessionId = claudeTerminalSessionId(config.id)
+    const projectDir = join(home, '.claude/projects', resolve(config.cwd).replace(/[\\/]/g, '-'))
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, `${sessionId}.jsonl`), '')
+
+    const launch = buildTerminalProcessLaunch(config, 'runtime', shell)
+
+    expect(launch.args).toContain('--resume')
+    expect(launch.args).toContain(sessionId)
+    expect(launch.env.HOME).toBe(home)
+  })
+
   it('preserves an explicit Claude resume state when one already exists', () => {
     const launch = buildTerminalProcessLaunch({
       ...launchConfig('claude'),

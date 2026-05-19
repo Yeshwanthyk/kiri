@@ -164,7 +164,7 @@ function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunch
   return Effect.gen(function* () {
   const state = yield* parseRuntimeState(config.runtimeStateJson)
   const initialTerminalInput = firstPendingTerminalInput(state)
-  const homePath = context.env.KIRI_CLAUDE_HOME ?? stringValue(state.homePath)
+  const homePath = stringValue(context.env.KIRI_CLAUDE_HOME) ?? stringValue(state.homePath)
   const args = [
     '--dangerously-skip-permissions',
     '--mcp-config',
@@ -277,7 +277,7 @@ function claudeSessionExists(
     || context.exists(join(projectDir, sessionId))
 }
 
-function claudeProjectKey(cwd: string) {
+export function claudeProjectKey(cwd: string) {
   return resolve(cwd).replace(/[\\/]/g, '-')
 }
 
@@ -396,20 +396,33 @@ function stringValue(value: unknown) {
 
 function firstPendingTerminalInput(state: Record<string, unknown>): TerminalLaunchInitialInput | null {
   const value = state.pendingTerminalInputs
-  if (!Array.isArray(value)) return null
+  if (!isUnknownArray(value)) return null
   for (const item of value) {
     if (!item || typeof item !== 'object') continue
-    const text = 'text' in item && typeof item.text === 'string' ? item.text : null
+    const textValue = objectProperty(item, 'text')
+    const text = typeof textValue === 'string' ? textValue : null
     if (!text) continue
+    const submitValue = objectProperty(item, 'submit')
+    const createdAtValue = objectProperty(item, 'createdAt')
     return {
       text,
-      submit: 'submit' in item && typeof item.submit === 'boolean' ? item.submit : true,
-      createdAt: 'createdAt' in item && typeof item.createdAt === 'string'
-        ? item.createdAt
+      submit: typeof submitValue === 'boolean' ? submitValue : true,
+      createdAt: typeof createdAtValue === 'string'
+        ? createdAtValue
         : new Date(0).toISOString(),
     }
   }
   return null
+}
+
+function isUnknownArray(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value)
+}
+
+function objectProperty(value: object, key: string) {
+  return Object.prototype.hasOwnProperty.call(value, key)
+    ? (value as Record<string, unknown>)[key]
+    : undefined
 }
 
 function resolveExecutable(
