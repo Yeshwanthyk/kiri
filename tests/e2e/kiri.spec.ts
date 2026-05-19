@@ -72,6 +72,7 @@ function resetE2eDatabase(database: DatabaseSync) {
     'messages',
     'threads',
     'deleted_sessions',
+    'scratchpad_blocks',
     'agent_slots',
     'projects',
   ]
@@ -894,6 +895,33 @@ test('escape leaves scratchpad input so sidebar keymaps work', async ({ page, is
   await expect(page.getByTestId('diff-panel')).toContainText('No diffs')
 })
 
+test('scratchpad trigger starts codex in terminal mode by default', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop terminal trigger flow')
+  const title = `Scratchpad Trigger Seed ${testInfo.project.name}`
+  const body = `scratchpad codex terminal ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+
+  await page.getByTestId('tab-scratchpad').click()
+  await expect(page.getByText(/trigger as/i)).toBeVisible()
+  await expect(page.getByText(/terminal · codex/)).toBeVisible()
+
+  await page.getByTestId('scratchpad-input').fill(body)
+  await page.getByTestId('scratchpad-panel').getByRole('button', { name: 'Capture' }).click()
+  await expect(page.getByTestId('scratchpad-block')).toContainText(body)
+
+  await page.getByTestId('scratchpad-block').getByRole('button', { name: 'Trigger' }).click()
+
+  await expect(page.getByTestId('terminal-panel')).toContainText('Agent terminal', { timeout: 10_000 })
+  await expect(page.getByTestId('terminal-transcript')).toContainText('fake-codex-terminal mode:fresh')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(body)
+  await expect
+    .poll(() => readLatestCodexSessionInterfaceMode())
+    .toBe('terminal')
+  expect(fakeCodexServer.requests.map((request: CodexHarnessRequest) => request.method)).not.toContain('thread/start')
+})
+
 test('agent switching does not refocus chat after explicit chat focus', async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, 'desktop agent switching only')
   const firstTitle = `First Session ${testInfo.project.name}`
@@ -1365,6 +1393,24 @@ function readAgentRuntimeState(title: string) {
       .get(title) as { runtimeStateJson: string | null } | undefined
     if (!row?.runtimeStateJson) return null
     return JSON.parse(row.runtimeStateJson) as Record<string, unknown>
+  } finally {
+    database.close()
+  }
+}
+
+function readLatestCodexSessionInterfaceMode() {
+  const database = new DatabaseSync(testDbPath)
+  try {
+    const row = database
+      .prepare(`
+        SELECT interface_mode AS interfaceMode
+        FROM agent_slots
+        WHERE runtime = 'codex'
+        ORDER BY position DESC, id DESC
+        LIMIT 1
+      `)
+      .get() as { interfaceMode: string } | undefined
+    return row?.interfaceMode ?? null
   } finally {
     database.close()
   }
