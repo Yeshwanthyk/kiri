@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { claudeProjectKey, claudeTerminalSessionId } from './terminal-launch'
+import { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 
 const claudeRuntimeStateSchema = z.object({
   homePath: z.string().trim().min(1).optional(),

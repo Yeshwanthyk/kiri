@@ -184,7 +184,9 @@ export function getAgentDetail(input: { agentId: string; limit?: number; offset?
   const database = getDb()
   hydratePersistedPiSessions(database)
   const agentId = input.agentId.trim()
-  hydrateClaudeSession(database, agentId)
+  if (agentRuntime(database, agentId) === 'claude') {
+    hydrateClaudeSession(database, agentId)
+  }
   const limit = Math.max(1, Math.min(input.limit ?? 500, 500))
   const offset = Math.max(0, Math.min(input.offset ?? 0, 100_000))
   const settings = getSettings()
@@ -231,6 +233,14 @@ export function getAgentDetail(input: { agentId: string; limit?: number; offset?
     })),
     tasks: detail.tasks,
   })
+}
+
+function agentRuntime(database: DatabaseSync, agentId: string) {
+  const row = database
+    .prepare('SELECT runtime FROM agent_slots WHERE id = ?')
+    .get(agentId) as { runtime: unknown } | undefined
+  const parsed = runtimeKindSchema.safeParse(row?.runtime)
+  return parsed.success ? parsed.data : null
 }
 
 export function listProjectSummaries(includeHidden = false) {

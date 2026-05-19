@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import type { RuntimeKind, TerminalMode } from '~/lib/contracts'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -8,6 +7,8 @@ import {
   RuntimeBinariesService,
   type RuntimeBinariesApi,
 } from './runtime-binaries'
+export { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
+import { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { commonTerminalEnv, removeColorDisablingEnv } from './terminal-env'
 
 export type TerminalAgentLaunchConfig = {
@@ -247,24 +248,6 @@ function claudeKiriTerminalPrompt(agentId: string) {
   ].join('\n')
 }
 
-export function claudeTerminalSessionId(agentId: string, state: Record<string, unknown> = {}) {
-  const configured = stringValue(state.sessionId)
-  if (configured && isUuid(configured)) return configured
-  return deterministicUuid(`kiri:claude:${agentId}`)
-}
-
-function deterministicUuid(input: string) {
-  const bytes = Array.from(createHash('sha256').update(input).digest().subarray(0, 16))
-  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50
-  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80
-  const hex = bytes.map((byte) => byte.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-}
-
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-}
-
 function claudeSessionExists(
   cwd: string,
   sessionId: string,
@@ -275,10 +258,6 @@ function claudeSessionExists(
   const projectDir = join(claudeHome, 'projects', claudeProjectKey(cwd))
   return context.exists(join(projectDir, `${sessionId}.jsonl`))
     || context.exists(join(projectDir, sessionId))
-}
-
-export function claudeProjectKey(cwd: string) {
-  return resolve(cwd).replace(/[\\/]/g, '-')
 }
 
 function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {

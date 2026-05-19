@@ -37,7 +37,7 @@ try {
 
   const [{ getDb }, { claudeProjectKey }, { makeKiriControl }, { runKiriOperation }] = await Promise.all([
     import('../../src/server/db'),
-    import('../../src/server/terminal-launch'),
+    import('../../src/server/claude-session-path'),
     import('../../src/server/kiri-control'),
     import('../../src/server/kiri-router'),
   ])
