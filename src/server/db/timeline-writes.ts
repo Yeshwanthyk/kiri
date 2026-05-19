@@ -520,14 +520,11 @@ export function hydrateProjectionMessages(
   const projectedPrefix = `pi-jsonl-${agentId}-`
   const existingMessages = existingThreadMessages(database, threadId, agentId)
   const existingById = new Map(existingMessages.map((message) => [message.id, message]))
-  const hadProjectedMessages = existingMessages.some((message) => message.id.startsWith(projectedPrefix))
   const liveMessageCounts = new Map<string, number>()
-  if (!hadProjectedMessages) {
-    for (const message of existingMessages) {
-      if (message.id.startsWith(projectedPrefix)) continue
-      const key = messageContentKey(message)
-      liveMessageCounts.set(key, (liveMessageCounts.get(key) ?? 0) + 1)
-    }
+  for (const message of existingMessages) {
+    if (message.id.startsWith(projectedPrefix)) continue
+    const key = messageContentKey(message)
+    liveMessageCounts.set(key, (liveMessageCounts.get(key) ?? 0) + 1)
   }
   database
     .prepare('DELETE FROM messages WHERE thread_id = ? AND id NOT LIKE ?')

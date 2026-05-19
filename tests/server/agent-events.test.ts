@@ -145,6 +145,56 @@ describe('agent events', () => {
       listAgentEvents(database, { agentId: 'agent-1' }).map((event) => event.payload.text),
     ).toEqual(['first', 'second'])
   })
+
+  it('does not duplicate a live reply when a later projection already has older projected turns', () => {
+    const database = testDatabase()
+    database
+      .prepare('INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at) VALUES (?, ?, 1, ?, 0, ?)')
+      .run('thread-agent-1', 'agent-1', 'Ready.', '2026-05-19T00:00:00.000Z')
+
+    hydrateProjectionMessages(database, 'agent-1', {
+      preview: 'old',
+      updatedAt: '2026-05-19T00:00:01.000Z',
+      messages: [{
+        id: 'jsonl-message-1',
+        role: 'assistant',
+        text: 'old',
+        timestamp: '2026-05-19T00:00:01.000Z',
+      }],
+    })
+    recordPiLiveMessages(database, {
+      agentId: 'agent-1',
+      promptText: 'next',
+      turnStartedAt: 1_779_148_801,
+      turnCompletedAt: 1_779_148_802,
+      messages: [
+        { role: 'user', content: 'next' },
+        { role: 'assistant', content: 'new' },
+      ],
+    })
+    hydrateProjectionMessages(database, 'agent-1', {
+      preview: 'new',
+      updatedAt: '2026-05-19T00:00:02.000Z',
+      messages: [
+        {
+          id: 'jsonl-message-1',
+          role: 'assistant',
+          text: 'old',
+          timestamp: '2026-05-19T00:00:01.000Z',
+        },
+        {
+          id: 'jsonl-message-2',
+          role: 'assistant',
+          text: 'new',
+          timestamp: '2026-05-19T00:00:02.000Z',
+        },
+      ],
+    })
+
+    expect(
+      listAgentEvents(database, { agentId: 'agent-1' }).map((event) => event.payload.text),
+    ).toEqual(['old', 'new'])
+  })
 })
 
 function testDatabase() {
