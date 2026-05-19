@@ -158,7 +158,8 @@ async function triggerScratchpadSessionWithDeps(
   if (!block) throw new Error(`Scratchpad block not found: ${input.id}`)
 
   const runtime = input.runtime ?? 'pi'
-  const interfaceMode = sessionInterfaceModeForRuntime(runtime, input.interfaceMode ?? 'gui')
+  const requestedInterfaceMode = input.interfaceMode ?? (runtime === 'codex' ? 'terminal' : 'gui')
+  const interfaceMode = sessionInterfaceModeForRuntime(runtime, requestedInterfaceMode)
   const agentId = dependencies.startSessionAndGetId({
     projectId: input.projectId,
     runtime,

@@ -109,7 +109,7 @@ export function ScratchpadPanel({
 }) {
   const [state, dispatch] = React.useReducer(scratchpadReducer, initialScratchpadState)
   const [triggerRuntime, setTriggerRuntime] = React.useState<RuntimeKind>('codex')
-  const [triggerInterfaceMode, setTriggerInterfaceMode] = React.useState<SessionInterfaceMode>('gui')
+  const [triggerInterfaceMode, setTriggerInterfaceMode] = React.useState<SessionInterfaceMode>('terminal')
   const [triggerModel, setTriggerModel] = React.useState(settings.runtimes.codex.defaultModel)
   const [triggerThinkingLevel, setTriggerThinkingLevel] = React.useState<ThinkingLevel>('medium')
   const captureRef = React.useRef<HTMLTextAreaElement>(null)

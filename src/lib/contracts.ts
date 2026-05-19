@@ -473,7 +473,7 @@ export const triggerScratchpadBlockInputSchema = z.object({
   id: z.string().trim().min(1),
   projectId: z.string().trim().min(1),
   runtime: runtimeKindSchema.optional(),
-  interfaceMode: sessionInterfaceModeSchema.default('gui'),
+  interfaceMode: sessionInterfaceModeSchema.optional(),
   model: z.string().trim().optional(),
   title: z.string().trim().optional(),
   thinkingLevel: thinkingLevelSchema.default('medium'),

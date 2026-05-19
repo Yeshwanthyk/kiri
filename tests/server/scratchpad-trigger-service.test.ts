@@ -17,6 +17,40 @@ const block: ScratchpadBlock = {
 }
 
 describe('ScratchpadTriggerService', () => {
+  it('defaults codex scratchpad triggers to terminal sessions', async () => {
+    const calls: string[] = []
+    const service = makeScratchpadTriggerService(testDependencies({
+      startSessionAndGetId: (input) => {
+        calls.push(`start:${input.runtime}:${input.interfaceMode}`)
+        return 'agent-1'
+      },
+      queueAgentTerminalInput: (input) => {
+        calls.push(`queue:${input.agentId}:${input.text}:${input.submit}`)
+      },
+      pasteAgentRuntimeTerminal: (input) => {
+        calls.push(`spawn:${input.agentId}`)
+        return Promise.resolve({ agentId: input.agentId, mode: 'runtime' })
+      },
+      promptAgent: () => {
+        calls.push('prompt')
+        return Promise.resolve()
+      },
+    }))
+
+    await Effect.runPromise(service.trigger({
+      id: 'block-1',
+      projectId: 'project-1',
+      runtime: 'codex',
+      thinkingLevel: 'medium',
+    }))
+
+    expect(calls).toEqual([
+      'start:codex:terminal',
+      'queue:agent-1:Do the work:true',
+      'spawn:agent-1',
+    ])
+  })
+
   it('queues and spawns terminal sessions without prompting', async () => {
     const calls: string[] = []
     const service = makeScratchpadTriggerService(testDependencies({
