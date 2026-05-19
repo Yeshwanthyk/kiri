@@ -3,6 +3,8 @@ import type { RuntimeKind, TerminalMode } from '~/lib/contracts'
 export type TerminalRegistryProc = {
   readonly resize: (cols: number, rows: number) => void
   readonly write: (data: string) => void
+  readonly paste: (text: string, submit: boolean) => void
+  readonly snapshot: () => void
   readonly kill: () => void
 }
 
@@ -54,14 +56,21 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   const sessions = new Map<string, TerminalRegistrySession>()
   const timers = input.timers ?? defaultTimers
 
-  function sessionKey(config: TerminalRegistryLaunchConfig, mode: TerminalMode) {
+  function sessionKey(config: TerminalRegistryLaunchConfig, mode: TerminalMode, instanceId = 'main') {
+    const suffix = terminalInstanceSuffix(instanceId)
     return mode === 'shell'
-      ? `${config.projectId}:shell`
-      : `${config.id}:runtime`
+      ? `${config.projectId}:shell:${suffix}`
+      : `${config.id}:runtime:${suffix}`
   }
 
-  function getReusable(config: TerminalRegistryLaunchConfig, mode: TerminalMode, cols: number, rows: number) {
-    const key = sessionKey(config, mode)
+  function getReusable(
+    config: TerminalRegistryLaunchConfig,
+    mode: TerminalMode,
+    cols: number,
+    rows: number,
+    instanceId = 'main',
+  ) {
+    const key = sessionKey(config, mode, instanceId)
     const existing = sessions.get(key)
     if (existing && existing.cwd === config.cwd) {
       existing.proc.resize(cols, rows)
@@ -105,6 +114,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     }
     session.sockets.add(socket)
     if (session.buffer) socket.send(session.buffer)
+    session.proc.snapshot()
   }
 
   function detach(session: TerminalRegistrySession, socket: TerminalRegistrySocket) {
@@ -156,8 +166,9 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   }
 
   function closeAgentRuntime(agentId: string) {
-    const session = sessions.get(`${agentId}:runtime`)
-    if (session) kill(session)
+    for (const [key, session] of Array.from(sessions)) {
+      if (key.startsWith(`${agentId}:runtime:`)) kill(session)
+    }
   }
 
   function closeAll() {
@@ -183,6 +194,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   }
 
   function trimReplay(session: TerminalRegistrySession) {
+    const totalBytes = session.replayBytes
     while (
       session.replayBytes > input.maxReplayBytes &&
       session.replayChunks.length > 1
@@ -191,7 +203,10 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       session.replayBytes -= removed.length
     }
     if (session.replayBytes <= input.maxReplayBytes) return
-    const tail = session.replayChunks[0]?.slice(-input.maxReplayBytes) ?? ''
+    const rawTail = session.replayChunks[0]?.slice(-input.maxReplayBytes) ?? ''
+    const tail = totalBytes > input.maxReplayBytes && rawTail.includes('\n')
+      ? lineSafeTail(rawTail)
+      : rawTail
     session.replayChunks.splice(0, session.replayChunks.length, tail)
     session.replayBytes = tail.length
   }
@@ -201,4 +216,14 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       sessions.delete(session.key)
     }
   }
+}
+
+function lineSafeTail(rawTail: string) {
+  const newline = rawTail.indexOf('\n')
+  return newline === -1 ? '' : rawTail.slice(newline + 1)
+}
+
+function terminalInstanceSuffix(instanceId: string) {
+  const normalized = instanceId.trim().replace(/[^a-zA-Z0-9_.:-]/g, '-')
+  return normalized || 'main'
 }

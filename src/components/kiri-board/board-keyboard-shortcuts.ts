@@ -79,6 +79,7 @@ export function useBoardKeyboardShortcuts({
     }
 
     function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented) return
       const key = event.key.toLowerCase()
       if ((event.metaKey || event.ctrlKey) && key === 'k') {
         event.preventDefault()
@@ -205,5 +206,5 @@ export function useBoardKeyboardShortcuts({
 
 function isTerminalHelperTarget(target: EventTarget | null) {
   return target instanceof HTMLElement &&
-    target.classList.contains('xterm-helper-textarea')
+    target.classList.contains('kiri-terminal-host')
 }

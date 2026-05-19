@@ -5,6 +5,8 @@ function proc() {
   return {
     resize: vi.fn(),
     write: vi.fn(),
+    paste: vi.fn(),
+    snapshot: vi.fn(),
     kill: vi.fn(),
   }
 }
@@ -46,15 +48,16 @@ describe('terminal registry', () => {
       cwd: '/repo',
     }
 
-    expect(registry.sessionKey(config, 'shell')).toBe('project-1:shell')
-    expect(registry.sessionKey(config, 'runtime')).toBe('agent-1:runtime')
+    expect(registry.sessionKey(config, 'shell')).toBe('project-1:shell:main')
+    expect(registry.sessionKey(config, 'runtime')).toBe('agent-1:runtime:main')
+    expect(registry.sessionKey(config, 'runtime', 'pane/2')).toBe('agent-1:runtime:pane-2')
   })
 
   it('reuses matching cwd sessions and kills stale cwd sessions', () => {
     const { registry } = createRegistry()
     const firstProc = proc()
     const session = registry.register({
-      key: 'agent-1:runtime',
+      key: 'agent-1:runtime:main',
       cwd: '/repo',
       mode: 'runtime',
       label: 'codex',
@@ -73,14 +76,14 @@ describe('terminal registry', () => {
 
     expect(registry.getReusable({ ...config, cwd: '/other' }, 'runtime', 80, 24)).toBeNull()
     expect(firstProc.kill).toHaveBeenCalledTimes(1)
-    expect(registry.sessions.has('agent-1:runtime')).toBe(false)
+    expect(registry.sessions.has('agent-1:runtime:main')).toBe(false)
   })
 
   it('does not let stale process exit unregister a replacement session with the same key', () => {
     const { registry } = createRegistry()
     const oldProc = proc()
     const oldSession = registry.register({
-      key: 'agent-1:runtime',
+      key: 'agent-1:runtime:main',
       cwd: '/repo',
       mode: 'runtime',
       label: 'codex',
@@ -96,7 +99,7 @@ describe('terminal registry', () => {
 
     expect(registry.getReusable(config, 'runtime', 80, 24)).toBeNull()
     const replacement = registry.register({
-      key: 'agent-1:runtime',
+      key: 'agent-1:runtime:main',
       cwd: '/other',
       mode: 'runtime',
       label: 'codex',
@@ -105,13 +108,13 @@ describe('terminal registry', () => {
     })
     registry.exit(oldSession, 'old exit')
 
-    expect(registry.sessions.get('agent-1:runtime')).toBe(replacement)
+    expect(registry.sessions.get('agent-1:runtime:main')).toBe(replacement)
   })
 
   it('caps replay buffer and broadcasts only to open sockets', () => {
     const { registry } = createRegistry()
     const session = registry.register({
-      key: 'agent-1:runtime',
+      key: 'agent-1:runtime:main',
       cwd: '/repo',
       mode: 'runtime',
       label: 'codex',
@@ -128,6 +131,7 @@ describe('terminal registry', () => {
 
     expect(session.buffer).toBe('456789abcdef')
     expect(open.send).toHaveBeenCalledWith('hello')
+    expect(session.proc.snapshot).toHaveBeenCalledTimes(2)
     expect(open.send).toHaveBeenCalledWith('next')
     expect(closed.send).toHaveBeenCalledWith('hello')
     expect(closed.send).not.toHaveBeenCalledWith('next')
@@ -136,7 +140,7 @@ describe('terminal registry', () => {
   it('trims replay on chunk boundaries before slicing a single oversized chunk', () => {
     const { registry } = createRegistry()
     const session = registry.register({
-      key: 'agent-1:runtime',
+      key: 'agent-1:runtime:main',
       cwd: '/repo',
       mode: 'runtime',
       label: 'codex',
@@ -161,7 +165,7 @@ describe('terminal registry', () => {
   it('sends the chunk-trimmed replay buffer on attach', () => {
     const { registry } = createRegistry()
     const session = registry.register({
-      key: 'agent-1:runtime',
+      key: 'agent-1:runtime:main',
       cwd: '/repo',
       mode: 'runtime',
       label: 'codex',
@@ -202,7 +206,7 @@ describe('terminal registry', () => {
     })
     const fakeProc = proc()
     const session = registry.register({
-      key: 'agent-1:runtime',
+      key: 'agent-1:runtime:main',
       cwd: '/repo',
       mode: 'runtime',
       label: 'codex',
@@ -245,7 +249,7 @@ describe('terminal registry', () => {
     const runtimeProc = proc()
     const shellProc = proc()
     const runtimeSession = registry.register({
-      key: 'agent-1:runtime',
+      key: 'agent-1:runtime:main',
       cwd: '/repo',
       mode: 'runtime',
       label: 'codex',
@@ -253,7 +257,7 @@ describe('terminal registry', () => {
       initialBuffer: '',
     })
     registry.register({
-      key: 'project-1:shell',
+      key: 'project-1:shell:main',
       cwd: '/repo',
       mode: 'shell',
       label: 'shell',
@@ -269,7 +273,7 @@ describe('terminal registry', () => {
     expect(shellProc.kill).not.toHaveBeenCalled()
 
     registry.exit(runtimeSession, 'late runtime exit')
-    expect(registry.sessions.has('project-1:shell')).toBe(true)
+    expect(registry.sessions.has('project-1:shell:main')).toBe(true)
 
     registry.closeAll()
     expect(shellProc.kill).toHaveBeenCalledTimes(1)

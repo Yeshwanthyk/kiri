@@ -31,6 +31,10 @@ describe('desktop package contract', () => {
       to: 'bin/kiri-mcp',
     })
     expect(isExecutable(join(process.cwd(), 'resources/bin/kiri-mcp'))).toBe(true)
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'resources/bin/kiri-term',
+      to: 'bin/kiri-term',
+    })
   })
 
   it('keeps built packaged app contents runnable when a desktop package assertion is requested', () => {
@@ -48,6 +52,8 @@ describe('desktop package contract', () => {
       const appAsar = join(resourcesRoot, 'app.asar')
       expect(existsSync(appAsar), `${appRoot} has app.asar`).toBe(true)
       expect(isExecutable(join(resourcesRoot, 'bin/kiri-mcp')), `${appRoot} has executable kiri-mcp`)
+        .toBe(true)
+      expect(isExecutable(join(resourcesRoot, 'bin/kiri-term')), `${appRoot} has executable kiri-term`)
         .toBe(true)
 
       const header = readAsarHeader(appAsar)

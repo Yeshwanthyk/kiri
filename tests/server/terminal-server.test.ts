@@ -193,6 +193,8 @@ describe('terminal server', () => {
       }),
       spawnPty: () => ({
         write,
+        paste: vi.fn(),
+        snapshot: vi.fn(),
         resize: vi.fn(),
         kill: vi.fn(),
         onData: vi.fn(),
@@ -241,8 +243,12 @@ describe('terminal server', () => {
       }),
       spawnPty: () => ({
         write: () => {
+          throw new Error('raw write failed')
+        },
+        paste: () => {
           throw new Error('write failed')
         },
+        snapshot: vi.fn(),
         resize: vi.fn(),
         kill,
         onData: vi.fn(),

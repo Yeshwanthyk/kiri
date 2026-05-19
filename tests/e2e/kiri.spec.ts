@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
-import { rmSync, mkdirSync, writeFileSync } from 'node:fs'
+import { rmSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -10,7 +10,7 @@ test.describe.configure({ mode: 'serial', timeout: 60_000 })
 
 const testDbPath = resolve(process.env.KIRI_DB_PATH ?? '.kiri/kiri.e2e.sqlite')
 const appRoot = process.cwd()
-const projectRoot = resolve(tmpdir(), 'kiri-pican-e2e-worktree')
+const projectRoot = resolve(realpathSync(tmpdir()), 'kiri-pican-e2e-worktree')
 const fileOperationFixturePath = resolve(projectRoot, 'src/kiri-file-operation-e2e.tmp')
 const detailFixturePath = resolve(projectRoot, 'src/detail.ts')
 let fakeCodexServer: Awaited<ReturnType<typeof startFakeCodexAppServer>>
@@ -602,7 +602,7 @@ test('sidebar switches between chat, diffs, and terminal', async ({ page, isMobi
   await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
 
   await expect(terminalInput).toBeFocused()
-  await page.getByRole('button', { name: /Toggle terminal focus/ }).click()
+  await page.getByRole('button', { name: /Release terminal focus/ }).click()
   await expect(terminalInput).not.toBeFocused()
   await page.keyboard.down('Shift')
   await page.keyboard.press('KeyC')
@@ -654,7 +654,7 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
   await expect(page.getByTestId('terminal-panel')).toBeVisible()
   await expect.poll(async () =>
     terminalInputElement.evaluate((element) =>
-      element === document.querySelector('[data-testid="terminal-panel"] .xterm-helper-textarea'),
+      element === document.querySelector('[data-testid="terminal-panel"] .kiri-terminal-host'),
     ),
   ).toBe(true)
   await expect.poll(async () =>
@@ -669,6 +669,27 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
   await expect(page.getByTestId('terminal-transcript')).toContainText(
     `preserved:tab-preserved:${projectRoot}/src`,
   )
+})
+
+test('terminal tabs and split panes create independent terminal surfaces', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop terminal tabs and panes')
+  const title = `Terminal Tabs Panes ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+
+  await page.getByTestId('tab-terminal').click()
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  await expect(page.getByTestId('terminal-host')).toHaveCount(1)
+
+  await page.getByTestId('terminal-new-tab').click()
+  await expect(page.getByTestId('terminal-tab')).toHaveCount(2)
+  await expect(page.getByTestId('terminal-host')).toHaveCount(1)
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+
+  await page.getByTestId('terminal-split-pane').click()
+  await expect(page.getByTestId('terminal-host')).toHaveCount(2)
+  await expect(page.getByTestId('terminal-panel')).toHaveAttribute('data-terminal-pane-count', '2')
 })
 
 test('terminal focus controls still work after a theme change', async ({ page, isMobile }, testInfo) => {
@@ -704,7 +725,7 @@ test('terminal focus controls still work after a theme change', async ({ page, i
   await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
   await expect(terminalInput).toBeFocused()
 
-  await page.getByRole('button', { name: /Toggle terminal focus/ }).click()
+  await page.getByRole('button', { name: /Release terminal focus/ }).click()
   await expect(terminalInput).not.toBeFocused()
   await terminalInput.click()
   await expect(terminalInput).toBeFocused()

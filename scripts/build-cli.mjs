@@ -20,9 +20,6 @@ await build({
     js: 'import { createRequire as __kiriCreateRequire } from "node:module"; const require = __kiriCreateRequire(import.meta.url);',
   },
   sourcemap: false,
-  external: [
-    'node-pty',
-  ],
   plugins: [
     {
       name: 'kiri-tsconfig-paths',

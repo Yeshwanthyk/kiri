@@ -5,7 +5,6 @@ import { platform } from 'node:os'
 import { parse } from 'node:url'
 import { Context, Effect, Layer } from 'effect'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
-import * as pty from 'node-pty'
 import { terminalModeSchema, type TerminalMode } from '~/lib/contracts'
 import { rememberCodexTerminalSession } from './codex-cli-sessions'
 import {
@@ -18,6 +17,7 @@ import {
   type TerminalAgentLaunchConfig,
   type TerminalProcessLaunch,
 } from './terminal-launch'
+import { closeKiriTermClient, spawnKiriTermProc, type KiriTermProc } from './kiri-term-client'
 import { makeTerminalRegistry, type TerminalRegistrySession } from './terminal-registry'
 
 type TerminalServerInfo = {
@@ -31,6 +31,11 @@ type TerminalClientMessage =
   | {
       type: 'input'
       data: string
+    }
+  | {
+      type: 'paste'
+      text: string
+      submit: boolean
     }
   | {
       type: 'resize'
@@ -61,7 +66,7 @@ type TerminalServerRuntime = {
   setWebSocketServer: (server: WebSocketServer | null) => void
 }
 
-type TerminalPtyProcess = ReturnType<typeof pty.spawn>
+type TerminalPtyProcess = KiriTermProc
 
 export type TerminalServerDependencies = {
   readonly getAgentLaunchConfig: (agentId: string) => TerminalAgentLaunchConfig
@@ -73,8 +78,15 @@ export type TerminalServerDependencies = {
   readonly spawnPty: (
     command: string,
     args: readonly string[],
-    options: Parameters<typeof pty.spawn>[2],
+    options: {
+      readonly name: string
+      readonly cols: number
+      readonly rows: number
+      readonly cwd: string
+      readonly env: NodeJS.ProcessEnv
+    },
   ) => TerminalPtyProcess
+  readonly closeTerminalTransport: () => Promise<void>
   readonly rememberCodexTerminalSession: typeof rememberCodexTerminalSession
   readonly takeAgentTerminalInputs: typeof takeAgentTerminalInputs
   readonly requeueAgentTerminalInputs: typeof requeueAgentTerminalInputs
@@ -137,7 +149,8 @@ export function makeTerminalServerService(
     dependencies: {
       getAgentLaunchConfig,
       buildTerminalProcessLaunch,
-      spawnPty: (command, args, options) => pty.spawn(command, [...args], options),
+      spawnPty: (command, args, options) => spawnKiriTermProc(command, args, options),
+      closeTerminalTransport: closeKiriTermClient,
       rememberCodexTerminalSession,
       takeAgentTerminalInputs,
       requeueAgentTerminalInputs,
@@ -196,6 +209,7 @@ export function makeTerminalServerService(
       await Promise.all([
         closeWebSocketServer(wss),
         closeHttpServer(server),
+        runtime.dependencies.closeTerminalTransport(),
       ])
     },
   }
@@ -287,9 +301,10 @@ async function handleTerminalConnection(
   try {
     const config = runtime.dependencies.getAgentLaunchConfig(agentId)
     const mode = parseTerminalMode(query.mode)
+    const instanceId = parseTerminalInstanceId(query.instanceId)
     const cols = positiveInt(query.cols, 100)
     const rows = positiveInt(query.rows, 30)
-    session = await getOrCreateTerminalSession(runtime, config, mode, cols, rows)
+    session = await getOrCreateTerminalSession(runtime, config, mode, cols, rows, instanceId)
     attachTerminalSocket(runtime, session, socket)
   } catch (error) {
     closeWithReason(socket, error instanceof Error ? error.message : String(error))
@@ -301,6 +316,10 @@ async function handleTerminalConnection(
     if (!message) return
     if (message.type === 'input') {
       session.proc.write(message.data)
+      return
+    }
+    if (message.type === 'paste') {
+      session.proc.paste(message.text, message.submit)
       return
     }
     session.proc.resize(message.cols, message.rows)
@@ -317,16 +336,17 @@ async function getOrCreateTerminalSession(
   mode: TerminalMode,
   cols: number,
   rows: number,
+  instanceId = 'main',
 ) {
-  const key = runtime.registry.sessionKey(config, mode)
-  const existing = runtime.registry.getReusable(config, mode, cols, rows)
+  const key = runtime.registry.sessionKey(config, mode, instanceId)
+  const existing = runtime.registry.getReusable(config, mode, cols, rows, instanceId)
   if (existing) {
     writePendingTerminalInputs(runtime, config.id, existing, mode)
     return existing
   }
 
   const launch = runtime.dependencies.buildTerminalProcessLaunch(config, mode, defaultShell())
-  await cleanupStaleClaudeSession(launch)
+  if (instanceId === 'main') await cleanupStaleClaudeSession(launch)
   const launchedAtMs = Date.now()
   const launchToken = `${launchedAtMs}:${randomBytes(8).toString('hex')}`
   const proc = runtime.dependencies.spawnPty(launch.command, launch.args, {
@@ -436,6 +456,9 @@ function parseClientMessage(raw: RawData): TerminalClientMessage | null {
     if ('type' in message && message.type === 'input' && 'data' in message && typeof message.data === 'string') {
       return { type: 'input', data: message.data }
     }
+    if ('type' in message && message.type === 'paste' && 'text' in message && typeof message.text === 'string') {
+      return { type: 'paste', text: message.text, submit: 'submit' in message && message.submit === true }
+    }
     if ('type' in message && message.type === 'resize') {
       const cols = positiveInt('cols' in message ? message.cols : undefined, 100)
       const rows = positiveInt('rows' in message ? message.rows : undefined, 30)
@@ -464,8 +487,8 @@ function parseTerminalMode(value: unknown): TerminalMode {
   return terminalModeSchema.catch('shell').parse(value)
 }
 
-function terminalPasteData(text: string, submit: boolean) {
-  return submit ? `${text}\r` : text
+function parseTerminalInstanceId(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : 'main'
 }
 
 function writePendingTerminalInputs(
@@ -478,9 +501,8 @@ function writePendingTerminalInputs(
   const inputs = runtime.dependencies.takeAgentTerminalInputs(agentId)
   const unwritten: typeof inputs = []
   for (const [index, input] of inputs.entries()) {
-    const data = terminalPasteData(input.text, input.submit)
     try {
-      if (data) session.proc.write(data)
+      if (input.text || input.submit) session.proc.paste(input.text, input.submit)
     } catch (error) {
       unwritten.push(input, ...inputs.slice(index + 1))
       runtime.dependencies.requeueAgentTerminalInputs(agentId, unwritten)

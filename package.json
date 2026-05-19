@@ -19,6 +19,7 @@
     "dev": "vite dev",
     "build": "vite build && tsc --noEmit",
     "build:cli": "node scripts/build-cli.mjs",
+    "build:term": "cargo build --release -p kiri-term && node scripts/stage-kiri-term.mjs",
     "site:build": "vite build --config vite.site.config.ts",
     "site:preview": "vite preview --config vite.site.config.ts --outDir ../dist/site",
     "icons:generate": "node scripts/generate-icons.mjs",
@@ -38,13 +39,13 @@
     "verify:knip": "pnpm exec knip --reporter compact",
     "verify:e2e": "pnpm test:e2e --project=chromium",
     "verify:desktop:smoke": "node --check scripts/*.mjs && pnpm build:cli",
-    "verify:desktop:package": "pnpm build && pnpm build:cli && node scripts/sanitize-desktop-package-inputs.mjs && node -e \"for (const path of ['dist/mac','dist/mac-arm64','dist/mac-universal']) require('node:fs').rmSync(path, { recursive: true, force: true })\" && electron-builder --mac dir && KIRI_ASSERT_PACKAGED_APP=1 pnpm exec vitest run tests/server/desktop-package-contract.test.ts tests/server/kiri-mcp.test.ts",
+    "verify:desktop:package": "pnpm build && pnpm build:cli && pnpm build:term && node scripts/sanitize-desktop-package-inputs.mjs && node -e \"for (const path of ['dist/mac','dist/mac-arm64','dist/mac-universal']) require('node:fs').rmSync(path, { recursive: true, force: true })\" && electron-builder --mac dir && KIRI_ASSERT_PACKAGED_APP=1 pnpm exec vitest run tests/server/desktop-package-contract.test.ts tests/server/kiri-mcp.test.ts",
     "verify:desktop": "pnpm verify:desktop:smoke && pnpm verify:desktop:package",
     "verify": "pnpm typecheck && pnpm lint && pnpm effect:audit && pnpm test && pnpm knip:report",
     "desktop:dev": "KIRI_DESKTOP_DEV_URL=http://127.0.0.1:3090 electron src/desktop/main.mjs",
     "desktop:start": "pnpm build && electron src/desktop/main.mjs",
     "desktop:backend": "node scripts/kiri-desktop-backend.mjs",
-    "dist:desktop": "pnpm build && pnpm build:cli && node scripts/sanitize-desktop-package-inputs.mjs && electron-builder --mac dir && node scripts/normalize-desktop-app.mjs && node scripts/create-desktop-dmg.mjs",
+    "dist:desktop": "pnpm build && pnpm build:cli && pnpm build:term && node scripts/sanitize-desktop-package-inputs.mjs && electron-builder --mac dir && node scripts/normalize-desktop-app.mjs && node scripts/create-desktop-dmg.mjs",
     "install:desktop": "pnpm dist:desktop && node scripts/install-desktop-app.mjs",
     "prepare": "effect-language-service patch",
     "kiri": "tsx src/cli/kirictl.ts",
@@ -52,6 +53,7 @@
     "kiri:ctl": "tsx src/cli/kirictl.ts",
     "kiri:agent-harness": "tsx tests/harness/kiri-agent-cli-harness.ts",
     "kiri:history-harness": "tsx tests/harness/kiri-agent-detail-history-harness.ts",
+    "kiri:terminal-harness": "tsx tests/harness/terminal-agent-harness.ts",
     "kiri:models": "node scripts/sync-models-dev.mjs",
     "effect:audit": "node scripts/effect-migration-audit.mjs",
     "preview": "vite preview",
@@ -72,12 +74,9 @@
     "@tanstack/react-router": "^1.169.2",
     "@tanstack/react-router-ssr-query": "^1.166.12",
     "@tanstack/react-start": "^1.167.65",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
     "effect": "^3.21.2",
     "fast-check": "3.23.2",
     "lucide-react": "^1.14.0",
-    "node-pty": "1.2.0-beta.12",
     "pure-rand": "6.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -100,13 +99,14 @@
       "settings.json",
       "package.json"
     ],
-    "asarUnpack": [
-      "node_modules/node-pty/**"
-    ],
     "extraResources": [
       {
         "from": "resources/bin/kiri-mcp",
         "to": "bin/kiri-mcp"
+      },
+      {
+        "from": "resources/bin/kiri-term",
+        "to": "bin/kiri-term"
       }
     ],
     "mac": {
