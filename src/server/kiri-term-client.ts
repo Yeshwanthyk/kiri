@@ -11,6 +11,15 @@ type TerminalProcOptions = {
   readonly env: NodeJS.ProcessEnv
 }
 
+export type KiriTermClientTransport = {
+  readonly spawnProc: (
+    command: string,
+    args: readonly string[],
+    options: TerminalProcOptions,
+  ) => KiriTermProc
+  readonly close: () => Promise<void>
+}
+
 export type KiriTermProc = {
   readonly terminalId: string
   readonly resize: (cols: number, rows: number) => void
@@ -233,18 +242,8 @@ class KiriTermClient {
   }
 }
 
-const defaultClient = new KiriTermClient()
-
-export function spawnKiriTermProc(
-  command: string,
-  args: readonly string[],
-  options: TerminalProcOptions,
-): KiriTermProc {
-  return defaultClient.spawnProc(command, args, options)
-}
-
-export function closeKiriTermClient() {
-  return defaultClient.close()
+export function makeKiriTermClient(): KiriTermClientTransport {
+  return new KiriTermClient()
 }
 
 function stringEnv(env: NodeJS.ProcessEnv) {

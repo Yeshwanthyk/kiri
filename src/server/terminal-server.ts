@@ -17,7 +17,7 @@ import {
   type TerminalAgentLaunchConfig,
   type TerminalProcessLaunch,
 } from './terminal-launch'
-import { closeKiriTermClient, spawnKiriTermProc, type KiriTermProc } from './kiri-term-client'
+import { makeKiriTermClient, type KiriTermProc } from './kiri-term-client'
 import { makeTerminalRegistry, type TerminalRegistrySession } from './terminal-registry'
 
 type TerminalServerInfo = {
@@ -135,6 +135,7 @@ export function closeTerminalServerForTests() {
 export function makeTerminalServerService(
   dependencies: Partial<TerminalServerDependencies> = {},
 ): TerminalServerApi {
+  const terminalTransport = makeKiriTermClient()
   let terminalServer: TerminalServerInfo | null = null
   let httpServer: Server | null = null
   let webSocketServer: WebSocketServer | null = null
@@ -147,14 +148,14 @@ export function makeTerminalServerService(
       socketOpenState: WebSocket.OPEN,
     }),
     dependencies: {
-      getAgentLaunchConfig,
-      buildTerminalProcessLaunch,
-      spawnPty: (command, args, options) => spawnKiriTermProc(command, args, options),
-      closeTerminalTransport: closeKiriTermClient,
-      rememberCodexTerminalSession,
-      takeAgentTerminalInputs,
-      requeueAgentTerminalInputs,
-      ...dependencies,
+      getAgentLaunchConfig: dependencies.getAgentLaunchConfig ?? getAgentLaunchConfig,
+      buildTerminalProcessLaunch: dependencies.buildTerminalProcessLaunch ?? buildTerminalProcessLaunch,
+      spawnPty: dependencies.spawnPty
+        ?? ((command, args, options) => terminalTransport.spawnProc(command, args, options)),
+      closeTerminalTransport: dependencies.closeTerminalTransport ?? (() => terminalTransport.close()),
+      rememberCodexTerminalSession: dependencies.rememberCodexTerminalSession ?? rememberCodexTerminalSession,
+      takeAgentTerminalInputs: dependencies.takeAgentTerminalInputs ?? takeAgentTerminalInputs,
+      requeueAgentTerminalInputs: dependencies.requeueAgentTerminalInputs ?? requeueAgentTerminalInputs,
     },
     setInfo: (info) => {
       terminalServer = info
