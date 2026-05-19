@@ -41,6 +41,9 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/codex-server-requests.ts` | pure | Codex automatic server request response helper | explicit-non-migration | not-required | Pure request-method to response-payload mapping extracted from Codex runtime. |
 | `src/server/codex-thread-state.ts` | pure | Codex active-turn and thread-status helper | explicit-non-migration | not-required | Pure thread state derivation extracted from Codex runtime. |
 | `src/server/codex-value-helpers.ts` | pure | Codex notification value normalization helpers | explicit-non-migration | not-required | Pure object/number/status/timestamp/command text helpers extracted from Codex runtime. |
+| `src/server/claude-jsonl-file.ts` | projection | Claude JSONL session file reader over pure Claude projection | migrating | required | Added for Claude terminal session hydration; review passed, final filesystem service injection remains. |
+| `src/server/claude-jsonl.ts` | pure | Pure Claude JSONL session projection into board messages and cursor state | explicit-non-migration | not-required | Pure parser/projection module; IO remains in `claude-jsonl-file.ts`. |
+| `src/server/claude-projection.ts` | projection | DB-backed Claude JSONL hydrator for agent detail | migrating | required | Added to hydrate Claude terminal output into timeline rows before `agent.detail`; review passed, final DB/filesystem service injection remains. |
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | migrating | required | Compatibility facade now uses explicit `KiriDbService` cache/close seam over extracted repositories. |
 | `src/server/db/agent-detail.ts` | repository | Paged agent detail reader for timeline, diffs, tasks, and context usage | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/bootstrap.ts` | repository | Startup DB data repair and seed cleanup boundary | migrating | required | Extracted from `db.ts`; direct bootstrap tests added and review passed; final status waits for DB/settings service boundary. |
@@ -775,12 +778,12 @@ Copy this section under `## Migration Records` for each file or inseparable file
 
 ### src/server/db/timeline-writes.ts
 
-- Status: completed
+- Status: updated
 - Target seam: repository module for message, timeline event, task, Pi projection, context usage, and diff write persistence over an injected DB connection.
 - Behavior preserved: `src/server/db.ts` compatibility exports still expose the same public write functions while delegating to the repository. Pi projection hydration still replaces transient prompt rows, preserves JSONL message ids, updates tasks/context usage, and falls back to live RPC messages when no JSONL projection is available.
 - Dependencies moved: message id hashing, Pi live-turn filtering, projection hydration, task replacement, diff artifact replacement, thread summary updates, and info/runtime/Pi timeline event inserts moved from `src/server/db.ts`.
 - Baseline tests before migration: runtime lifecycle, agent detail history, perf gates, Pi JSONL projection, runtime state, task-progress DB tests.
-- Tests added/updated: `tests/server/db-timeline-writes.test.ts` covers Pi live-turn persistence, JSONL projection replacement with task/context usage writes, and diff replacement semantics.
+- Tests added/updated: `tests/server/db-timeline-writes.test.ts` covers Pi live-turn persistence, JSONL projection replacement with task/context usage writes, diff replacement semantics, and idempotent runtime projection message writes.
 - Post-migration parity tests: focused repository tests and existing runtime/detail/perf tests passed.
 - Perf/memory impact: no payload growth. Standalone perf harness after extraction returned 500 timeline rows and 50 diffs with 54.67MB RSS delta under the 64MB budget.
 - Verification commands and results:
@@ -796,6 +799,26 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: first reviewer reported no blockers and identified missing direct persistence coverage; tests were added. Ramanujan reported no blocking findings and no edits; verified focused timeline-write test, typecheck, lint, and diff check.
 - Findings fixed: added direct persistence regression tests after the first reviewer identified missing coverage for Pi live/projection writes and diff replacement.
 - Residual risk: no direct test yet for low-level timeline event id collisions; covered through existing runtime lifecycle flow tests and unchanged event id helper.
+
+### src/server/claude-jsonl.ts, src/server/claude-jsonl-file.ts, and src/server/claude-projection.ts
+
+- Status: added
+- Target seam: pure Claude JSONL projection, filesystem session-file reader, and DB-backed hydrator that writes Claude terminal output into the existing agent timeline before `agent.detail` reads.
+- Behavior preserved: no change to non-Claude runtimes; Claude terminal launches keep deterministic/resume session ids, and `agent.detail` still returns the existing contract shape while adding parsed Claude assistant messages when JSONL is present.
+- Dependencies moved: Claude file IO is isolated in `claude-jsonl-file.ts`; pure parsing stays in `claude-jsonl.ts`; DB writes/runtime-state persistence stay in `claude-projection.ts` over repository helpers.
+- Baseline tests before migration: terminal launch tests, agent detail history harness, DB timeline writer tests.
+- Tests added/updated: `tests/server/claude-jsonl.test.ts`, `tests/server/claude-jsonl-file.test.ts`, `tests/server/claude-projection.test.ts`, `tests/server/claude-agent-detail-harness.test.ts`, and `tests/harness/kiri-claude-agent-detail-harness.ts`.
+- Post-migration parity tests: focused Claude parser/file/projection tests passed; agent detail harness now routes through `runKiriOperation` with operation `agent.detail`.
+- Perf/memory impact: detail hydration reads only the target Claude JSONL file and projects incrementally when cursor validation succeeds; stale/truncated offsets fall back to UUID scanning to avoid data loss.
+- Verification commands and results:
+  - `pnpm exec vitest run tests/server/claude-jsonl-file.test.ts tests/server/claude-projection.test.ts tests/server/db-timeline-writes.test.ts tests/server/claude-jsonl.test.ts` - passed, 30 tests
+  - `pnpm exec vitest run tests/server/claude-agent-detail-harness.test.ts tests/server/claude-projection.test.ts tests/server/claude-jsonl-file.test.ts tests/server/kiri-control-service.test.ts` - passed, 26 tests
+  - `pnpm exec eslint src/server/claude-projection.ts src/server/claude-jsonl-file.ts src/server/db/timeline-writes.ts tests/server/claude-projection.test.ts tests/server/claude-jsonl-file.test.ts tests/server/db-timeline-writes.test.ts --max-warnings=0` - passed
+  - `pnpm exec eslint src/server/db.ts tests/harness/kiri-claude-agent-detail-harness.ts tests/server/claude-agent-detail-harness.test.ts --max-warnings=0` - passed
+  - `pnpm typecheck` - passed
+- Review subagent summary: reviewers found and rechecked cursor mapping, transaction atomicity, stale EOF/in-bounds offset handling, newline-boundary validation, and real `agent.detail` routing. Final review reported no issues after the harness moved through `runKiriOperation`.
+- Findings fixed: mapped persisted `claudeLastSeenUuid` to parser `afterUuid`; made runtime message batch writes atomic for direct callers; validated tail offsets as line boundaries immediately after the saved UUID row when present; rejected unsafe resume path segments; ignored empty `KIRI_CLAUDE_HOME`; moved the harness from direct DB facade calls to router/control `agent.detail`.
+- Residual risk: Claude JSONL schema may evolve; parser currently accepts assistant text content conservatively and ignores unknown/non-text events.
 
 ### src/server/db/workspace-snapshot.ts
 
