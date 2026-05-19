@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { readClaudeSessionFile } from '~/server/claude-jsonl-file'
+import { claudeCursorState, readClaudeSessionFile } from '~/server/claude-jsonl-file'
 import { claudeProjectKey, claudeTerminalSessionId } from '~/server/terminal-launch'
 
 function writeClaudeSession(home: string, cwd: string, sessionId: string, content: string) {
@@ -73,6 +73,120 @@ describe('readClaudeSessionFile', () => {
     expect(result?.offset).toBeUndefined()
   })
 
+  it('falls back to a full read when an in-bounds offset no longer follows the saved UUID', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kiri-claude-home-'))
+    const cwd = '/tmp/kiri-project'
+    const agentId = 'agent-1'
+    const sessionId = claudeTerminalSessionId(agentId)
+    const first = '{"type":"assistant","uuid":"new-1","text":"rewritten"}\n'
+    const second = '{"type":"assistant","uuid":"new-2","text":"later"}\n'
+    writeClaudeSession(home, cwd, sessionId, `${first}${second}`)
+
+    const result = readClaudeSessionFile({
+      agentId,
+      cwd,
+      runtimeState: {
+        claudeLastSeenUuid: 'old-uuid',
+        claudeLastSeenOffset: Buffer.byteLength(first),
+      },
+      env: { KIRI_CLAUDE_HOME: home },
+    })
+
+    expect(result?.content).toBe(`${first}${second}`)
+    expect(result?.offset).toBeUndefined()
+  })
+
+  it('uses an in-bounds offset when the saved UUID appears before it', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kiri-claude-home-'))
+    const cwd = '/tmp/kiri-project'
+    const agentId = 'agent-1'
+    const sessionId = claudeTerminalSessionId(agentId)
+    const first = '{"type":"assistant","uuid":"uuid-1","text":"seen"}\n'
+    const second = '{"type":"assistant","uuid":"uuid-2","text":"next"}\n'
+    writeClaudeSession(home, cwd, sessionId, `${first}${second}`)
+
+    const result = readClaudeSessionFile({
+      agentId,
+      cwd,
+      runtimeState: {
+        claudeLastSeenUuid: 'uuid-1',
+        claudeLastSeenOffset: Buffer.byteLength(first),
+      },
+      env: { KIRI_CLAUDE_HOME: home },
+    })
+
+    expect(result?.content).toBe(second)
+    expect(result?.offset).toBe(Buffer.byteLength(first))
+  })
+
+  it('falls back when the saved UUID appears before a stale non-boundary offset', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kiri-claude-home-'))
+    const cwd = '/tmp/kiri-project'
+    const agentId = 'agent-1'
+    const sessionId = claudeTerminalSessionId(agentId)
+    const first = '{"type":"assistant","uuid":"uuid-1","text":"seen"}\n'
+    const second = '{"type":"assistant","uuid":"uuid-2","text":"next"}\n'
+    writeClaudeSession(home, cwd, sessionId, `${first}${second}`)
+
+    const result = readClaudeSessionFile({
+      agentId,
+      cwd,
+      runtimeState: {
+        claudeLastSeenUuid: 'uuid-1',
+        claudeLastSeenOffset: Buffer.byteLength(first) + 5,
+      },
+      env: { KIRI_CLAUDE_HOME: home },
+    })
+
+    expect(result?.content).toBe(`${first}${second}`)
+    expect(result?.offset).toBeUndefined()
+  })
+
+  it('falls back when offset-only state points inside a JSONL row', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kiri-claude-home-'))
+    const cwd = '/tmp/kiri-project'
+    const agentId = 'agent-1'
+    const sessionId = claudeTerminalSessionId(agentId)
+    const first = '{"type":"assistant","uuid":"uuid-1","text":"seen"}\n'
+    const second = '{"type":"assistant","uuid":"uuid-2","text":"next"}\n'
+    writeClaudeSession(home, cwd, sessionId, `${first}${second}`)
+
+    const result = readClaudeSessionFile({
+      agentId,
+      cwd,
+      runtimeState: {
+        claudeLastSeenOffset: Buffer.byteLength(first) + 5,
+      },
+      env: { KIRI_CLAUDE_HOME: home },
+    })
+
+    expect(result?.content).toBe(`${first}${second}`)
+    expect(result?.offset).toBeUndefined()
+  })
+
+  it('falls back when the saved UUID is not on the row immediately before the offset', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kiri-claude-home-'))
+    const cwd = '/tmp/kiri-project'
+    const agentId = 'agent-1'
+    const sessionId = claudeTerminalSessionId(agentId)
+    const first = '{"type":"assistant","uuid":"uuid-1","text":"seen"}\n'
+    const second = '{"type":"assistant","uuid":"uuid-2","text":"next"}\n'
+    writeClaudeSession(home, cwd, sessionId, `${first}${second}`)
+
+    const result = readClaudeSessionFile({
+      agentId,
+      cwd,
+      runtimeState: {
+        claudeLastSeenUuid: 'uuid-1',
+        claudeLastSeenOffset: Buffer.byteLength(first) + Buffer.byteLength(second),
+      },
+      env: { KIRI_CLAUDE_HOME: home },
+    })
+
+    expect(result?.content).toBe(`${first}${second}`)
+    expect(result?.offset).toBeUndefined()
+  })
+
   it('uses explicit resume ids before deterministic Kiri ids', () => {
     const home = mkdtempSync(join(tmpdir(), 'kiri-claude-home-'))
     const cwd = '/tmp/kiri-project'
@@ -124,5 +238,26 @@ describe('readClaudeSessionFile', () => {
       offset: undefined,
     })
     expect(envHome).not.toBe(stateHome)
+  })
+})
+
+describe('claudeCursorState', () => {
+  it('maps persisted runtime keys to parser cursor keys', () => {
+    expect(claudeCursorState({
+      claudeLastSeenUuid: 'uuid-1',
+      claudeLastSeenOffset: 123,
+    }, 123)).toEqual({
+      afterUuid: 'uuid-1',
+      offset: 123,
+    })
+  })
+
+  it('omits stale offsets when the file reader fell back to a full scan', () => {
+    expect(claudeCursorState({
+      claudeLastSeenUuid: 'uuid-1',
+      claudeLastSeenOffset: 123,
+    })).toEqual({
+      afterUuid: 'uuid-1',
+    })
   })
 })

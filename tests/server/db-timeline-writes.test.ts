@@ -10,6 +10,7 @@ import { insertProject } from '../../src/server/db/projects'
 import { insertSessionRow } from '../../src/server/db/sessions'
 import {
   appendUserMessageRow,
+  recordRuntimeMessages,
   recordPiLiveMessages,
   recordPiProjectionMessages,
   replaceAgentDiffArtifactsRows,
@@ -277,6 +278,71 @@ describe('timeline write repository', () => {
           )
           .all(fixture.agentId),
       ).toEqual([{ title: 'Old', path: 'src/old.ts', patch: 'old patch' }])
+    } finally {
+      closeFixture(fixture)
+    }
+  })
+
+  it('records runtime projection messages idempotently and updates the thread summary', () => {
+    const fixture = createFixture()
+    try {
+      recordRuntimeMessages(fixture.database, {
+        agentId: fixture.agentId,
+        sessionFile: '/tmp/claude.jsonl',
+        messages: [
+          {
+            id: 'claude:session-1:assistant-1',
+            role: 'assistant',
+            text: 'First answer',
+            timestamp: '2026-01-02T00:00:01.000Z',
+          },
+          {
+            id: 'claude:session-1:user-1',
+            role: 'user',
+            text: 'Human prompt',
+            timestamp: '2026-01-02T00:00:02.000Z',
+          },
+        ],
+      })
+      recordRuntimeMessages(fixture.database, {
+        agentId: fixture.agentId,
+        sessionFile: '/tmp/claude.jsonl',
+        messages: [
+          {
+            id: 'claude:session-1:assistant-1',
+            role: 'assistant',
+            text: 'First answer edited',
+            timestamp: '2026-01-02T00:00:03.000Z',
+          },
+        ],
+      })
+
+      expect(readMessages(fixture.database, fixture.threadId)).toEqual([
+        {
+          id: 'claude:session-1:user-1',
+          role: 'user',
+          text: 'Human prompt',
+          timestamp: '2026-01-02T00:00:02.000Z',
+        },
+        {
+          id: 'claude:session-1:assistant-1',
+          role: 'assistant',
+          text: 'First answer edited',
+          timestamp: '2026-01-02T00:00:03.000Z',
+        },
+      ])
+      expect(
+        fixture.database
+          .prepare(
+            'SELECT preview, message_count AS messageCount FROM threads WHERE id = ?',
+          )
+          .get(fixture.threadId),
+      ).toEqual({ preview: 'First answer edited', messageCount: 2 })
+      expect(
+        fixture.database
+          .prepare('SELECT session_file AS sessionFile FROM agent_slots WHERE id = ?')
+          .get(fixture.agentId),
+      ).toEqual({ sessionFile: '/tmp/claude.jsonl' })
     } finally {
       closeFixture(fixture)
     }

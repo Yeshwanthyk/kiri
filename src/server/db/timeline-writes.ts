@@ -82,6 +82,65 @@ export function recordRuntimeMessageRow(
   })
 }
 
+export function recordRuntimeMessages(
+  database: DatabaseSync,
+  input: {
+    readonly agentId: string
+    readonly messages: BoardMessage[]
+    readonly sessionFile?: string
+  },
+) {
+  withTransaction(database, () => {
+    recordRuntimeMessagesInTransaction(database, input)
+  })
+}
+
+export function recordRuntimeMessagesInTransaction(
+  database: DatabaseSync,
+  input: {
+    readonly agentId: string
+    readonly messages: BoardMessage[]
+    readonly sessionFile?: string
+  },
+) {
+  if (input.messages.length === 0) {
+    if (!input.sessionFile) return
+    database
+      .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
+      .run(input.sessionFile, input.agentId)
+    return
+  }
+  const threadId = ensureThreadForAgent(database, input.agentId, {
+    preview: input.messages.at(-1)?.text ?? '',
+    messages: input.messages,
+    updatedAt: input.messages.at(-1)?.timestamp,
+  })
+  const insertMessage = database.prepare(`
+    INSERT INTO messages (id, thread_id, role, text, timestamp)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      role = excluded.role,
+      text = excluded.text,
+      timestamp = excluded.timestamp
+  `)
+  for (const message of input.messages) {
+    const text = message.text.trim()
+    if (!text) continue
+    insertMessage.run(message.id, threadId, message.role, text, message.timestamp)
+  }
+  updateThreadSummary(
+    database,
+    threadId,
+    lastMessageText(input.messages, 'assistant') ?? input.messages.at(-1)?.text ?? null,
+    input.messages.at(-1)?.timestamp,
+  )
+  if (input.sessionFile) {
+    database
+      .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
+      .run(input.sessionFile, input.agentId)
+  }
+}
+
 export function recordRuntimeTimelineEventRow(
   database: DatabaseSync,
   input: {
