@@ -2313,10 +2313,15 @@
 
 .terminal-row {
   position: relative;
-  min-height: 1.35em;
+  height: 1.35em;
+  line-height: 1.35em;
 }
 
 .terminal-run {
+  display: inline-block;
+  height: 100%;
+  line-height: inherit;
+  vertical-align: top;
   white-space: pre;
 }
 

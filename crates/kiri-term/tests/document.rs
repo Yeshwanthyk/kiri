@@ -39,6 +39,34 @@ fn tracks_sgr_color_and_style_runs() {
 }
 
 #[test]
+fn preserves_blank_cells_between_styled_runs() {
+    let mut document = TerminalDocument::new(12, 2);
+    document.apply_bytes(b"\x1b[31mA\x1b[0m  \x1b[32mB");
+    let row = &document.snapshot().rows_data[0];
+
+    let rendered: String = row.runs.iter().map(|run| run.text.as_str()).collect();
+    assert_eq!(rendered, "A  B");
+    assert_eq!(row.runs[0].text, "A");
+    assert_eq!(row.runs[1].text, "  ");
+    assert_eq!(row.runs[2].text, "B");
+}
+
+#[test]
+fn preserves_styled_blank_cells_after_erase_line() {
+    let mut document = TerminalDocument::new(6, 2);
+    document.apply_bytes(b"\x1b[48;5;235mX\x1b[K");
+    let row = &document.snapshot().rows_data[0];
+
+    let rendered: String = row.runs.iter().map(|run| run.text.as_str()).collect();
+    assert_eq!(rendered, "X     ");
+    assert_eq!(row.runs[0].width, 6);
+    assert_eq!(
+        row.runs[0].style.background,
+        Some(TerminalColor::Palette { index: 235 })
+    );
+}
+
+#[test]
 fn handles_cursor_movement_and_erase_line() {
     let mut document = TerminalDocument::new(8, 2);
     document.apply_bytes(b"abcdef\x1b[1;3HX\x1b[K");

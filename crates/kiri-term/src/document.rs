@@ -580,13 +580,12 @@ fn blank_row(cols: usize, style: CellStyle) -> Vec<Cell> {
 
 fn row_runs(cells: &[Cell]) -> Vec<CellRun> {
     let mut runs: Vec<CellRun> = Vec::new();
-    let Some(last_printed) = cells
-        .iter()
-        .rposition(|cell| cell.width > 0 && !cell.text.is_empty())
-    else {
+    let Some(last_visible) = cells.iter().rposition(|cell| {
+        cell.width > 0 && (!cell.text.is_empty() || cell.style != CellStyle::default())
+    }) else {
         return runs;
     };
-    for cell in &cells[..=last_printed] {
+    for cell in &cells[..=last_visible] {
         if cell.width == 0 {
             continue;
         }
