@@ -19,6 +19,27 @@ struct ScreenBuffer {
     cells: Vec<Vec<Cell>>,
 }
 
+#[derive(Clone, Debug)]
+struct SavedCursor {
+    row: usize,
+    col: usize,
+    style: CellStyle,
+    origin: bool,
+    wrap: bool,
+}
+
+impl Default for SavedCursor {
+    fn default() -> Self {
+        Self {
+            row: 0,
+            col: 0,
+            style: CellStyle::default(),
+            origin: false,
+            wrap: true,
+        }
+    }
+}
+
 impl ScreenBuffer {
     fn new(cols: usize, rows: usize) -> Self {
         Self {
@@ -43,6 +64,10 @@ pub struct TerminalDocument {
     cursor_col: usize,
     main_cursor_row: usize,
     main_cursor_col: usize,
+    main_saved_cursor: SavedCursor,
+    alternate_saved_cursor: SavedCursor,
+    scroll_top: usize,
+    scroll_bottom: usize,
     style: CellStyle,
     modes: TerminalModes,
     buffer_kind: TerminalBufferKind,
@@ -66,6 +91,10 @@ impl TerminalDocument {
             cursor_col: 0,
             main_cursor_row: 0,
             main_cursor_col: 0,
+            main_saved_cursor: SavedCursor::default(),
+            alternate_saved_cursor: SavedCursor::default(),
+            scroll_top: 0,
+            scroll_bottom: rows - 1,
             style: CellStyle::default(),
             modes: TerminalModes::new(),
             buffer_kind: TerminalBufferKind::Main,
@@ -98,6 +127,12 @@ impl TerminalDocument {
             .resize(self.cols, self.rows, self.style.clone());
         self.cursor_row = self.cursor_row.min(self.rows - 1);
         self.cursor_col = self.cursor_col.min(self.cols - 1);
+        self.main_saved_cursor.row = self.main_saved_cursor.row.min(self.rows - 1);
+        self.main_saved_cursor.col = self.main_saved_cursor.col.min(self.cols - 1);
+        self.alternate_saved_cursor.row = self.alternate_saved_cursor.row.min(self.rows - 1);
+        self.alternate_saved_cursor.col = self.alternate_saved_cursor.col.min(self.cols - 1);
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows - 1;
         self.emit_patch(before)
     }
 
@@ -195,11 +230,7 @@ impl TerminalDocument {
             .cells
             .iter()
             .enumerate()
-            .map(|(row, cells)| TerminalRow {
-                row,
-                runs: row_runs(cells),
-                fingerprint: row_fingerprint(cells),
-            })
+            .map(|(row, cells)| terminal_row(row, cells))
             .collect()
     }
 
@@ -231,9 +262,14 @@ impl TerminalDocument {
             self.append_combining(c);
             return;
         }
-        if self.cursor_col >= self.cols || (width == 2 && self.cursor_col + 1 >= self.cols) {
+        let should_wrap = self.modes.wrap
+            && (self.cursor_col >= self.cols || (width == 2 && self.cursor_col + 1 >= self.cols));
+        if should_wrap {
             self.newline();
             self.cursor_col = 0;
+        }
+        if self.cursor_col >= self.cols || (width == 2 && self.cursor_col + 1 >= self.cols) {
+            return;
         }
         let row = self.cursor_row;
         let col = self.cursor_col;
@@ -267,25 +303,48 @@ impl TerminalDocument {
     }
 
     fn newline(&mut self) {
-        if self.cursor_row + 1 >= self.rows {
-            self.scroll_up();
+        if self.cursor_row == self.scroll_bottom {
+            self.scroll_up_region(self.scroll_top, self.scroll_bottom, 1, true);
         } else {
-            self.cursor_row += 1;
+            self.cursor_row = (self.cursor_row + 1).min(self.rows - 1);
         }
     }
 
-    fn scroll_up(&mut self) {
+    fn scroll_up_region(&mut self, top: usize, bottom: usize, count: usize, push_history: bool) {
+        if top > bottom || bottom >= self.rows {
+            return;
+        }
         let style = self.style.clone();
         let cols = self.cols;
-        if self.buffer_kind == TerminalBufferKind::Main {
-            if let Some(row) = self.rows_data().into_iter().next() {
+        let should_push_history = push_history
+            && top == 0
+            && bottom == self.rows - 1
+            && self.buffer_kind == TerminalBufferKind::Main;
+        let count = count.min(bottom - top + 1);
+        for _ in 0..count {
+            if should_push_history {
+                let row = terminal_row(top, &self.active().cells[top]);
                 let delta = self.history.push(row);
                 self.push_history_delta(delta);
             }
+            let active = self.active_mut();
+            active.cells.remove(top);
+            active.cells.insert(bottom, blank_row(cols, style.clone()));
         }
+    }
+
+    fn scroll_down_region(&mut self, top: usize, bottom: usize, count: usize) {
+        if top > bottom || bottom >= self.rows {
+            return;
+        }
+        let style = self.style.clone();
+        let cols = self.cols;
+        let count = count.min(bottom - top + 1);
         let active = self.active_mut();
-        active.cells.remove(0);
-        active.cells.push(blank_row(cols, style));
+        for _ in 0..count {
+            active.cells.remove(bottom);
+            active.cells.insert(top, blank_row(cols, style.clone()));
+        }
     }
 
     fn carriage_return(&mut self) {
@@ -314,6 +373,10 @@ impl TerminalDocument {
         let rows = self.rows;
         self.cursor_row = 0;
         self.cursor_col = 0;
+        self.main_saved_cursor = SavedCursor::default();
+        self.alternate_saved_cursor = SavedCursor::default();
+        self.scroll_top = 0;
+        self.scroll_bottom = rows - 1;
         self.style = CellStyle::default();
         self.modes = TerminalModes::new();
         self.buffer_kind = TerminalBufferKind::Main;
@@ -380,11 +443,23 @@ impl TerminalDocument {
     }
 
     fn cursor_up(&mut self, count: usize) {
-        self.cursor_row = self.cursor_row.saturating_sub(count);
+        let min_row = if self.cursor_row >= self.scroll_top && self.cursor_row <= self.scroll_bottom
+        {
+            self.scroll_top
+        } else {
+            0
+        };
+        self.cursor_row = self.cursor_row.saturating_sub(count).max(min_row);
     }
 
     fn cursor_down(&mut self, count: usize) {
-        self.cursor_row = (self.cursor_row + count).min(self.rows - 1);
+        let max_row = if self.cursor_row >= self.scroll_top && self.cursor_row <= self.scroll_bottom
+        {
+            self.scroll_bottom
+        } else {
+            self.rows - 1
+        };
+        self.cursor_row = (self.cursor_row + count).min(max_row);
     }
 
     fn cursor_forward(&mut self, count: usize) {
@@ -396,8 +471,146 @@ impl TerminalDocument {
     }
 
     fn set_cursor_position(&mut self, row: usize, col: usize) {
-        self.cursor_row = row.saturating_sub(1).min(self.rows - 1);
+        let row = row.saturating_sub(1);
+        self.cursor_row = if self.modes.origin {
+            (self.scroll_top + row).min(self.scroll_bottom)
+        } else {
+            row.min(self.rows - 1)
+        };
         self.cursor_col = col.saturating_sub(1).min(self.cols - 1);
+    }
+
+    fn set_cursor_column(&mut self, col: usize) {
+        self.cursor_col = col.saturating_sub(1).min(self.cols - 1);
+    }
+
+    fn set_cursor_row(&mut self, row: usize) {
+        let row = row.saturating_sub(1);
+        self.cursor_row = if self.modes.origin {
+            (self.scroll_top + row).min(self.scroll_bottom)
+        } else {
+            row.min(self.rows - 1)
+        };
+    }
+
+    fn next_line(&mut self, count: usize) {
+        self.cursor_down(count);
+        self.cursor_col = 0;
+    }
+
+    fn previous_line(&mut self, count: usize) {
+        self.cursor_up(count);
+        self.cursor_col = 0;
+    }
+
+    fn reverse_index(&mut self) {
+        if self.cursor_row == self.scroll_top {
+            self.scroll_down_region(self.scroll_top, self.scroll_bottom, 1);
+        } else {
+            self.cursor_up(1);
+        }
+    }
+
+    fn save_cursor(&mut self) {
+        let saved = SavedCursor {
+            row: self.cursor_row,
+            col: self.cursor_col,
+            style: self.style.clone(),
+            origin: self.modes.origin,
+            wrap: self.modes.wrap,
+        };
+        match self.buffer_kind {
+            TerminalBufferKind::Main => self.main_saved_cursor = saved,
+            TerminalBufferKind::Alternate => self.alternate_saved_cursor = saved,
+        }
+    }
+
+    fn restore_cursor(&mut self) {
+        let saved = match self.buffer_kind {
+            TerminalBufferKind::Main => self.main_saved_cursor.clone(),
+            TerminalBufferKind::Alternate => self.alternate_saved_cursor.clone(),
+        };
+        self.cursor_row = saved.row.min(self.rows - 1);
+        self.cursor_col = saved.col.min(self.cols - 1);
+        self.style = saved.style;
+        self.modes.origin = saved.origin;
+        self.modes.wrap = saved.wrap;
+    }
+
+    fn set_scroll_region(&mut self, top: Option<u16>, bottom: Option<u16>) {
+        let top = usize::from(top.filter(|value| *value > 0).unwrap_or(1)) - 1;
+        let bottom = usize::from(
+            bottom
+                .filter(|value| *value > 0)
+                .unwrap_or(self.rows.min(usize::from(u16::MAX)) as u16),
+        ) - 1;
+        if top < bottom && bottom < self.rows {
+            self.scroll_top = top;
+            self.scroll_bottom = bottom;
+        } else {
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows - 1;
+        }
+        self.set_cursor_position(1, 1);
+    }
+
+    fn insert_lines(&mut self, count: usize) {
+        if self.cursor_row < self.scroll_top || self.cursor_row > self.scroll_bottom {
+            return;
+        }
+        self.scroll_down_region(self.cursor_row, self.scroll_bottom, count);
+        self.cursor_col = 0;
+    }
+
+    fn delete_lines(&mut self, count: usize) {
+        if self.cursor_row < self.scroll_top || self.cursor_row > self.scroll_bottom {
+            return;
+        }
+        self.scroll_up_region(self.cursor_row, self.scroll_bottom, count, false);
+        self.cursor_col = 0;
+    }
+
+    fn insert_chars(&mut self, count: usize) {
+        let row = self.cursor_row;
+        let col = self.cursor_col.min(self.cols - 1);
+        let cols = self.cols;
+        let count = count.min(cols - col);
+        let style = self.style.clone();
+        let cells = &mut self.active_mut().cells[row];
+        for index in (col..cols - count).rev() {
+            cells[index + count] = cells[index].clone();
+        }
+        for cell in &mut cells[col..col + count] {
+            *cell = Cell::blank(style.clone());
+        }
+        normalize_wide_cells(cells, style);
+    }
+
+    fn delete_chars(&mut self, count: usize) {
+        let row = self.cursor_row;
+        let col = self.cursor_col.min(self.cols - 1);
+        let cols = self.cols;
+        let count = count.min(cols - col);
+        let style = self.style.clone();
+        let cells = &mut self.active_mut().cells[row];
+        for index in col..cols - count {
+            cells[index] = cells[index + count].clone();
+        }
+        for cell in &mut cells[cols - count..] {
+            *cell = Cell::blank(style.clone());
+        }
+        normalize_wide_cells(cells, style);
+    }
+
+    fn erase_chars(&mut self, count: usize) {
+        let row = self.cursor_row;
+        let col = self.cursor_col.min(self.cols - 1);
+        let count = count.min(self.cols - col);
+        let style = self.style.clone();
+        self.clear_wide_fragment(row, col, style.clone());
+        for cell in &mut self.active_mut().cells[row][col..col + count] {
+            *cell = Cell::blank(style.clone());
+        }
     }
 
     fn clear_wide_fragment(&mut self, row: usize, col: usize, style: CellStyle) {
@@ -435,7 +648,13 @@ impl TerminalDocument {
     fn set_private_mode(&mut self, mode: u16, enabled: bool) {
         match mode {
             1 => self.modes.app_cursor_keys = enabled,
+            6 => {
+                self.modes.origin = enabled;
+                self.set_cursor_position(1, 1);
+            }
+            7 => self.modes.wrap = enabled,
             25 => self.modes.cursor_visible = enabled,
+            1004 => self.modes.focus_reporting = enabled,
             1000 | 1002 => self.modes.mouse_basic = enabled,
             1006 => self.modes.mouse_sgr = enabled,
             1049 => {
@@ -444,13 +663,19 @@ impl TerminalDocument {
                     self.main_cursor_col = self.cursor_col;
                     self.cursor_row = 0;
                     self.cursor_col = 0;
+                    self.scroll_top = 0;
+                    self.scroll_bottom = self.rows - 1;
+                    self.alternate = ScreenBuffer::new(self.cols, self.rows);
                     TerminalBufferKind::Alternate
                 } else {
                     self.cursor_row = self.main_cursor_row.min(self.rows - 1);
                     self.cursor_col = self.main_cursor_col.min(self.cols - 1);
+                    self.scroll_top = 0;
+                    self.scroll_bottom = self.rows - 1;
                     TerminalBufferKind::Main
                 };
             }
+            2026 => self.modes.synchronized_output = enabled,
             2004 => self.modes.bracketed_paste = enabled,
             _ => {}
         }
@@ -553,13 +778,34 @@ impl Perform for TerminalDocument {
             (_, 'B') => self.cursor_down(count_param(first)),
             (_, 'C') => self.cursor_forward(count_param(first)),
             (_, 'D') => self.cursor_back(count_param(first)),
+            (_, 'E') => self.next_line(count_param(first)),
+            (_, 'F') => self.previous_line(count_param(first)),
+            (_, 'G') => self.set_cursor_column(values.first().copied().unwrap_or(1) as usize),
             (_, 'H' | 'f') => self.set_cursor_position(
                 values.first().copied().unwrap_or(1) as usize,
                 values.get(1).copied().unwrap_or(1) as usize,
             ),
             (_, 'J') => self.erase_display(first),
             (_, 'K') => self.erase_line(first),
+            (_, 'L') => self.insert_lines(count_param(first)),
+            (_, 'M') => self.delete_lines(count_param(first)),
+            (_, 'P') => self.delete_chars(count_param(first)),
+            (_, 'S') => self.scroll_up_region(
+                self.scroll_top,
+                self.scroll_bottom,
+                count_param(first),
+                false,
+            ),
+            (_, 'T') => {
+                self.scroll_down_region(self.scroll_top, self.scroll_bottom, count_param(first))
+            }
+            (_, 'X') => self.erase_chars(count_param(first)),
+            (_, '@') => self.insert_chars(count_param(first)),
+            (_, 'd') => self.set_cursor_row(values.first().copied().unwrap_or(1) as usize),
             (_, 'm') => self.apply_sgr(&values),
+            (_, 'r') => self.set_scroll_region(values.first().copied(), values.get(1).copied()),
+            (_, 's') => self.save_cursor(),
+            (_, 'u') => self.restore_cursor(),
             _ => {}
         }
     }
@@ -568,14 +814,28 @@ impl Perform for TerminalDocument {
         if ignore {
             return;
         }
-        if byte == b'c' {
-            self.reset();
+        match byte {
+            b'7' => self.save_cursor(),
+            b'8' => self.restore_cursor(),
+            b'D' => self.newline(),
+            b'E' => self.next_line(1),
+            b'M' => self.reverse_index(),
+            b'c' => self.reset(),
+            _ => {}
         }
     }
 }
 
 fn blank_row(cols: usize, style: CellStyle) -> Vec<Cell> {
     vec![Cell::blank(style); cols]
+}
+
+fn terminal_row(row: usize, cells: &[Cell]) -> TerminalRow {
+    TerminalRow {
+        row,
+        runs: row_runs(cells),
+        fingerprint: row_fingerprint(cells),
+    }
 }
 
 fn row_runs(cells: &[Cell]) -> Vec<CellRun> {

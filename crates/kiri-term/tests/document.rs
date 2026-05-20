@@ -192,6 +192,98 @@ fn resize_patch_is_authoritative_for_replay() {
     assert_eq!(replayed.rows_data.len(), 4);
 }
 
+#[test]
+fn scroll_region_keeps_tui_header_and_footer_stable() {
+    let mut document = TerminalDocument::new(8, 4);
+    let before = document.snapshot();
+    let patch = document
+        .apply_bytes(b"\x1b[1;1HHEAD\x1b[2;1HBODY1\x1b[3;1HBODY2\x1b[4;1HFOOT\x1b[2;3r\x1b[3;1H\n");
+    assert_replay_matches(before, &patch, document.snapshot());
+
+    assert_eq!(document.screen_text(), "HEAD\nBODY2\n\nFOOT");
+    assert_eq!(document.snapshot().history_rows.len(), 0);
+}
+
+#[test]
+fn reverse_index_scrolls_down_inside_scroll_region() {
+    let mut document = TerminalDocument::new(8, 4);
+    document
+        .apply_bytes(b"\x1b[1;1HHEAD\x1b[2;1Hone\x1b[3;1Htwo\x1b[4;1HFOOT\x1b[2;3r\x1b[2;1H\x1bM");
+
+    assert_eq!(document.screen_text(), "HEAD\n\none\nFOOT");
+}
+
+#[test]
+fn insert_and_delete_lines_are_limited_to_scroll_region() {
+    let mut document = TerminalDocument::new(8, 5);
+    document.apply_bytes(b"\x1b[1;1HHEAD\x1b[2;1Hone\x1b[3;1Htwo\x1b[4;1Hthree\x1b[5;1HFOOT");
+    document.apply_bytes(b"\x1b[2;4r\x1b[3;1H\x1b[L");
+    assert_eq!(document.screen_text(), "HEAD\none\n\ntwo\nFOOT");
+
+    document.apply_bytes(b"\x1b[3;1H\x1b[M");
+    assert_eq!(document.screen_text(), "HEAD\none\ntwo\n\nFOOT");
+}
+
+#[test]
+fn explicit_screen_edits_do_not_push_scrollback_history() {
+    let mut document = TerminalDocument::new(8, 3);
+    document.apply_bytes(b"\x1b[1;1Hone\x1b[2;1Htwo\x1b[3;1Hthree\x1b[1;1H\x1b[M");
+    assert_eq!(document.screen_text(), "two\nthree\n");
+    assert_eq!(document.snapshot().history_rows.len(), 0);
+
+    document.apply_bytes(b"\x1b[1;1H\x1b[2S");
+    assert_eq!(document.snapshot().history_rows.len(), 0);
+}
+
+#[test]
+fn insert_delete_and_erase_chars_support_prompt_redraws() {
+    let mut document = TerminalDocument::new(8, 2);
+    document.apply_bytes(b"abcdef\x1b[1;3H\x1b[2P");
+    assert_eq!(document.screen_text(), "abef\n");
+
+    document.apply_bytes(b"\x1b[1;3H\x1b[2@XY");
+    assert_eq!(document.screen_text(), "abXYef\n");
+
+    document.apply_bytes(b"\x1b[1;3H\x1b[2X");
+    assert_eq!(document.screen_text(), "ab  ef\n");
+}
+
+#[test]
+fn origin_mode_positions_cursor_relative_to_scroll_region() {
+    let mut document = TerminalDocument::new(6, 5);
+    document.apply_bytes(b"\x1b[2;4r\x1b[?6h\x1b[1;1HX");
+
+    assert_eq!(document.screen_text(), "\nX\n\n\n");
+    assert_eq!(document.snapshot().cursor.row, 1);
+    assert_eq!(document.snapshot().cursor.col, 1);
+}
+
+#[test]
+fn cursor_save_restore_keeps_style_and_origin_mode_per_screen() {
+    let mut document = TerminalDocument::new(8, 5);
+    document.apply_bytes(
+        b"\x1b[2;4r\x1b[?6h\x1b[31m\x1b[2;2H\x1b7\x1b[?6l\x1b[?7l\x1b[0m\x1b[1;1H\x1b8X",
+    );
+    let snapshot = document.snapshot();
+
+    assert!(snapshot.modes.origin);
+    assert!(snapshot.modes.wrap);
+    assert_eq!(snapshot.cursor.row, 2);
+    assert_eq!(snapshot.cursor.col, 2);
+    assert_eq!(snapshot.rows_data[2].runs[1].text, "X");
+    assert_eq!(
+        snapshot.rows_data[2].runs[1].style.foreground,
+        Some(TerminalColor::Palette { index: 1 })
+    );
+
+    document.apply_bytes(b"\x1b[?1049h\x1b[5;5H\x1b7\x1b[1;1H\x1b8Y");
+    let snapshot = document.snapshot();
+    assert_eq!(snapshot.cursor.row, 4);
+    assert_eq!(snapshot.cursor.col, 5);
+    assert_eq!(snapshot.rows_data[4].runs[0].text, "    ");
+    assert_eq!(snapshot.rows_data[4].runs[1].text, "Y");
+}
+
 #[derive(Debug)]
 struct ReplayState {
     cols: usize,
