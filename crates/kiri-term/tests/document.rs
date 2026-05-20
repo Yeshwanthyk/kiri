@@ -67,6 +67,50 @@ fn preserves_styled_blank_cells_after_erase_line() {
 }
 
 #[test]
+fn sgr_colon_subparams_do_not_leak_underline() {
+    let mut document = TerminalDocument::new(16, 2);
+    document.apply_bytes(b"\x1b[4:1munder\x1b[4:0m plain");
+    let rows = document.snapshot().rows_data;
+
+    assert_eq!(rows[0].runs[0].text, "under");
+    assert!(rows[0].runs[0].style.underline);
+    assert_eq!(rows[0].runs[1].text, " plain");
+    assert!(!rows[0].runs[1].style.underline);
+}
+
+#[test]
+fn sgr_colon_extended_colors_match_semicolon_form() {
+    let mut document = TerminalDocument::new(16, 2);
+    document.apply_bytes(b"\x1b[38:5:196;48:5:21mred\x1b[0m \x1b[48:2:1:2:3mcell");
+    let rows = document.snapshot().rows_data;
+
+    assert_eq!(
+        rows[0].runs[0].style.foreground,
+        Some(TerminalColor::Palette { index: 196 })
+    );
+    assert_eq!(
+        rows[0].runs[0].style.background,
+        Some(TerminalColor::Palette { index: 21 })
+    );
+    assert_eq!(
+        rows[0].runs[2].style.background,
+        Some(TerminalColor::Rgb { r: 1, g: 2, b: 3 })
+    );
+}
+
+#[test]
+fn sgr_colon_truecolor_skips_optional_color_space_subparam() {
+    let mut document = TerminalDocument::new(16, 2);
+    document.apply_bytes(b"\x1b[38:2::1:2:3mfg\x1b[0m");
+    let rows = document.snapshot().rows_data;
+
+    assert_eq!(
+        rows[0].runs[0].style.foreground,
+        Some(TerminalColor::Rgb { r: 1, g: 2, b: 3 })
+    );
+}
+
+#[test]
 fn handles_cursor_movement_and_erase_line() {
     let mut document = TerminalDocument::new(8, 2);
     document.apply_bytes(b"abcdef\x1b[1;3HX\x1b[K");

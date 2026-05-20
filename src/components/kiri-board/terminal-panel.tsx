@@ -12,13 +12,13 @@ import {
   type ChatTypographySettings,
 } from './storage'
 
-const wheelDeltaPixel = 0
 const wheelDeltaLine = 1
 const wheelDeltaPage = 2
 const fallbackCols = 100
 const fallbackRows = 30
 const mainTerminalInstanceId = 'main'
 const maxRenderedHistoryRows = 800
+const terminalMeasureSample = 'W'.repeat(80)
 
 type TerminalSnapshot = {
   readonly cols: number
@@ -184,7 +184,6 @@ export function TerminalPanel({
   focusRequest,
   mode,
   project,
-  themeMode: _themeMode,
   toggleFocusKey,
   typography,
   visible,
@@ -360,7 +359,6 @@ export function TerminalPanel({
             focusRequest={focusRequest}
             getTerminalConfig={getTerminalConfig}
             instanceId={paneId}
-            label={label}
             mode={mode}
             onDebugChange={handlePaneDebugChange}
             onFocusPane={setActivePaneId}
@@ -440,7 +438,6 @@ function TerminalPane({
   focusRequest,
   getTerminalConfig,
   instanceId,
-  label,
   mode,
   onDebugChange,
   onFocusPane,
@@ -455,7 +452,6 @@ function TerminalPane({
   readonly focusRequest: number
   readonly getTerminalConfig: GetTerminalConfig
   readonly instanceId: string
-  readonly label: string
   readonly mode: TerminalMode
   readonly onDebugChange: (paneId: string, debug: TerminalDebugSnapshot) => void
   readonly onFocusPane: (paneId: string) => void
@@ -1008,9 +1004,59 @@ function terminalSizeFromHost(host: HTMLElement | null) {
   if (!host) return { cols: fallbackCols, rows: fallbackRows }
   const style = window.getComputedStyle(host)
   const fontSize = Number.parseFloat(style.fontSize) || 14
-  const cols = Math.max(20, Math.floor(host.clientWidth / (fontSize * 0.62)))
-  const rows = Math.max(6, Math.floor(host.clientHeight / (fontSize * 1.35)))
-  return { cols, rows }
+  const lineHeight = terminalLineHeight(style.lineHeight, fontSize)
+  return terminalSizeFromMeasurements({
+    width: host.clientWidth,
+    height: host.clientHeight,
+    paddingLeft: Number.parseFloat(style.paddingLeft) || 0,
+    paddingRight: Number.parseFloat(style.paddingRight) || 0,
+    paddingTop: Number.parseFloat(style.paddingTop) || 0,
+    paddingBottom: Number.parseFloat(style.paddingBottom) || 0,
+    charWidth: terminalMeasuredCharWidth(host, style, fontSize),
+    lineHeight,
+  })
+}
+
+export function terminalSizeFromMeasurements(input: {
+  readonly width: number
+  readonly height: number
+  readonly paddingLeft: number
+  readonly paddingRight: number
+  readonly paddingTop: number
+  readonly paddingBottom: number
+  readonly charWidth: number
+  readonly lineHeight: number
+}) {
+  const contentWidth = Math.max(0, input.width - input.paddingLeft - input.paddingRight)
+  const contentHeight = Math.max(0, input.height - input.paddingTop - input.paddingBottom)
+  return {
+    cols: Math.max(20, Math.floor(contentWidth / Math.max(1, input.charWidth))),
+    rows: Math.max(6, Math.floor(contentHeight / Math.max(1, input.lineHeight))),
+  }
+}
+
+function terminalLineHeight(lineHeight: string, fontSize: number) {
+  const parsed = Number.parseFloat(lineHeight)
+  return Number.isFinite(parsed) ? parsed : fontSize * 1.35
+}
+
+function terminalMeasuredCharWidth(host: HTMLElement, style: CSSStyleDeclaration, fontSize: number) {
+  const ownerDocument = host.ownerDocument
+  const probe = ownerDocument.createElement('span')
+  probe.textContent = terminalMeasureSample
+  probe.style.position = 'absolute'
+  probe.style.visibility = 'hidden'
+  probe.style.whiteSpace = 'pre'
+  probe.style.fontFamily = style.fontFamily
+  probe.style.fontSize = style.fontSize
+  probe.style.fontWeight = style.fontWeight
+  probe.style.fontStyle = style.fontStyle
+  probe.style.letterSpacing = style.letterSpacing
+  probe.style.lineHeight = style.lineHeight
+  host.appendChild(probe)
+  const width = probe.getBoundingClientRect().width / terminalMeasureSample.length
+  probe.remove()
+  return Number.isFinite(width) && width > 0 ? width : fontSize * 0.62
 }
 
 function terminalWebSocketUrl(

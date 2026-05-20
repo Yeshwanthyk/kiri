@@ -4,6 +4,7 @@ import {
   parseTerminalFramesForTests,
   terminalColorValueForTests,
   terminalRenderedRowsForTests,
+  terminalSizeFromMeasurements,
   terminalShouldCustomScrollWheel,
   terminalTypographyOptions,
   terminalWheelScrollLines,
@@ -146,6 +147,21 @@ describe('terminal frame renderer contract', () => {
   it('maps 256-color palette indices for sidecar-rendered ANSI styles', () => {
     expect(terminalColorValueForTests({ kind: 'palette', index: 196 })).toBe('rgb(255 0 0)')
     expect(terminalColorValueForTests({ kind: 'palette', index: 232 })).toBe('rgb(8 8 8)')
+  })
+})
+
+describe('terminal sizing', () => {
+  it('computes pty size from measured cells and excludes host padding', () => {
+    expect(terminalSizeFromMeasurements({
+      width: 1020,
+      height: 548,
+      paddingLeft: 10,
+      paddingRight: 10,
+      paddingTop: 8,
+      paddingBottom: 8,
+      charWidth: 10,
+      lineHeight: 19,
+    })).toEqual({ cols: 100, rows: 28 })
   })
 })
 

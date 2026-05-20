@@ -681,21 +681,22 @@ impl TerminalDocument {
         }
     }
 
-    fn apply_sgr(&mut self, params: &[u16]) {
+    fn apply_sgr(&mut self, params: &[SgrParam]) {
         if params.is_empty() {
             self.style = CellStyle::default();
             return;
         }
         let mut index = 0;
         while index < params.len() {
-            let value = params[index];
+            let value = params[index].value();
             match value {
                 0 => self.style = CellStyle::default(),
                 1 => self.style.bold = true,
                 2 => self.style.dim = true,
                 3 => self.style.italic = true,
-                4 => self.style.underline = true,
+                4 => self.style.underline = params[index].subvalue().unwrap_or(1) != 0,
                 7 => self.style.inverse = true,
+                21 => self.style.underline = true,
                 22 => {
                     self.style.bold = false;
                     self.style.dim = false;
@@ -726,7 +727,7 @@ impl TerminalDocument {
                     })
                 }
                 38 | 48 => {
-                    if let Some((color, consumed)) = parse_extended_color(&params[index + 1..]) {
+                    if let Some((color, consumed)) = parse_extended_color(&params[index..]) {
                         if value == 38 {
                             self.style.foreground = Some(color);
                         } else {
@@ -802,7 +803,7 @@ impl Perform for TerminalDocument {
             (_, 'X') => self.erase_chars(count_param(first)),
             (_, '@') => self.insert_chars(count_param(first)),
             (_, 'd') => self.set_cursor_row(values.first().copied().unwrap_or(1) as usize),
-            (_, 'm') => self.apply_sgr(&values),
+            (_, 'm') => self.apply_sgr(&sgr_params(params)),
             (_, 'r') => self.set_scroll_region(values.first().copied(), values.get(1).copied()),
             (_, 's') => self.save_cursor(),
             (_, 'u') => self.restore_cursor(),
@@ -835,6 +836,21 @@ fn terminal_row(row: usize, cells: &[Cell]) -> TerminalRow {
         row,
         runs: row_runs(cells),
         fingerprint: row_fingerprint(cells),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SgrParam {
+    values: Vec<u16>,
+}
+
+impl SgrParam {
+    fn value(&self) -> u16 {
+        self.values.first().copied().unwrap_or(0)
+    }
+
+    fn subvalue(&self) -> Option<u16> {
+        self.values.get(1).copied()
     }
 }
 
@@ -916,26 +932,64 @@ fn flat_params(params: &Params) -> Vec<u16> {
         .collect()
 }
 
+fn sgr_params(params: &Params) -> Vec<SgrParam> {
+    params
+        .iter()
+        .map(|part| SgrParam {
+            values: part.to_vec(),
+        })
+        .collect()
+}
+
 fn count_param(value: u16) -> usize {
     usize::from(value.max(1))
 }
 
-fn parse_extended_color(params: &[u16]) -> Option<(TerminalColor, usize)> {
-    match params {
-        [5, index, ..] => Some((
-            TerminalColor::Palette {
-                index: (*index).min(255) as u8,
-            },
-            2,
-        )),
-        [2, r, g, b, ..] => Some((
-            TerminalColor::Rgb {
-                r: (*r).min(255) as u8,
-                g: (*g).min(255) as u8,
-                b: (*b).min(255) as u8,
-            },
-            4,
-        )),
-        _ => None,
+fn parse_extended_color(params: &[SgrParam]) -> Option<(TerminalColor, usize)> {
+    if let [first, rest @ ..] = params {
+        if first.values.len() > 1 {
+            return match first.values.as_slice() {
+                [_, 5, index, ..] => Some((
+                    TerminalColor::Palette {
+                        index: (*index).min(255) as u8,
+                    },
+                    0,
+                )),
+                [_, 2, color @ ..] => parse_colon_rgb(color).map(|color| (color, 0)),
+                _ => None,
+            };
+        }
+        match rest {
+            [mode, index, ..] if mode.value() == 5 => Some((
+                TerminalColor::Palette {
+                    index: index.value().min(255) as u8,
+                },
+                2,
+            )),
+            [mode, r, g, b, ..] if mode.value() == 2 => Some((
+                TerminalColor::Rgb {
+                    r: r.value().min(255) as u8,
+                    g: g.value().min(255) as u8,
+                    b: b.value().min(255) as u8,
+                },
+                4,
+            )),
+            _ => None,
+        }
+    } else {
+        None
     }
+}
+
+fn parse_colon_rgb(values: &[u16]) -> Option<TerminalColor> {
+    let [r, g, b] = match values {
+        [0, r, g, b, ..] => [r, g, b],
+        [r, g, b, ..] => [r, g, b],
+        _ => return None,
+    };
+    Some(TerminalColor::Rgb {
+        r: (*r).min(255) as u8,
+        g: (*g).min(255) as u8,
+        b: (*b).min(255) as u8,
+    })
 }
