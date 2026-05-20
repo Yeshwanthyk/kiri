@@ -2319,6 +2319,8 @@
   position: relative;
   height: 1.35em;
   line-height: 1.35em;
+  overflow: hidden;
+  contain: paint;
 }
 
 .terminal-run {
