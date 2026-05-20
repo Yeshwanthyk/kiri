@@ -704,7 +704,16 @@ function TerminalRows({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
               data-terminal-underline={terminalRunHasVisibleUnderline(run) ? 'true' : undefined}
               data-terminal-blank-underline={terminalRunIsBlankUnderline(run) ? 'true' : undefined}
             >
-              {run.text}
+              {terminalRunDecorationSegments(run).map((segment, segmentIndex) => (
+                <span
+                  key={`${row.row}-${index}-${segmentIndex}`}
+                  className="terminal-run-segment"
+                  style={terminalRunSegmentStyle(segment)}
+                  data-terminal-underline={segment.underline ? 'true' : undefined}
+                >
+                  {segment.text}
+                </span>
+              ))}
             </span>
           ))}
           {snapshot.cursor.visible && screenRow === snapshot.cursor.row ? (
@@ -1250,6 +1259,12 @@ type RenderCell = {
   readonly style: TerminalCellStyle
 }
 
+type TerminalRunDecorationSegment = {
+  readonly text: string
+  readonly width: number
+  readonly underline: boolean
+}
+
 function expandRunsToCells(runs: readonly CellRun[]) {
   const cells: RenderCell[] = []
   for (const run of runs) {
@@ -1341,6 +1356,38 @@ export function terminalRowUnderlineBlankRunCountForTests(row: TerminalRow) {
   return terminalRowUnderlineBlankRunCount(row)
 }
 
+function terminalRunDecorationSegments(run: CellRun): readonly TerminalRunDecorationSegment[] {
+  if (!run.style.underline) {
+    return [{ text: run.text, width: run.width, underline: false }]
+  }
+  const chars = Array.from(run.text)
+  const canSplitByCell = chars.length > 0
+    && chars.length === run.width
+    && chars.every((char) => char.length === 1 && char.charCodeAt(0) < 128)
+  if (!canSplitByCell) {
+    return [{ text: run.text, width: run.width, underline: /\S/u.test(run.text) }]
+  }
+  const segments: TerminalRunDecorationSegment[] = []
+  for (const char of chars) {
+    const underline = /\S/u.test(char)
+    const previous = segments.at(-1)
+    if (previous && previous.underline === underline) {
+      segments[segments.length - 1] = {
+        ...previous,
+        text: `${previous.text}${char}`,
+        width: previous.width + 1,
+      }
+      continue
+    }
+    segments.push({ text: char, width: 1, underline })
+  }
+  return segments
+}
+
+export function terminalRunDecorationSegmentsForTests(run: CellRun) {
+  return terminalRunDecorationSegments(run)
+}
+
 function runStyle(run: CellRun): React.CSSProperties {
   const style = run.style
   return {
@@ -1351,6 +1398,13 @@ function runStyle(run: CellRun): React.CSSProperties {
     opacity: style.dim ? 0.68 : undefined,
     color: colorValue(style.inverse ? style.background : style.foreground),
     backgroundColor: colorValue(style.inverse ? style.foreground : style.background),
+  }
+}
+
+function terminalRunSegmentStyle(segment: TerminalRunDecorationSegment): React.CSSProperties {
+  return {
+    width: `${segment.width}ch`,
+    minWidth: `${segment.width}ch`,
   }
 }
 

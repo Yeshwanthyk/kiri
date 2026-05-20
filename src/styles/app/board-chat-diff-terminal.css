@@ -2335,7 +2335,16 @@
   word-break: keep-all;
 }
 
-.terminal-run[data-terminal-underline="true"]::after {
+.terminal-run-segment {
+  position: relative;
+  display: inline-block;
+  height: 100%;
+  line-height: inherit;
+  vertical-align: top;
+  white-space: pre;
+}
+
+.terminal-run-segment[data-terminal-underline="true"]::after {
   position: absolute;
   right: 0;
   bottom: 0.16em;
