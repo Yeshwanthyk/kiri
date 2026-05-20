@@ -2307,12 +2307,11 @@
 
 .terminal-screen {
   position: relative;
-  width: max-content;
-  min-width: 100%;
   color: #e6e8ef;
   font-variant-ligatures: none;
   line-height: 1.35;
   tab-size: 8;
+  white-space: pre;
 }
 
 .terminal-row {
@@ -2321,14 +2320,18 @@
   line-height: 1.35em;
   overflow: hidden;
   contain: paint;
+  white-space: nowrap;
 }
 
 .terminal-run {
   display: inline-block;
   height: 100%;
   line-height: inherit;
+  overflow: hidden;
   vertical-align: top;
   white-space: pre;
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
 
 .terminal-cursor {

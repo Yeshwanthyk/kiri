@@ -42,6 +42,8 @@ type TerminalCursor = {
 type TerminalModes = {
   readonly bracketedPaste: boolean
   readonly cursorVisible: boolean
+  readonly mouseBasic?: boolean
+  readonly mouseSgr?: boolean
 }
 
 type TerminalViewport = {
@@ -637,6 +639,28 @@ function TerminalPane({
           event.stopPropagation()
           sendPaste(socketRef.current, text, false)
         }}
+        onWheel={(event) => {
+          const host = hostRef.current
+          if (!host || event.shiftKey) return
+          const action = terminalWheelAction({
+            deltaMode: event.deltaMode,
+            deltaY: event.deltaY,
+            mouseInput: terminalWheelMouseInput(event, host, snapshot, typographyOptions.fontSize),
+          })
+          if (action.type === 'input') {
+            event.preventDefault()
+            event.stopPropagation()
+            sendInput(socketRef.current, action.data)
+            return
+          }
+          if (action.type === 'none') return
+          const before = host.scrollTop
+          host.scrollTop += action.lines * terminalLineHeight(window.getComputedStyle(host).lineHeight, typographyOptions.fontSize)
+          if (host.scrollTop !== before) {
+            event.preventDefault()
+            event.stopPropagation()
+          }
+        }}
         onFocus={() => onFocusPane(instanceId)}
         onClick={() => onFocusPane(instanceId)}
       >
@@ -662,6 +686,7 @@ function TerminalRows({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
       className="terminal-screen"
       data-cols={snapshot.cols}
       data-rows={snapshot.rows}
+      style={terminalScreenStyle(snapshot.cols)}
     >
       {rows.map(({ key, row, screenRow }) => (
         <div
@@ -673,7 +698,7 @@ function TerminalRows({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
             <span
               key={`${row.row}-${index}`}
               className="terminal-run"
-              style={runStyle(run.style)}
+              style={runStyle(run)}
             >
               {run.text}
             </span>
@@ -733,10 +758,98 @@ export function terminalWheelScrollLines(event: Pick<WheelEvent, 'deltaMode' | '
   return Math.sign(event.deltaY) * Math.max(1, lines)
 }
 
-export function terminalShouldCustomScrollWheel(
-  buffer: { readonly type: 'normal' | 'alternate'; readonly baseY: number } | undefined,
+type TerminalWheelActionInput = Pick<WheelEvent, 'deltaMode' | 'deltaY'> & {
+  readonly mouseInput: string | null
+}
+
+type TerminalWheelAction =
+  | { readonly type: 'input'; readonly data: string }
+  | { readonly type: 'scroll'; readonly lines: number }
+  | { readonly type: 'none' }
+
+export function terminalWheelActionForTests(input: TerminalWheelActionInput): TerminalWheelAction {
+  return terminalWheelAction(input)
+}
+
+function terminalWheelAction(input: TerminalWheelActionInput): TerminalWheelAction {
+  if (input.mouseInput !== null) return { type: 'input', data: input.mouseInput }
+  const lines = terminalWheelScrollLines(input)
+  return lines === 0 ? { type: 'none' } : { type: 'scroll', lines }
+}
+
+type TerminalWheelMouseInput = {
+  readonly deltaY: number
+  readonly clientX: number
+  readonly clientY: number
+  readonly hostRect: Pick<DOMRect, 'left' | 'top'>
+  readonly paddingLeft: number
+  readonly paddingRight: number
+  readonly paddingTop: number
+  readonly scrollTop: number
+  readonly clientWidth: number
+  readonly cols: number
+  readonly rows: number
+  readonly renderedHistoryRows: number
+  readonly lineHeight: number
+  readonly mouseBasic: boolean
+  readonly mouseSgr: boolean
+}
+
+export function terminalWheelMouseInputForTests(input: TerminalWheelMouseInput) {
+  return terminalWheelMouseSequence(input)
+}
+
+function terminalWheelMouseInput(
+  event: React.WheelEvent,
+  host: HTMLElement,
+  snapshot: TerminalSnapshot,
+  fontSize: number,
 ) {
-  return buffer?.type === 'normal' && buffer.baseY > 0
+  if (!snapshot.modes.mouseBasic) return null
+  const style = window.getComputedStyle(host)
+  return terminalWheelMouseSequence({
+    deltaY: event.deltaY,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    hostRect: host.getBoundingClientRect(),
+    paddingLeft: Number.parseFloat(style.paddingLeft) || 0,
+    paddingRight: Number.parseFloat(style.paddingRight) || 0,
+    paddingTop: Number.parseFloat(style.paddingTop) || 0,
+    scrollTop: host.scrollTop,
+    clientWidth: host.clientWidth,
+    cols: snapshot.cols,
+    rows: snapshot.rows,
+    renderedHistoryRows: snapshot.bufferKind === 'main'
+      ? Math.min(snapshot.historyRows.length, maxRenderedHistoryRows)
+      : 0,
+    lineHeight: terminalLineHeight(style.lineHeight, fontSize),
+    mouseBasic: Boolean(snapshot.modes.mouseBasic),
+    mouseSgr: Boolean(snapshot.modes.mouseSgr),
+  })
+}
+
+function terminalWheelMouseSequence(input: TerminalWheelMouseInput) {
+  if (!input.mouseBasic || input.deltaY === 0 || input.cols <= 0 || input.rows <= 0) return null
+  const contentWidth = Math.max(1, input.clientWidth - input.paddingLeft - input.paddingRight)
+  const cellWidth = Math.max(1, contentWidth / input.cols)
+  const rowOffset = input.renderedHistoryRows * input.lineHeight
+  const col = clampTerminalMouseCoord(
+    Math.floor((input.clientX - input.hostRect.left - input.paddingLeft) / cellWidth) + 1,
+    input.cols,
+  )
+  const row = clampTerminalMouseCoord(
+    Math.floor((input.clientY - input.hostRect.top - input.paddingTop + input.scrollTop - rowOffset) / input.lineHeight) + 1,
+    input.rows,
+  )
+  const button = input.deltaY < 0 ? 64 : 65
+  if (input.mouseSgr) return `\x1b[<${button};${col};${row}M`
+  const legacyMax = 223
+  return `\x1b[M${String.fromCharCode(32 + button)}${String.fromCharCode(32 + Math.min(col, legacyMax))}${String.fromCharCode(32 + Math.min(row, legacyMax))}`
+}
+
+function clampTerminalMouseCoord(value: number, max: number) {
+  if (!Number.isFinite(value)) return 1
+  return Math.min(Math.max(1, value), Math.max(1, max))
 }
 
 export function applyTerminalFrameForTests(
@@ -1181,8 +1294,22 @@ function reindexRows(rows: readonly TerminalRow[]) {
   return rows.map((row, index) => ({ ...row, row: index }))
 }
 
-function runStyle(style: TerminalCellStyle): React.CSSProperties {
+function terminalScreenStyle(cols: number): React.CSSProperties {
   return {
+    width: `${cols}ch`,
+    minWidth: `${cols}ch`,
+  }
+}
+
+export function terminalScreenStyleForTests(cols: number) {
+  return terminalScreenStyle(cols)
+}
+
+function runStyle(run: CellRun): React.CSSProperties {
+  const style = run.style
+  return {
+    width: `${run.width}ch`,
+    minWidth: `${run.width}ch`,
     fontWeight: style.bold ? 700 : undefined,
     fontStyle: style.italic ? 'italic' : undefined,
     textDecoration: style.underline ? 'underline' : undefined,
@@ -1190,6 +1317,10 @@ function runStyle(style: TerminalCellStyle): React.CSSProperties {
     color: colorValue(style.inverse ? style.background : style.foreground),
     backgroundColor: colorValue(style.inverse ? style.foreground : style.background),
   }
+}
+
+export function terminalRunStyleForTests(run: CellRun) {
+  return runStyle(run)
 }
 
 function colorValue(color: TerminalColor | null | undefined) {

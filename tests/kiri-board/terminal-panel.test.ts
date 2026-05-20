@@ -4,9 +4,12 @@ import {
   parseTerminalFramesForTests,
   terminalColorValueForTests,
   terminalRenderedRowsForTests,
+  terminalRunStyleForTests,
+  terminalScreenStyleForTests,
   terminalSizeFromMeasurements,
-  terminalShouldCustomScrollWheel,
   terminalTypographyOptions,
+  terminalWheelActionForTests,
+  terminalWheelMouseInputForTests,
   terminalWheelScrollLines,
 } from '~/components/kiri-board/terminal-panel'
 
@@ -148,6 +151,21 @@ describe('terminal frame renderer contract', () => {
     expect(terminalColorValueForTests({ kind: 'palette', index: 196 })).toBe('rgb(255 0 0)')
     expect(terminalColorValueForTests({ kind: 'palette', index: 232 })).toBe('rgb(8 8 8)')
   })
+
+  it('reserves terminal cell width so styled runs cannot soft-wrap like normal DOM text', () => {
+    expect(terminalScreenStyleForTests(80)).toMatchObject({
+      width: '80ch',
+      minWidth: '80ch',
+    })
+    expect(terminalRunStyleForTests({
+      text: 'long output',
+      width: 80,
+      style: {},
+    })).toMatchObject({
+      width: '80ch',
+      minWidth: '80ch',
+    })
+  })
 })
 
 describe('terminal sizing', () => {
@@ -177,14 +195,81 @@ describe('terminal wheel scrolling', () => {
       .toBe(0)
   })
 
-  it('only overrides wheel handling when normal scrollback exists', () => {
-    expect(terminalShouldCustomScrollWheel({ type: 'normal', baseY: 12 }))
-      .toBe(true)
-    expect(terminalShouldCustomScrollWheel({ type: 'normal', baseY: 0 }))
-      .toBe(false)
-    expect(terminalShouldCustomScrollWheel({ type: 'alternate', baseY: 12 }))
-      .toBe(false)
-    expect(terminalShouldCustomScrollWheel(undefined))
-      .toBe(false)
+  it('routes wheel events to PTY input before host scrollback', () => {
+    expect(terminalWheelActionForTests({
+      deltaMode: 0,
+      deltaY: 80,
+      mouseInput: '\x1b[<65;3;5M',
+    })).toEqual({ type: 'input', data: '\x1b[<65;3;5M' })
+    expect(terminalWheelActionForTests({
+      deltaMode: 0,
+      deltaY: 80,
+      mouseInput: null,
+    })).toEqual({ type: 'scroll', lines: 2 })
+    expect(terminalWheelActionForTests({
+      deltaMode: 0,
+      deltaY: 0,
+      mouseInput: null,
+    })).toEqual({ type: 'none' })
+  })
+
+  it('encodes wheel events for mouse-tracking terminal apps', () => {
+    expect(terminalWheelMouseInputForTests({
+      deltaY: -100,
+      clientX: 25,
+      clientY: 41,
+      hostRect: { left: 10, top: 20 },
+      paddingLeft: 5,
+      paddingRight: 0,
+      paddingTop: 2,
+      scrollTop: 0,
+      clientWidth: 805,
+      cols: 80,
+      rows: 24,
+      renderedHistoryRows: 0,
+      lineHeight: 19,
+      mouseBasic: true,
+      mouseSgr: true,
+    })).toBe('\x1b[<64;2;2M')
+  })
+
+  it('accounts for rendered scrollback rows when encoding wheel coordinates', () => {
+    expect(terminalWheelMouseInputForTests({
+      deltaY: 100,
+      clientX: 35,
+      clientY: 80,
+      hostRect: { left: 10, top: 20 },
+      paddingLeft: 5,
+      paddingRight: 0,
+      paddingTop: 2,
+      scrollTop: 95,
+      clientWidth: 805,
+      cols: 80,
+      rows: 24,
+      renderedHistoryRows: 4,
+      lineHeight: 19,
+      mouseBasic: true,
+      mouseSgr: true,
+    })).toBe('\x1b[<65;3;5M')
+  })
+
+  it('does not encode wheel input unless mouse tracking is active', () => {
+    expect(terminalWheelMouseInputForTests({
+      deltaY: 100,
+      clientX: 35,
+      clientY: 80,
+      hostRect: { left: 10, top: 20 },
+      paddingLeft: 5,
+      paddingRight: 0,
+      paddingTop: 2,
+      scrollTop: 0,
+      clientWidth: 805,
+      cols: 80,
+      rows: 24,
+      renderedHistoryRows: 0,
+      lineHeight: 19,
+      mouseBasic: false,
+      mouseSgr: true,
+    })).toBeNull()
   })
 })
