@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import {
   applyTerminalFrameForTests,
   parseTerminalFramesForTests,
+  TerminalRowsForTests,
   terminalColorValueForTests,
+  terminalRenderableRunsForTests,
   terminalRenderedRowsForTests,
   terminalRowUnderlineBlankRunCountForTests,
   terminalRowUnderlineRunCountForTests,
@@ -186,6 +190,50 @@ describe('terminal frame renderer contract', () => {
     expect(terminalRunHasVisibleUnderlineForTests(visibleRun)).toBe(true)
     expect(terminalRunHasVisibleUnderlineForTests(blankRun)).toBe(false)
     expect(terminalRunIsBlankUnderlineForTests(blankRun)).toBe(true)
+  })
+
+  it('splits underlined whitespace into sibling terminal runs without nested layout', () => {
+    expect(terminalRenderableRunsForTests([{
+      text: 'hello world',
+      width: 11,
+      style: { underline: true },
+    }])).toEqual([
+      { text: 'hello', width: 5, style: { underline: true } },
+      { text: ' ', width: 1, style: { underline: false } },
+      { text: 'world', width: 5, style: { underline: true } },
+    ])
+  })
+
+  it('does not split wide or ambiguous-width underlined terminal runs', () => {
+    expect(terminalRenderableRunsForTests([{
+      text: '界',
+      width: 2,
+      style: { underline: true },
+    }])).toEqual([{ text: '界', width: 2, style: { underline: true } }])
+  })
+
+  it('renders whitespace-split underline runs as siblings instead of nested spans', () => {
+    const html = renderToStaticMarkup(createElement(TerminalRowsForTests, {
+      snapshot: {
+        cols: 11,
+        rows: 1,
+        screenSeq: 0,
+        historySeq: 0,
+        bufferKind: 'main',
+        cursor: { row: 0, col: 0, visible: false },
+        modes: { bracketedPaste: false, cursorVisible: false },
+        viewport: { historyOffset: 0, visibleRows: 1 },
+        historyRows: [],
+        rowsData: [{
+          row: 0,
+          fingerprint: 1,
+          runs: [{ text: 'hello world', width: 11, style: { underline: true } }],
+        }],
+      },
+    }))
+
+    expect(html).not.toContain('terminal-run-segment')
+    expect(html.match(/class="terminal-run"/g)).toHaveLength(3)
   })
 
   it('exposes per-row underline diagnostics for live terminal capture', () => {

@@ -696,7 +696,7 @@ function TerminalRows({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
           data-terminal-underline-runs={terminalRowUnderlineRunCount(row)}
           data-terminal-underline-blank-runs={terminalRowUnderlineBlankRunCount(row)}
         >
-          {row.runs.length === 0 ? '\u00a0' : row.runs.map((run, index) => (
+          {row.runs.length === 0 ? '\u00a0' : terminalRenderableRuns(row.runs).map((run, index) => (
             <span
               key={`${row.row}-${index}`}
               className="terminal-run"
@@ -1339,6 +1339,40 @@ function terminalRowUnderlineBlankRunCount(row: TerminalRow) {
 
 export function terminalRowUnderlineBlankRunCountForTests(row: TerminalRow) {
   return terminalRowUnderlineBlankRunCount(row)
+}
+
+function terminalRenderableRuns(runs: readonly CellRun[]) {
+  return runs.flatMap((run) => splitUnderlineRunAtWhitespace(run))
+}
+
+export function terminalRenderableRunsForTests(runs: readonly CellRun[]) {
+  return terminalRenderableRuns(runs)
+}
+
+function splitUnderlineRunAtWhitespace(run: CellRun): readonly CellRun[] {
+  if (!run.style.underline) return [run]
+  const chars = Array.from(run.text)
+  const canSplitByCell = chars.length > 0
+    && chars.length === run.width
+    && chars.every((char) => char.length === 1 && char.charCodeAt(0) < 128)
+  if (!canSplitByCell) return [run]
+
+  const splitRuns: CellRun[] = []
+  for (const char of chars) {
+    const underline = /\S/u.test(char)
+    const style = underline ? run.style : { ...run.style, underline: false }
+    const previous = splitRuns.at(-1)
+    if (previous && terminalStyleKey(previous.style) === terminalStyleKey(style)) {
+      splitRuns[splitRuns.length - 1] = {
+        ...previous,
+        text: `${previous.text}${char}`,
+        width: previous.width + 1,
+      }
+      continue
+    }
+    splitRuns.push({ text: char, width: 1, style })
+  }
+  return splitRuns
 }
 
 function runStyle(run: CellRun): React.CSSProperties {
