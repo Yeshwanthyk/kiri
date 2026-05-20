@@ -692,6 +692,39 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
   await expect(terminalTranscript).toContainText(`${basename(projectRoot)}/src`)
 })
 
+test('terminal keeps measured cell geometry and input delivery after browser resize', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop terminal resize behavior')
+  const title = `Terminal Resize ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+
+  await page.getByTestId('tab-terminal').click()
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  const terminalInput = page.getByTestId('terminal-host').first()
+  await terminalInput.click()
+  await page.keyboard.type('echo before-resize')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText('before-resize')
+
+  await page.setViewportSize({ width: 920, height: 700 })
+  await expect.poll(async () => terminalInput.evaluate((host) => {
+    const screen = host.querySelector<HTMLElement>('.terminal-screen')
+    if (!screen) return false
+    const hostStyle = window.getComputedStyle(host)
+    const contentWidth = host.clientWidth -
+      Number.parseFloat(hostStyle.paddingLeft) -
+      Number.parseFloat(hostStyle.paddingRight)
+    const screenWidth = screen.getBoundingClientRect().width
+    return screenWidth <= contentWidth + 1
+  })).toBe(true)
+
+  await terminalInput.click()
+  await page.keyboard.type('echo after-resize')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText('after-resize')
+})
+
 test('terminal tabs and split panes create independent terminal surfaces', async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, 'desktop terminal tabs and panes')
   const title = `Terminal Tabs Panes ${testInfo.project.name}`

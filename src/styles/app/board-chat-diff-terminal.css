@@ -2316,8 +2316,8 @@
 
 .terminal-row {
   position: relative;
-  height: 1.35em;
-  line-height: 1.35em;
+  height: 1lh;
+  line-height: inherit;
   overflow: hidden;
   contain: paint;
   white-space: nowrap;
@@ -2337,9 +2337,8 @@
 
 .terminal-cursor {
   position: absolute;
-  top: 0.15em;
-  width: 0.62em;
-  height: 1.05em;
+  top: 0.12em;
+  height: 1.08em;
   background: #f5c15c;
   mix-blend-mode: difference;
   pointer-events: none;

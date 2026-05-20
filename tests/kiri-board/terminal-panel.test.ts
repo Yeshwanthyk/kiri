@@ -159,18 +159,20 @@ describe('terminal frame renderer contract', () => {
     expect(terminalColorValueForTests({ kind: 'palette', index: 232 })).toBe('rgb(8 8 8)')
   })
 
-  it('reserves terminal cell width so styled runs cannot soft-wrap like normal DOM text', () => {
-    expect(terminalScreenStyleForTests(80)).toMatchObject({
-      width: '80ch',
-      minWidth: '80ch',
+  it('reserves measured terminal cell width so styled runs cannot drift from PTY geometry', () => {
+    const renderMetrics = { cellWidth: 9.5, lineHeight: 18 }
+    expect(terminalScreenStyleForTests(80, renderMetrics)).toMatchObject({
+      width: '760px',
+      minWidth: '760px',
+      lineHeight: '18px',
     })
     expect(terminalRunStyleForTests({
       text: 'long output',
       width: 80,
       style: {},
-    })).toMatchObject({
-      width: '80ch',
-      minWidth: '80ch',
+    }, renderMetrics)).toMatchObject({
+      width: '760px',
+      minWidth: '760px',
     })
   })
 
@@ -315,10 +317,9 @@ describe('terminal wheel scrolling', () => {
       clientY: 41,
       hostRect: { left: 10, top: 20 },
       paddingLeft: 5,
-      paddingRight: 0,
       paddingTop: 2,
       scrollTop: 0,
-      clientWidth: 805,
+      cellWidth: 10,
       cols: 80,
       rows: 24,
       renderedHistoryRows: 0,
@@ -335,10 +336,9 @@ describe('terminal wheel scrolling', () => {
       clientY: 80,
       hostRect: { left: 10, top: 20 },
       paddingLeft: 5,
-      paddingRight: 0,
       paddingTop: 2,
       scrollTop: 95,
-      clientWidth: 805,
+      cellWidth: 10,
       cols: 80,
       rows: 24,
       renderedHistoryRows: 4,
@@ -355,10 +355,9 @@ describe('terminal wheel scrolling', () => {
       clientY: 80,
       hostRect: { left: 10, top: 20 },
       paddingLeft: 5,
-      paddingRight: 0,
       paddingTop: 2,
       scrollTop: 0,
-      clientWidth: 805,
+      cellWidth: 10,
       cols: 80,
       rows: 24,
       renderedHistoryRows: 0,

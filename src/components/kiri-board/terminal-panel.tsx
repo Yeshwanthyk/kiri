@@ -156,6 +156,16 @@ type TerminalRuntimeMetrics = {
   readonly lastMetricUnit: string
 }
 
+type TerminalRenderMetrics = {
+  readonly cellWidth: number
+  readonly lineHeight: number
+}
+
+type TerminalHostMeasurement = TerminalRenderMetrics & {
+  readonly cols: number
+  readonly rows: number
+}
+
 const emptyRuntimeMetrics: TerminalRuntimeMetrics = {
   frameCount: 0,
   patchCount: 0,
@@ -470,6 +480,7 @@ function TerminalPane({
   const stickToBottomRef = React.useRef(true)
   const visibleRef = React.useRef(visible)
   const lastKnownSizeRef = React.useRef({ cols: fallbackCols, rows: fallbackRows })
+  const renderMetricsRef = React.useRef<TerminalRenderMetrics>(fallbackTerminalRenderMetrics(typographyOptions.fontSize))
   const transcriptEnabledRef = React.useRef(false)
   const lineBufferRef = React.useRef('')
   const previousVisibleRef = React.useRef(visible)
@@ -478,7 +489,13 @@ function TerminalPane({
   const [transcript, setTranscript] = React.useState<string | null>(null)
   const [snapshot, setSnapshot] = React.useState<TerminalSnapshot>(() => emptySnapshot(fallbackCols, fallbackRows))
   const [metrics, setMetrics] = React.useState<TerminalRuntimeMetrics>(emptyRuntimeMetrics)
+  const [renderMetrics, setRenderMetrics] = React.useState<TerminalRenderMetrics>(() => renderMetricsRef.current)
   const debugSnapshot = terminalDebugSnapshot(snapshot, transcript, metrics)
+  const syncRenderMetrics = React.useCallback((next: TerminalRenderMetrics) => {
+    if (terminalRenderMetricsEqual(renderMetricsRef.current, next)) return
+    renderMetricsRef.current = next
+    setRenderMetrics(next)
+  }, [])
 
   React.useEffect(() => {
     onStatusChange(instanceId, status)
@@ -503,13 +520,23 @@ function TerminalPane({
 
   React.useEffect(() => {
     if (!visible) return
-    const size = terminalVisibleSizeFromHost(hostRef.current)
-    if (size) {
-      lastKnownSizeRef.current = size
-      sendResize(socketRef.current, size)
+    const measurement = terminalVisibleMeasurementFromHost(hostRef.current)
+    if (measurement) {
+      syncRenderMetrics(measurement)
+      lastKnownSizeRef.current = terminalSizeFromMeasurement(measurement)
+      sendResize(socketRef.current, lastKnownSizeRef.current)
     }
     if (stickToBottomRef.current) scrollTerminalToBottomSoon(hostRef.current)
-  }, [visible])
+  }, [syncRenderMetrics, visible])
+
+  React.useEffect(() => {
+    if (!visible) return
+    const measurement = terminalVisibleMeasurementFromHost(hostRef.current)
+    if (!measurement) return
+    syncRenderMetrics(measurement)
+    lastKnownSizeRef.current = terminalSizeFromMeasurement(measurement)
+    sendResize(socketRef.current, lastKnownSizeRef.current)
+  }, [syncRenderMetrics, typographyOptions.fontFamily, typographyOptions.fontSize, visible])
 
   React.useLayoutEffect(() => {
     if (!visible || !stickToBottomRef.current) return
@@ -541,7 +568,9 @@ function TerminalPane({
         const terminalConfig = await getTerminalConfigRef.current({ data: { agentId: agent.id, mode } })
         if (disposed) return
         const host = hostRef.current
-        const size = terminalVisibleSizeFromHost(host) ?? lastKnownSizeRef.current
+        const measurement = terminalVisibleMeasurementFromHost(host)
+        if (measurement) syncRenderMetrics(measurement)
+        const size = measurement ? terminalSizeFromMeasurement(measurement) : lastKnownSizeRef.current
         const url = terminalWebSocketUrl(terminalConfig, agent.id, size.cols, size.rows, instanceId)
         const socket = new WebSocket(url)
         socketRef.current = socket
@@ -551,8 +580,10 @@ function TerminalPane({
           if (resizeAnimationFrame !== null) window.cancelAnimationFrame(resizeAnimationFrame)
           resizeAnimationFrame = window.requestAnimationFrame(() => {
             resizeAnimationFrame = null
-            const nextSize = terminalVisibleSizeFromHost(hostRef.current)
-            if (!nextSize) return
+            const measurement = terminalVisibleMeasurementFromHost(hostRef.current)
+            if (!measurement) return
+            syncRenderMetrics(measurement)
+            const nextSize = terminalSizeFromMeasurement(measurement)
             lastKnownSizeRef.current = nextSize
             if (!force && terminalSizesEqual(lastSentSize, nextSize)) return
             if (sendResize(socket, nextSize)) lastSentSize = nextSize
@@ -687,7 +718,7 @@ function TerminalPane({
           const action = terminalWheelAction({
             deltaMode: event.deltaMode,
             deltaY: event.deltaY,
-            mouseInput: terminalWheelMouseInput(event, host, snapshot, typographyOptions.fontSize),
+            mouseInput: terminalWheelMouseInput(event, host, snapshot, renderMetrics),
           })
           if (action.type === 'input') {
             event.preventDefault()
@@ -712,7 +743,7 @@ function TerminalPane({
         onFocus={() => onFocusPane(instanceId)}
         onClick={() => onFocusPane(instanceId)}
       >
-        <TerminalRows snapshot={snapshot} />
+        <TerminalRows renderMetrics={renderMetrics} snapshot={snapshot} />
       </div>
       {transcript !== null ? (
         <pre
@@ -727,14 +758,20 @@ function TerminalPane({
   )
 }
 
-function TerminalRows({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
+function TerminalRows({
+  renderMetrics,
+  snapshot,
+}: {
+  readonly renderMetrics: TerminalRenderMetrics
+  readonly snapshot: TerminalSnapshot
+}) {
   const rows = React.useMemo(() => renderedTerminalRows(snapshot), [snapshot])
   return (
     <div
       className="terminal-screen"
       data-cols={snapshot.cols}
       data-rows={snapshot.rows}
-      style={terminalScreenStyle(snapshot.cols)}
+      style={terminalScreenStyle(snapshot.cols, renderMetrics)}
     >
       {rows.map(({ key, row, screenRow }) => (
         <div
@@ -748,7 +785,7 @@ function TerminalRows({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
             <span
               key={`${row.row}-${index}`}
               className="terminal-run"
-              style={runStyle(run)}
+              style={runStyle(run, renderMetrics)}
               data-terminal-underline={terminalRunHasVisibleUnderline(run) ? 'true' : undefined}
               data-terminal-blank-underline={terminalRunIsBlankUnderline(run) ? 'true' : undefined}
             >
@@ -758,7 +795,7 @@ function TerminalRows({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
           {snapshot.cursor.visible && screenRow === snapshot.cursor.row ? (
             <span
               className="terminal-cursor"
-              style={{ left: `${snapshot.cursor.col}ch` }}
+              style={terminalCursorStyle(snapshot.cursor.col, renderMetrics)}
               aria-hidden="true"
             />
           ) : null}
@@ -769,7 +806,7 @@ function TerminalRows({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
 }
 
 export function TerminalRowsForTests({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
-  return <TerminalRows snapshot={snapshot} />
+  return <TerminalRows renderMetrics={fallbackTerminalRenderMetrics(14)} snapshot={snapshot} />
 }
 
 function renderedTerminalRows(snapshot: TerminalSnapshot) {
@@ -835,10 +872,9 @@ type TerminalWheelMouseInput = {
   readonly clientY: number
   readonly hostRect: Pick<DOMRect, 'left' | 'top'>
   readonly paddingLeft: number
-  readonly paddingRight: number
   readonly paddingTop: number
   readonly scrollTop: number
-  readonly clientWidth: number
+  readonly cellWidth: number
   readonly cols: number
   readonly rows: number
   readonly renderedHistoryRows: number
@@ -855,7 +891,7 @@ function terminalWheelMouseInput(
   event: React.WheelEvent,
   host: HTMLElement,
   snapshot: TerminalSnapshot,
-  fontSize: number,
+  renderMetrics: TerminalRenderMetrics,
 ) {
   if (!snapshot.modes.mouseBasic) return null
   const style = window.getComputedStyle(host)
@@ -865,16 +901,15 @@ function terminalWheelMouseInput(
     clientY: event.clientY,
     hostRect: host.getBoundingClientRect(),
     paddingLeft: Number.parseFloat(style.paddingLeft) || 0,
-    paddingRight: Number.parseFloat(style.paddingRight) || 0,
     paddingTop: Number.parseFloat(style.paddingTop) || 0,
     scrollTop: host.scrollTop,
-    clientWidth: host.clientWidth,
+    cellWidth: renderMetrics.cellWidth,
     cols: snapshot.cols,
     rows: snapshot.rows,
     renderedHistoryRows: snapshot.bufferKind === 'main'
       ? Math.min(snapshot.historyRows.length, maxRenderedHistoryRows)
       : 0,
-    lineHeight: terminalLineHeight(style.lineHeight, fontSize),
+    lineHeight: renderMetrics.lineHeight,
     mouseBasic: Boolean(snapshot.modes.mouseBasic),
     mouseSgr: Boolean(snapshot.modes.mouseSgr),
   })
@@ -882,8 +917,7 @@ function terminalWheelMouseInput(
 
 function terminalWheelMouseSequence(input: TerminalWheelMouseInput) {
   if (!input.mouseBasic || input.deltaY === 0 || input.cols <= 0 || input.rows <= 0) return null
-  const contentWidth = Math.max(1, input.clientWidth - input.paddingLeft - input.paddingRight)
-  const cellWidth = Math.max(1, contentWidth / input.cols)
+  const cellWidth = Math.max(1, input.cellWidth)
   const rowOffset = input.renderedHistoryRows * input.lineHeight
   const col = clampTerminalMouseCoord(
     Math.floor((input.clientX - input.hostRect.left - input.paddingLeft) / cellWidth) + 1,
@@ -1212,26 +1246,34 @@ function terminalSizesEqual(
   return left?.cols === right.cols && left.rows === right.rows
 }
 
-function terminalSizeFromHost(host: HTMLElement | null) {
-  if (!host) return { cols: fallbackCols, rows: fallbackRows }
+function terminalMeasurementFromHost(host: HTMLElement | null): TerminalHostMeasurement {
+  if (!host) {
+    const metrics = fallbackTerminalRenderMetrics(14)
+    return { cols: fallbackCols, rows: fallbackRows, ...metrics }
+  }
   const style = window.getComputedStyle(host)
   const fontSize = Number.parseFloat(style.fontSize) || 14
   const lineHeight = terminalLineHeight(style.lineHeight, fontSize)
-  return terminalSizeFromMeasurements({
+  const cellWidth = terminalMeasuredCharWidth(host, style, fontSize)
+  return terminalMeasurementFromMeasurements({
     width: host.clientWidth,
     height: host.clientHeight,
     paddingLeft: Number.parseFloat(style.paddingLeft) || 0,
     paddingRight: Number.parseFloat(style.paddingRight) || 0,
     paddingTop: Number.parseFloat(style.paddingTop) || 0,
     paddingBottom: Number.parseFloat(style.paddingBottom) || 0,
-    charWidth: terminalMeasuredCharWidth(host, style, fontSize),
+    charWidth: cellWidth,
     lineHeight,
   })
 }
 
-function terminalVisibleSizeFromHost(host: HTMLElement | null) {
+function terminalVisibleMeasurementFromHost(host: HTMLElement | null) {
   if (!host || !terminalCanMeasureHostSize(host)) return null
-  return terminalSizeFromHost(host)
+  return terminalMeasurementFromHost(host)
+}
+
+function terminalSizeFromMeasurement(measurement: TerminalHostMeasurement) {
+  return { cols: measurement.cols, rows: measurement.rows }
 }
 
 function terminalCanMeasureHostSize(host: { readonly clientWidth: number; readonly clientHeight: number }) {
@@ -1255,12 +1297,39 @@ export function terminalSizeFromMeasurements(input: {
   readonly charWidth: number
   readonly lineHeight: number
 }) {
+  return terminalSizeFromMeasurement(terminalMeasurementFromMeasurements(input))
+}
+
+function terminalMeasurementFromMeasurements(input: {
+  readonly width: number
+  readonly height: number
+  readonly paddingLeft: number
+  readonly paddingRight: number
+  readonly paddingTop: number
+  readonly paddingBottom: number
+  readonly charWidth: number
+  readonly lineHeight: number
+}): TerminalHostMeasurement {
   const contentWidth = Math.max(0, input.width - input.paddingLeft - input.paddingRight)
   const contentHeight = Math.max(0, input.height - input.paddingTop - input.paddingBottom)
   return {
     cols: Math.max(20, Math.floor(contentWidth / Math.max(1, input.charWidth))),
     rows: Math.max(6, Math.floor(contentHeight / Math.max(1, input.lineHeight))),
+    cellWidth: Math.max(1, input.charWidth),
+    lineHeight: Math.max(1, input.lineHeight),
   }
+}
+
+function fallbackTerminalRenderMetrics(fontSize: number): TerminalRenderMetrics {
+  return {
+    cellWidth: Math.max(1, fontSize * 0.62),
+    lineHeight: Math.max(1, fontSize * 1.35),
+  }
+}
+
+function terminalRenderMetricsEqual(left: TerminalRenderMetrics, right: TerminalRenderMetrics) {
+  return Math.abs(left.cellWidth - right.cellWidth) < 0.01 &&
+    Math.abs(left.lineHeight - right.lineHeight) < 0.01
 }
 
 function terminalLineHeight(lineHeight: string, fontSize: number) {
@@ -1409,15 +1478,23 @@ function reindexRows(rows: readonly TerminalRow[]) {
   return rows.map((row, index) => ({ ...row, row: index }))
 }
 
-function terminalScreenStyle(cols: number): React.CSSProperties {
+function terminalScreenStyle(
+  cols: number,
+  renderMetrics: TerminalRenderMetrics = fallbackTerminalRenderMetrics(14),
+): React.CSSProperties {
+  const width = cols * renderMetrics.cellWidth
   return {
-    width: `${cols}ch`,
-    minWidth: `${cols}ch`,
+    width: `${width}px`,
+    minWidth: `${width}px`,
+    lineHeight: `${renderMetrics.lineHeight}px`,
   }
 }
 
-export function terminalScreenStyleForTests(cols: number) {
-  return terminalScreenStyle(cols)
+export function terminalScreenStyleForTests(
+  cols: number,
+  renderMetrics?: TerminalRenderMetrics,
+) {
+  return terminalScreenStyle(cols, renderMetrics)
 }
 
 function terminalRunHasVisibleUnderline(run: CellRun) {
@@ -1452,11 +1529,15 @@ export function terminalRowUnderlineBlankRunCountForTests(row: TerminalRow) {
   return terminalRowUnderlineBlankRunCount(row)
 }
 
-function runStyle(run: CellRun): React.CSSProperties {
+function runStyle(
+  run: CellRun,
+  renderMetrics: TerminalRenderMetrics = fallbackTerminalRenderMetrics(14),
+): React.CSSProperties {
   const style = run.style
+  const width = run.width * renderMetrics.cellWidth
   return {
-    width: `${run.width}ch`,
-    minWidth: `${run.width}ch`,
+    width: `${width}px`,
+    minWidth: `${width}px`,
     fontWeight: style.bold ? 700 : undefined,
     fontStyle: style.italic ? 'italic' : undefined,
     opacity: style.dim ? 0.68 : undefined,
@@ -1465,8 +1546,21 @@ function runStyle(run: CellRun): React.CSSProperties {
   }
 }
 
-export function terminalRunStyleForTests(run: CellRun) {
-  return runStyle(run)
+function terminalCursorStyle(
+  col: number,
+  renderMetrics: TerminalRenderMetrics,
+): React.CSSProperties {
+  return {
+    left: `${col * renderMetrics.cellWidth}px`,
+    width: `${renderMetrics.cellWidth}px`,
+  }
+}
+
+export function terminalRunStyleForTests(
+  run: CellRun,
+  renderMetrics?: TerminalRenderMetrics,
+) {
+  return runStyle(run, renderMetrics)
 }
 
 function colorValue(color: TerminalColor | null | undefined) {
