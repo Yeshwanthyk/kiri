@@ -693,12 +693,16 @@ function TerminalRows({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
           key={key}
           className="terminal-row"
           data-row={row.row}
+          data-terminal-underline-runs={terminalRowUnderlineRunCount(row)}
+          data-terminal-underline-blank-runs={terminalRowUnderlineBlankRunCount(row)}
         >
           {row.runs.length === 0 ? '\u00a0' : row.runs.map((run, index) => (
             <span
               key={`${row.row}-${index}`}
               className="terminal-run"
               style={runStyle(run)}
+              data-terminal-underline={terminalRunHasVisibleUnderline(run) ? 'true' : undefined}
+              data-terminal-blank-underline={terminalRunIsBlankUnderline(run) ? 'true' : undefined}
             >
               {run.text}
             </span>
@@ -1305,6 +1309,38 @@ export function terminalScreenStyleForTests(cols: number) {
   return terminalScreenStyle(cols)
 }
 
+function terminalRunHasVisibleUnderline(run: CellRun) {
+  return run.style.underline === true && /\S/u.test(run.text)
+}
+
+export function terminalRunHasVisibleUnderlineForTests(run: CellRun) {
+  return terminalRunHasVisibleUnderline(run)
+}
+
+function terminalRunIsBlankUnderline(run: CellRun) {
+  return run.style.underline === true && !/\S/u.test(run.text)
+}
+
+export function terminalRunIsBlankUnderlineForTests(run: CellRun) {
+  return terminalRunIsBlankUnderline(run)
+}
+
+function terminalRowUnderlineRunCount(row: TerminalRow) {
+  return row.runs.filter((run) => run.style.underline).length
+}
+
+export function terminalRowUnderlineRunCountForTests(row: TerminalRow) {
+  return terminalRowUnderlineRunCount(row)
+}
+
+function terminalRowUnderlineBlankRunCount(row: TerminalRow) {
+  return row.runs.filter(terminalRunIsBlankUnderline).length
+}
+
+export function terminalRowUnderlineBlankRunCountForTests(row: TerminalRow) {
+  return terminalRowUnderlineBlankRunCount(row)
+}
+
 function runStyle(run: CellRun): React.CSSProperties {
   const style = run.style
   return {
@@ -1312,7 +1348,6 @@ function runStyle(run: CellRun): React.CSSProperties {
     minWidth: `${run.width}ch`,
     fontWeight: style.bold ? 700 : undefined,
     fontStyle: style.italic ? 'italic' : undefined,
-    textDecoration: style.underline ? 'underline' : undefined,
     opacity: style.dim ? 0.68 : undefined,
     color: colorValue(style.inverse ? style.background : style.foreground),
     backgroundColor: colorValue(style.inverse ? style.foreground : style.background),

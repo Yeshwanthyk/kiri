@@ -4,6 +4,10 @@ import {
   parseTerminalFramesForTests,
   terminalColorValueForTests,
   terminalRenderedRowsForTests,
+  terminalRowUnderlineBlankRunCountForTests,
+  terminalRowUnderlineRunCountForTests,
+  terminalRunHasVisibleUnderlineForTests,
+  terminalRunIsBlankUnderlineForTests,
   terminalRunStyleForTests,
   terminalScreenStyleForTests,
   terminalSizeFromMeasurements,
@@ -165,6 +169,38 @@ describe('terminal frame renderer contract', () => {
       width: '80ch',
       minWidth: '80ch',
     })
+  })
+
+  it('renders underline as terminal decoration metadata instead of CSS text decoration', () => {
+    const visibleRun = {
+      text: 'link',
+      width: 4,
+      style: { underline: true },
+    }
+    const blankRun = {
+      text: '    ',
+      width: 4,
+      style: { underline: true },
+    }
+    expect(terminalRunStyleForTests(visibleRun)).not.toHaveProperty('textDecoration')
+    expect(terminalRunHasVisibleUnderlineForTests(visibleRun)).toBe(true)
+    expect(terminalRunHasVisibleUnderlineForTests(blankRun)).toBe(false)
+    expect(terminalRunIsBlankUnderlineForTests(blankRun)).toBe(true)
+  })
+
+  it('exposes per-row underline diagnostics for live terminal capture', () => {
+    const row = {
+      row: 0,
+      fingerprint: 0,
+      runs: [
+        { text: 'link', width: 4, style: { underline: true } },
+        { text: '  ', width: 2, style: { underline: true } },
+        { text: 'plain', width: 5, style: {} },
+      ],
+    }
+
+    expect(terminalRowUnderlineRunCountForTests(row)).toBe(2)
+    expect(terminalRowUnderlineBlankRunCountForTests(row)).toBe(1)
   })
 })
 

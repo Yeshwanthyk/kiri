@@ -2324,6 +2324,7 @@
 }
 
 .terminal-run {
+  position: relative;
   display: inline-block;
   height: 100%;
   line-height: inherit;
@@ -2332,6 +2333,18 @@
   white-space: pre;
   overflow-wrap: normal;
   word-break: keep-all;
+}
+
+.terminal-run[data-terminal-underline="true"]::after {
+  position: absolute;
+  right: 0;
+  bottom: 0.16em;
+  left: 0;
+  height: 1px;
+  background: currentColor;
+  content: "";
+  opacity: 0.56;
+  pointer-events: none;
 }
 
 .terminal-cursor {

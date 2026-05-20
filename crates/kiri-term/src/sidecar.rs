@@ -248,11 +248,15 @@ fn handle_command(
                 pixel_width: 0,
                 pixel_height: 0,
             })?;
-            let patch = session
-                .document
-                .lock()
-                .expect("terminal document lock")
-                .resize(usize::from(cols), usize::from(rows));
+            let (patch, emission) = {
+                let mut document = session.document.lock().expect("terminal document lock");
+                let patch = document.resize(usize::from(cols), usize::from(rows));
+                let emission = resize_emission(document.snapshot().modes.synchronized_output);
+                (patch, emission)
+            };
+            if emission == ReaderEmission::Suppress {
+                return Ok(());
+            }
             write_frame(
                 output,
                 &TerminalServerFrame::Patch {
@@ -420,10 +424,22 @@ fn spawn_reader(
         let mut buffer = [0u8; 8192];
         let mut pending_bytes: usize = 0;
         let mut pending_ops: usize = 0;
+        let mut synchronized_output_active = false;
         let mut last_metric_flush = Instant::now();
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => {
+                    if synchronized_output_active {
+                        let _ordered = order.lock().expect("terminal order lock");
+                        let snapshot = document.lock().expect("terminal document lock").snapshot();
+                        let _ = write_frame(
+                            &output,
+                            &TerminalServerFrame::Snapshot {
+                                terminal_id: terminal_id.clone(),
+                                snapshot,
+                            },
+                        );
+                    }
                     let _ = flush_reader_metrics(
                         &output,
                         &terminal_id,
@@ -457,19 +473,41 @@ fn spawn_reader(
                 }
                 Ok(n) => {
                     let _ordered = order.lock().expect("terminal order lock");
-                    let patch = document
-                        .lock()
-                        .expect("terminal document lock")
-                        .apply_bytes(&buffer[..n]);
+                    let (patch, snapshot, emission) = {
+                        let mut document = document.lock().expect("terminal document lock");
+                        let patch = document.apply_bytes(&buffer[..n]);
+                        let snapshot = document.snapshot();
+                        let now_synchronized = snapshot.modes.synchronized_output;
+                        let emission = synchronized_output_emission(
+                            synchronized_output_active,
+                            now_synchronized,
+                        );
+                        synchronized_output_active = now_synchronized;
+                        (patch, snapshot, emission)
+                    };
                     pending_bytes += n;
                     pending_ops += patch.ops.len();
-                    let _ = write_frame(
-                        &output,
-                        &TerminalServerFrame::Patch {
-                            terminal_id: terminal_id.clone(),
-                            patch,
-                        },
-                    );
+                    match emission {
+                        ReaderEmission::Patch => {
+                            let _ = write_frame(
+                                &output,
+                                &TerminalServerFrame::Patch {
+                                    terminal_id: terminal_id.clone(),
+                                    patch,
+                                },
+                            );
+                        }
+                        ReaderEmission::Snapshot => {
+                            let _ = write_frame(
+                                &output,
+                                &TerminalServerFrame::Snapshot {
+                                    terminal_id: terminal_id.clone(),
+                                    snapshot,
+                                },
+                            );
+                        }
+                        ReaderEmission::Suppress => {}
+                    }
                     if last_metric_flush.elapsed() >= METRIC_FLUSH_INTERVAL {
                         let _ = flush_reader_metrics(
                             &output,
@@ -493,6 +531,29 @@ fn spawn_reader(
             }
         }
     });
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReaderEmission {
+    Patch,
+    Snapshot,
+    Suppress,
+}
+
+fn synchronized_output_emission(was_active: bool, is_active: bool) -> ReaderEmission {
+    match (was_active, is_active) {
+        (_, true) => ReaderEmission::Suppress,
+        (true, false) => ReaderEmission::Snapshot,
+        (false, false) => ReaderEmission::Patch,
+    }
+}
+
+fn resize_emission(is_synchronized: bool) -> ReaderEmission {
+    if is_synchronized {
+        ReaderEmission::Suppress
+    } else {
+        ReaderEmission::Patch
+    }
 }
 
 fn flush_reader_metrics(
@@ -653,6 +714,32 @@ mod tests {
         assert!(command.contains("\"type\":\"paste\""));
         assert!(command.contains("\"terminalId\":\"term-1\""));
         assert!(command.contains("\"bracketed\":\"auto\""));
+    }
+
+    #[test]
+    fn synchronized_output_suppresses_intermediate_patches_until_mode_exits() {
+        assert_eq!(
+            synchronized_output_emission(false, true),
+            ReaderEmission::Suppress,
+        );
+        assert_eq!(
+            synchronized_output_emission(true, true),
+            ReaderEmission::Suppress,
+        );
+        assert_eq!(
+            synchronized_output_emission(true, false),
+            ReaderEmission::Snapshot,
+        );
+        assert_eq!(
+            synchronized_output_emission(false, false),
+            ReaderEmission::Patch,
+        );
+    }
+
+    #[test]
+    fn resize_suppresses_patch_while_synchronized_output_is_active() {
+        assert_eq!(resize_emission(true), ReaderEmission::Suppress);
+        assert_eq!(resize_emission(false), ReaderEmission::Patch);
     }
 
     #[test]
