@@ -1,3 +1,5 @@
+import packageJson from '../../package.json'
+
 export function commonTerminalEnv(input: {
   readonly terminfoPath?: string | null
 } = {}) {
@@ -5,6 +7,7 @@ export function commonTerminalEnv(input: {
   return {
     TERM: terminalName,
     TERM_PROGRAM: 'kiri',
+    TERM_PROGRAM_VERSION: packageJson.version,
     ...(input.terminfoPath ? { TERMINFO: input.terminfoPath } : {}),
     COLORTERM: 'truecolor',
     FORCE_COLOR: '3',

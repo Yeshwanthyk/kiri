@@ -19,6 +19,7 @@ const fallbackRows = 30
 const mainTerminalInstanceId = 'main'
 const maxRenderedHistoryRows = 800
 const terminalScrollBottomTolerance = 4
+const terminalResizeDebounceMs = 90
 const terminalMeasureSample = 'W'.repeat(80)
 
 type TerminalSnapshot = {
@@ -555,6 +556,7 @@ function TerminalPane({
     let disposed = false
     let resizeObserver: ResizeObserver | null = null
     let resizeAnimationFrame: number | null = null
+    let resizeTimer: number | null = null
     let lastSentSize: { cols: number; rows: number } | null = null
     transcriptEnabledRef.current = window.localStorage.getItem('kiri:terminal-transcript') === '1'
     setTranscript(transcriptEnabledRef.current ? '' : null)
@@ -575,7 +577,7 @@ function TerminalPane({
         const socket = new WebSocket(url)
         socketRef.current = socket
         lastSentSize = size
-        const scheduleResize = (force = false) => {
+        const deliverResize = (force = false) => {
           if (!visibleRef.current) return
           if (resizeAnimationFrame !== null) window.cancelAnimationFrame(resizeAnimationFrame)
           resizeAnimationFrame = window.requestAnimationFrame(() => {
@@ -588,6 +590,21 @@ function TerminalPane({
             if (!force && terminalSizesEqual(lastSentSize, nextSize)) return
             if (sendResize(socket, nextSize)) lastSentSize = nextSize
           })
+        }
+        const scheduleResize = (force = false) => {
+          if (force) {
+            if (resizeTimer !== null) {
+              window.clearTimeout(resizeTimer)
+              resizeTimer = null
+            }
+            deliverResize(true)
+            return
+          }
+          if (resizeTimer !== null) window.clearTimeout(resizeTimer)
+          resizeTimer = window.setTimeout(() => {
+            resizeTimer = null
+            deliverResize(false)
+          }, terminalResizeDebounceMs)
         }
         socket.onopen = () => {
           if (disposed) return
@@ -635,6 +652,7 @@ function TerminalPane({
 
     return () => {
       disposed = true
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer)
       if (resizeAnimationFrame !== null) window.cancelAnimationFrame(resizeAnimationFrame)
       resizeObserver?.disconnect()
       const socket = socketRef.current

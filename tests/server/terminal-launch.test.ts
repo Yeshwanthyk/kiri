@@ -370,6 +370,7 @@ describe('buildTerminalProcessLaunch', () => {
 
     expect(launch.env.TERM).toBe('xterm-ghostty')
     expect(launch.env.TERM_PROGRAM).toBe('kiri')
+    expect(launch.env.TERM_PROGRAM_VERSION).toBe('0.1.12')
     expect(launch.env.TERMINFO).toBe('/app/resources/terminfo')
     expect(launch.env.COLORTERM).toBe('truecolor')
     expect(launch.env.COLORFGBG).toBe('15;0')
