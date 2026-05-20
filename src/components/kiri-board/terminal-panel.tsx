@@ -20,7 +20,7 @@ const mainTerminalInstanceId = 'main'
 const maxRenderedHistoryRows = 800
 const terminalScrollBottomTolerance = 4
 const terminalResizeDebounceMs = 90
-const terminalMeasureSample = 'W'.repeat(80)
+const terminalMeasureSample = '0'.repeat(80)
 
 type TerminalSnapshot = {
   readonly cols: number

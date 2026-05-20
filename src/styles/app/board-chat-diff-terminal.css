@@ -2294,11 +2294,13 @@
   box-sizing: border-box;
   padding: 8px 10px;
   outline: none;
+  letter-spacing: 0;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   touch-action: pan-y;
   white-space: pre;
+  word-spacing: 0;
 }
 
 .kiri-terminal-host:focus-visible {
@@ -2308,6 +2310,7 @@
 .terminal-screen {
   position: relative;
   color: #e6e8ef;
+  font-kerning: none;
   font-variant-ligatures: none;
   line-height: 1.35;
   tab-size: 8;
