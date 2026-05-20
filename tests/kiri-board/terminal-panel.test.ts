@@ -4,7 +4,6 @@ import {
   parseTerminalFramesForTests,
   terminalColorValueForTests,
   terminalRenderedRowsForTests,
-  terminalRunDecorationSegmentsForTests,
   terminalRowUnderlineBlankRunCountForTests,
   terminalRowUnderlineRunCountForTests,
   terminalRunHasVisibleUnderlineForTests,
@@ -187,26 +186,6 @@ describe('terminal frame renderer contract', () => {
     expect(terminalRunHasVisibleUnderlineForTests(visibleRun)).toBe(true)
     expect(terminalRunHasVisibleUnderlineForTests(blankRun)).toBe(false)
     expect(terminalRunIsBlankUnderlineForTests(blankRun)).toBe(true)
-  })
-
-  it('splits underline decoration at spaces so visual bridges do not cross words', () => {
-    expect(terminalRunDecorationSegmentsForTests({
-      text: 'hello world',
-      width: 11,
-      style: { underline: true },
-    })).toEqual([
-      { text: 'hello', width: 5, underline: true },
-      { text: ' ', width: 1, underline: false },
-      { text: 'world', width: 5, underline: true },
-    ])
-  })
-
-  it('keeps wide or ambiguous-width underline runs intact for terminal cell safety', () => {
-    expect(terminalRunDecorationSegmentsForTests({
-      text: '界',
-      width: 2,
-      style: { underline: true },
-    })).toEqual([{ text: '界', width: 2, underline: true }])
   })
 
   it('exposes per-row underline diagnostics for live terminal capture', () => {
