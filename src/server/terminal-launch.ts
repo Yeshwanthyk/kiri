@@ -330,7 +330,7 @@ function baseTerminalEnv(
   return Effect.gen(function* () {
   return removeColorDisablingEnv(yield* context.runtimeBinaries.processEnv({
     ...extra,
-    ...commonTerminalEnv(),
+    ...commonTerminalEnv({ terminfoPath: terminalTerminfoPath(context) }),
     KIRI_AGENT_ID: config.id,
     KIRI_PROJECT_CWD: config.cwd,
     KIRI_RUNTIME: config.runtime,
@@ -344,10 +344,21 @@ function baseTerminalEnv(
 function shellTerminalEnv(cwd: string, context: TerminalLaunchContext) {
   return Effect.gen(function* () {
   return removeColorDisablingEnv(yield* context.runtimeBinaries.processEnv({
-    ...commonTerminalEnv(),
+    ...commonTerminalEnv({ terminfoPath: terminalTerminfoPath(context) }),
     KIRI_PROJECT_CWD: cwd,
   }))
   })
+}
+
+function terminalTerminfoPath(context: TerminalLaunchContext) {
+  const override = context.env.KIRI_TERMINFO?.trim()
+  if (override) return override
+  const candidates = [
+    context.resourcesPath ? join(context.resourcesPath, 'terminfo') : null,
+    '/Applications/Solo.app/Contents/Resources',
+    '/Applications/Ghostty.app/Contents/Resources/terminfo',
+  ]
+  return candidates.find((candidate): candidate is string => Boolean(candidate && context.exists(candidate)))
 }
 
 function parseRuntimeState(value: string | null | undefined) {

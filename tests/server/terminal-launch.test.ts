@@ -343,6 +343,38 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.env.FORCE_COLOR).toBe('3')
   })
 
+  it('advertises Ghostty-compatible terminfo when available', async () => {
+    const env = {
+      PATH: '/bin',
+      KIRI_CODEX_BIN: '/injected/codex',
+    }
+    const service = makeTerminalLaunchService({
+      runtimeBinaries: makeRuntimeBinariesService({
+        getEnv: () => env,
+        getHomeDir: () => '/injected/home',
+        exists: (path) => path === '/app/resources/terminfo' || path === '/injected/codex',
+      }),
+      getEnv: () => env,
+      getHomeDir: () => '/injected/home',
+      exists: (path) => path === '/app/resources/terminfo' || path === '/injected/codex',
+      getProcessCwd: () => '/repo',
+      getExecPath: () => '/node',
+      getResourcesPath: () => '/app/resources',
+    })
+
+    const launch = await Effect.runPromise(service.buildProcessLaunch({
+      config: launchConfig('codex'),
+      mode: 'runtime',
+      shell,
+    }))
+
+    expect(launch.env.TERM).toBe('xterm-ghostty')
+    expect(launch.env.TERM_PROGRAM).toBe('kiri')
+    expect(launch.env.TERMINFO).toBe('/app/resources/terminfo')
+    expect(launch.env.COLORTERM).toBe('truecolor')
+    expect(launch.env.COLORFGBG).toBe('15;0')
+  })
+
   it('builds terminal launches through injected service dependencies', async () => {
     const env = {
       PATH: '/bin',

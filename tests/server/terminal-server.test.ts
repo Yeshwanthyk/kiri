@@ -9,6 +9,7 @@ import {
   ensureTerminalServer,
   makeTerminalServerService,
   TerminalServerService,
+  type TerminalServerDependencies,
 } from '~/server/terminal-server'
 
 describe('terminal server', () => {
@@ -211,6 +212,66 @@ describe('terminal server', () => {
       expect(write).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(8_000)
       expect(write).toHaveBeenCalledWith('\r')
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('passes the initial PTY geometry through COLUMNS and LINES', async () => {
+    const spawnPtyCalls: Parameters<TerminalServerDependencies['spawnPty']>[] = []
+    const spawnPty: TerminalServerDependencies['spawnPty'] = (command, args, options) => {
+      spawnPtyCalls.push([command, args, options])
+      return {
+        terminalId: 'term-test',
+        write: vi.fn(),
+        paste: vi.fn(),
+        snapshot: vi.fn(),
+        resize: vi.fn(),
+        kill: vi.fn(),
+        onData: vi.fn(),
+        onExit: vi.fn(),
+      }
+    }
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'pi',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake',
+        args: [],
+        cwd: '/tmp/project',
+        env: { TERM: 'xterm-ghostty' },
+        label: 'pi',
+      }),
+      spawnPty,
+    })
+
+    try {
+      await expect(service.spawnAgentRuntime({
+        agentId: 'agent-1',
+        cols: 156,
+        rows: 40,
+      })).resolves.toMatchObject({
+        agentId: 'agent-1',
+        mode: 'runtime',
+      })
+      expect(spawnPtyCalls[0]).toEqual(['/bin/fake', [], expect.objectContaining({
+        name: 'xterm-ghostty',
+        cols: 156,
+        rows: 40,
+      })])
+      const options = spawnPtyCalls[0]?.[2]
+      expect(options?.env).toMatchObject({
+        TERM: 'xterm-ghostty',
+        COLUMNS: '156',
+        LINES: '40',
+      })
     } finally {
       await service.close()
     }

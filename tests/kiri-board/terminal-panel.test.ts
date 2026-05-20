@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   applyTerminalFrameForTests,
   parseTerminalFramesForTests,
+  sendResizeForTests,
+  terminalCanMeasureHostSizeForTests,
   terminalColorValueForTests,
+  terminalHostIsNearBottomForTests,
   terminalRenderedRowsForTests,
   terminalRowUnderlineBlankRunCountForTests,
   terminalRowUnderlineRunCountForTests,
@@ -216,6 +219,62 @@ describe('terminal sizing', () => {
       charWidth: 10,
       lineHeight: 19,
     })).toEqual({ cols: 100, rows: 28 })
+  })
+
+  it('does not treat hidden zero-sized panes as measurable resize sources', () => {
+    expect(terminalCanMeasureHostSizeForTests({
+      clientWidth: 0,
+      clientHeight: 480,
+    })).toBe(false)
+    expect(terminalCanMeasureHostSizeForTests({
+      clientWidth: 960,
+      clientHeight: 0,
+    })).toBe(false)
+    expect(terminalCanMeasureHostSizeForTests({
+      clientWidth: 960,
+      clientHeight: 480,
+    })).toBe(true)
+  })
+
+  it('only records resize delivery after the websocket is open', () => {
+    vi.stubGlobal('WebSocket', { OPEN: 1 })
+    try {
+      const connectingSend = vi.fn()
+      expect(sendResizeForTests({
+        readyState: 0,
+        send: connectingSend,
+      } as unknown as WebSocket, { cols: 120, rows: 40 })).toBe(false)
+      expect(connectingSend).not.toHaveBeenCalled()
+
+      const openSend = vi.fn()
+      expect(sendResizeForTests({
+        readyState: 1,
+        send: openSend,
+      } as unknown as WebSocket, { cols: 120, rows: 40 })).toBe(true)
+      expect(openSend).toHaveBeenCalledWith(JSON.stringify({
+        type: 'resize',
+        cols: 120,
+        rows: 40,
+      }))
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('terminal scroll follow', () => {
+  it('keeps tail-follow active only near the bottom of scrollback', () => {
+    expect(terminalHostIsNearBottomForTests({
+      clientHeight: 300,
+      scrollHeight: 900,
+      scrollTop: 596,
+    })).toBe(true)
+
+    expect(terminalHostIsNearBottomForTests({
+      clientHeight: 300,
+      scrollHeight: 900,
+      scrollTop: 500,
+    })).toBe(false)
   })
 })
 

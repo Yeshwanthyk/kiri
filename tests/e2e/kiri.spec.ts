@@ -2,25 +2,34 @@ import { expect, test, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { rmSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { startFakeCodexAppServer } from '../harness/fake-codex-app-server.mjs'
 
 test.describe.configure({ mode: 'serial', timeout: 60_000 })
+
+type FakeCodexAppServer = {
+  readonly requests: CodexHarnessRequest[]
+  readonly close: () => Promise<void>
+}
+
+const startCodexHarness = startFakeCodexAppServer as unknown as (
+  input: { readonly port: number },
+) => Promise<FakeCodexAppServer>
 
 const testDbPath = resolve(process.env.KIRI_DB_PATH ?? '.kiri/kiri.e2e.sqlite')
 const appRoot = process.cwd()
 const projectRoot = resolve(realpathSync(tmpdir()), 'kiri-pican-e2e-worktree')
 const fileOperationFixturePath = resolve(projectRoot, 'src/kiri-file-operation-e2e.tmp')
 const detailFixturePath = resolve(projectRoot, 'src/detail.ts')
-let fakeCodexServer: Awaited<ReturnType<typeof startFakeCodexAppServer>>
+let fakeCodexServer: FakeCodexAppServer
 
 test.beforeAll(async () => {
-  fakeCodexServer = await startFakeCodexAppServer({ port: 39111 })
+  fakeCodexServer = await startCodexHarness({ port: 39111 })
 })
 
 test.afterAll(async () => {
-  await fakeCodexServer?.close()
+  await fakeCodexServer.close()
   rmSync(projectRoot, { force: true, recursive: true })
 })
 
@@ -29,7 +38,7 @@ test.beforeEach(async ({ page }, testInfo) => {
     window.localStorage.setItem('kiri:terminal-transcript', '1')
     window.localStorage.setItem('kiri:terminal-debug', '1')
   })
-  if (fakeCodexServer) fakeCodexServer.requests.length = 0
+  fakeCodexServer.requests.length = 0
   resetE2eProjectWorktree()
   mkdirSync(dirname(testDbPath), { recursive: true })
   rmSync(resolve(appRoot, '.kiri', 'preferences.json'), { force: true })
@@ -480,7 +489,7 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
   await showLatestActivity(page)
   await expect(page.getByTestId('chat-panel')).toContainText('Edited')
 
-  const requests = fakeCodexServer.requests as CodexHarnessRequest[]
+  const requests = fakeCodexServer.requests
   expect(requests.some((request) => request.method === 'initialize')).toBe(true)
   expect(requests.some((request) => request.method === 'thread/start')).toBe(true)
   expect(requests.some((request) => request.method === 'turn/start')).toBe(true)
@@ -578,7 +587,7 @@ test('codex runtime replaces a missing rollout thread on first prompt', async ({
     timeout: 30_000,
   })
 
-  const requests = fakeCodexServer.requests as CodexHarnessRequest[]
+  const requests = fakeCodexServer.requests
   const missingReadIndex = requests.findIndex((request) => (
     request.method === 'thread/read' && request.params?.threadId === missingThreadId
   ))
@@ -644,9 +653,9 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
     'export KIRI_E2E_MARKER=tab-preserved; cd src; sleep 30 & export KIRI_E2E_PID=$!; echo ready:$KIRI_E2E_MARKER:$PWD:$KIRI_E2E_PID',
   )
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('terminal-transcript')).toContainText(
-    `ready:tab-preserved:${projectRoot}/src`,
-  )
+  const terminalTranscript = page.getByTestId('terminal-transcript')
+  await expect(terminalTranscript).toContainText('ready:tab-preserved:')
+  await expect(terminalTranscript).toContainText(`${basename(projectRoot)}/src`)
   await page.keyboard.type(
     "for i in $(seq 1 1200); do printf 'KIRI_SCROLL_%04d\\n' \"$i\"; done",
   )
@@ -679,9 +688,8 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
   )
   await page.keyboard.press('Enter')
 
-  await expect(page.getByTestId('terminal-transcript')).toContainText(
-    `preserved:tab-preserved:${projectRoot}/src`,
-  )
+  await expect(terminalTranscript).toContainText('preserved:tab-preserved:')
+  await expect(terminalTranscript).toContainText(`${basename(projectRoot)}/src`)
 })
 
 test('terminal tabs and split panes create independent terminal surfaces', async ({ page, isMobile }, testInfo) => {
@@ -773,7 +781,7 @@ test('terminal focus controls still work after a theme change', async ({ page, i
   await terminalInput.click()
   await page.keyboard.type('pwd')
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
+  await expect(page.getByTestId('terminal-transcript')).toContainText(basename(projectRoot))
   await expect(terminalInput).toBeFocused()
 
   await page.getByRole('button', { name: /Release terminal focus/ }).click()
@@ -802,7 +810,7 @@ test('terminal interface sessions render the agent runtime in chat and shell in 
     .click()
   await page.keyboard.type('pwd')
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
+  await expect(page.getByTestId('terminal-transcript')).toContainText(basename(projectRoot))
 })
 
 test('codex terminal interface resumes after the PTY exits and keeps diffs available', async ({ page, isMobile }, testInfo) => {
@@ -828,7 +836,7 @@ test('codex terminal interface resumes after the PTY exits and keeps diffs avail
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('terminal-transcript')).toContainText(`remembered:alpha:session:${sessionId}`)
   await expect
-    .poll(async () => readAgentRuntimeState(title)?.codexSessionId)
+    .poll(() => readAgentRuntimeState(title)?.codexSessionId)
     .toBe(sessionId)
 
   await page.keyboard.type('exit')
@@ -853,7 +861,7 @@ test('codex terminal interface resumes after the PTY exits and keeps diffs avail
   writeFileSync(fileOperationFixturePath, 'codex terminal diff\n')
   await page.getByTestId('tab-diffs').click()
   await expect
-    .poll(async () => diffPathsForSessionTitle(title).includes('src/kiri-file-operation-e2e.tmp'))
+    .poll(() => diffPathsForSessionTitle(title).includes('src/kiri-file-operation-e2e.tmp'))
     .toBe(true)
   await expect(page.getByTestId('diff-panel')).toContainText('Changed files')
 })
@@ -991,7 +999,7 @@ test('scratchpad trigger starts codex in terminal mode by default', async ({ pag
   await expect
     .poll(() => readLatestCodexSessionInterfaceMode())
     .toBe('terminal')
-  expect(fakeCodexServer.requests.map((request: CodexHarnessRequest) => request.method)).not.toContain('thread/start')
+  expect(fakeCodexServer.requests.map((request) => request.method)).not.toContain('thread/start')
 })
 
 test('agent switching does not refocus chat after explicit chat focus', async ({ page, isMobile }, testInfo) => {

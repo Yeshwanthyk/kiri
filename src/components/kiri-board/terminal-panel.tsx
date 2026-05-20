@@ -18,6 +18,7 @@ const fallbackCols = 100
 const fallbackRows = 30
 const mainTerminalInstanceId = 'main'
 const maxRenderedHistoryRows = 800
+const terminalScrollBottomTolerance = 4
 const terminalMeasureSample = 'W'.repeat(80)
 
 type TerminalSnapshot = {
@@ -466,6 +467,9 @@ function TerminalPane({
   const getTerminalConfigRef = React.useRef(getTerminalConfig)
   const hostRef = React.useRef<HTMLDivElement | null>(null)
   const socketRef = React.useRef<WebSocket | null>(null)
+  const stickToBottomRef = React.useRef(true)
+  const visibleRef = React.useRef(visible)
+  const lastKnownSizeRef = React.useRef({ cols: fallbackCols, rows: fallbackRows })
   const transcriptEnabledRef = React.useRef(false)
   const lineBufferRef = React.useRef('')
   const previousVisibleRef = React.useRef(visible)
@@ -494,9 +498,23 @@ function TerminalPane({
   }, [focusRequest, visible])
 
   React.useEffect(() => {
-    if (!visible) return
-    sendResize(socketRef.current, terminalSizeFromHost(hostRef.current))
+    visibleRef.current = visible
   }, [visible])
+
+  React.useEffect(() => {
+    if (!visible) return
+    const size = terminalVisibleSizeFromHost(hostRef.current)
+    if (size) {
+      lastKnownSizeRef.current = size
+      sendResize(socketRef.current, size)
+    }
+    if (stickToBottomRef.current) scrollTerminalToBottomSoon(hostRef.current)
+  }, [visible])
+
+  React.useLayoutEffect(() => {
+    if (!visible || !stickToBottomRef.current) return
+    scrollTerminalToBottomSoon(hostRef.current)
+  }, [snapshot.bufferKind, snapshot.cols, snapshot.historySeq, snapshot.rows, snapshot.screenSeq, visible])
 
   React.useEffect(() => {
     const wasVisible = previousVisibleRef.current
@@ -509,6 +527,8 @@ function TerminalPane({
   React.useEffect(() => {
     let disposed = false
     let resizeObserver: ResizeObserver | null = null
+    let resizeAnimationFrame: number | null = null
+    let lastSentSize: { cols: number; rows: number } | null = null
     transcriptEnabledRef.current = window.localStorage.getItem('kiri:terminal-transcript') === '1'
     setTranscript(transcriptEnabledRef.current ? '' : null)
     setSnapshot(emptySnapshot(fallbackCols, fallbackRows))
@@ -521,10 +541,23 @@ function TerminalPane({
         const terminalConfig = await getTerminalConfigRef.current({ data: { agentId: agent.id, mode } })
         if (disposed) return
         const host = hostRef.current
-        const size = terminalSizeFromHost(host)
+        const size = terminalVisibleSizeFromHost(host) ?? lastKnownSizeRef.current
         const url = terminalWebSocketUrl(terminalConfig, agent.id, size.cols, size.rows, instanceId)
         const socket = new WebSocket(url)
         socketRef.current = socket
+        lastSentSize = size
+        const scheduleResize = (force = false) => {
+          if (!visibleRef.current) return
+          if (resizeAnimationFrame !== null) window.cancelAnimationFrame(resizeAnimationFrame)
+          resizeAnimationFrame = window.requestAnimationFrame(() => {
+            resizeAnimationFrame = null
+            const nextSize = terminalVisibleSizeFromHost(hostRef.current)
+            if (!nextSize) return
+            lastKnownSizeRef.current = nextSize
+            if (!force && terminalSizesEqual(lastSentSize, nextSize)) return
+            if (sendResize(socket, nextSize)) lastSentSize = nextSize
+          })
+        }
         socket.onopen = () => {
           if (disposed) return
           setStatus('Connected')
@@ -532,11 +565,17 @@ function TerminalPane({
             ? `kiri agent terminal · ${terminalConfig.runtime} · ${terminalConfig.model} · ${project.cwd}\n`
             : `kiri shell terminal · ${project.cwd}\n`
           appendTranscript(setTranscript, transcriptEnabledRef.current, banner)
-          sendResize(socket, terminalSizeFromHost(hostRef.current))
+          stickToBottomRef.current = true
+          scheduleResize(true)
+          scrollTerminalToBottomSoon(hostRef.current)
+          void window.document.fonts?.ready.then(() => {
+            if (!disposed) scheduleResize(true)
+          })
         }
         socket.onmessage = (event) => {
           if (typeof event.data !== 'string') return
           const startedAt = performance.now()
+          stickToBottomRef.current = stickToBottomRef.current || terminalHostIsNearBottom(hostRef.current)
           const frames = parseTerminalFrames(event.data, lineBufferRef)
           appendTranscript(setTranscript, transcriptEnabledRef.current, terminalTranscriptText(frames))
           for (const frame of frames) {
@@ -553,9 +592,7 @@ function TerminalPane({
         socket.onerror = () => {
           if (!disposed) setStatus('Connection failed')
         }
-        resizeObserver = new ResizeObserver(() => {
-          sendResize(socket, terminalSizeFromHost(hostRef.current))
-        })
+        resizeObserver = new ResizeObserver(() => scheduleResize())
         if (host) resizeObserver.observe(host)
       } catch (error) {
         if (disposed) return
@@ -567,6 +604,7 @@ function TerminalPane({
 
     return () => {
       disposed = true
+      if (resizeAnimationFrame !== null) window.cancelAnimationFrame(resizeAnimationFrame)
       resizeObserver?.disconnect()
       const socket = socketRef.current
       socketRef.current = null
@@ -629,7 +667,9 @@ function TerminalPane({
           if (!data) return
           event.preventDefault()
           event.stopPropagation()
+          stickToBottomRef.current = true
           sendInput(socketRef.current, data)
+          scrollTerminalToBottomSoon(hostRef.current)
         }}
         onPaste={(event) => {
           onFocusPane(instanceId)
@@ -637,7 +677,9 @@ function TerminalPane({
           if (!text) return
           event.preventDefault()
           event.stopPropagation()
+          stickToBottomRef.current = true
           sendPaste(socketRef.current, text, false)
+          scrollTerminalToBottomSoon(hostRef.current)
         }}
         onWheel={(event) => {
           const host = hostRef.current
@@ -650,16 +692,22 @@ function TerminalPane({
           if (action.type === 'input') {
             event.preventDefault()
             event.stopPropagation()
+            stickToBottomRef.current = true
             sendInput(socketRef.current, action.data)
+            scrollTerminalToBottomSoon(host)
             return
           }
           if (action.type === 'none') return
           const before = host.scrollTop
           host.scrollTop += action.lines * terminalLineHeight(window.getComputedStyle(host).lineHeight, typographyOptions.fontSize)
+          stickToBottomRef.current = terminalHostIsNearBottom(host)
           if (host.scrollTop !== before) {
             event.preventDefault()
             event.stopPropagation()
           }
+        }}
+        onScroll={() => {
+          stickToBottomRef.current = terminalHostIsNearBottom(hostRef.current)
         }}
         onFocus={() => onFocusPane(instanceId)}
         onClick={() => onFocusPane(instanceId)}
@@ -1113,8 +1161,55 @@ function sendPaste(socket: WebSocket | null, text: string, submit: boolean) {
 }
 
 function sendResize(socket: WebSocket | null, size: { readonly cols: number; readonly rows: number }) {
-  if (socket?.readyState !== WebSocket.OPEN) return
+  if (socket?.readyState !== WebSocket.OPEN) return false
   socket.send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }))
+  return true
+}
+
+export function sendResizeForTests(
+  socket: WebSocket | null,
+  size: { readonly cols: number; readonly rows: number },
+) {
+  return sendResize(socket, size)
+}
+
+function terminalHostIsNearBottom(host: HTMLElement | null) {
+  if (!host) return true
+  return terminalScrollDistanceFromBottom({
+    clientHeight: host.clientHeight,
+    scrollHeight: host.scrollHeight,
+    scrollTop: host.scrollTop,
+  }) <= terminalScrollBottomTolerance
+}
+
+function terminalScrollDistanceFromBottom(input: {
+  readonly clientHeight: number
+  readonly scrollHeight: number
+  readonly scrollTop: number
+}) {
+  return Math.max(0, input.scrollHeight - input.scrollTop - input.clientHeight)
+}
+
+export function terminalHostIsNearBottomForTests(input: {
+  readonly clientHeight: number
+  readonly scrollHeight: number
+  readonly scrollTop: number
+}) {
+  return terminalScrollDistanceFromBottom(input) <= terminalScrollBottomTolerance
+}
+
+function scrollTerminalToBottomSoon(host: HTMLElement | null) {
+  if (!host) return
+  window.requestAnimationFrame(() => {
+    host.scrollTop = host.scrollHeight
+  })
+}
+
+function terminalSizesEqual(
+  left: { readonly cols: number; readonly rows: number } | null,
+  right: { readonly cols: number; readonly rows: number },
+) {
+  return left?.cols === right.cols && left.rows === right.rows
 }
 
 function terminalSizeFromHost(host: HTMLElement | null) {
@@ -1132,6 +1227,22 @@ function terminalSizeFromHost(host: HTMLElement | null) {
     charWidth: terminalMeasuredCharWidth(host, style, fontSize),
     lineHeight,
   })
+}
+
+function terminalVisibleSizeFromHost(host: HTMLElement | null) {
+  if (!host || !terminalCanMeasureHostSize(host)) return null
+  return terminalSizeFromHost(host)
+}
+
+function terminalCanMeasureHostSize(host: { readonly clientWidth: number; readonly clientHeight: number }) {
+  return host.clientWidth > 0 && host.clientHeight > 0
+}
+
+export function terminalCanMeasureHostSizeForTests(input: {
+  readonly clientWidth: number
+  readonly clientHeight: number
+}) {
+  return terminalCanMeasureHostSize(input)
 }
 
 export function terminalSizeFromMeasurements(input: {

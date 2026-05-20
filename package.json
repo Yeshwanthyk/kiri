@@ -107,6 +107,10 @@
       {
         "from": "resources/bin/kiri-term",
         "to": "bin/kiri-term"
+      },
+      {
+        "from": "resources/terminfo",
+        "to": "terminfo"
       }
     ],
     "mac": {

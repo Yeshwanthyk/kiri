@@ -17,6 +17,7 @@ import {
   type TerminalAgentLaunchConfig,
   type TerminalProcessLaunch,
 } from './terminal-launch'
+import { terminalSizeEnv } from './terminal-env'
 import { makeKiriTermClient, type KiriTermProc } from './kiri-term-client'
 import { makeTerminalRegistry, type TerminalRegistrySession } from './terminal-registry'
 
@@ -351,11 +352,14 @@ async function getOrCreateTerminalSession(
   const launchedAtMs = Date.now()
   const launchToken = `${launchedAtMs}:${randomBytes(8).toString('hex')}`
   const proc = runtime.dependencies.spawnPty(launch.command, launch.args, {
-    name: 'xterm-256color',
+    name: launch.env.TERM ?? 'xterm-256color',
     cols,
     rows,
     cwd: launch.cwd,
-    env: launch.env,
+    env: {
+      ...launch.env,
+      ...terminalSizeEnv(cols, rows),
+    },
   })
   const session = runtime.registry.register({
     key,
