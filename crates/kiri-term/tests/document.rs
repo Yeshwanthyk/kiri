@@ -67,6 +67,51 @@ fn preserves_styled_blank_cells_after_erase_line() {
 }
 
 #[test]
+fn erase_line_does_not_copy_underline_to_blank_cells() {
+    let mut document = TerminalDocument::new(8, 2);
+    document.apply_bytes(b"\x1b[4mX\x1b[K");
+    let row = &document.snapshot().rows_data[0];
+
+    assert_eq!(row.runs[0].text, "X");
+    assert!(row.runs[0].style.underline);
+    assert!(row.runs.iter().skip(1).all(|run| !run.style.underline));
+}
+
+#[test]
+fn erase_line_preserves_background_without_text_attributes() {
+    let mut document = TerminalDocument::new(6, 2);
+    document.apply_bytes(b"\x1b[4;48;5;235mX\x1b[K");
+    let row = &document.snapshot().rows_data[0];
+
+    assert_eq!(row.runs[0].text, "X");
+    assert!(row.runs[0].style.underline);
+    assert_eq!(
+        row.runs[0].style.background,
+        Some(TerminalColor::Palette { index: 235 })
+    );
+    assert_eq!(row.runs[1].text, "     ");
+    assert!(!row.runs[1].style.underline);
+    assert_eq!(
+        row.runs[1].style.background,
+        Some(TerminalColor::Palette { index: 235 })
+    );
+}
+
+#[test]
+fn erase_chars_do_not_copy_underline_to_blank_cells() {
+    let mut document = TerminalDocument::new(8, 2);
+    document.apply_bytes(b"\x1b[4mABCDEFGH\x1b[1;3H\x1b[3X");
+    let row = &document.snapshot().rows_data[0];
+
+    assert_eq!(row.runs[0].text, "AB");
+    assert!(row.runs[0].style.underline);
+    assert_eq!(row.runs[1].text, "   ");
+    assert!(!row.runs[1].style.underline);
+    assert_eq!(row.runs[2].text, "FGH");
+    assert!(row.runs[2].style.underline);
+}
+
+#[test]
 fn sgr_colon_subparams_do_not_leak_underline() {
     let mut document = TerminalDocument::new(16, 2);
     document.apply_bytes(b"\x1b[4:1munder\x1b[4:0m plain");

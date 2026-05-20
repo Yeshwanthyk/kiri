@@ -122,9 +122,9 @@ impl TerminalDocument {
         let before = self.last_rows.clone();
         self.cols = cols.max(1);
         self.rows = rows.max(1);
-        self.main.resize(self.cols, self.rows, self.style.clone());
-        self.alternate
-            .resize(self.cols, self.rows, self.style.clone());
+        let erase_style = self.erase_style();
+        self.main.resize(self.cols, self.rows, erase_style.clone());
+        self.alternate.resize(self.cols, self.rows, erase_style);
         self.cursor_row = self.cursor_row.min(self.rows - 1);
         self.cursor_col = self.cursor_col.min(self.cols - 1);
         self.main_saved_cursor.row = self.main_saved_cursor.row.min(self.rows - 1);
@@ -256,6 +256,13 @@ impl TerminalDocument {
         }
     }
 
+    fn erase_style(&self) -> CellStyle {
+        CellStyle {
+            background: self.style.background.clone(),
+            ..CellStyle::default()
+        }
+    }
+
     fn put_char(&mut self, c: char) {
         let width = UnicodeWidthChar::width(c).unwrap_or(1);
         if width == 0 {
@@ -314,7 +321,7 @@ impl TerminalDocument {
         if top > bottom || bottom >= self.rows {
             return;
         }
-        let style = self.style.clone();
+        let style = self.erase_style();
         let cols = self.cols;
         let should_push_history = push_history
             && top == 0
@@ -337,7 +344,7 @@ impl TerminalDocument {
         if top > bottom || bottom >= self.rows {
             return;
         }
-        let style = self.style.clone();
+        let style = self.erase_style();
         let cols = self.cols;
         let count = count.min(bottom - top + 1);
         let active = self.active_mut();
@@ -361,7 +368,7 @@ impl TerminalDocument {
     }
 
     fn clear_screen(&mut self) {
-        let style = self.style.clone();
+        let style = self.erase_style();
         let cols = self.cols;
         for row in &mut self.active_mut().cells {
             *row = blank_row(cols, style.clone());
@@ -390,7 +397,7 @@ impl TerminalDocument {
             0 => {
                 self.erase_line_from_cursor();
                 let cols = self.cols;
-                let style = self.style.clone();
+                let style = self.erase_style();
                 let start = self.cursor_row + 1;
                 for row in &mut self.active_mut().cells[start..] {
                     *row = blank_row(cols, style.clone());
@@ -399,7 +406,7 @@ impl TerminalDocument {
             1 => {
                 self.erase_line_to_cursor();
                 let cols = self.cols;
-                let style = self.style.clone();
+                let style = self.erase_style();
                 let cursor_row = self.cursor_row;
                 for row in &mut self.active_mut().cells[..cursor_row] {
                     *row = blank_row(cols, style.clone());
@@ -416,7 +423,7 @@ impl TerminalDocument {
             1 => self.erase_line_to_cursor(),
             2 => {
                 let row = self.cursor_row;
-                self.active_mut().cells[row] = blank_row(self.cols, self.style.clone());
+                self.active_mut().cells[row] = blank_row(self.cols, self.erase_style());
             }
             _ => {}
         }
@@ -425,7 +432,7 @@ impl TerminalDocument {
     fn erase_line_from_cursor(&mut self) {
         let row = self.cursor_row;
         let col = self.cursor_col.min(self.cols - 1);
-        let style = self.style.clone();
+        let style = self.erase_style();
         self.clear_wide_fragment(row, col, style.clone());
         for cell in &mut self.active_mut().cells[row][col..] {
             *cell = Cell::blank(style.clone());
@@ -435,7 +442,7 @@ impl TerminalDocument {
     fn erase_line_to_cursor(&mut self) {
         let row = self.cursor_row;
         let col = self.cursor_col.min(self.cols - 1);
-        let style = self.style.clone();
+        let style = self.erase_style();
         self.clear_wide_fragment(row, col, style.clone());
         for cell in &mut self.active_mut().cells[row][..=col] {
             *cell = Cell::blank(style.clone());
@@ -575,7 +582,7 @@ impl TerminalDocument {
         let col = self.cursor_col.min(self.cols - 1);
         let cols = self.cols;
         let count = count.min(cols - col);
-        let style = self.style.clone();
+        let style = self.erase_style();
         let cells = &mut self.active_mut().cells[row];
         for index in (col..cols - count).rev() {
             cells[index + count] = cells[index].clone();
@@ -591,7 +598,7 @@ impl TerminalDocument {
         let col = self.cursor_col.min(self.cols - 1);
         let cols = self.cols;
         let count = count.min(cols - col);
-        let style = self.style.clone();
+        let style = self.erase_style();
         let cells = &mut self.active_mut().cells[row];
         for index in col..cols - count {
             cells[index] = cells[index + count].clone();
@@ -606,7 +613,7 @@ impl TerminalDocument {
         let row = self.cursor_row;
         let col = self.cursor_col.min(self.cols - 1);
         let count = count.min(self.cols - col);
-        let style = self.style.clone();
+        let style = self.erase_style();
         self.clear_wide_fragment(row, col, style.clone());
         for cell in &mut self.active_mut().cells[row][col..col + count] {
             *cell = Cell::blank(style.clone());
