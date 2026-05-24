@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.13 - 2026-05-24
+
+- Added the phone board connect flow and desktop backend support for local mobile pairing.
+- Moved session launcher, scratchpad trigger, and command palette runtime/model choices to settings-driven runtime options.
+- Added user settings overlay support at `~/.kiri/userdata/settings.json` with `KIRI_USER_SETTINGS_PATH` override.
+- Added Pi GUI/terminal interface mode configuration and additive Pi model settings, including local overlay support for new models.
+- Fixed desktop-launched Pi auth by loading runtime provider keys from `~/.env` and stripping Anthropic OAuth tokens by default.
+- Fixed macOS Tailscale binary discovery for the desktop connect flow.
+
 ## 0.1.12 - 2026-05-19
 
 - Added the agent event stream with per-agent sequences, event contracts, storage, and `agent.events.list` through the control router.
