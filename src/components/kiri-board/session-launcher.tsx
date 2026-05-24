@@ -18,11 +18,11 @@ import type {
   ThinkingLevel,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
-import { sessionInterfaceModeForRuntime } from '~/lib/contracts'
-import { errorMessage, formatAgo, formatTokenCount } from './format'
+import { errorMessage, formatAgo } from './format'
 import { supportsThinking } from './slash-commands'
-import { runtimeCopy, sessionRuntimeOrder, sessionThinkingLevels } from './board-types'
+import { sessionThinkingLevels } from './board-types'
 import { trapTabFocus, useFocusReturn } from './dialog-focus'
+import { modelOptions, normalizeInterfaceMode, normalizeRuntimeModel, runtimeOption, runtimeOptions } from './runtime-options'
 
 export function InlineSessionLauncher({
   project,
@@ -58,12 +58,18 @@ export function InlineSessionLauncher({
   const [launchProjectId, setLaunchProjectId] = React.useState(initialProjectId ?? project.id)
   const [projectQuery, setProjectQuery] = React.useState('')
   const [projectPickerOpen, setProjectPickerOpen] = React.useState(false)
-  const initialLauncherRuntime = initialRuntime ?? 'codex'
+  const initialRuntimeOption = initialRuntime
+    ? runtimeOption(settings, initialRuntime)
+    : runtimeOptions(settings)[0]
+  if (!initialRuntimeOption) {
+    throw new Error('At least one runtime must be configured')
+  }
+  const initialLauncherRuntime = initialRuntimeOption.runtime
   const [runtime, setRuntime] = React.useState<RuntimeKind>(initialLauncherRuntime)
-  const [interfaceMode, setInterfaceMode] = React.useState<SessionInterfaceMode>('gui')
-  const [model, setModel] = React.useState(
-    settings.runtimes[initialLauncherRuntime].defaultModel,
+  const [interfaceMode, setInterfaceMode] = React.useState<SessionInterfaceMode>(
+    initialRuntimeOption.defaultInterfaceMode,
   )
+  const [model, setModel] = React.useState(initialRuntimeOption.defaultModel)
   const [title, setTitle] = React.useState('')
   const [thinkingLevel, setThinkingLevel] = React.useState<ThinkingLevel>('medium')
   const [pending, setPending] = React.useState(false)
@@ -71,12 +77,13 @@ export function InlineSessionLauncher({
   const launcherRef = React.useRef<HTMLFormElement | null>(null)
   const titleRef = React.useRef<HTMLInputElement>(null)
   const settingsRef = React.useRef(settings)
-  const models = settings.runtimes[runtime].models
+  const runtimes = runtimeOptions(settings)
+  const selectedRuntime = runtimeOption(settings, runtime)
+  const models = modelOptions(settings, runtime)
   const launchProject = projects.find((item) => item.id === launchProjectId) ?? project
   const runtimeSupportsThinking = supportsThinking(runtime)
-  const runtimeIsTerminalOnly = sessionInterfaceModeForRuntime(runtime, 'gui') === 'terminal'
-  const availableInterfaceModes = runtimeIsTerminalOnly ? ['terminal'] as const : ['gui', 'terminal'] as const
-  const selectedInterfaceMode = sessionInterfaceModeForRuntime(runtime, interfaceMode)
+  const availableInterfaceModes = selectedRuntime.interfaceModes
+  const selectedInterfaceMode = normalizeInterfaceMode(runtime, settings.runtimes[runtime], interfaceMode)
   const normalizedProjectQuery = projectQuery.trim().toLowerCase()
   const visibleTargetProjects = projects.filter((item) => {
     if (!normalizedProjectQuery) return true
@@ -131,26 +138,25 @@ export function InlineSessionLauncher({
   }, [initialProjectId, project.id])
 
   React.useEffect(() => {
-    const nextRuntime = initialRuntime ?? 'codex'
-    setRuntime(nextRuntime)
-    setModel(settingsRef.current.runtimes[nextRuntime].defaultModel)
-    setInterfaceMode(sessionInterfaceModeForRuntime(nextRuntime, 'gui'))
+    const nextRuntimeOption = initialRuntime
+      ? runtimeOption(settingsRef.current, initialRuntime)
+      : runtimeOptions(settingsRef.current)[0]
+    if (!nextRuntimeOption) return
+    setRuntime(nextRuntimeOption.runtime)
+    setModel(nextRuntimeOption.defaultModel)
+    setInterfaceMode(nextRuntimeOption.defaultInterfaceMode)
   }, [initialProjectId, initialRuntime])
 
   React.useEffect(() => {
-    const runtimeSettings = settings.runtimes[runtime]
-    if (!runtimeSettings.models.includes(model)) {
-      setModel(runtimeSettings.defaultModel)
-    }
+    const nextModel = normalizeRuntimeModel(settings, runtime, model)
+    if (nextModel !== model) setModel(nextModel)
   }, [model, runtime, settings])
 
   function updateRuntime(nextRuntime: RuntimeKind) {
     setRuntime(nextRuntime)
     setModel(settings.runtimes[nextRuntime].defaultModel)
     setInterfaceMode((current) =>
-      runtimeIsTerminalOnly && sessionInterfaceModeForRuntime(nextRuntime, 'gui') !== 'terminal'
-        ? 'gui'
-        : sessionInterfaceModeForRuntime(nextRuntime, current))
+      normalizeInterfaceMode(nextRuntime, settings.runtimes[nextRuntime], current))
   }
 
   function selectLaunchProject(projectId: string) {
@@ -343,25 +349,24 @@ export function InlineSessionLauncher({
                 <span>Provider is an execution mode.</span>
               </div>
               <div className="session-runtime-grid" data-testid="session-runtime">
-                {sessionRuntimeOrder.map((item) => {
-                  const copy = runtimeCopy[item]
-                  const active = runtime === item
+                {runtimes.map((item) => {
+                  const active = runtime === item.runtime
                   return (
                     <button
-                      key={item}
+                      key={item.runtime}
                       type="button"
                       className="session-runtime-card"
                       data-active={active ? 'true' : undefined}
-                      onClick={() => updateRuntime(item)}
+                      onClick={() => updateRuntime(item.runtime)}
                       disabled={pending}
                       aria-pressed={active}
                     >
                       <span>
-                        <strong>{copy.label}</strong>
-                        <code>{copy.meta}</code>
+                        <strong>{item.label}</strong>
+                        <code>{item.meta}</code>
                       </span>
-                      <small>{copy.detail}</small>
-                      <code>{settings.runtimes[item].defaultModel}</code>
+                      <small>{item.detail}</small>
+                      <code>{item.defaultModel}</code>
                     </button>
                   )
                 })}
@@ -375,20 +380,19 @@ export function InlineSessionLauncher({
               </div>
               <div className="session-model-list" data-testid="session-model">
                 {models.map((item) => {
-                  const active = item === model
-                  const contextWindow = settings.runtimes[runtime].contextWindows?.[item]
+                  const active = item.model === model
                   return (
                     <button
-                      key={item}
+                      key={item.model}
                       type="button"
                       className="session-model-chip"
                       data-active={active ? 'true' : undefined}
-                      onClick={() => setModel(item)}
+                      onClick={() => setModel(item.model)}
                       disabled={pending}
                       aria-pressed={active}
                     >
-                      <span>{item}</span>
-                      {contextWindow ? <code>{formatTokenCount(contextWindow)}</code> : null}
+                      <span>{item.model}</span>
+                      {item.contextLabel ? <code>{item.contextLabel}</code> : null}
                     </button>
                   )
                 })}
@@ -428,7 +432,7 @@ export function InlineSessionLauncher({
               {error ? <span role="status">{error}</span> : null}
               <button type="submit" disabled={pending}>
                 <Plus size={14} />
-                Start {runtimeCopy[runtime].label} session
+                Start {selectedRuntime.label} session
               </button>
             </div>
           </>

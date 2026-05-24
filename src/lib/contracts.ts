@@ -237,6 +237,11 @@ export const listAgentEventsInputSchema = z.object({
 export type ListAgentEventsInput = z.infer<typeof listAgentEventsInputSchema>
 
 const runtimeSettingsSchema = z.object({
+  label: z.string().trim().min(1).optional(),
+  meta: z.string().trim().min(1).optional(),
+  detail: z.string().trim().min(1).optional(),
+  interfaceModes: z.array(sessionInterfaceModeSchema).min(1).optional(),
+  defaultInterfaceMode: sessionInterfaceModeSchema.optional(),
   models: z.array(z.string().trim().min(1)).min(1),
   defaultModel: z.string().trim().min(1),
   contextWindows: z.record(z.string(), z.number().int().positive()).optional(),

@@ -25,6 +25,7 @@ describe('kiri config', () => {
       stateDir: '/Users/yesh/.kiri/userdata',
       dbPath: '/Users/yesh/.kiri/userdata/kiri.sqlite',
       settingsPath: '/repo/kiri/settings.json',
+      userSettingsPath: '/Users/yesh/.kiri/userdata/settings.json',
       preferencesPath: '/Users/yesh/.kiri/userdata/preferences.json',
       piSessionsDir: '/Users/yesh/.kiri/userdata/pi-sessions',
       runtimeSessionsDir: '/Users/yesh/.kiri/userdata/runtime-sessions',
@@ -42,6 +43,7 @@ describe('kiri config', () => {
         KIRI_ROOT_DIR: '/Applications/Kiri.app',
         KIRI_HOME: '/Users/yesh/.kiri',
         KIRI_SETTINGS_PATH: '/Users/yesh/Library/Application Support/Kiri/settings.json',
+        KIRI_USER_SETTINGS_PATH: '/Users/yesh/Library/Application Support/Kiri/user-settings.json',
         KIRI_PREFERENCES_PATH: '/Users/yesh/Library/Application Support/Kiri/preferences.json',
         KIRI_DEFAULT_PROJECT_CWD: '/Users/yesh/Documents',
       },
@@ -49,6 +51,7 @@ describe('kiri config', () => {
 
     expect(config.hostMode).toBe('desktop')
     expect(config.dbPath).toBe('/Users/yesh/.kiri/userdata/kiri.sqlite')
+    expect(config.userSettingsPath).toBe('/Users/yesh/Library/Application Support/Kiri/user-settings.json')
     expect(config.preferencesPath).toBe('/Users/yesh/Library/Application Support/Kiri/preferences.json')
     expect(config.defaultProjectCwd).toBe('/Users/yesh/Documents')
     expect(runtimeSessionDirPath(config, 'codex', 'kiri', 'session-1')).toBe(
@@ -69,6 +72,7 @@ describe('kiri config', () => {
         KIRI_STATE_DIR: '',
         KIRI_DB_PATH: '',
         KIRI_SETTINGS_PATH: '',
+        KIRI_USER_SETTINGS_PATH: '',
         KIRI_PREFERENCES_PATH: '',
         KIRI_PI_SESSIONS_DIR: '',
         KIRI_RUNTIME_SESSIONS_DIR: '',
@@ -79,6 +83,7 @@ describe('kiri config', () => {
 
     expect(config.dbPath).toBe('/Users/yesh/.kiri/userdata/kiri.sqlite')
     expect(config.settingsPath).toBe('/repo/kiri/settings.json')
+    expect(config.userSettingsPath).toBe('/Users/yesh/.kiri/userdata/settings.json')
     expect(config.preferencesPath).toBe('/Users/yesh/.kiri/userdata/preferences.json')
     expect(config.logsDir).toBe('/Users/yesh/.kiri/userdata/logs')
   })
