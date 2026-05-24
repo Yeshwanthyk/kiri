@@ -12,6 +12,7 @@ export type KiriConfig = {
   readonly stateDir: string
   readonly dbPath: string
   readonly settingsPath: string
+  readonly userSettingsPath: string
   readonly preferencesPath: string
   readonly piSessionsDir: string
   readonly runtimeSessionsDir: string
@@ -73,6 +74,9 @@ export function resolveKiriConfig(input: {
   const settingsPath = resolve(
     envValue(input.env.KIRI_SETTINGS_PATH) ?? join(rootDir, 'settings.json'),
   )
+  const userSettingsPath = resolve(
+    envValue(input.env.KIRI_USER_SETTINGS_PATH) ?? join(stateDir, 'settings.json'),
+  )
   const preferencesPath = resolve(
     envValue(input.env.KIRI_PREFERENCES_PATH) ?? join(stateDir, 'preferences.json'),
   )
@@ -86,6 +90,7 @@ export function resolveKiriConfig(input: {
     stateDir,
     dbPath,
     settingsPath,
+    userSettingsPath,
     preferencesPath,
     piSessionsDir: resolve(envValue(input.env.KIRI_PI_SESSIONS_DIR) ?? join(stateDir, 'pi-sessions')),
     runtimeSessionsDir: resolve(

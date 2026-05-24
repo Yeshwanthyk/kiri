@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { Context, Data, Effect, Layer } from 'effect'
 import type { KiriSettings, RuntimeKind } from '~/lib/contracts'
 import { kiriSettingsSchema } from '~/lib/contracts'
@@ -46,8 +46,10 @@ export class KiriSettingsService extends Context.Tag('@kiri/KiriSettings')<
 export function makeKiriSettingsService(input: {
   readonly config: KiriConfigApi
   readonly readTextFile?: (path: string) => string
+  readonly fileExists?: (path: string) => boolean
 }): KiriSettingsApi {
   const readTextFile = input.readTextFile ?? ((path: string) => readFileSync(path, 'utf8'))
+  const fileExists = input.fileExists ?? existsSync
   const get = Effect.gen(function* () {
     const config = yield* input.config.get.pipe(
       Effect.mapError((error) => new KiriSettingsError({
@@ -55,7 +57,12 @@ export function makeKiriSettingsService(input: {
         cause: error,
       })),
     )
-    return yield* loadSettingsEffect(config.settingsPath, readTextFile)
+    return yield* loadSettingsEffect(
+      config.settingsPath,
+      readTextFile,
+      config.userSettingsPath,
+      fileExists,
+    )
   })
   const getRuntime = (runtime: RuntimeKind) =>
     get.pipe(Effect.map((settings) => settings.runtimes[runtime]))
@@ -77,18 +84,29 @@ export function makeKiriSettingsService(input: {
 }
 
 export function getSettings(): KiriSettings {
-  return loadSettings(getKiriConfig().settingsPath)
+  const config = getKiriConfig()
+  return loadSettings(config.settingsPath, undefined, config.userSettingsPath)
 }
 
 export function loadSettings(
   settingsPath: string,
   readTextFile: (path: string) => string = (path) => readFileSync(path, 'utf8'),
+  userSettingsPath?: string,
+  fileExists: (path: string) => boolean = existsSync,
 ): KiriSettings {
-  return parseSettings(settingsPath, readTextFile(settingsPath))
+  const base = JSON.parse(readTextFile(settingsPath))
+  const settings = userSettingsPath && fileExists(userSettingsPath)
+    ? mergeSettings(base, JSON.parse(readTextFile(userSettingsPath)))
+    : base
+  return parseSettingsObject(settingsPath, settings)
 }
 
 function parseSettings(_settingsPath: string, raw: string): KiriSettings {
-  const parsed = kiriSettingsSchema.parse(normalizeSettings(JSON.parse(raw)))
+  return parseSettingsObject(_settingsPath, JSON.parse(raw))
+}
+
+function parseSettingsObject(_settingsPath: string, settings: unknown): KiriSettings {
+  const parsed = kiriSettingsSchema.parse(normalizeSettings(settings))
   validateSettings(parsed)
   return parsed
 }
@@ -107,11 +125,56 @@ export function assertConfiguredModel(runtime: RuntimeKind, model: string) {
 function loadSettingsEffect(
   settingsPath: string,
   readTextFile: (path: string) => string,
+  userSettingsPath: string | undefined,
+  fileExists: (path: string) => boolean,
 ) {
   return Effect.try({
-    try: () => loadSettings(settingsPath, readTextFile),
+    try: () => loadSettings(settingsPath, readTextFile, userSettingsPath, fileExists),
     catch: (error) => toKiriSettingsError(settingsPath, error),
   })
+}
+
+function mergeSettings(base: unknown, override: unknown): unknown {
+  if (!isSettingsObject(base) || !isSettingsObject(override)) return override
+  if (!isRecord(base.runtimes) || !isRecord(override.runtimes)) {
+    return { ...base, ...override }
+  }
+
+  const runtimes: Record<string, unknown> = { ...base.runtimes }
+  for (const [runtime, overrideRuntime] of Object.entries(override.runtimes)) {
+    const baseRuntime = isRecord(runtimes[runtime]) ? runtimes[runtime] : {}
+    const runtimePatch = isRecord(overrideRuntime) ? overrideRuntime : {}
+    runtimes[runtime] = {
+      ...baseRuntime,
+      ...runtimePatch,
+      models: uniqueStrings([
+        ...arrayValue(baseRuntime.models),
+        ...arrayValue(runtimePatch.models),
+      ]),
+      contextWindows: {
+        ...(isRecord(baseRuntime.contextWindows) ? baseRuntime.contextWindows : {}),
+        ...(isRecord(runtimePatch.contextWindows) ? runtimePatch.contextWindows : {}),
+      },
+    }
+  }
+
+  return { ...base, ...override, runtimes }
+}
+
+function isSettingsObject(value: unknown): value is { readonly runtimes?: unknown } {
+  return isRecord(value)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function arrayValue(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function uniqueStrings(values: readonly string[]) {
+  return [...new Set(values)]
 }
 
 function validateSettings(settings: KiriSettings) {
@@ -136,12 +199,25 @@ function normalizeSettings(settings: unknown): unknown {
     return settings
   }
   const defaults = kiriSettingsSchema.parse(bundledSettings)
+  const normalizedRuntimes = { ...defaults.runtimes }
+  for (const [runtime, runtimeSettings] of Object.entries(runtimes)) {
+    const defaultRuntime: Record<string, unknown> = isRecord(defaults.runtimes[runtime as RuntimeKind])
+      ? { ...defaults.runtimes[runtime as RuntimeKind] }
+      : {}
+    normalizedRuntimes[runtime as RuntimeKind] = isRecord(runtimeSettings)
+      ? {
+        ...defaultRuntime,
+        ...runtimeSettings,
+        contextWindows: {
+          ...(isRecord(defaultRuntime.contextWindows) ? defaultRuntime.contextWindows : {}),
+          ...(isRecord(runtimeSettings.contextWindows) ? runtimeSettings.contextWindows : {}),
+        },
+      }
+      : runtimeSettings
+  }
   return {
     ...settings,
-    runtimes: {
-      ...defaults.runtimes,
-      ...runtimes,
-    },
+    runtimes: normalizedRuntimes,
   }
 }
 

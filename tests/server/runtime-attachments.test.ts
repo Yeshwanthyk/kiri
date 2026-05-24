@@ -84,6 +84,7 @@ function testConfig(): KiriConfig {
     stateDir: root,
     dbPath: join(root, 'kiri.sqlite'),
     settingsPath: join(root, 'settings.json'),
+    userSettingsPath: join(root, 'user-settings.json'),
     preferencesPath: join(root, 'preferences.json'),
     piSessionsDir: join(root, 'pi-sessions'),
     runtimeSessionsDir: join(root, 'runtime-sessions'),

@@ -38,6 +38,7 @@ const configFor = (settingsPath: string): KiriConfigApi => ({
     stateDir: '/Users/yesh/.kiri/userdata',
     dbPath: '/Users/yesh/.kiri/userdata/kiri.sqlite',
     settingsPath,
+    userSettingsPath: '/Users/yesh/.kiri/userdata/settings.json',
     preferencesPath: '/Users/yesh/.kiri/userdata/preferences.json',
     piSessionsDir: '/Users/yesh/.kiri/userdata/pi-sessions',
     runtimeSessionsDir: '/Users/yesh/.kiri/userdata/runtime-sessions',
@@ -90,6 +91,41 @@ describe('settings service', () => {
       expect(runtime.models).toEqual(['pi-default', 'pi-alt'])
     }),
   )
+
+  it('merges user runtime settings additively over bundled settings', () => {
+    const files = new Map([
+      ['/repo/settings.json', validSettingsJson],
+      ['/state/settings.json', JSON.stringify({
+        runtimes: {
+          pi: {
+            models: ['deepseek/deepseek-v4-flash'],
+            contextWindows: { 'deepseek/deepseek-v4-flash': 1_000_000 },
+          },
+        },
+      })],
+    ])
+
+    const settings = loadSettings(
+      '/repo/settings.json',
+      (path) => {
+        const value = files.get(path)
+        if (value === undefined) throw new Error(`missing ${path}`)
+        return value
+      },
+      '/state/settings.json',
+      (path) => files.has(path),
+    )
+
+    expect(settings.runtimes.pi.defaultModel).toBe('pi-default')
+    expect(settings.runtimes.pi.models).toEqual([
+      'pi-default',
+      'pi-alt',
+      'deepseek/deepseek-v4-flash',
+    ])
+    expect(settings.runtimes.pi.contextWindows?.['deepseek/deepseek-v4-flash']).toBe(1_000_000)
+    expect(settings.runtimes.pi.interfaceModes).toEqual(['gui', 'terminal'])
+    expect(settings.runtimes.pi.defaultInterfaceMode).toBe('gui')
+  })
 
   it.effect('fails invalid default models with typed settings errors', () =>
     Effect.gen(function* () {

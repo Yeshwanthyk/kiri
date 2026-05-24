@@ -11,6 +11,7 @@ test.describe.configure({ mode: 'serial', timeout: 60_000 })
 const testDbPath = resolve(process.env.KIRI_DB_PATH ?? '.kiri/kiri.e2e.sqlite')
 const appRoot = process.cwd()
 const projectRoot = resolve(tmpdir(), 'kiri-pican-e2e-worktree')
+const userSettingsPath = resolve(appRoot, '.kiri', 'settings.json')
 const fileOperationFixturePath = resolve(projectRoot, 'src/kiri-file-operation-e2e.tmp')
 const detailFixturePath = resolve(projectRoot, 'src/detail.ts')
 let fakeCodexServer: Awaited<ReturnType<typeof startFakeCodexAppServer>>
@@ -24,6 +25,10 @@ test.afterAll(async () => {
   rmSync(projectRoot, { force: true, recursive: true })
 })
 
+test.afterEach(() => {
+  rmSync(userSettingsPath, { force: true })
+})
+
 test.beforeEach(async ({ page }, testInfo) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('kiri:terminal-transcript', '1')
@@ -33,6 +38,7 @@ test.beforeEach(async ({ page }, testInfo) => {
   resetE2eProjectWorktree()
   mkdirSync(dirname(testDbPath), { recursive: true })
   rmSync(resolve(appRoot, '.kiri', 'preferences.json'), { force: true })
+  rmSync(userSettingsPath, { force: true })
   const database = new DatabaseSync(testDbPath)
   resetE2eDatabase(database)
   if (testInfo.title !== 'empty workspace starts with an add-project path') {
@@ -119,6 +125,31 @@ test('empty workspace starts with an add-project path', async ({ page }) => {
 
   await expect(page.getByTestId('selected-project').first()).toHaveText('Current Repo')
   await expect(page.getByTestId('selected-agent').first()).toHaveText('No session')
+})
+
+test('user Pi model override preserves interface modes', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  mkdirSync(dirname(userSettingsPath), { recursive: true })
+  writeFileSync(userSettingsPath, JSON.stringify({
+    runtimes: {
+      pi: {
+        models: ['deepseek/deepseek-v4-flash'],
+        contextWindows: { 'deepseek/deepseek-v4-flash': 1_000_000 },
+      },
+    },
+  }))
+
+  await page.reload()
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  await pressShiftKey(page, 'KeyN')
+  await expect(page.getByTestId('session-launcher')).toBeVisible()
+  await clickRuntime(page, 'pi')
+  await expectRuntimeSelected(page, 'pi')
+  await expect(page.getByTestId('session-model')).toContainText('deepseek/deepseek-v4-flash')
+  await expect(page.getByTestId('session-interface-mode').getByRole('button', { name: 'GUI' })).toBeVisible()
+  await expect(page.getByTestId('session-interface-mode').getByRole('button', { name: 'Terminal' })).toBeVisible()
+  expect(pageErrors.filter((message) => message.includes('interfaceModes'))).toEqual([])
 })
 
 test('keyboard navigation moves projects without default sessions', async ({ page, isMobile }) => {

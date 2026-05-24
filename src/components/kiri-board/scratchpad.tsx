@@ -1,11 +1,10 @@
 import { Check, NotebookPen, Plus, Send, Trash2 } from 'lucide-react'
 import * as React from 'react'
 import type { ProjectRow, RuntimeKind, ScratchpadBlock, SessionInterfaceMode, ThinkingLevel, WorkspaceSnapshot } from '~/lib/contracts'
-import { sessionInterfaceModeForRuntime } from '~/lib/contracts'
-import { errorMessage, formatBlockDay, formatBlockTime, formatTokenCount } from './format'
+import { errorMessage, formatBlockDay, formatBlockTime } from './format'
 import { supportsThinking } from './slash-commands'
+import { modelOptions, normalizeInterfaceMode, normalizeRuntimeModel, runtimeOption, runtimeOptions } from './runtime-options'
 
-export const scratchpadRuntimeOrder = ['codex', 'pi', 'claude', 'opencode'] as const satisfies readonly RuntimeKind[]
 const scratchpadThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
 
 type ScratchpadState = {
@@ -108,25 +107,35 @@ export function ScratchpadPanel({
   ) => Promise<void>
 }) {
   const [state, dispatch] = React.useReducer(scratchpadReducer, initialScratchpadState)
-  const [triggerRuntime, setTriggerRuntime] = React.useState<RuntimeKind>('codex')
-  const [triggerInterfaceMode, setTriggerInterfaceMode] = React.useState<SessionInterfaceMode>('terminal')
-  const [triggerModel, setTriggerModel] = React.useState(settings.runtimes.codex.defaultModel)
+  const triggerRuntimes = runtimeOptions(settings)
+  const initialTriggerRuntime = triggerRuntimes[0]
+  if (!initialTriggerRuntime) {
+    throw new Error('At least one runtime must be configured')
+  }
+  const [triggerRuntime, setTriggerRuntime] = React.useState<RuntimeKind>(initialTriggerRuntime.runtime)
+  const [triggerInterfaceMode, setTriggerInterfaceMode] = React.useState<SessionInterfaceMode>(
+    initialTriggerRuntime.defaultInterfaceMode,
+  )
+  const [triggerModel, setTriggerModel] = React.useState(initialTriggerRuntime.defaultModel)
   const [triggerThinkingLevel, setTriggerThinkingLevel] = React.useState<ThinkingLevel>('medium')
   const captureRef = React.useRef<HTMLTextAreaElement>(null)
-  const triggerModels = settings.runtimes[triggerRuntime].models
+  const selectedTriggerRuntime = runtimeOption(settings, triggerRuntime)
+  const triggerModels = modelOptions(settings, triggerRuntime)
   const triggerSupportsThinking = supportsThinking(triggerRuntime)
-  const triggerRuntimeIsTerminalOnly = sessionInterfaceModeForRuntime(triggerRuntime, 'gui') === 'terminal'
-  const triggerInterfaceModes = triggerRuntimeIsTerminalOnly ? ['terminal'] as const : ['gui', 'terminal'] as const
-  const selectedTriggerInterfaceMode = sessionInterfaceModeForRuntime(triggerRuntime, triggerInterfaceMode)
+  const triggerInterfaceModes = selectedTriggerRuntime.interfaceModes
+  const selectedTriggerInterfaceMode = normalizeInterfaceMode(
+    triggerRuntime,
+    settings.runtimes[triggerRuntime],
+    triggerInterfaceMode,
+  )
 
   React.useEffect(() => {
     captureRef.current?.focus()
   }, [])
 
   React.useEffect(() => {
-    if (!triggerModels.includes(triggerModel)) {
-      setTriggerModel(settings.runtimes[triggerRuntime].defaultModel)
-    }
+    const nextModel = normalizeRuntimeModel(settings, triggerRuntime, triggerModel)
+    if (nextModel !== triggerModel) setTriggerModel(nextModel)
   }, [settings, triggerModel, triggerModels, triggerRuntime])
 
   React.useEffect(() => {
@@ -141,9 +150,7 @@ export function ScratchpadPanel({
     setTriggerRuntime(runtime)
     setTriggerModel(settings.runtimes[runtime].defaultModel)
     setTriggerInterfaceMode((current) =>
-      triggerRuntimeIsTerminalOnly && sessionInterfaceModeForRuntime(runtime, 'gui') !== 'terminal'
-        ? 'gui'
-        : sessionInterfaceModeForRuntime(runtime, current))
+      normalizeInterfaceMode(runtime, settings.runtimes[runtime], current))
   }
 
   async function submitCapture(event: React.FormEvent<HTMLFormElement>) {
@@ -311,41 +318,40 @@ export function ScratchpadPanel({
           })}
         </div>
         <div className="scratchpad-trigger-row" role="radiogroup" aria-label="Trigger runtime">
-          {scratchpadRuntimeOrder.map((runtime) => {
-            const active = triggerRuntime === runtime
+          {triggerRuntimes.map((option) => {
+            const active = triggerRuntime === option.runtime
             return (
               <button
-                key={runtime}
+                key={option.runtime}
                 type="button"
                 className="scratchpad-trigger-chip"
                 data-active={active ? 'true' : undefined}
-                onClick={() => updateTriggerRuntime(runtime)}
+                onClick={() => updateTriggerRuntime(option.runtime)}
                 disabled={state.pendingId !== null}
                 role="radio"
                 aria-checked={active}
               >
-                {runtime}
+                {option.label}
               </button>
             )
           })}
         </div>
         <div className="scratchpad-trigger-row" role="radiogroup" aria-label="Trigger model">
           {triggerModels.map((model) => {
-            const active = triggerModel === model
-            const windowTokens = settings.runtimes[triggerRuntime].contextWindows?.[model]
+            const active = triggerModel === model.model
             return (
               <button
-                key={model}
+                key={model.model}
                 type="button"
                 className="scratchpad-trigger-chip scratchpad-trigger-model"
                 data-active={active ? 'true' : undefined}
-                onClick={() => setTriggerModel(model)}
+                onClick={() => setTriggerModel(model.model)}
                 disabled={state.pendingId !== null}
                 role="radio"
                 aria-checked={active}
               >
-                <span>{model}</span>
-                {windowTokens ? <code>{formatTokenCount(windowTokens)}</code> : null}
+                <span>{model.model}</span>
+                {model.contextLabel ? <code>{model.contextLabel}</code> : null}
               </button>
             )
           })}

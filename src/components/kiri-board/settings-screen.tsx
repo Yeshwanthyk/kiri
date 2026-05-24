@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowLeft, Check } from 'lucide-react'
+import { ArrowLeft, Check, Copy, ExternalLink, RefreshCw, Smartphone } from 'lucide-react'
 import * as React from 'react'
 import {
   defaultThemeSelection,
@@ -84,6 +84,13 @@ export function SettingsScreen({
               </span>
               <span>{Object.keys(monoFonts).length}</span>
             </a>
+            <a className="settings-index-item" href="#settings-connect">
+              <span>
+                <strong>Connect</strong>
+                <small>Phone board access</small>
+              </span>
+              <span>QR</span>
+            </a>
             <a className="settings-index-item" href="#settings-keyboard">
               <span>
                 <strong>Keyboard</strong>
@@ -118,6 +125,17 @@ export function SettingsScreen({
             </section>
 
             <section
+              id="settings-connect"
+              className="settings-panel"
+              data-panel="connect"
+              aria-label="Connect phone"
+            >
+              <ConnectSettingsPanel />
+            </section>
+          </div>
+
+          <div className="settings-panel-row settings-panel-row--single">
+            <section
               id="settings-keyboard"
               className="settings-panel"
               data-panel="keymap"
@@ -134,6 +152,210 @@ export function SettingsScreen({
       </div>
     </main>
   )
+}
+
+type ConnectEndpoint = {
+  readonly kind: string
+  readonly label: string
+  readonly url: string
+}
+
+type ConnectInfo = {
+  readonly baseUrl: string
+  readonly endpoints: readonly ConnectEndpoint[]
+  readonly auth: {
+    readonly pendingPairingTokens: number
+    readonly activeSessions: number
+  }
+  readonly tailscale: {
+    readonly available: boolean
+    readonly dnsName?: string
+    readonly error?: string
+  }
+}
+
+type PairingLink = {
+  readonly pairingUrl: string
+  readonly expiresAt: string
+}
+
+function ConnectSettingsPanel() {
+  const [info, setInfo] = React.useState<ConnectInfo | undefined>()
+  const [selectedUrl, setSelectedUrl] = React.useState('')
+  const [pairing, setPairing] = React.useState<PairingLink | undefined>()
+  const [status, setStatus] = React.useState<string | undefined>()
+  const [loading, setLoading] = React.useState(false)
+  const [ownerToken, setOwnerToken] = React.useState('')
+
+  React.useEffect(() => {
+    const url = new URL(window.location.href)
+    const token = url.searchParams.get('kiri_owner_token') ?? sessionStorage.getItem('kiri_owner_token') ?? ''
+    if (token) {
+      sessionStorage.setItem('kiri_owner_token', token)
+      url.searchParams.delete('kiri_owner_token')
+      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+    }
+    setOwnerToken(token)
+  }, [])
+
+  const refresh = React.useCallback(async () => {
+    if (!ownerToken) {
+      setStatus('Open kiri from the desktop app to manage phone pairing.')
+      return
+    }
+    setLoading(true)
+    setStatus(undefined)
+    try {
+      const response = await fetch('/.well-known/kiri/connect', {
+        cache: 'no-store',
+        headers: ownerHeaders(ownerToken),
+      })
+      if (!response.ok) throw new Error(await responseErrorMessage(response))
+      const next = await response.json() as ConnectInfo
+      setInfo(next)
+      setSelectedUrl((current) => current || preferredConnectUrl(next))
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLoading(false)
+    }
+  }, [ownerToken])
+
+  React.useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const createPairingLink = React.useCallback(async () => {
+    if (!ownerToken) return
+    setLoading(true)
+    setStatus(undefined)
+    try {
+      const response = await fetch('/.well-known/kiri/connect/pairing-token', {
+        method: 'POST',
+        headers: ownerHeaders(ownerToken),
+        body: JSON.stringify({ baseUrl: selectedUrl, label: 'phone' }),
+      })
+      if (!response.ok) throw new Error(await responseErrorMessage(response))
+      const next = await response.json() as PairingLink
+      setPairing(next)
+      await navigator.clipboard?.writeText(next.pairingUrl)
+      setStatus('Pairing link copied.')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLoading(false)
+    }
+  }, [ownerToken, selectedUrl])
+
+  const enableTailscaleServe = React.useCallback(async () => {
+    if (!ownerToken) return
+    setLoading(true)
+    setStatus(undefined)
+    try {
+      const response = await fetch('/.well-known/kiri/connect/tailscale-serve', {
+        method: 'POST',
+        headers: ownerHeaders(ownerToken),
+        body: JSON.stringify({ enabled: true }),
+      })
+      if (!response.ok) throw new Error(await responseErrorMessage(response))
+      setStatus('Tailscale Serve enabled.')
+      setSelectedUrl('')
+      await refresh()
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLoading(false)
+    }
+  }, [ownerToken, refresh])
+
+  const endpoints = info?.endpoints.length
+    ? info.endpoints
+    : [{ kind: 'local', label: 'This Mac', url: info?.baseUrl ?? selectedUrl }]
+
+  return (
+    <>
+      <header className="settings-lane-head">
+        <div className="settings-lane-title">
+          <p className="settings-kicker">Connect</p>
+          <h2>Phone board</h2>
+          <p>Pair a phone browser to this desktop board over Tailscale or the local network.</p>
+        </div>
+        <button
+          type="button"
+          className="settings-reset"
+          onClick={() => void refresh()}
+          disabled={loading}
+          aria-label="Refresh connect status"
+        >
+          <RefreshCw size={13} aria-hidden="true" />
+        </button>
+      </header>
+
+      <div className="connect-summary" aria-live="polite">
+        <span>
+          <Smartphone size={14} aria-hidden="true" />
+          {info?.auth.activeSessions ?? 0} paired
+        </span>
+        <span>{info?.auth.pendingPairingTokens ?? 0} pending</span>
+        <span data-ok={info?.tailscale.available ? 'true' : 'false'}>
+          Tailscale {info?.tailscale.available ? 'ready' : 'not found'}
+        </span>
+      </div>
+
+      <label className="connect-field">
+        <span>Endpoint</span>
+        <select value={selectedUrl} onChange={(event) => setSelectedUrl(event.currentTarget.value)}>
+          {endpoints.map((endpoint) => (
+            <option key={`${endpoint.kind}:${endpoint.url}`} value={endpoint.url}>
+              {endpoint.label} · {endpoint.url}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <div className="connect-actions">
+        <button type="button" onClick={() => void createPairingLink()} disabled={loading || !selectedUrl || !ownerToken}>
+          <Copy size={14} aria-hidden="true" />
+          create link
+        </button>
+        <button type="button" onClick={() => void enableTailscaleServe()} disabled={loading || !ownerToken}>
+          <ExternalLink size={14} aria-hidden="true" />
+          serve
+        </button>
+      </div>
+
+      {pairing ? (
+        <div className="connect-link-box">
+          <span>Expires {new Date(pairing.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+          <a href={pairing.pairingUrl} target="_blank" rel="noreferrer">{pairing.pairingUrl}</a>
+        </div>
+      ) : null}
+
+      {status ? <p className="connect-status">{status}</p> : null}
+    </>
+  )
+}
+
+function preferredConnectUrl(info: ConnectInfo) {
+  return info.endpoints.find((endpoint) => endpoint.kind === 'tailscale-https')?.url ||
+    info.endpoints[0]?.url ||
+    info.baseUrl
+}
+
+function ownerHeaders(token: string) {
+  return {
+    'content-type': 'application/json',
+    'x-kiri-owner-token': token,
+  }
+}
+
+async function responseErrorMessage(response: Response) {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType.includes('application/json')) {
+    const body = await response.json().catch(() => undefined) as { error?: unknown } | undefined
+    if (typeof body?.error === 'string') return body.error
+  }
+  return `Connect endpoint unavailable (${response.status})`
 }
 
 function ThemeSettingsPanel({

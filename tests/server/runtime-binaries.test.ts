@@ -104,6 +104,41 @@ describe('runtime binaries', () => {
     }),
   )
 
+  it.effect('loads provider keys from the home env file for desktop-launched runtimes', () =>
+    Effect.gen(function* () {
+      const binaries = makeRuntimeBinariesService({
+        getEnv: () => ({ PATH: '/usr/bin' }),
+        getHomeDir: () => '/Users/yesh',
+        exists: (path) => path === join('/Users/yesh', '.env'),
+        readTextFile: () => [
+          'export DEEPSEEK_API_KEY=deepseek-key',
+          'OPENAI_API_KEY="openai-key"',
+          '# ignored',
+        ].join('\n'),
+      })
+
+      const env = yield* binaries.processEnv()
+
+      expect(env.DEEPSEEK_API_KEY).toBe('deepseek-key')
+      expect(env.OPENAI_API_KEY).toBe('openai-key')
+    }),
+  )
+
+  it.effect('lets the process env override the home env file', () =>
+    Effect.gen(function* () {
+      const binaries = makeRuntimeBinariesService({
+        getEnv: () => ({ PATH: '/usr/bin', OPENAI_API_KEY: 'process-key' }),
+        getHomeDir: () => '/Users/yesh',
+        exists: (path) => path === join('/Users/yesh', '.env'),
+        readTextFile: () => 'OPENAI_API_KEY=file-key',
+      })
+
+      const env = yield* binaries.processEnv()
+
+      expect(env.OPENAI_API_KEY).toBe('process-key')
+    }),
+  )
+
   it.effect('exposes runtime process env through the service layer', () =>
     Effect.gen(function* () {
       const binaries = yield* RuntimeBinariesService
