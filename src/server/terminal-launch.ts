@@ -292,14 +292,22 @@ function piLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchCont
   const args = ['--session-dir', config.sessionDir]
   if (config.sessionFile) args.push('--session', config.sessionFile)
   if (config.model) args.push('--model', config.model)
+  const env = yield* baseTerminalEnv(config, context)
+  removeAnthropicOauthEnv(env)
   return {
     command: yield* resolveExecutable(context, 'pi', context.env.KIRI_PI_BIN),
     args,
     cwd: config.cwd,
-    env: yield* baseTerminalEnv(config, context),
+    env,
     label: 'pi',
   }
   })
+}
+
+function removeAnthropicOauthEnv(env: NodeJS.ProcessEnv) {
+  if (env.KIRI_PI_ALLOW_ANTHROPIC_OAUTH === '1') return
+  delete env.ANTHROPIC_AUTH_TOKEN
+  delete env.ANTHROPIC_OAUTH_TOKEN
 }
 
 function opencodeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {

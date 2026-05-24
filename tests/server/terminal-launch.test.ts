@@ -270,8 +270,11 @@ describe('buildTerminalProcessLaunch', () => {
     expect(error.message).toBe('Invalid runtime state JSON')
   })
 
-  it('launches Pi against the Kiri session directory', () => {
+  it('launches Pi against the Kiri session directory without Anthropic OAuth env', () => {
     vi.stubEnv('KIRI_PI_BIN', '/tmp/bin/pi')
+    vi.stubEnv('ANTHROPIC_API_KEY', 'api-key')
+    vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'auth-token')
+    vi.stubEnv('ANTHROPIC_OAUTH_TOKEN', 'oauth-token')
 
     const launch = buildTerminalProcessLaunch(launchConfig('pi'), 'runtime', shell)
 
@@ -284,6 +287,18 @@ describe('buildTerminalProcessLaunch', () => {
       '--model',
       'test-model',
     ])
+    expect(launch.env.ANTHROPIC_API_KEY).toBe('api-key')
+    expect(launch.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
+    expect(launch.env.ANTHROPIC_OAUTH_TOKEN).toBeUndefined()
+  })
+
+  it('can explicitly allow Anthropic OAuth for Pi launches', () => {
+    vi.stubEnv('KIRI_PI_ALLOW_ANTHROPIC_OAUTH', '1')
+    vi.stubEnv('ANTHROPIC_OAUTH_TOKEN', 'oauth-token')
+
+    const launch = buildTerminalProcessLaunch(launchConfig('pi'), 'runtime', shell)
+
+    expect(launch.env.ANTHROPIC_OAUTH_TOKEN).toBe('oauth-token')
   })
 
   it('launches OpenCode TUI against the project cwd', () => {
