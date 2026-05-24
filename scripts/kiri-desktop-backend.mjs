@@ -27,6 +27,7 @@ const tailscaleServePath = '/.well-known/kiri/connect/tailscale-serve'
 const pairPath = '/pair'
 const controlToken = process.env.KIRI_BACKEND_CONTROL_TOKEN ?? randomBytes(32).toString('base64url')
 const controlInfoPath = resolve(process.env.KIRI_BACKEND_CONTROL_PATH ?? join(stateDir, 'backend-control.json'))
+const tailscalePath = resolve(process.env.KIRI_TAILSCALE_PATH ?? '/Applications/Tailscale.app/Contents/MacOS/Tailscale')
 const ownerToken = process.env.KIRI_BACKEND_OWNER_TOKEN ?? randomBytes(32).toString('base64url')
 const ownerTokenParam = 'kiri_owner_token'
 const ownerTokenHeader = 'x-kiri-owner-token'
@@ -236,9 +237,9 @@ async function handleTailscaleServeRequest(request) {
   }
   try {
     if (enabled) {
-      await execFile('tailscale', ['serve', '--bg', '--https=443', `http://127.0.0.1:${localPort}`], { timeout: 10_000 })
+      await execFile(tailscaleCommand(), ['serve', '--bg', '--https=443', `http://127.0.0.1:${localPort}`], { timeout: 10_000 })
     } else {
-      await execFile('tailscale', ['serve', '--https=443', 'off'], { timeout: 10_000 })
+      await execFile(tailscaleCommand(), ['serve', 'reset'], { timeout: 10_000 })
     }
     return Response.json({ ok: true, enabled }, { headers: { 'cache-control': 'no-store' } })
   } catch (error) {
@@ -271,7 +272,7 @@ async function connectInfo() {
 
 async function tailscaleInfo() {
   try {
-    const { stdout } = await execFile('tailscale', ['status', '--json'], { timeout: 5_000 })
+    const { stdout } = await execFile(tailscaleCommand(), ['status', '--json'], { timeout: 5_000 })
     const status = JSON.parse(stdout)
     const self = status?.Self
     const dnsName = typeof self?.DNSName === 'string' ? self.DNSName.replace(/\.$/, '') : ''
@@ -405,6 +406,10 @@ function isTailscaleIpv4(ip) {
 
 function isNetworkBoundHost(value) {
   return value === '0.0.0.0' || value === '::' || value === '[::]'
+}
+
+function tailscaleCommand() {
+  return existsSync(tailscalePath) ? tailscalePath : 'tailscale'
 }
 
 function requestOwnerToken(request) {
