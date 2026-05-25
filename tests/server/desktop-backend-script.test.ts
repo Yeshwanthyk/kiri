@@ -68,7 +68,7 @@ describe('desktop backend script', () => {
     })
     expect(existsSync(fixture.importMarker)).toBe(false)
 
-    const app = await fetch(new URL('/app-route', ready.url))
+    const app = await fetch(ownerUrl('/app-route', ready.url))
     expect(app.status).toBe(200)
     expect(await app.text()).toBe('app:/app-route')
     expect(existsSync(fixture.importMarker)).toBe(true)
@@ -141,6 +141,12 @@ function waitForReady(child: ChildProcess) {
       }
     })
   })
+}
+
+function ownerUrl(pathname: string, readyUrl: string) {
+  const url = new URL(readyUrl)
+  url.pathname = pathname
+  return url
 }
 
 function isReadyMessage(value: unknown): value is { readonly url: string } {

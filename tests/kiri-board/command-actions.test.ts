@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentCell, ProjectRow, WorkspaceSnapshot } from '~/lib/contracts'
+import type { AgentCell, ProjectRow, SessionInterfaceMode, WorkspaceSnapshot } from '~/lib/contracts'
 import { buildBoardCommandActions } from '~/components/kiri-board/command-actions'
 
 describe('buildBoardCommandActions', () => {
@@ -30,14 +30,14 @@ describe('buildBoardCommandActions', () => {
       'unhide-project-hidden',
       'delete-project-alpha',
       'delete-project-beta',
-      'start-codex-alpha',
       'start-pi-alpha',
+      'start-codex-alpha',
       'start-claude-alpha',
       'start-opencode-alpha',
       'switch-project-alpha',
       'switch-agent-agent-a',
-      'start-codex-beta',
       'start-pi-beta',
+      'start-codex-beta',
       'start-claude-beta',
       'start-opencode-beta',
       'switch-project-beta',
@@ -105,10 +105,10 @@ function workspaceWithProjects(
   return {
     settings: {
       runtimes: {
-        pi: { models: ['pi-model'], defaultModel: 'pi-model' },
-        codex: { models: ['codex-model'], defaultModel: 'codex-model' },
-        claude: { models: ['claude-model'], defaultModel: 'claude-model' },
-        opencode: { models: ['opencode-model'], defaultModel: 'opencode-model' },
+        pi: runtimeSettings('pi-model'),
+        codex: runtimeSettings('codex-model'),
+        claude: runtimeSettings('claude-model'),
+        opencode: runtimeSettings('opencode-model'),
       },
     },
     preferences: {
@@ -146,6 +146,11 @@ function workspaceWithProjects(
     }],
     selected: { projectId: '', agentId: '' },
   }
+}
+
+function runtimeSettings(model: string) {
+  const interfaceModes: SessionInterfaceMode[] = ['gui', 'terminal']
+  return { models: [model], defaultModel: model, interfaceModes }
 }
 
 function project(id: string, agents: AgentCell[]): ProjectRow {
