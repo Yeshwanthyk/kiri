@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from '@effect/vitest'
@@ -149,6 +149,94 @@ describe('git diff capture', () => {
     }),
   )
 
+  it.effect('uses an available Rust collector by default', () =>
+    Effect.gen(function* () {
+      let rustCalls = 0
+      const service = makeGitDiffService({
+        env: {},
+        runRustCollector: () => {
+          rustCalls += 1
+          return [{ title: 'fast.ts', path: 'src/fast.ts', patch: 'diff --git a/src/fast.ts b/src/fast.ts' }]
+        },
+        runGit: () => {
+          throw new Error('TypeScript collector should not run')
+        },
+      })
+
+      const artifacts = yield* service.collectArtifacts('/repo')
+
+      expect(rustCalls).toBe(1)
+      expect(artifacts.map((artifact) => artifact.path)).toEqual(['src/fast.ts'])
+    }),
+  )
+
+  it.effect('can force the TypeScript collector for compatibility', () =>
+    Effect.gen(function* () {
+      let rustCalls = 0
+      const service = makeGitDiffService({
+        env: { KIRI_GIT_DIFF_COLLECTOR: 'typescript' },
+        runRustCollector: () => {
+          rustCalls += 1
+          return []
+        },
+        runGit: (_cwd, args) => {
+          if (args[0] === 'rev-parse') return 'true\n'
+          if (args[0] === 'status') return ''
+          return 'diff --git a/src/compat.ts b/src/compat.ts\n--- a/src/compat.ts\n+++ b/src/compat.ts'
+        },
+      })
+
+      const artifacts = yield* service.collectArtifacts('/repo')
+
+      expect(rustCalls).toBe(0)
+      expect(artifacts.map((artifact) => artifact.path)).toEqual(['src/compat.ts'])
+    }),
+  )
+
+  it.effect('passes injected env through to the default Rust collector', () =>
+    Effect.gen(function* () {
+      const bin = join(mkdtempSync(join(tmpdir(), 'kiri-git-diff-bin-')), 'collector')
+      writeFileSync(bin, '#!/bin/sh\nprintf "[]"\n')
+      chmodSync(bin, 0o755)
+      const service = makeGitDiffService({
+        env: {
+          KIRI_GIT_DIFF_COLLECTOR: 'rust',
+          KIRI_GIT_DIFF_COLLECTOR_BIN: bin,
+        },
+        runGit: () => {
+          throw new Error('TypeScript collector should not run')
+        },
+      })
+
+      const artifacts = yield* service.collectArtifacts('/repo')
+
+      expect(artifacts).toEqual([])
+    }),
+  )
+
+  it('resolves the Rust collector from packaged resources', () => {
+    const resourcesRoot = mkdtempSync(join(tmpdir(), 'kiri-git-diff-resources-'))
+    const binDir = join(resourcesRoot, 'bin')
+    mkdirSync(binDir)
+    writeFileSync(join(binDir, 'kiri-git-diff-collector'), '#!/bin/sh\nprintf "[]"\n')
+    chmodSync(join(binDir, 'kiri-git-diff-collector'), 0o755)
+
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
+    Object.defineProperty(process, 'resourcesPath', {
+      configurable: true,
+      value: resourcesRoot,
+    })
+    try {
+      expect(collectRustGitDiffArtifacts('/repo', {})).toEqual([])
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(process, 'resourcesPath', descriptor)
+      } else {
+        Reflect.deleteProperty(process, 'resourcesPath')
+      }
+    }
+  })
+
   it.effect('matches TypeScript output with the Rust collector on a real worktree', () =>
     Effect.gen(function* () {
       buildRustCollector()
@@ -159,12 +247,12 @@ describe('git diff capture', () => {
       mkdirSync(join(repo, 'dist'))
       writeFileSync(join(repo, 'dist', 'skip.js'), 'compiled\n')
 
-      const service = makeGitDiffService({ env: {} })
+      const service = makeGitDiffService({ env: { KIRI_GIT_DIFF_COLLECTOR: 'typescript' } })
       const tsArtifacts = yield* service.collectArtifacts(repo)
       const rustArtifacts = collectRustGitDiffArtifacts(repo)
 
       expect(normalizeArtifacts(rustArtifacts)).toEqual(normalizeArtifacts(tsArtifacts))
-    }),
+    }), 15_000,
   )
 })
 

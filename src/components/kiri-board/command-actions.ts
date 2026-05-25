@@ -12,12 +12,10 @@ import {
 } from 'lucide-react'
 import type { AgentCell, ProjectRow, RuntimeKind, WorkspaceSnapshot } from '~/lib/contracts'
 import {
-  runtimeCopy,
-  settingsRuntimeDetail,
-  sessionRuntimeOrder,
   type CommandPaletteAction,
   type SidebarTab,
 } from './board-types'
+import { runtimeOptions } from './runtime-options'
 
 type BoardCommandActionsInput = {
   workspace: WorkspaceSnapshot
@@ -151,13 +149,13 @@ export function buildBoardCommandActions(input: BoardCommandActionsInput): Comma
       },
     })),
     ...workspace.projects.flatMap((project) => [
-      ...sessionRuntimeOrder.map((runtime) => ({
-        id: `start-${runtime}-${project.id}`,
-        title: `Start ${runtimeCopy[runtime].label} in ${project.name}`,
-        detail: settingsRuntimeDetail(workspace.settings, runtime),
+      ...runtimeOptions(workspace.settings).map((option) => ({
+        id: `start-${option.runtime}-${project.id}`,
+        title: `Start ${option.label} in ${project.name}`,
+        detail: option.defaultModel,
         icon: Plus,
         disabled: false,
-        run: () => openSessionLauncher(project.id, runtime),
+        run: () => openSessionLauncher(project.id, option.runtime),
       })),
       {
         id: `switch-project-${project.id}`,

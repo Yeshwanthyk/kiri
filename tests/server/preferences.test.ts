@@ -38,6 +38,7 @@ function configFor(preferencesPath: string): KiriConfigApi {
       stateDir: '/Users/yesh/.kiri/userdata',
       dbPath: '/Users/yesh/.kiri/userdata/kiri.sqlite',
       settingsPath: '/repo/kiri/settings.json',
+      userSettingsPath: '/Users/yesh/.kiri/userdata/settings.json',
       preferencesPath,
       piSessionsDir: '/Users/yesh/.kiri/userdata/pi-sessions',
       runtimeSessionsDir: '/Users/yesh/.kiri/userdata/runtime-sessions',

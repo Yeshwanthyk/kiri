@@ -39,6 +39,10 @@ describe('WorkspaceService', () => {
         calls.push('snapshot')
         return snapshot
       },
+      refreshReadModels: () => {
+        calls.push('read-models')
+        return []
+      },
     }))
 
     await expect(Effect.runPromise(service.sendMessage({
@@ -47,7 +51,64 @@ describe('WorkspaceService', () => {
       images: [],
     }))).resolves.toBe(snapshot)
 
-    expect(calls).toEqual(['prompt:agent-1:hello', 'snapshot'])
+    expect(calls).toEqual(['prompt:agent-1:hello', 'read-models', 'snapshot'])
+  })
+
+  it('returns a cheap workspace revision without hydrating the full snapshot', async () => {
+    const calls: string[] = []
+    const service = makeWorkspaceService(testDependencies({
+      getWorkspaceRevision: () => {
+        calls.push('revision')
+        return { revision: 'rev-1' }
+      },
+      getWorkspaceSnapshot: () => {
+        calls.push('snapshot')
+        return snapshot
+      },
+    }))
+
+    await expect(Effect.runPromise(service.revision())).resolves.toEqual({ revision: 'rev-1' })
+
+    expect(calls).toEqual(['revision'])
+  })
+
+  it('refreshes read models before full snapshot hydration', async () => {
+    const calls: string[] = []
+    const service = makeWorkspaceService(testDependencies({
+      refreshReadModels: () => {
+        calls.push('read-models')
+        return []
+      },
+      getWorkspaceSnapshot: () => {
+        calls.push('snapshot')
+        return snapshot
+      },
+    }))
+
+    await expect(Effect.runPromise(service.snapshot())).resolves.toBe(snapshot)
+
+    expect(calls).toEqual(['read-models', 'snapshot'])
+  })
+
+  it('refreshes read models after sync snapshot mutations', async () => {
+    const calls: string[] = []
+    const service = makeWorkspaceService(testDependencies({
+      addProject: (input) => {
+        calls.push(`add:${input.name}`)
+        return snapshot
+      },
+      refreshReadModels: () => {
+        calls.push('read-models')
+        return []
+      },
+    }))
+
+    await expect(Effect.runPromise(service.addProject({
+      name: 'Project',
+      cwd: '/tmp/project',
+    }))).resolves.toBe(snapshot)
+
+    expect(calls).toEqual(['add:Project', 'read-models'])
   })
 
   it('returns forked agent id with the post-fork snapshot', async () => {
@@ -235,6 +296,8 @@ function testDependencies(
 ): WorkspaceServiceDependencies {
   return {
     getWorkspaceSnapshot: () => snapshot,
+    getWorkspaceRevision: () => ({ revision: 'rev-1' }),
+    refreshReadModels: () => [],
     getAgentDetail: () => {
       throw new Error('getAgentDetail not implemented')
     },

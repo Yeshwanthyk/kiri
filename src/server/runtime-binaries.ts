@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { delimiter } from 'node:path'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -22,12 +22,14 @@ type RuntimeBinariesServiceInput = {
   readonly getEnv?: () => NodeJS.ProcessEnv
   readonly getHomeDir?: () => string
   readonly exists?: (path: string) => boolean
+  readonly readTextFile?: (path: string) => string
 }
 
 type RuntimeBinariesContext = {
   readonly env: NodeJS.ProcessEnv
   readonly homeDir: string
   readonly exists: (path: string) => boolean
+  readonly readTextFile: (path: string) => string
 }
 
 export class RuntimeBinariesService extends Context.Tag('@kiri/RuntimeBinaries')<
@@ -47,6 +49,7 @@ export function makeRuntimeBinariesService(
     env: input.getEnv?.() ?? process.env,
     homeDir: input.getHomeDir?.() ?? homedir(),
     exists: input.exists ?? existsSync,
+    readTextFile: input.readTextFile ?? ((path) => readFileSync(path, 'utf8')),
   })
 
   return {
@@ -81,7 +84,7 @@ function desktopPathEntries(homeDir: string) {
 
 export function resolveRuntimeExecutable(command: string, configuredPath?: string) {
   return resolveRuntimeExecutableWith(
-    { env: process.env, homeDir: homedir(), exists: existsSync },
+    { env: process.env, homeDir: homedir(), exists: existsSync, readTextFile: (path) => readFileSync(path, 'utf8') },
     command,
     configuredPath,
   )
@@ -100,7 +103,7 @@ function resolveRuntimeExecutableWith(
 
 export function runtimeProcessEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return runtimeProcessEnvWith(
-    { env: process.env, homeDir: homedir(), exists: existsSync },
+    { env: process.env, homeDir: homedir(), exists: existsSync, readTextFile: (path) => readFileSync(path, 'utf8') },
     extra,
   )
 }
@@ -109,13 +112,50 @@ function runtimeProcessEnvWith(
   context: RuntimeBinariesContext,
   extra?: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
-  const path = context.env.PATH ?? ''
-  const entries = [...desktopPathEntries(context.homeDir), ...path.split(delimiter).filter(Boolean)]
-  return {
+  const homeEnv = loadHomeEnv(context)
+  const mergedEnv = {
+    ...homeEnv,
     ...context.env,
     ...extra,
+  }
+  const path = mergedEnv.PATH ?? ''
+  const entries = [...desktopPathEntries(context.homeDir), ...path.split(delimiter).filter(Boolean)]
+  return {
+    ...mergedEnv,
     PATH: Array.from(new Set(entries)).join(delimiter),
   }
+}
+
+function loadHomeEnv(context: RuntimeBinariesContext): NodeJS.ProcessEnv {
+  if (context.env.KIRI_LOAD_HOME_ENV === '0') return {}
+  const envPath = envValue(context.env, 'KIRI_RUNTIME_ENV_PATH') ?? join(context.homeDir, '.env')
+  if (!context.exists(envPath)) return {}
+  return parseEnvFile(context.readTextFile(envPath))
+}
+
+function parseEnvFile(contents: string): NodeJS.ProcessEnv {
+  const values: NodeJS.ProcessEnv = {}
+  for (const rawLine of contents.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    const assignment = line.startsWith('export ') ? line.slice('export '.length).trim() : line
+    const equals = assignment.indexOf('=')
+    if (equals <= 0) continue
+    const key = assignment.slice(0, equals).trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
+    values[key] = parseEnvValue(assignment.slice(equals + 1).trim())
+  }
+  return values
+}
+
+function parseEnvValue(value: string) {
+  if (value.length >= 2) {
+    const quote = value[0]
+    if ((quote === '"' || quote === "'") && value[value.length - 1] === quote) {
+      return value.slice(1, -1)
+    }
+  }
+  return value
 }
 
 function executableOnPath(context: RuntimeBinariesContext, command: string) {

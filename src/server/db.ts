@@ -98,7 +98,7 @@ import {
   replaceAgentDiffArtifactsRows,
   replaceAgentTasksRows,
 } from './db/timeline-writes'
-import { readWorkspaceSnapshot } from './db/workspace-snapshot'
+import { readWorkspaceRevision, readWorkspaceSnapshot } from './db/workspace-snapshot'
 import {
   createForkedSessionRow,
   hydratePersistedPiSessionRows,
@@ -109,6 +109,9 @@ import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
 import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
 import { getKiriConfig, runtimeSessionDirPath, type KiriConfig } from './kiri-config'
 import { getUiPreferences } from './preferences'
+import { refreshReadModelEntriesIfChanged } from './read-model-indexer'
+
+let readModelRefreshWarningShown = false
 
 export type KiriDbApi = {
   readonly get: Effect.Effect<DatabaseSync>
@@ -184,6 +187,33 @@ export function getWorkspaceSnapshot() {
     preferences: getUiPreferences(),
     scratchpadBlocks: listScratchpadBlocks(),
   })
+}
+
+export function getWorkspaceRevision() {
+  const database = getDb()
+  return readWorkspaceRevision(database, {
+    settings: getSettings(),
+    preferences: getUiPreferences(),
+  })
+}
+
+export function refreshReadModels() {
+  if (readModelRefreshDisabled(process.env)) return []
+  const database = getDb()
+  try {
+    return [...refreshReadModelEntriesIfChanged(database).entries]
+  } catch (error) {
+    if (!readModelRefreshWarningShown) {
+      readModelRefreshWarningShown = true
+      console.warn('[kiri] read-model refresh failed; continuing with source tables', error)
+    }
+    return []
+  }
+}
+
+function readModelRefreshDisabled(env: NodeJS.ProcessEnv) {
+  const value = env.KIRI_READ_MODEL_REFRESH?.trim().toLowerCase()
+  return value === '0' || value === 'false' || value === 'off'
 }
 
 const agentDetailDiffLimit = 50

@@ -1,7 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { runtimeKinds } from '~/lib/contracts'
+import { readModelKinds } from '../read-model-contract'
 
 const runtimeCheckValues = runtimeKinds.map((runtime) => `'${runtime}'`).join(', ')
+const readModelKindCheckValues = readModelKinds.map((kind) => `'${kind}'`).join(', ')
 
 export function migrate(database: DatabaseSync) {
   database.exec(`
@@ -25,6 +27,7 @@ export function migrate(database: DatabaseSync) {
       session_dir TEXT NOT NULL,
       session_file TEXT,
       runtime_state_json TEXT,
+      runtime_state_updated_at TEXT,
       archived_at TEXT,
       position INTEGER NOT NULL
     );
@@ -191,17 +194,81 @@ export function migrate(database: DatabaseSync) {
     CREATE UNIQUE INDEX IF NOT EXISTS terminal_layouts_project_mode
       ON terminal_layouts(project_id, mode)
       WHERE project_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS read_model_entries (
+      kind TEXT NOT NULL CHECK (kind IN (${readModelKindCheckValues})),
+      entity_id TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (kind, entity_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS read_model_entries_updated
+      ON read_model_entries(updated_at);
   `)
   widenRuntimeCheck(database)
   addContextUsageWindowTokensColumn(database)
   addProjectHiddenAtColumn(database)
   addRuntimeStateColumn(database)
+  addRuntimeStateUpdatedAtColumn(database)
   addAgentArchivedAtColumn(database)
   addAgentInterfaceModeColumn(database)
   addAgentEventsTable(database)
+  addReadModelEntriesTable(database)
+  widenReadModelKindCheck(database)
   normalizeTerminalOnlyInterfaceMode(database)
   repairAgentSlotReferences(database)
   removeLegacyDefaultAgentSlots(database)
+}
+
+function addReadModelEntriesTable(database: DatabaseSync) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS read_model_entries (
+      kind TEXT NOT NULL CHECK (kind IN (${readModelKindCheckValues})),
+      entity_id TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (kind, entity_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS read_model_entries_updated
+      ON read_model_entries(updated_at);
+  `)
+}
+
+function widenReadModelKindCheck(database: DatabaseSync) {
+  const row = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'read_model_entries'")
+    .get() as { sql?: string } | undefined
+  if (!row?.sql || readModelKinds.every((kind) => row.sql?.includes(`'${kind}'`))) return
+
+  database.exec(`
+    PRAGMA foreign_keys = OFF;
+    PRAGMA legacy_alter_table = ON;
+    ALTER TABLE read_model_entries RENAME TO read_model_entries_old;
+
+    CREATE TABLE read_model_entries (
+      kind TEXT NOT NULL CHECK (kind IN (${readModelKindCheckValues})),
+      entity_id TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (kind, entity_id)
+    );
+
+    INSERT INTO read_model_entries (kind, entity_id, revision, payload_json, updated_at)
+    SELECT kind, entity_id, revision, payload_json, updated_at
+    FROM read_model_entries_old
+    WHERE kind IN (${readModelKindCheckValues});
+
+    DROP TABLE read_model_entries_old;
+    CREATE INDEX IF NOT EXISTS read_model_entries_updated
+      ON read_model_entries(updated_at);
+    PRAGMA legacy_alter_table = OFF;
+    PRAGMA foreign_keys = ON;
+  `)
 }
 
 function addProjectHiddenAtColumn(database: DatabaseSync) {
@@ -226,6 +293,14 @@ function addRuntimeStateColumn(database: DatabaseSync) {
     .all() as Array<{ name: string }>
   if (columns.some((column) => column.name === 'runtime_state_json')) return
   database.exec('ALTER TABLE agent_slots ADD COLUMN runtime_state_json TEXT')
+}
+
+function addRuntimeStateUpdatedAtColumn(database: DatabaseSync) {
+  const columns = database
+    .prepare('PRAGMA table_info(agent_slots)')
+    .all() as Array<{ name: string }>
+  if (columns.some((column) => column.name === 'runtime_state_updated_at')) return
+  database.exec('ALTER TABLE agent_slots ADD COLUMN runtime_state_updated_at TEXT')
 }
 
 function addAgentArchivedAtColumn(database: DatabaseSync) {
@@ -285,6 +360,7 @@ function widenAgentSlotsRuntimeCheck(database: DatabaseSync) {
   const columns = tableColumns(database, 'agent_slots')
   const interfaceMode = columns.has('interface_mode') ? 'interface_mode' : "'gui'"
   const runtimeStateJson = columns.has('runtime_state_json') ? 'runtime_state_json' : 'NULL'
+  const runtimeStateUpdatedAt = columns.has('runtime_state_updated_at') ? 'runtime_state_updated_at' : 'NULL'
   const archivedAt = columns.has('archived_at') ? 'archived_at' : 'NULL'
 
   database.exec(`
@@ -304,14 +380,15 @@ function widenAgentSlotsRuntimeCheck(database: DatabaseSync) {
       session_dir TEXT NOT NULL,
       session_file TEXT,
       runtime_state_json TEXT,
+      runtime_state_updated_at TEXT,
       archived_at TEXT,
       position INTEGER NOT NULL
     );
 
     INSERT INTO agent_slots (
-      id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, runtime_state_json, archived_at, position
+      id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, runtime_state_json, runtime_state_updated_at, archived_at, position
     )
-    SELECT id, project_id, slot, title, runtime, ${interfaceMode}, model, status, session_dir, session_file, ${runtimeStateJson}, ${archivedAt}, position
+    SELECT id, project_id, slot, title, runtime, ${interfaceMode}, model, status, session_dir, session_file, ${runtimeStateJson}, ${runtimeStateUpdatedAt}, ${archivedAt}, position
     FROM agent_slots_old;
 
     DROP TABLE agent_slots_old;

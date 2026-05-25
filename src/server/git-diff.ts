@@ -25,7 +25,7 @@ export type GitCommandRunner = (
   timeout: number,
 ) => string
 
-export type RustGitDiffCollector = (cwd: string) => RuntimeDiffArtifact[]
+export type RustGitDiffCollector = (cwd: string, env: NodeJS.ProcessEnv) => RuntimeDiffArtifact[]
 
 export type GitDiffServiceApi = {
   readonly collectArtifacts: (cwd: string) => Effect.Effect<RuntimeDiffArtifact[], GitDiffError>
@@ -50,6 +50,8 @@ export function makeGitDiffService(input: {
 } = {}): GitDiffServiceApi {
   const runGitCommand = input.runGit ?? runGit
   const runRustCollector = input.runRustCollector ?? collectRustGitDiffArtifacts
+  const hasInjectedGitRunner = Boolean(input.runGit)
+  const hasInjectedRustCollector = Boolean(input.runRustCollector)
   const env = input.env ?? process.env
   const now = input.now ?? Date.now
   return {
@@ -59,6 +61,8 @@ export function makeGitDiffService(input: {
         env,
         runGit: runGitCommand,
         runRustCollector,
+        hasInjectedGitRunner,
+        hasInjectedRustCollector,
         now,
       }),
       catch: (error) => new GitDiffError({
@@ -77,6 +81,8 @@ export function collectGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] {
     env: process.env,
     runGit,
     runRustCollector: collectRustGitDiffArtifacts,
+    hasInjectedGitRunner: false,
+    hasInjectedRustCollector: false,
     now: Date.now,
   })
 }
@@ -86,18 +92,39 @@ function collectGitDiffArtifactsWith(input: {
   readonly env: NodeJS.ProcessEnv
   readonly runGit: GitCommandRunner
   readonly runRustCollector: RustGitDiffCollector
+  readonly hasInjectedGitRunner: boolean
+  readonly hasInjectedRustCollector: boolean
   readonly now: () => number
 }): RuntimeDiffArtifact[] {
-  const { cwd, env, runGit: runGitCommand, runRustCollector, now } = input
-  const collectorMode = env.KIRI_GIT_DIFF_COLLECTOR?.trim().toLowerCase()
-  if (collectorMode === 'rust') {
+  const {
+    cwd,
+    env,
+    runGit: runGitCommand,
+    runRustCollector,
+    hasInjectedGitRunner,
+    hasInjectedRustCollector,
+    now,
+  } = input
+  if (shouldUseRustCollector(env, hasInjectedGitRunner, hasInjectedRustCollector)) {
     try {
-      return runRustCollector(cwd)
+      return runRustCollector(cwd, env)
     } catch {
-      // Keep the new collector as an opt-in acceleration path until parity is proven broadly.
+      // Rust is the fast path; TypeScript remains the compatibility fallback.
     }
   }
   return collectGitDiffArtifactsWithTypeScript({ cwd, runGit: runGitCommand, now })
+}
+
+function shouldUseRustCollector(
+  env: NodeJS.ProcessEnv,
+  hasInjectedGitRunner: boolean,
+  hasInjectedRustCollector: boolean,
+) {
+  const collectorMode = env.KIRI_GIT_DIFF_COLLECTOR?.trim().toLowerCase()
+  if (collectorMode === 'typescript' || collectorMode === 'ts') return false
+  if (collectorMode === 'rust') return true
+  return hasInjectedRustCollector
+    || (!hasInjectedGitRunner && rustCollectorBinaryPath(env, { requireExisting: true }) !== null)
 }
 
 function collectGitDiffArtifactsWithTypeScript(input: {
@@ -147,8 +174,13 @@ function collectGitDiffArtifactsWithTypeScript(input: {
   })
 }
 
-export function collectRustGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] {
-  const output = execFileSync(rustCollectorBinaryPath(), [cwd], {
+export function collectRustGitDiffArtifacts(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): RuntimeDiffArtifact[] {
+  const binaryPath = rustCollectorBinaryPath(env, { requireExisting: false })
+  if (!binaryPath) throw new Error('Rust git diff collector binary not found')
+  const output = execFileSync(binaryPath, [cwd], {
     encoding: 'utf8',
     maxBuffer: 20 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -157,20 +189,30 @@ export function collectRustGitDiffArtifacts(cwd: string): RuntimeDiffArtifact[] 
   return parseRustDiffCollectorOutput(output)
 }
 
-function rustCollectorBinaryPath() {
-  const explicit = process.env.KIRI_GIT_DIFF_COLLECTOR_BIN?.trim()
+function rustCollectorBinaryPath(
+  env: NodeJS.ProcessEnv,
+  options: { readonly requireExisting: boolean },
+) {
+  const explicit = env.KIRI_GIT_DIFF_COLLECTOR_BIN?.trim()
   if (explicit) return explicit
 
   const binaryName = process.platform === 'win32'
     ? 'kiri-git-diff-collector.exe'
     : 'kiri-git-diff-collector'
+  const resourcesPath = stringValue((process as NodeJS.Process & { resourcesPath?: string }).resourcesPath)
   const candidates = [
-    resolve(process.cwd(), 'target', 'debug', binaryName),
+    ...(resourcesPath ? [resolve(resourcesPath, 'bin', binaryName)] : []),
+    resolve(process.cwd(), 'dist', 'bin', binaryName),
     resolve(process.cwd(), 'target', 'release', binaryName),
+    resolve(process.cwd(), 'target', 'debug', binaryName),
   ]
   const found = candidates.find((candidate) => existsSync(candidate))
   if (found) return found
-  return candidates[0]
+  return options.requireExisting ? null : candidates[0]
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined
 }
 
 function parseRustDiffCollectorOutput(output: string): RuntimeDiffArtifact[] {

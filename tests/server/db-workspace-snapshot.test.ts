@@ -13,7 +13,7 @@ import {
   upsertAgentContextUsage,
 } from '../../src/server/db/runtime-state'
 import { upsertTerminalLayout } from '../../src/server/db/terminal-layout'
-import { readWorkspaceSnapshot } from '../../src/server/db/workspace-snapshot'
+import { readWorkspaceRevision, readWorkspaceSnapshot } from '../../src/server/db/workspace-snapshot'
 
 const settings: KiriSettings = {
   runtimes: {
@@ -174,6 +174,92 @@ describe('workspace snapshot projection', () => {
         title: 'Archived Session',
       })
       expect(snapshot.scratchpadBlocks).toEqual(scratchpadBlocks)
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('changes the cheap revision when projected workspace state changes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-workspace-revision-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const before = readWorkspaceRevision(database, {
+        settings,
+        preferences: defaultUiPreferences,
+      })
+
+      const agentId = insertSessionRow(database, {
+        projectId,
+        title: 'Active Session',
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, 'sessions', slot),
+        now: () => '2026-01-01T00:00:00.000Z',
+        slotTimestampMs: () => 10,
+        slotSuffix: () => 'aaaaaa',
+      })
+      const afterSession = readWorkspaceRevision(database, {
+        settings,
+        preferences: defaultUiPreferences,
+      })
+      setAgentRuntimeState(database, agentId, {
+        pendingQuestion: {
+          requestId: 'request-2',
+          questions: [],
+        },
+      })
+      const afterRuntimeState = readWorkspaceRevision(database, {
+        settings,
+        preferences: defaultUiPreferences,
+      })
+      database
+        .prepare('UPDATE threads SET preview = ?, message_count = ?, updated_at = ? WHERE agent_id = ?')
+        .run('Updated preview', 2, '2026-01-02T00:00:00.000Z', agentId)
+      const afterThread = readWorkspaceRevision(database, {
+        settings,
+        preferences: defaultUiPreferences,
+      })
+      database
+        .prepare(
+          `
+            INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
+            VALUES ('diff-1', ?, 'Diff', 'src/file.ts', 'patch', '2026-01-02T00:00:00.000Z')
+          `,
+        )
+        .run(agentId)
+      const afterDiff = readWorkspaceRevision(database, {
+        settings,
+        preferences: defaultUiPreferences,
+      })
+      upsertAgentContextUsage(database, {
+        agentId,
+        usedTokens: 25,
+        updatedAt: '2026-01-02T00:00:00.000Z',
+      })
+      const afterContext = readWorkspaceRevision(database, {
+        settings,
+        preferences: defaultUiPreferences,
+      })
+      database
+        .prepare('INSERT INTO scratchpad_blocks (id, project_id, body, created_at) VALUES (?, ?, ?, ?)')
+        .run('scratch-1', projectId, 'Draft', '2026-01-03T00:00:00.000Z')
+      const afterScratchpad = readWorkspaceRevision(database, {
+        settings,
+        preferences: defaultUiPreferences,
+      })
+
+      expect(afterSession.revision).not.toBe(before.revision)
+      expect(afterRuntimeState.revision).not.toBe(afterSession.revision)
+      expect(afterThread.revision).not.toBe(afterRuntimeState.revision)
+      expect(afterDiff.revision).not.toBe(afterThread.revision)
+      expect(afterContext.revision).not.toBe(afterDiff.revision)
+      expect(afterScratchpad.revision).not.toBe(afterContext.revision)
     } finally {
       database.close()
       rmSync(root, { recursive: true, force: true })

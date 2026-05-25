@@ -2,7 +2,7 @@
   "name": "kiri",
   "productName": "kiri",
   "private": true,
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Keyboard-first local agent control plane for Codex, Claude Code, Pi, and OpenCode.",
   "homepage": "https://kiri-8zk.pages.dev",
   "repository": {
@@ -20,6 +20,7 @@
     "build": "vite build && tsc --noEmit",
     "build:cli": "node scripts/build-cli.mjs",
     "build:term": "cargo build --release -p kiri-term && node scripts/stage-kiri-term.mjs",
+    "build:rust": "node scripts/build-rust-bins.mjs",
     "site:build": "vite build --config vite.site.config.ts",
     "site:preview": "vite preview --config vite.site.config.ts --outDir ../dist/site",
     "icons:generate": "node scripts/generate-icons.mjs",
@@ -39,13 +40,13 @@
     "verify:knip": "pnpm exec knip --reporter compact",
     "verify:e2e": "pnpm test:e2e --project=chromium",
     "verify:desktop:smoke": "node --check scripts/*.mjs && pnpm build:cli",
-    "verify:desktop:package": "pnpm build && pnpm build:cli && pnpm build:term && node scripts/sanitize-desktop-package-inputs.mjs && node -e \"for (const path of ['dist/mac','dist/mac-arm64','dist/mac-universal']) require('node:fs').rmSync(path, { recursive: true, force: true })\" && electron-builder --mac dir && KIRI_ASSERT_PACKAGED_APP=1 pnpm exec vitest run tests/server/desktop-package-contract.test.ts tests/server/kiri-mcp.test.ts",
+    "verify:desktop:package": "pnpm build && pnpm build:cli && pnpm build:term && pnpm build:rust && node scripts/sanitize-desktop-package-inputs.mjs && node -e \"for (const path of ['dist/mac','dist/mac-arm64','dist/mac-universal']) require('node:fs').rmSync(path, { recursive: true, force: true })\" && electron-builder --mac dir && KIRI_ASSERT_PACKAGED_APP=1 pnpm exec vitest run tests/server/desktop-package-contract.test.ts tests/server/kiri-mcp.test.ts",
     "verify:desktop": "pnpm verify:desktop:smoke && pnpm verify:desktop:package",
     "verify": "pnpm typecheck && pnpm lint && pnpm effect:audit && pnpm test && pnpm knip:report",
     "desktop:dev": "KIRI_DESKTOP_DEV_URL=http://127.0.0.1:3090 electron src/desktop/main.mjs",
     "desktop:start": "pnpm build && electron src/desktop/main.mjs",
     "desktop:backend": "node scripts/kiri-desktop-backend.mjs",
-    "dist:desktop": "pnpm build && pnpm build:cli && pnpm build:term && node scripts/sanitize-desktop-package-inputs.mjs && electron-builder --mac dir && node scripts/normalize-desktop-app.mjs && node scripts/create-desktop-dmg.mjs",
+    "dist:desktop": "pnpm build && pnpm build:cli && pnpm build:term && pnpm build:rust && node scripts/sanitize-desktop-package-inputs.mjs && electron-builder --mac dir && node scripts/normalize-desktop-app.mjs && node scripts/create-desktop-dmg.mjs",
     "install:desktop": "pnpm dist:desktop && node scripts/install-desktop-app.mjs",
     "prepare": "effect-language-service patch",
     "kiri": "tsx src/cli/kirictl.ts",
@@ -56,6 +57,7 @@
     "kiri:terminal-harness": "tsx tests/harness/terminal-agent-harness.ts",
     "kiri:models": "node scripts/sync-models-dev.mjs",
     "effect:audit": "node scripts/effect-migration-audit.mjs",
+    "perf:workspace-dedupe": "tsx tests/perf/run-workspace-dedupe-perf.ts",
     "preview": "vite preview",
     "start": "pnpx srvx --prod -s ../client dist/server/server.js"
   },
@@ -111,6 +113,14 @@
       {
         "from": "resources/terminfo",
         "to": "terminfo"
+      },
+      {
+        "from": "dist/bin/kiri-git-diff-collector",
+        "to": "bin/kiri-git-diff-collector"
+      },
+      {
+        "from": "dist/bin/kiri-read-model-indexer",
+        "to": "bin/kiri-read-model-indexer"
       }
     ],
     "mac": {

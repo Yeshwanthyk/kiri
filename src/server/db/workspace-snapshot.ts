@@ -1,11 +1,14 @@
+import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type {
   KiriSettings,
   ScratchpadBlock,
+  WorkspaceRevision,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import {
   pendingQuestionSchema,
+  workspaceRevisionSchema,
   workspaceSnapshotSchema,
 } from '~/lib/contracts'
 import type { UiPreferences } from '~/lib/ui-preferences'
@@ -28,6 +31,11 @@ type ReadWorkspaceSnapshotInput = {
   readonly settings: KiriSettings
   readonly preferences: UiPreferences
   readonly scratchpadBlocks: ScratchpadBlock[]
+}
+
+type ReadWorkspaceRevisionInput = {
+  readonly settings: KiriSettings
+  readonly preferences: UiPreferences
 }
 
 export function readWorkspaceSnapshot(
@@ -192,6 +200,96 @@ export function readWorkspaceSnapshot(
       agentId: selectedAgent?.id ?? '',
     },
   })
+}
+
+export function readWorkspaceRevision(
+  database: DatabaseSync,
+  input: ReadWorkspaceRevisionInput,
+): WorkspaceRevision {
+  const hash = createHash('sha256')
+  hash.update(JSON.stringify({
+    settings: input.settings,
+    preferences: input.preferences,
+    projects: database.prepare(`
+      SELECT
+        COUNT(*) AS rowCount,
+        COALESCE(GROUP_CONCAT(id || ':' || name || ':' || cwd || ':' || position || ':' || COALESCE(hidden_at, ''), char(31)), '') AS marker
+      FROM (
+        SELECT id, name, cwd, position, hidden_at
+        FROM projects
+        ORDER BY position ASC, id ASC
+      )
+    `).get(),
+    agents: database.prepare(`
+      SELECT
+        COUNT(*) AS rowCount,
+        COALESCE(MAX(COALESCE(runtime_state_updated_at, '')), '') AS runtimeStateUpdatedAt,
+        COALESCE(GROUP_CONCAT(
+          id || ':' || project_id || ':' || slot || ':' || title || ':' || runtime || ':' ||
+          interface_mode || ':' || model || ':' || status || ':' || session_dir || ':' ||
+          COALESCE(session_file, '') || ':' || COALESCE(runtime_state_json, '') || ':' ||
+          position || ':' || COALESCE(archived_at, ''),
+          char(31)
+        ), '') AS marker
+      FROM (
+        SELECT
+          id,
+          project_id,
+          slot,
+          title,
+          runtime,
+          interface_mode,
+          model,
+          status,
+          session_dir,
+          session_file,
+          runtime_state_json,
+          runtime_state_updated_at,
+          position,
+          archived_at
+        FROM agent_slots
+        ORDER BY position ASC, id ASC
+      )
+    `).get(),
+    threads: database.prepare(`
+      SELECT
+        COUNT(*) AS rowCount,
+        COALESCE(SUM(message_count), 0) AS messageCount,
+        COALESCE(SUM(LENGTH(COALESCE(preview, ''))), 0) AS previewBytes,
+        COALESCE(MAX(updated_at), '') AS updatedAt
+      FROM threads
+      WHERE active = 1
+    `).get(),
+    diffs: database.prepare(`
+      SELECT
+        COUNT(*) AS rowCount,
+        COALESCE(MAX(updated_at), '') AS updatedAt
+      FROM diff_artifacts
+    `).get(),
+    contextUsage: database.prepare(`
+      SELECT
+        COUNT(*) AS rowCount,
+        COALESCE(SUM(used_tokens), 0) AS usedTokens,
+        COALESCE(SUM(COALESCE(window_tokens, 0)), 0) AS windowTokens,
+        COALESCE(SUM(LENGTH(COALESCE(session_file, ''))), 0) AS sessionFileBytes,
+        COALESCE(MAX(updated_at), '') AS updatedAt
+      FROM agent_context_usage
+    `).get(),
+    scratchpadBlocks: database.prepare(`
+      SELECT
+        COUNT(*) AS rowCount,
+        COALESCE(SUM(LENGTH(body)), 0) AS bodyBytes,
+        COALESCE(MAX(created_at), '') AS createdAt,
+        COALESCE(MAX(COALESCE(triggered_at, '')), '') AS triggeredAt,
+        COALESCE(GROUP_CONCAT(
+          id || ':' || COALESCE(project_id, '') || ':' || body || ':' ||
+          COALESCE(triggered_agent_id, ''),
+          char(31)
+        ), '') AS marker
+      FROM scratchpad_blocks
+    `).get(),
+  }))
+  return workspaceRevisionSchema.parse({ revision: hash.digest('hex') })
 }
 
 function groupBy<T, K extends string>(

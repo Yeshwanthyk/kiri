@@ -25,10 +25,18 @@ describe('desktop package contract', () => {
     expect(packageJson.build.files).not.toContain('scripts/normalize-desktop-app.mjs')
   })
 
-  it('ships the MCP helper as an extra resource next to the packaged app', () => {
+  it('ships native helpers as extra resources next to the packaged app', () => {
     expect(packageJson.build.extraResources).toContainEqual({
       from: 'resources/bin/kiri-mcp',
       to: 'bin/kiri-mcp',
+    })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'dist/bin/kiri-git-diff-collector',
+      to: 'bin/kiri-git-diff-collector',
+    })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'dist/bin/kiri-read-model-indexer',
+      to: 'bin/kiri-read-model-indexer',
     })
     expect(isExecutable(join(process.cwd(), 'resources/bin/kiri-mcp'))).toBe(true)
     expect(packageJson.build.extraResources).toContainEqual({
@@ -41,6 +49,13 @@ describe('desktop package contract', () => {
       to: 'terminfo',
     })
     expect(existsSync(join(process.cwd(), 'resources/terminfo/78/xterm-ghostty'))).toBe(true)
+  })
+
+  it('defers built app-server import until after desktop readiness', () => {
+    const backendScript = readFileSync(join(process.cwd(), 'scripts/kiri-desktop-backend.mjs'), 'utf8')
+
+    expect(backendScript).toContain('async function loadAppFetch()')
+    expect(backendScript).not.toContain('const serverEntry = await import')
   })
 
   it('keeps built packaged app contents runnable when a desktop package assertion is requested', () => {
@@ -63,7 +78,14 @@ describe('desktop package contract', () => {
         .toBe(true)
       expect(existsSync(join(resourcesRoot, 'terminfo/78/xterm-ghostty')), `${appRoot} has xterm-ghostty terminfo`)
         .toBe(true)
-
+      expect(
+        isExecutable(join(resourcesRoot, 'bin/kiri-git-diff-collector')),
+        `${appRoot} has executable kiri-git-diff-collector`,
+      ).toBe(true)
+      expect(
+        isExecutable(join(resourcesRoot, 'bin/kiri-read-model-indexer')),
+        `${appRoot} has executable kiri-read-model-indexer`,
+      ).toBe(true)
       const header = readAsarHeader(appAsar)
       expect(hasAsarPath(header, ['scripts', 'kiri-desktop-backend.mjs'])).toBe(true)
       expect(hasAsarPath(header, ['dist', 'client'])).toBe(true)

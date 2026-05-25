@@ -14,6 +14,7 @@ import {
   workflowItemStatusSchema,
   workflowRunStatusSchema,
 } from '~/lib/contracts'
+import { readModelKindSchema } from '../read-model-contract'
 
 export const projectDbRowSchema = z.object({
   id: z.string(),
@@ -190,6 +191,14 @@ export const terminalLayoutProjectionSchema = z.object({
   ownerId: z.string(),
   mode: terminalModeSchema,
   layout: terminalLayoutSchema,
+  updatedAt: z.string(),
+})
+
+export const readModelEntryDbRowSchema = z.object({
+  kind: readModelKindSchema,
+  entityId: z.string(),
+  revision: z.string(),
+  payloadJson: z.string(),
   updatedAt: z.string(),
 })
 
