@@ -30,7 +30,10 @@ if (copyResult.status !== 0) {
   process.exit(copyResult.status ?? 1)
 }
 
-const result = spawnSync('open', [destination], { stdio: 'inherit' })
+const result = spawnSync('open', [destination], {
+  env: openAppEnv(),
+  stdio: 'inherit',
+})
 if (result.status !== 0) {
   process.exit(result.status ?? 1)
 }
@@ -61,4 +64,12 @@ function runningPids(patterns) {
     }
   }
   return [...pids]
+}
+
+function openAppEnv() {
+  const env = { ...process.env }
+  delete env.ELECTRON_RUN_AS_NODE
+  delete env.ELECTRON_NO_ATTACH_CONSOLE
+  delete env.ELECTRON_ENABLE_LOGGING
+  return env
 }
