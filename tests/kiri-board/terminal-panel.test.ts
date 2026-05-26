@@ -1,16 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  applyTerminalFramesForTests,
   applyTerminalFrameForTests,
   parseTerminalFramesForTests,
   sendResizeForTests,
   terminalCanMeasureHostSizeForTests,
   terminalColorValueForTests,
+  terminalCursorRowPartsForTests,
+  terminalCursorShouldRenderForTests,
   terminalHostIsNearBottomForTests,
   terminalRenderedRowsForTests,
   terminalRowUnderlineBlankRunCountForTests,
   terminalRowUnderlineRunCountForTests,
   terminalRunHasVisibleUnderlineForTests,
   terminalRunIsBlankUnderlineForTests,
+  terminalRunCellsForTests,
   terminalRunStyleForTests,
   terminalScreenStyleForTests,
   terminalSizeFromMeasurements,
@@ -84,6 +88,57 @@ describe('terminal frame renderer contract', () => {
     })
 
     expect(patched.rowsData[0]?.runs[0]?.text).toBe('ok')
+  })
+
+  it('coalesces multiple terminal frames into one snapshot transition', () => {
+    const initial = {
+      cols: 4,
+      rows: 1,
+      screenSeq: 0,
+      historySeq: 0,
+      bufferKind: 'main' as const,
+      cursor: { row: 0, col: 0, visible: true },
+      modes: { bracketedPaste: false, cursorVisible: true },
+      viewport: { historyOffset: 0, visibleRows: 1 },
+      historyRows: [],
+      rowsData: [],
+    }
+
+    const patched = applyTerminalFramesForTests(initial, [{
+      type: 'patch',
+      terminalId: 'term-1',
+      patch: {
+        cols: 4,
+        rows: 1,
+        screenSeq: 1,
+        historySeq: 0,
+        historyDelta: null,
+        ops: [{
+          op: 'replaceRow',
+          row: { row: 0, fingerprint: 1, runs: [{ text: 'abcd', width: 4, style: {} }] },
+        }],
+      },
+    }, {
+      type: 'patch',
+      terminalId: 'term-1',
+      patch: {
+        cols: 4,
+        rows: 1,
+        screenSeq: 2,
+        historySeq: 0,
+        historyDelta: null,
+        ops: [{ op: 'setCursor', cursor: { row: 0, col: 4, visible: false } }],
+      },
+    }])
+
+    expect(patched.rowsData[0]?.runs[0]?.text).toBe('abcd')
+    expect(patched.cursor).toEqual({ row: 0, col: 4, visible: false })
+  })
+
+  it('can force a focused cursor marker when a TUI hides the terminal cursor', () => {
+    expect(terminalCursorShouldRenderForTests({ row: 0, col: 1, visible: false }, false)).toBe(false)
+    expect(terminalCursorShouldRenderForTests({ row: 0, col: 1, visible: false }, true)).toBe(true)
+    expect(terminalCursorShouldRenderForTests({ row: 0, col: 1, visible: true }, false)).toBe(true)
   })
 
   it('renders scrollback rows before the live screen rows', () => {
@@ -174,6 +229,20 @@ describe('terminal frame renderer contract', () => {
       width: '760px',
       minWidth: '760px',
     })
+    expect(terminalRunCellsForTests({
+      text: 'abc',
+      width: 5,
+      style: {},
+    })).toEqual(['a', 'b', 'c', ' ', ' '])
+    expect(terminalCursorRowPartsForTests([{
+      text: 'looks pretty good',
+      width: 17,
+      style: {},
+    }], 5)).toEqual([
+      { kind: 'run', run: { text: 'looks', width: 5, style: {} } },
+      { kind: 'cursor' },
+      { kind: 'run', run: { text: ' pretty good', width: 12, style: {} } },
+    ])
   })
 
   it('renders underline as terminal decoration metadata instead of CSS text decoration', () => {

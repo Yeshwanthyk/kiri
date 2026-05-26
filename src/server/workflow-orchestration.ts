@@ -190,7 +190,7 @@ async function launchWorkflowItem(item: {
         submit: item.terminalPaste?.submit ?? true,
       })
       : null
-    const terminalSpawn = terminalPaste && process.env.KIRI_WORKFLOW_SPAWN_TERMINALS === '1'
+    const terminalSpawn = terminalPaste && process.env.KIRI_WORKFLOW_SPAWN_TERMINALS !== '0'
       ? await pasteAgentRuntimeTerminal({ agentId: session.id })
       : null
     const attempt = recordWorkflowItemAttempt({

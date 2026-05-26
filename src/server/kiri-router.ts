@@ -19,7 +19,9 @@ import {
   restoreSessionInputSchema,
   runtimeKindSchema,
   startSessionInputSchema,
+  terminalCloseInputSchema,
   terminalInputSchema,
+  terminalOpenInputSchema,
   triggerScratchpadBlockInputSchema,
   unhideProjectInputSchema,
   workflowItemOperationInputSchema,
@@ -184,8 +186,14 @@ async function dispatchWriteOperation(
     case 'agent.prompt':
       result = await run(control.agentPrompt(parseParams(agentPromptInputSchema, params)))
       break
+    case 'terminal.open':
+      result = await run(control.terminalOpen(parseParams(terminalOpenInputSchema, params)))
+      break
     case 'terminal.input':
       result = await run(control.terminalInput(parseParams(terminalInputSchema, params)))
+      break
+    case 'terminal.close':
+      result = await run(control.terminalClose(parseParams(terminalCloseInputSchema, params)))
       break
     case 'scratchpad.add':
       result = await run(control.addScratchpad(parseParams(addScratchpadBlockInputSchema, params)))

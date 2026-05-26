@@ -59,6 +59,7 @@ Mutate via `kiri_do` / `pnpm kiri:ctl call`:
 
 - `project.add`, `project.hide`, `project.unhide`, `project.delete`
 - `session.create`, `session.rename`, `session.archive`, `session.restore`
+- `terminal.open`, `terminal.input`, `terminal.close`
 - `scratchpad.add`, `scratchpad.delete`, `scratchpad.trigger`
 - `workflow.validate`, `workflow.create`, `workflow.dispatch`
 - `workflow.retrigger`, `workflow.track`, `workflow.untrack`
@@ -73,6 +74,9 @@ pnpm kiri:ctl call '{"operation":"session.create","params":{"projectId":"kiri","
 pnpm kiri:ctl call '{"operation":"session.rename","params":{"agentId":"agent-id","title":"New title"}}'
 pnpm kiri:ctl call '{"operation":"session.archive","params":{"agentId":"agent-id"}}'
 pnpm kiri:ctl call '{"operation":"session.restore","params":{"agentId":"agent-id"}}'
+pnpm kiri:ctl call '{"operation":"terminal.open","params":{"agentId":"agent-id"}}'
+pnpm kiri:ctl call '{"operation":"terminal.input","params":{"agentId":"agent-id","text":"continue from here","submit":true,"spawn":true}}'
+pnpm kiri:ctl call '{"operation":"terminal.close","params":{"agentId":"agent-id"}}'
 pnpm kiri:ctl call '{"operation":"scratchpad.add","params":{"projectId":"kiri","body":"Capture this for later"}}'
 pnpm kiri:ctl call '{"operation":"scratchpad.trigger","params":{"id":"block-id","projectId":"kiri","runtime":"pi","model":"openai-codex/gpt-5.5","title":"Follow up"}}'
 pnpm kiri:ctl call '{"operation":"workflow.create","params":{"projectId":"kiri","title":"Build workflow","defaults":{"runtime":"pi","model":"openai-codex/gpt-5.5","attachScratchpad":true},"items":[{"id":"impl","action":"launch","title":"Implement","body":"Implement the plan"},{"id":"review","action":"launch","title":"Review","body":"Review the implementation","tracked":true}]}}'

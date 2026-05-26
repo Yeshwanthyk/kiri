@@ -5,6 +5,7 @@ const e2eStateDir = join(process.cwd(), '.kiri')
 const e2eDbPath = join(e2eStateDir, 'kiri.e2e.sqlite')
 const e2eSettingsPath = join(process.cwd(), 'settings.json')
 const fakeCodexTerminalPath = join(process.cwd(), 'tests/harness/fake-codex-terminal.mjs')
+const fakeClaudeTerminalPath = join(process.cwd(), 'tests/harness/fake-claude-terminal.mjs')
 process.env.KIRI_STATE_DIR = e2eStateDir
 process.env.KIRI_DB_PATH = e2eDbPath
 process.env.KIRI_ROOT_DIR = e2eStateDir
@@ -32,6 +33,8 @@ export default defineConfig({
       KIRI_CODEX_APP_SERVER_URL: 'ws://127.0.0.1:39111',
       KIRI_CODEX_BIN: fakeCodexTerminalPath,
       KIRI_CODEX_HOME: join(e2eStateDir, 'codex-home'),
+      KIRI_CLAUDE_BIN: fakeClaudeTerminalPath,
+      KIRI_CLAUDE_HOME: join(e2eStateDir, 'claude-home'),
     },
     url: 'http://localhost:3109/@vite/client',
     reuseExistingServer: false,

@@ -10,6 +10,7 @@ export type TerminalRegistryProc = {
 
 export type TerminalRegistrySocket = {
   readonly readyState: number
+  readonly bufferedAmount?: number
   readonly send: (data: string) => void
   readonly close: () => void
 }
@@ -42,6 +43,7 @@ type TerminalRegistryTimers = {
 
 type TerminalRegistryInput = {
   readonly maxReplayBytes: number
+  readonly maxSocketBufferedBytes?: number
   readonly idleKillMs: number
   readonly socketOpenState: number
   readonly timers?: TerminalRegistryTimers
@@ -55,6 +57,8 @@ const defaultTimers: TerminalRegistryTimers = {
 export function makeTerminalRegistry(input: TerminalRegistryInput) {
   const sessions = new Map<string, TerminalRegistrySession>()
   const timers = input.timers ?? defaultTimers
+  const maxSocketBufferedBytes = input.maxSocketBufferedBytes ?? 5_000_000
+  const exitCloseDelayMs = 20
 
   function sessionKey(config: TerminalRegistryLaunchConfig, mode: TerminalMode, instanceId = 'main') {
     const suffix = terminalInstanceSuffix(instanceId)
@@ -120,6 +124,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   function detach(session: TerminalRegistrySession, socket: TerminalRegistrySocket) {
     session.sockets.delete(socket)
     if (session.exited) return
+    if (session.mode === 'runtime') return
     if (session.sockets.size > 0 || session.idleTimer) return
     session.idleTimer = timers.setTimeout(() => {
       if (session.sockets.size === 0) kill(session)
@@ -148,11 +153,18 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
 
   function broadcast(session: TerminalRegistrySession, data: string) {
     for (const socket of session.sockets) {
-      if (socket.readyState === input.socketOpenState) socket.send(data)
+      if (socket.readyState !== input.socketOpenState) continue
+      if ((socket.bufferedAmount ?? 0) > maxSocketBufferedBytes) {
+        session.sockets.delete(socket)
+        socket.close()
+        continue
+      }
+      socket.send(data)
     }
   }
 
   function exit(session: TerminalRegistrySession, message: string) {
+    if (session.exited) return
     session.exited = true
     if (session.idleTimer) {
       timers.clearTimeout(session.idleTimer)
@@ -160,9 +172,12 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     }
     append(session, message)
     broadcast(session, message)
-    for (const socket of session.sockets) {
-      socket.close()
-    }
+    const sockets = Array.from(session.sockets)
+    timers.setTimeout(() => {
+      for (const socket of sockets) {
+        socket.close()
+      }
+    }, exitCloseDelayMs)
     deleteOwnedSession(session)
   }
 

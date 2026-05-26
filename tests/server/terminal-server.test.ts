@@ -217,6 +217,87 @@ describe('terminal server', () => {
     }
   })
 
+  it('reuses headless runtime terminals for repeated background paste and can close/reopen them', async () => {
+    const pasteCalls: Array<{ text: string; submit: boolean }> = []
+    const resize = vi.fn()
+    const kill = vi.fn()
+    const spawnPty = vi.fn(() => ({
+      terminalId: 'term-test',
+      write: vi.fn(),
+      paste: (text: string, submit: boolean) => {
+        pasteCalls.push({ text, submit })
+      },
+      snapshot: vi.fn(),
+      resize,
+      kill,
+      onData: vi.fn(),
+      onExit: vi.fn(),
+    }))
+    let pending = [{
+      text: 'first paste',
+      submit: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'pi',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake',
+        args: [],
+        cwd: '/tmp/project',
+        env: process.env,
+        label: 'pi',
+      }),
+      spawnPty,
+      takeAgentTerminalInputs: () => {
+        const next = pending
+        pending = []
+        return next
+      },
+    })
+
+    try {
+      await expect(service.spawnAgentRuntime({ agentId: 'agent-1', cols: 100, rows: 30 }))
+        .resolves.toMatchObject({ agentId: 'agent-1', mode: 'runtime' })
+      pending = [{
+        text: 'second paste',
+        submit: false,
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }]
+      await expect(service.spawnAgentRuntime({ agentId: 'agent-1', cols: 120, rows: 40 }))
+        .resolves.toMatchObject({ agentId: 'agent-1', mode: 'runtime' })
+
+      expect(spawnPty).toHaveBeenCalledTimes(1)
+      expect(resize).toHaveBeenLastCalledWith(120, 40)
+      expect(pasteCalls).toEqual([
+        { text: 'first paste', submit: true },
+        { text: 'second paste', submit: false },
+      ])
+
+      service.closeAgentRuntime('agent-1')
+      expect(kill).toHaveBeenCalledTimes(1)
+      pending = [{
+        text: 'after close',
+        submit: true,
+        createdAt: '2026-01-01T00:00:02.000Z',
+      }]
+      await expect(service.spawnAgentRuntime({ agentId: 'agent-1' }))
+        .resolves.toMatchObject({ agentId: 'agent-1', mode: 'runtime' })
+
+      expect(spawnPty).toHaveBeenCalledTimes(2)
+      expect(pasteCalls.at(-1)).toEqual({ text: 'after close', submit: true })
+    } finally {
+      await service.close()
+    }
+  })
+
   it('passes the initial PTY geometry through COLUMNS and LINES', async () => {
     const spawnPtyCalls: Parameters<TerminalServerDependencies['spawnPty']>[] = []
     const spawnPty: TerminalServerDependencies['spawnPty'] = (command, args, options) => {

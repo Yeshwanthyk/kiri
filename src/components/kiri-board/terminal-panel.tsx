@@ -486,6 +486,7 @@ function TerminalPane({
   const lineBufferRef = React.useRef('')
   const previousVisibleRef = React.useRef(visible)
   const [connectionGeneration, setConnectionGeneration] = React.useState(0)
+  const [terminalFocused, setTerminalFocused] = React.useState(false)
   const [status, setStatus] = React.useState('Connecting')
   const [transcript, setTranscript] = React.useState<string | null>(null)
   const [snapshot, setSnapshot] = React.useState<TerminalSnapshot>(() => emptySnapshot(fallbackCols, fallbackRows))
@@ -557,6 +558,9 @@ function TerminalPane({
     let resizeObserver: ResizeObserver | null = null
     let resizeAnimationFrame: number | null = null
     let resizeTimer: number | null = null
+    let frameAnimationFrame: number | null = null
+    let pendingFrameProcessMs = 0
+    const pendingFrames: TerminalFrame[] = []
     let lastSentSize: { cols: number; rows: number } | null = null
     transcriptEnabledRef.current = window.localStorage.getItem('kiri:terminal-transcript') === '1'
     setTranscript(transcriptEnabledRef.current ? '' : null)
@@ -606,6 +610,19 @@ function TerminalPane({
             deliverResize(false)
           }, terminalResizeDebounceMs)
         }
+        const flushFrames = () => {
+          frameAnimationFrame = null
+          const frames = pendingFrames.splice(0)
+          const frameProcessMs = pendingFrameProcessMs
+          pendingFrameProcessMs = 0
+          if (frames.length === 0) return
+          applyFrames(frames, setSnapshot, setStatus)
+          recordTerminalFrames(setMetrics, frames, frameProcessMs)
+        }
+        const scheduleFrameFlush = () => {
+          if (frameAnimationFrame !== null) return
+          frameAnimationFrame = window.requestAnimationFrame(flushFrames)
+        }
         socket.onopen = () => {
           if (disposed) return
           setStatus('Connected')
@@ -626,10 +643,9 @@ function TerminalPane({
           stickToBottomRef.current = stickToBottomRef.current || terminalHostIsNearBottom(hostRef.current)
           const frames = parseTerminalFrames(event.data, lineBufferRef)
           appendTranscript(setTranscript, transcriptEnabledRef.current, terminalTranscriptText(frames))
-          for (const frame of frames) {
-            applyFrame(frame, setSnapshot, setStatus)
-          }
-          recordTerminalFrames(setMetrics, frames, performance.now() - startedAt)
+          pendingFrames.push(...frames)
+          pendingFrameProcessMs += performance.now() - startedAt
+          scheduleFrameFlush()
         }
         socket.onclose = () => {
           if (!disposed) {
@@ -654,6 +670,7 @@ function TerminalPane({
       disposed = true
       if (resizeTimer !== null) window.clearTimeout(resizeTimer)
       if (resizeAnimationFrame !== null) window.cancelAnimationFrame(resizeAnimationFrame)
+      if (frameAnimationFrame !== null) window.cancelAnimationFrame(frameAnimationFrame)
       resizeObserver?.disconnect()
       const socket = socketRef.current
       socketRef.current = null
@@ -759,9 +776,15 @@ function TerminalPane({
           stickToBottomRef.current = terminalHostIsNearBottom(hostRef.current)
         }}
         onFocus={() => onFocusPane(instanceId)}
+        onFocusCapture={() => setTerminalFocused(true)}
+        onBlurCapture={() => setTerminalFocused(false)}
         onClick={() => onFocusPane(instanceId)}
       >
-        <TerminalRows renderMetrics={renderMetrics} snapshot={snapshot} />
+        <TerminalRows
+          forceCursorVisible={active && terminalFocused}
+          renderMetrics={renderMetrics}
+          snapshot={snapshot}
+        />
       </div>
       {transcript !== null ? (
         <pre
@@ -777,13 +800,16 @@ function TerminalPane({
 }
 
 function TerminalRows({
+  forceCursorVisible = false,
   renderMetrics,
   snapshot,
 }: {
+  readonly forceCursorVisible?: boolean
   readonly renderMetrics: TerminalRenderMetrics
   readonly snapshot: TerminalSnapshot
 }) {
   const rows = React.useMemo(() => renderedTerminalRows(snapshot), [snapshot])
+  const showCursor = terminalCursorShouldRender(snapshot.cursor, forceCursorVisible)
   return (
     <div
       className="terminal-screen"
@@ -799,24 +825,38 @@ function TerminalRows({
           data-terminal-underline-runs={terminalRowUnderlineRunCount(row)}
           data-terminal-underline-blank-runs={terminalRowUnderlineBlankRunCount(row)}
         >
-          {row.runs.length === 0 ? '\u00a0' : row.runs.map((run, index) => (
-            <span
-              key={`${row.row}-${index}`}
-              className="terminal-run"
-              style={runStyle(run, renderMetrics)}
-              data-terminal-underline={terminalRunHasVisibleUnderline(run) ? 'true' : undefined}
-              data-terminal-blank-underline={terminalRunIsBlankUnderline(run) ? 'true' : undefined}
-            >
-              {run.text}
-            </span>
-          ))}
-          {snapshot.cursor.visible && screenRow === snapshot.cursor.row ? (
-            <span
-              className="terminal-cursor"
-              style={terminalCursorStyle(snapshot.cursor.col, renderMetrics)}
-              aria-hidden="true"
-            />
-          ) : null}
+          {showCursor && screenRow === snapshot.cursor.row
+            ? terminalCursorRowParts(row.runs, snapshot.cursor.col).map((part, index) => part.kind === 'cursor' ? (
+              <span
+                key={`cursor-${index}`}
+                className="terminal-cursor"
+                data-terminal-inline-cursor="true"
+                data-terminal-forced-cursor={!snapshot.cursor.visible ? 'true' : undefined}
+                style={terminalInlineCursorStyle(renderMetrics)}
+                aria-hidden="true"
+              />
+            ) : (
+              <span
+                key={`run-${index}`}
+                className="terminal-run"
+                style={cursorRowRunStyle(part.run)}
+                data-terminal-underline={terminalRunHasVisibleUnderline(part.run) ? 'true' : undefined}
+                data-terminal-blank-underline={terminalRunIsBlankUnderline(part.run) ? 'true' : undefined}
+              >
+                {part.run.text}
+              </span>
+            ))
+            : row.runs.length === 0 ? '\u00a0' : row.runs.map((run, index) => (
+              <span
+                key={`${row.row}-${index}`}
+                className="terminal-run"
+                style={runStyle(run, renderMetrics)}
+                data-terminal-underline={terminalRunHasVisibleUnderline(run) ? 'true' : undefined}
+                data-terminal-blank-underline={terminalRunIsBlankUnderline(run) ? 'true' : undefined}
+              >
+                {run.text}
+              </span>
+            ))}
         </div>
       ))}
     </div>
@@ -825,6 +865,14 @@ function TerminalRows({
 
 export function TerminalRowsForTests({ snapshot }: { readonly snapshot: TerminalSnapshot }) {
   return <TerminalRows renderMetrics={fallbackTerminalRenderMetrics(14)} snapshot={snapshot} />
+}
+
+function terminalCursorShouldRender(cursor: TerminalCursor, forceVisible: boolean) {
+  return cursor.visible || forceVisible
+}
+
+export function terminalCursorShouldRenderForTests(cursor: TerminalCursor, forceVisible: boolean) {
+  return terminalCursorShouldRender(cursor, forceVisible)
 }
 
 function renderedTerminalRows(snapshot: TerminalSnapshot) {
@@ -965,6 +1013,13 @@ export function applyTerminalFrameForTests(
   return snapshot
 }
 
+export function applyTerminalFramesForTests(
+  snapshot: TerminalSnapshot,
+  frames: readonly TerminalFrame[],
+) {
+  return applyFramesToSnapshot(snapshot, frames)
+}
+
 export function parseTerminalFramesForTests(data: string, initialBuffer = '') {
   const buffer = { current: initialBuffer }
   return {
@@ -992,6 +1047,35 @@ function applyFrame(
   }
   if (frame.type === 'metric') return
   if (frame.type === 'error') setStatus(frame.message)
+}
+
+function applyFrames(
+  frames: readonly TerminalFrame[],
+  setSnapshot: React.Dispatch<React.SetStateAction<TerminalSnapshot>>,
+  setStatus: React.Dispatch<React.SetStateAction<string>>,
+) {
+  if (frames.some((frame) => frame.type === 'snapshot' || frame.type === 'patch')) {
+    setSnapshot((current) => applyFramesToSnapshot(current, frames))
+  }
+  const status = terminalStatusFromFrames(frames)
+  if (status) setStatus(status)
+}
+
+function applyFramesToSnapshot(
+  snapshot: TerminalSnapshot,
+  frames: readonly TerminalFrame[],
+) {
+  return frames.reduce(applyTerminalFrameForTests, snapshot)
+}
+
+function terminalStatusFromFrames(frames: readonly TerminalFrame[]) {
+  for (let index = frames.length - 1; index >= 0; index -= 1) {
+    const frame = frames[index]
+    if (!frame) continue
+    if (frame.type === 'status') return frame.status === 'running' ? 'Connected' : frame.status
+    if (frame.type === 'error') return frame.message
+  }
+  return null
 }
 
 function recordTerminalFrames(
@@ -1531,6 +1615,59 @@ export function terminalRunIsBlankUnderlineForTests(run: CellRun) {
   return terminalRunIsBlankUnderline(run)
 }
 
+function terminalRunCells(run: CellRun) {
+  const cells = Array.from(run.text)
+  const width = Math.max(run.width, cells.length)
+  while (cells.length < width) cells.push(' ')
+  return cells
+}
+
+export function terminalRunCellsForTests(run: CellRun) {
+  return terminalRunCells(run)
+}
+
+type TerminalCursorRowPart =
+  | { readonly kind: 'run'; readonly run: CellRun }
+  | { readonly kind: 'cursor' }
+
+function terminalCursorRowParts(runs: readonly CellRun[], cursorCol: number): readonly TerminalCursorRowPart[] {
+  const parts: TerminalCursorRowPart[] = []
+  let offset = 0
+  let inserted = false
+
+  const pushRun = (run: CellRun) => {
+    if (run.text.length === 0 && run.width === 0) return
+    parts.push({ kind: 'run', run })
+  }
+
+  for (const run of runs) {
+    const cells = terminalRunCells(run)
+    const runEnd = offset + cells.length
+    if (!inserted && cursorCol <= runEnd) {
+      const splitAt = Math.max(0, Math.min(cells.length, cursorCol - offset))
+      pushRun({ text: cells.slice(0, splitAt).join(''), width: splitAt, style: run.style })
+      parts.push({ kind: 'cursor' })
+      pushRun({ text: cells.slice(splitAt).join(''), width: cells.length - splitAt, style: run.style })
+      inserted = true
+    } else {
+      pushRun(run)
+    }
+    offset = runEnd
+  }
+
+  if (!inserted) {
+    const spacerWidth = Math.max(0, cursorCol - offset)
+    pushRun({ text: ' '.repeat(spacerWidth), width: spacerWidth, style: {} })
+    parts.push({ kind: 'cursor' })
+  }
+
+  return parts
+}
+
+export function terminalCursorRowPartsForTests(runs: readonly CellRun[], cursorCol: number) {
+  return terminalCursorRowParts(runs, cursorCol)
+}
+
 function terminalRowUnderlineRunCount(row: TerminalRow) {
   return row.runs.filter((run) => run.style.underline).length
 }
@@ -1564,13 +1701,21 @@ function runStyle(
   }
 }
 
-function terminalCursorStyle(
-  col: number,
-  renderMetrics: TerminalRenderMetrics,
-): React.CSSProperties {
+function cursorRowRunStyle(run: CellRun): React.CSSProperties {
+  const style = run.style
   return {
-    left: `${col * renderMetrics.cellWidth}px`,
+    fontWeight: style.bold ? 700 : undefined,
+    fontStyle: style.italic ? 'italic' : undefined,
+    opacity: style.dim ? 0.68 : undefined,
+    color: colorValue(style.inverse ? style.background : style.foreground),
+    backgroundColor: colorValue(style.inverse ? style.foreground : style.background),
+  }
+}
+
+function terminalInlineCursorStyle(renderMetrics: TerminalRenderMetrics): React.CSSProperties {
+  return {
     width: `${renderMetrics.cellWidth}px`,
+    marginRight: `${-renderMetrics.cellWidth}px`,
   }
 }
 

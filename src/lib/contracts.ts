@@ -422,6 +422,18 @@ export const terminalInputSchema = z.object({
 })
 export type TerminalInput = z.infer<typeof terminalInputSchema>
 
+export const terminalOpenInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  cols: z.number().int().positive().optional(),
+  rows: z.number().int().positive().optional(),
+})
+export type TerminalOpenInput = z.infer<typeof terminalOpenInputSchema>
+
+export const terminalCloseInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+})
+export type TerminalCloseInput = z.infer<typeof terminalCloseInputSchema>
+
 export const steerMessageInputSchema = z.object({
   agentId: z.string().trim().min(1),
   text: z.string().trim().min(1),
@@ -596,7 +608,9 @@ export const kiriWriteOperations = [
   'session.archive',
   'session.restore',
   'agent.prompt',
+  'terminal.open',
   'terminal.input',
+  'terminal.close',
   'scratchpad.add',
   'scratchpad.delete',
   'scratchpad.trigger',

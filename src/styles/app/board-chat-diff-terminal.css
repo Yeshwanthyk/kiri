@@ -2310,10 +2310,15 @@
 .terminal-screen {
   position: relative;
   color: #e6e8ef;
+  font-feature-settings: "liga" 0, "calt" 0, "tnum" 1;
   font-kerning: none;
+  font-synthesis: none;
+  font-variant-numeric: tabular-nums;
   font-variant-ligatures: none;
+  -webkit-font-smoothing: antialiased;
   line-height: 1.35;
   tab-size: 8;
+  text-rendering: geometricPrecision;
   white-space: pre;
 }
 
@@ -2340,11 +2345,29 @@
 
 .terminal-cursor {
   position: absolute;
-  top: 0.12em;
-  height: 1.08em;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
   background: #f5c15c;
-  mix-blend-mode: difference;
+  box-shadow: 0 0 0 1px color-mix(in oklab, #f5c15c 70%, transparent);
+  opacity: 0.96;
   pointer-events: none;
+}
+
+.terminal-cursor[data-terminal-inline-cursor="true"] {
+  position: relative;
+  display: inline-block;
+  top: auto;
+  bottom: auto;
+  height: 1lh;
+  line-height: inherit;
+  vertical-align: top;
+}
+
+.terminal-cursor[data-terminal-forced-cursor="true"] {
+  background: color-mix(in oklab, #f5c15c 24%, transparent);
+  outline: 1px solid #f5c15c;
+  outline-offset: -1px;
 }
 
 .terminal-transcript {

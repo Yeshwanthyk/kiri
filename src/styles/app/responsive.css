@@ -239,6 +239,11 @@
     grid-template-columns: 1fr;
   }
 
+  .session-launcher-quick,
+  .session-launcher-options {
+    grid-template-columns: 1fr;
+  }
+
   .session-project-picker {
     position: static;
     width: 100%;

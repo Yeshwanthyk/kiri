@@ -19,6 +19,15 @@ function socket(openState = 1) {
   }
 }
 
+function slowSocket(openState = 1, bufferedAmount = 6_000_000) {
+  return {
+    readyState: openState,
+    bufferedAmount,
+    send: vi.fn(),
+    close: vi.fn(),
+  }
+}
+
 function createRegistry() {
   const timers: Array<() => void> = []
   return {
@@ -208,7 +217,7 @@ describe('terminal registry', () => {
     expect(attached.send).toHaveBeenCalledWith(metric + patch)
   })
 
-  it('kills idle sessions after the last socket detaches and cancels idle kill on reattach', () => {
+  it('kills idle shell sessions after the last socket detaches and cancels idle kill on reattach', () => {
     const timers: Array<() => void> = []
     const activeTimers = new Set<ReturnType<typeof setTimeout>>()
     const registry = makeTerminalRegistry({
@@ -232,10 +241,10 @@ describe('terminal registry', () => {
     })
     const fakeProc = proc()
     const session = registry.register({
-      key: 'agent-1:runtime:main',
+      key: 'project-1:shell:main',
       cwd: '/repo',
-      mode: 'runtime',
-      label: 'codex',
+      mode: 'shell',
+      label: 'shell',
       proc: fakeProc,
       initialBuffer: '',
     })
@@ -258,6 +267,76 @@ describe('terminal registry', () => {
     timers[1]?.()
     expect(fakeProc.kill).toHaveBeenCalledTimes(1)
     expect(registry.sessions.has(session.key)).toBe(false)
+  })
+
+  it('keeps runtime sessions alive when their last socket detaches', () => {
+    const { registry, timers } = createRegistry()
+    const fakeProc = proc()
+    const session = registry.register({
+      key: 'agent-1:runtime:main',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: fakeProc,
+      initialBuffer: '',
+    })
+    const first = socket()
+
+    registry.attach(session, first)
+    registry.detach(session, first)
+
+    expect(timers).toHaveLength(0)
+    expect(fakeProc.kill).not.toHaveBeenCalled()
+    expect(registry.sessions.get(session.key)).toBe(session)
+  })
+
+  it('closes slow sockets instead of buffering terminal output without bound', () => {
+    const registry = makeTerminalRegistry({
+      maxReplayBytes: 1000,
+      maxSocketBufferedBytes: 10,
+      idleKillMs: 100,
+      socketOpenState: 1,
+    })
+    const session = registry.register({
+      key: 'agent-1:runtime:main',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: proc(),
+      initialBuffer: '',
+    })
+    const fast = socket(1)
+    const slow = slowSocket(1, 11)
+    registry.attach(session, fast)
+    registry.attach(session, slow)
+
+    registry.broadcast(session, 'next')
+
+    expect(fast.send).toHaveBeenCalledWith('next')
+    expect(slow.send).not.toHaveBeenCalledWith('next')
+    expect(slow.close).toHaveBeenCalledTimes(1)
+    expect(session.sockets.has(slow)).toBe(false)
+  })
+
+  it('delays socket close on exit so final frames can flush', () => {
+    const { registry, timers } = createRegistry()
+    const session = registry.register({
+      key: 'agent-1:runtime:main',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: proc(),
+      initialBuffer: '',
+    })
+    const attached = socket(1)
+    registry.attach(session, attached)
+
+    registry.exit(session, 'done')
+
+    expect(attached.send).toHaveBeenCalledWith('done')
+    expect(attached.close).not.toHaveBeenCalled()
+    timers.at(-1)?.()
+    expect(attached.close).toHaveBeenCalledTimes(1)
   })
 
   it('closeAgentRuntime and closeAll cleanup sessions without touching shell-only keys accidentally', () => {

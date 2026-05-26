@@ -374,6 +374,7 @@ describe('kirictl call', () => {
       KIRI_DB_PATH: join(root, 'kiri.sqlite'),
       KIRI_STATE_DIR: join(root, 'state'),
       KIRI_SETTINGS_PATH: resolve(projectRoot, 'settings.json'),
+      KIRI_WORKFLOW_SPAWN_TERMINALS: '0',
     }
 
     const models = modelRowsSchema.parse(callResult(env, {

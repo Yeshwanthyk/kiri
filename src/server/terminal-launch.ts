@@ -7,6 +7,7 @@ import {
   RuntimeBinariesService,
   type RuntimeBinariesApi,
 } from './runtime-binaries'
+import { getRuntimeSettings } from './settings'
 export { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { commonTerminalEnv, removeColorDisablingEnv } from './terminal-env'
@@ -291,6 +292,8 @@ function piLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchCont
   return Effect.gen(function* () {
   const args = ['--session-dir', config.sessionDir]
   if (config.sessionFile) args.push('--session', config.sessionFile)
+  const settings = getRuntimeSettings(config.runtime)
+  if (settings.models.length > 0) args.push('--models', settings.models.join(','))
   if (config.model) args.push('--model', config.model)
   const env = yield* baseTerminalEnv(config, context)
   removeAnthropicOauthEnv(env)

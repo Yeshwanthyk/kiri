@@ -78,6 +78,9 @@ pub struct TerminalDocument {
     parser: Parser,
     screen_seq: u64,
     last_rows: Vec<u64>,
+    tab_stops: Vec<bool>,
+    last_printed: Option<char>,
+    pending_responses: Vec<u8>,
 }
 
 impl TerminalDocument {
@@ -105,6 +108,9 @@ impl TerminalDocument {
             parser: Parser::new(),
             screen_seq: 0,
             last_rows: Vec::new(),
+            tab_stops: default_tab_stops(cols),
+            last_printed: None,
+            pending_responses: Vec::new(),
         };
         document.last_rows = document.row_fingerprints();
         document
@@ -118,6 +124,10 @@ impl TerminalDocument {
         self.emit_patch(before)
     }
 
+    pub fn take_pending_responses(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.pending_responses)
+    }
+
     pub fn resize(&mut self, cols: usize, rows: usize) -> TerminalFramePatch {
         let before = self.last_rows.clone();
         self.cols = cols.max(1);
@@ -125,6 +135,10 @@ impl TerminalDocument {
         let erase_style = self.erase_style();
         self.main.resize(self.cols, self.rows, erase_style.clone());
         self.alternate.resize(self.cols, self.rows, erase_style);
+        self.tab_stops.resize(self.cols, false);
+        for col in (8..self.cols).step_by(8) {
+            self.tab_stops[col] = true;
+        }
         self.cursor_row = self.cursor_row.min(self.rows - 1);
         self.cursor_col = self.cursor_col.min(self.cols - 1);
         self.main_saved_cursor.row = self.main_saved_cursor.row.min(self.rows - 1);
@@ -292,6 +306,7 @@ impl TerminalDocument {
             cells[col + 1] = Cell::continuation(style);
         }
         self.cursor_col = (self.cursor_col + width).min(self.cols);
+        self.last_printed = Some(c);
     }
 
     fn append_combining(&mut self, c: char) {
@@ -363,8 +378,64 @@ impl TerminalDocument {
     }
 
     fn tab(&mut self) {
-        let next = ((self.cursor_col / 8) + 1) * 8;
-        self.cursor_col = next.min(self.cols - 1);
+        self.cursor_col = self.next_tab_stop(self.cursor_col);
+    }
+
+    fn tab_forward(&mut self, count: usize) {
+        for _ in 0..count {
+            self.tab();
+        }
+    }
+
+    fn tab_backward(&mut self, count: usize) {
+        for _ in 0..count {
+            self.cursor_col = self.previous_tab_stop(self.cursor_col);
+        }
+    }
+
+    fn next_tab_stop(&self, col: usize) -> usize {
+        for next in col.saturating_add(1)..self.cols {
+            if self.tab_stops.get(next).copied().unwrap_or(false) {
+                return next;
+            }
+        }
+        self.cols - 1
+    }
+
+    fn previous_tab_stop(&self, col: usize) -> usize {
+        for next in (0..col).rev() {
+            if self.tab_stops.get(next).copied().unwrap_or(false) {
+                return next;
+            }
+        }
+        0
+    }
+
+    fn set_tab_stop(&mut self) {
+        if self.cursor_col < self.tab_stops.len() {
+            self.tab_stops[self.cursor_col] = true;
+        }
+    }
+
+    fn clear_tab_stop(&mut self, mode: u16) {
+        match mode {
+            0 => {
+                if self.cursor_col < self.tab_stops.len() {
+                    self.tab_stops[self.cursor_col] = false;
+                }
+            }
+            3 => self.tab_stops.fill(false),
+            _ => {}
+        }
+    }
+
+    fn repeat_previous_printable(&mut self, count: usize) {
+        let Some(c) = self.last_printed else {
+            return;
+        };
+        for _ in 0..count {
+            self.put_char(c);
+        }
     }
 
     fn clear_screen(&mut self) {
@@ -389,6 +460,8 @@ impl TerminalDocument {
         self.buffer_kind = TerminalBufferKind::Main;
         self.main = ScreenBuffer::new(cols, rows);
         self.alternate = ScreenBuffer::new(cols, rows);
+        self.tab_stops = default_tab_stops(cols);
+        self.last_printed = None;
         self.pending_history_delta = None;
     }
 
@@ -688,6 +761,31 @@ impl TerminalDocument {
         }
     }
 
+    fn soft_reset(&mut self) {
+        self.style = CellStyle::default();
+        self.modes = TerminalModes::new();
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows - 1;
+    }
+
+    fn send_primary_device_attributes(&mut self) {
+        self.pending_responses.extend_from_slice(b"\x1b[?62;4;c");
+    }
+
+    fn send_secondary_device_attributes(&mut self) {
+        self.pending_responses.extend_from_slice(b"\x1b[>0;0;0c");
+    }
+
+    fn send_device_status_report(&mut self, mode: u16) {
+        match mode {
+            5 => self.pending_responses.extend_from_slice(b"\x1b[0n"),
+            6 => self.pending_responses.extend_from_slice(
+                format!("\x1b[{};{}R", self.cursor_row + 1, self.cursor_col + 1).as_bytes(),
+            ),
+            _ => {}
+        }
+    }
+
     fn apply_sgr(&mut self, params: &[SgrParam]) {
         if params.is_empty() {
             self.style = CellStyle::default();
@@ -789,10 +887,18 @@ impl Perform for TerminalDocument {
             (_, 'E') => self.next_line(count_param(first)),
             (_, 'F') => self.previous_line(count_param(first)),
             (_, 'G') => self.set_cursor_column(values.first().copied().unwrap_or(1) as usize),
+            (_, '`') => self.set_cursor_column(values.first().copied().unwrap_or(1) as usize),
+            (_, 'a') => self.cursor_forward(count_param(first)),
+            (_, 'b') => self.repeat_previous_printable(count_param(first)),
+            (b">", 'c') => self.send_secondary_device_attributes(),
+            (_, 'c') => self.send_primary_device_attributes(),
+            (_, 'e') => self.cursor_down(count_param(first)),
             (_, 'H' | 'f') => self.set_cursor_position(
                 values.first().copied().unwrap_or(1) as usize,
                 values.get(1).copied().unwrap_or(1) as usize,
             ),
+            (_, 'g') => self.clear_tab_stop(first),
+            (_, 'I') => self.tab_forward(count_param(first)),
             (_, 'J') => self.erase_display(first),
             (_, 'K') => self.erase_line(first),
             (_, 'L') => self.insert_lines(count_param(first)),
@@ -811,15 +917,22 @@ impl Perform for TerminalDocument {
             (_, '@') => self.insert_chars(count_param(first)),
             (_, 'd') => self.set_cursor_row(values.first().copied().unwrap_or(1) as usize),
             (_, 'm') => self.apply_sgr(&sgr_params(params)),
+            (_, 'n') => self.send_device_status_report(first),
+            (b"!", 'p') => self.soft_reset(),
             (_, 'r') => self.set_scroll_region(values.first().copied(), values.get(1).copied()),
             (_, 's') => self.save_cursor(),
             (_, 'u') => self.restore_cursor(),
+            (_, 'Z') => self.tab_backward(count_param(first)),
+            (_, 'q') => {}
             _ => {}
         }
     }
 
-    fn esc_dispatch(&mut self, _intermediates: &[u8], ignore: bool, byte: u8) {
+    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
         if ignore {
+            return;
+        }
+        if matches!((intermediates, byte), (b"(", b'0' | b'B') | (b")", b'0' | b'B')) {
             return;
         }
         match byte {
@@ -827,6 +940,7 @@ impl Perform for TerminalDocument {
             b'8' => self.restore_cursor(),
             b'D' => self.newline(),
             b'E' => self.next_line(1),
+            b'H' => self.set_tab_stop(),
             b'M' => self.reverse_index(),
             b'c' => self.reset(),
             _ => {}
@@ -836,6 +950,14 @@ impl Perform for TerminalDocument {
 
 fn blank_row(cols: usize, style: CellStyle) -> Vec<Cell> {
     vec![Cell::blank(style); cols]
+}
+
+fn default_tab_stops(cols: usize) -> Vec<bool> {
+    let mut stops = vec![false; cols];
+    for col in (8..cols).step_by(8) {
+        stops[col] = true;
+    }
+    stops
 }
 
 fn terminal_row(row: usize, cells: &[Cell]) -> TerminalRow {

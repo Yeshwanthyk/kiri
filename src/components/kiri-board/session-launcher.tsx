@@ -58,9 +58,7 @@ export function InlineSessionLauncher({
   const [launchProjectId, setLaunchProjectId] = React.useState(initialProjectId ?? project.id)
   const [projectQuery, setProjectQuery] = React.useState('')
   const [projectPickerOpen, setProjectPickerOpen] = React.useState(false)
-  const initialRuntimeOption = initialRuntime
-    ? runtimeOption(settings, initialRuntime)
-    : runtimeOptions(settings)[0]
+  const initialRuntimeOption = launcherRuntimeOption(settings, initialRuntime)
   if (!initialRuntimeOption) {
     throw new Error('At least one runtime must be configured')
   }
@@ -138,9 +136,7 @@ export function InlineSessionLauncher({
   }, [initialProjectId, project.id])
 
   React.useEffect(() => {
-    const nextRuntimeOption = initialRuntime
-      ? runtimeOption(settingsRef.current, initialRuntime)
-      : runtimeOptions(settingsRef.current)[0]
+    const nextRuntimeOption = launcherRuntimeOption(settingsRef.current, initialRuntime)
     if (!nextRuntimeOption) return
     setRuntime(nextRuntimeOption.runtime)
     setModel(nextRuntimeOption.defaultModel)
@@ -217,9 +213,8 @@ export function InlineSessionLauncher({
             <Bot size={16} />
           </span>
           <div>
-            <p className="settings-kicker">Session launcher</p>
+            <p className="settings-kicker">{mode === 'new' ? 'New session' : 'Resume session'}</p>
             <strong id="session-dialog-title">{launchProject.name}</strong>
-            <small>{mode === 'new' ? 'Pick a runtime, then launch into chat.' : 'Jump back into a local session.'}</small>
           </div>
           <button className="session-close-button" type="button" onClick={onCancel} aria-label="Close session launcher">
             ×
@@ -249,104 +244,79 @@ export function InlineSessionLauncher({
 
         {mode === 'new' ? (
           <>
-            <div className="session-target-row">
-              <span>Target</span>
-              <button
-                type="button"
-                className="session-target-button"
-                aria-expanded={projectPickerOpen}
-                onClick={() => setProjectPickerOpen((open) => !open)}
-                disabled={pending}
-              >
-                <FolderOpen size={14} aria-hidden="true" />
-                <strong>{launchProject.name}</strong>
-                <ChevronDown size={13} aria-hidden="true" />
-              </button>
-              {projectPickerOpen ? (
-                <div className="session-project-picker">
-                  <label className="session-project-search">
-                    <Search size={13} aria-hidden="true" />
-                    <input
-                      value={projectQuery}
-                      onChange={(event) => setProjectQuery(event.currentTarget.value)}
-                      placeholder="Search projects"
-                      aria-label="Search projects"
-                    />
-                  </label>
-                  <div className="session-project-list" role="listbox" aria-label="Project target">
-                    {visibleTargetProjects.length > 0 ? visibleTargetProjects.map((item, index) => {
-                      const active = item.id === launchProject.id
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className="session-project-option"
-                          data-active={active ? 'true' : undefined}
-                          onClick={() => selectLaunchProject(item.id)}
-                          role="option"
-                          aria-selected={active}
-                        >
-                          <span className="session-project-initial" aria-hidden="true">
-                            {item.name.slice(0, 1).toLowerCase()}
-                          </span>
-                          <span>
-                            <strong>{item.name}</strong>
-                            <small>{item.cwd}</small>
-                          </span>
-                          <kbd>{index === 0 ? 'Enter' : index + 1}</kbd>
-                        </button>
-                      )
-                    }) : (
-                      <p className="session-project-empty">No project matches.</p>
-                    )}
+            <div className="session-launcher-quick">
+              <div className="session-target-row">
+                <span>Target</span>
+                <button
+                  type="button"
+                  className="session-target-button"
+                  aria-expanded={projectPickerOpen}
+                  onClick={() => setProjectPickerOpen((open) => !open)}
+                  disabled={pending}
+                >
+                  <FolderOpen size={14} aria-hidden="true" />
+                  <strong>{launchProject.name}</strong>
+                  <ChevronDown size={13} aria-hidden="true" />
+                </button>
+                {projectPickerOpen ? (
+                  <div className="session-project-picker">
+                    <label className="session-project-search">
+                      <Search size={13} aria-hidden="true" />
+                      <input
+                        value={projectQuery}
+                        onChange={(event) => setProjectQuery(event.currentTarget.value)}
+                        placeholder="Search projects"
+                        aria-label="Search projects"
+                      />
+                    </label>
+                    <div className="session-project-list" role="listbox" aria-label="Project target">
+                      {visibleTargetProjects.length > 0 ? visibleTargetProjects.map((item, index) => {
+                        const active = item.id === launchProject.id
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className="session-project-option"
+                            data-active={active ? 'true' : undefined}
+                            onClick={() => selectLaunchProject(item.id)}
+                            role="option"
+                            aria-selected={active}
+                          >
+                            <span className="session-project-initial" aria-hidden="true">
+                              {item.name.slice(0, 1).toLowerCase()}
+                            </span>
+                            <span>
+                              <strong>{item.name}</strong>
+                              <small>{item.cwd}</small>
+                            </span>
+                            <kbd>{index === 0 ? 'Enter' : index + 1}</kbd>
+                          </button>
+                        )
+                      }) : (
+                        <p className="session-project-empty">No project matches.</p>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
+
+              <label className="session-command-field">
+                <Command size={15} aria-hidden="true" />
+                <input
+                  ref={titleRef}
+                  value={title}
+                  disabled={pending}
+                  placeholder="Optional session name"
+                  aria-label="Session name"
+                  data-testid="session-title"
+                  onChange={(event) => setTitle(event.currentTarget.value)}
+                />
+              </label>
             </div>
-
-            <label className="session-command-field">
-              <Command size={16} aria-hidden="true" />
-              <input
-                ref={titleRef}
-                value={title}
-                disabled={pending}
-                placeholder="Name this session (optional)"
-                aria-label="Session name"
-                data-testid="session-title"
-                onChange={(event) => setTitle(event.currentTarget.value)}
-              />
-              <span>optional</span>
-            </label>
-
-            <section className="session-picker-section" aria-label="Interface">
-              <div className="session-picker-head">
-                <strong>Interface</strong>
-                <span>Chat tab can be GUI or agent terminal.</span>
-              </div>
-              <div className="session-thinking-list" data-testid="session-interface-mode">
-                {availableInterfaceModes.map((item) => {
-                  const active = selectedInterfaceMode === item
-                  return (
-                    <button
-                      key={item}
-                      type="button"
-                      className="session-thinking-chip"
-                      data-active={active ? 'true' : undefined}
-                      onClick={() => setInterfaceMode(item)}
-                      disabled={pending}
-                      aria-pressed={active}
-                    >
-                      {item === 'gui' ? 'GUI' : 'Terminal'}
-                    </button>
-                  )
-                })}
-              </div>
-            </section>
 
             <section className="session-picker-section" aria-label="Runtime">
               <div className="session-picker-head">
                 <strong>Runtime</strong>
-                <span>Provider is an execution mode.</span>
               </div>
               <div className="session-runtime-grid" data-testid="session-runtime">
                 {runtimes.map((item) => {
@@ -365,7 +335,6 @@ export function InlineSessionLauncher({
                         <strong>{item.label}</strong>
                         <code>{item.meta}</code>
                       </span>
-                      <small>{item.detail}</small>
                       <code>{item.defaultModel}</code>
                     </button>
                   )
@@ -376,7 +345,6 @@ export function InlineSessionLauncher({
             <section className="session-picker-section" aria-label="Model">
               <div className="session-picker-head">
                 <strong>Model</strong>
-                <span>Chips first. Search only when the set gets large.</span>
               </div>
               <div className="session-model-list" data-testid="session-model">
                 {models.map((item) => {
@@ -399,34 +367,59 @@ export function InlineSessionLauncher({
               </div>
             </section>
 
-            <section
-              className="session-picker-section"
-              data-disabled={runtimeSupportsThinking ? undefined : 'true'}
-              aria-label="Thinking"
-            >
-              <div className="session-picker-head">
-                <strong>Thinking</strong>
-                <span>{runtimeSupportsThinking ? 'Default is medium.' : `${runtime} does not support thinking.`}</span>
-              </div>
-              <div className="session-thinking-list" data-testid="session-thinking-level">
-                {sessionThinkingLevels.map((item) => {
-                  const active = thinkingLevel === item
-                  return (
-                    <button
-                      key={item}
-                      type="button"
-                      className="session-thinking-chip"
-                      data-active={active ? 'true' : undefined}
-                      onClick={() => setThinkingLevel(item)}
-                      disabled={pending || !runtimeSupportsThinking}
-                      aria-pressed={active}
-                    >
-                      {item}
-                    </button>
-                  )
-                })}
-              </div>
-            </section>
+            <div className="session-launcher-options">
+              <section className="session-picker-section" aria-label="Interface">
+                <div className="session-picker-head">
+                  <strong>Interface</strong>
+                </div>
+                <div className="session-thinking-list" data-testid="session-interface-mode">
+                  {availableInterfaceModes.map((item) => {
+                    const active = selectedInterfaceMode === item
+                    return (
+                      <button
+                        key={item}
+                        type="button"
+                        className="session-thinking-chip"
+                        data-active={active ? 'true' : undefined}
+                        onClick={() => setInterfaceMode(item)}
+                        disabled={pending}
+                        aria-pressed={active}
+                      >
+                        {item === 'gui' ? 'GUI' : 'Terminal'}
+                      </button>
+                    )
+                  })}
+                </div>
+              </section>
+
+              <section
+                className="session-picker-section"
+                data-disabled={runtimeSupportsThinking ? undefined : 'true'}
+                aria-label="Thinking"
+              >
+                <div className="session-picker-head">
+                  <strong>Thinking</strong>
+                </div>
+                <div className="session-thinking-list" data-testid="session-thinking-level">
+                  {sessionThinkingLevels.map((item) => {
+                    const active = thinkingLevel === item
+                    return (
+                      <button
+                        key={item}
+                        type="button"
+                        className="session-thinking-chip"
+                        data-active={active ? 'true' : undefined}
+                        onClick={() => setThinkingLevel(item)}
+                        disabled={pending || !runtimeSupportsThinking}
+                        aria-pressed={active}
+                      >
+                        {item}
+                      </button>
+                    )
+                  })}
+                </div>
+              </section>
+            </div>
 
             <div className="session-dialog-actions">
               {error ? <span role="status">{error}</span> : null}
@@ -480,4 +473,13 @@ export function InlineSessionLauncher({
       </form>
     </>
   )
+}
+
+function launcherRuntimeOption(
+  settings: WorkspaceSnapshot['settings'],
+  presetRuntime: RuntimeKind | undefined,
+) {
+  if (presetRuntime) return runtimeOption(settings, presetRuntime)
+  const options = runtimeOptions(settings)
+  return options.find((item) => item.runtime === 'codex') ?? options[0]
 }

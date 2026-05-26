@@ -3,7 +3,14 @@ import * as React from 'react'
 import type { ProjectRow, RuntimeKind, ScratchpadBlock, SessionInterfaceMode, ThinkingLevel, WorkspaceSnapshot } from '~/lib/contracts'
 import { errorMessage, formatBlockDay, formatBlockTime } from './format'
 import { supportsThinking } from './slash-commands'
-import { modelOptions, normalizeInterfaceMode, normalizeRuntimeModel, runtimeOption, runtimeOptions } from './runtime-options'
+import {
+  modelOptions,
+  normalizeInterfaceMode,
+  normalizeRuntimeModel,
+  type RuntimeOption,
+  runtimeOption,
+  runtimeOptions,
+} from './runtime-options'
 
 const scratchpadThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
 
@@ -108,13 +115,16 @@ export function ScratchpadPanel({
 }) {
   const [state, dispatch] = React.useReducer(scratchpadReducer, initialScratchpadState)
   const triggerRuntimes = runtimeOptions(settings)
-  const initialTriggerRuntime = triggerRuntimes[0]
+  const initialTriggerRuntime = initialScratchpadTriggerRuntime(triggerRuntimes)
   if (!initialTriggerRuntime) {
     throw new Error('At least one runtime must be configured')
   }
+  const initialTriggerInterfaceMode = initialTriggerRuntime.interfaceModes.includes('terminal')
+    ? 'terminal'
+    : initialTriggerRuntime.defaultInterfaceMode
   const [triggerRuntime, setTriggerRuntime] = React.useState<RuntimeKind>(initialTriggerRuntime.runtime)
   const [triggerInterfaceMode, setTriggerInterfaceMode] = React.useState<SessionInterfaceMode>(
-    initialTriggerRuntime.defaultInterfaceMode,
+    initialTriggerInterfaceMode,
   )
   const [triggerModel, setTriggerModel] = React.useState(initialTriggerRuntime.defaultModel)
   const [triggerThinkingLevel, setTriggerThinkingLevel] = React.useState<ThinkingLevel>('medium')
@@ -150,7 +160,9 @@ export function ScratchpadPanel({
     setTriggerRuntime(runtime)
     setTriggerModel(settings.runtimes[runtime].defaultModel)
     setTriggerInterfaceMode((current) =>
-      normalizeInterfaceMode(runtime, settings.runtimes[runtime], current))
+      current === 'terminal'
+        ? normalizeInterfaceMode(runtime, settings.runtimes[runtime], 'terminal')
+        : normalizeInterfaceMode(runtime, settings.runtimes[runtime], current))
   }
 
   async function submitCapture(event: React.FormEvent<HTMLFormElement>) {
@@ -439,6 +451,12 @@ export function ScratchpadPanel({
       </div>
     </div>
   )
+}
+
+function initialScratchpadTriggerRuntime(options: readonly RuntimeOption[]) {
+  return options.find((option) => option.runtime === 'codex' && option.interfaceModes.includes('terminal'))
+    ?? options.find((option) => option.interfaceModes.includes('terminal'))
+    ?? options[0]
 }
 
 export function groupBlocksByDay(blocks: ScratchpadBlock[]) {

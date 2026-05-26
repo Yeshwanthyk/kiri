@@ -181,6 +181,40 @@ describe('KiriControl service construction', () => {
     ])
   })
 
+  it('routes terminal lifecycle operations through Kiri-owned runtime controls', async () => {
+    const calls: string[] = []
+    const control = makeKiriControl(testDependencies({
+      pasteAgentRuntimeTerminal: (input) => {
+        calls.push(`open:${input.agentId}:${input.cols ?? 'default'}x${input.rows ?? 'default'}`)
+        return Promise.resolve({ agentId: input.agentId, mode: 'runtime' as const })
+      },
+      queueAgentTerminalInput: (input) => {
+        calls.push(`queue:${input.agentId}:${input.text}:${input.submit}`)
+      },
+      closeAgentRuntimeTerminal: (agentId) => {
+        calls.push(`close:${agentId}`)
+      },
+    }))
+
+    await expect(Effect.runPromise(control.terminalOpen({ agentId: 'agent-1', cols: 120, rows: 40 })))
+      .resolves.toMatchObject({ agentId: 'agent-1', opened: true })
+    await expect(Effect.runPromise(control.terminalInput({
+      agentId: 'agent-1',
+      text: 'continue',
+      submit: true,
+      spawn: true,
+    }))).resolves.toMatchObject({ agentId: 'agent-1', queued: true, spawned: true })
+    await expect(Effect.runPromise(control.terminalClose({ agentId: 'agent-1' })))
+      .resolves.toMatchObject({ agentId: 'agent-1', closed: true })
+
+    expect(calls).toEqual([
+      'open:agent-1:120x40',
+      'queue:agent-1:continue:true',
+      'open:agent-1:defaultxdefault',
+      'close:agent-1',
+    ])
+  })
+
   it('wraps injected sync failures with the original message', async () => {
     const control = makeKiriControl(testDependencies({
       listProjectSummaries: () => {
@@ -230,6 +264,7 @@ function testDependencies(
     steerAgent: () => Promise.resolve({}),
     queueAgentTerminalInput: () => undefined,
     pasteAgentRuntimeTerminal: (input) => Promise.resolve({ agentId: input.agentId, mode: 'runtime' as const }),
+    closeAgentRuntimeTerminal: () => undefined,
     listScratchpadBlocks: () => [scratchpadBlock],
     addScratchpadBlockSummary: (input) => ({ ...scratchpadBlock, body: input.body }),
     deleteScratchpadBlockSummary: (id) => ({ ...scratchpadBlock, id }),

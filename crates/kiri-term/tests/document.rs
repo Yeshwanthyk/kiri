@@ -166,6 +166,60 @@ fn handles_cursor_movement_and_erase_line() {
 }
 
 #[test]
+fn supports_xterm_cursor_aliases_and_repeat_printable() {
+    let mut document = TerminalDocument::new(16, 5);
+    document.apply_bytes(b"abc\x1b[3b");
+    assert_eq!(document.screen_text(), "abcccc\n\n\n\n");
+    assert_eq!(document.snapshot().cursor.col, 6);
+
+    let mut document = TerminalDocument::new(16, 5);
+    document.apply_bytes(b"x\x1b[10`Y");
+    assert_eq!(document.screen_text(), "x        Y\n\n\n\n");
+    assert_eq!(document.snapshot().cursor.col, 10);
+
+    let mut document = TerminalDocument::new(16, 5);
+    document.apply_bytes(b"x\x1b[10aY");
+    assert_eq!(document.screen_text(), "x          Y\n\n\n\n");
+    assert_eq!(document.snapshot().cursor.col, 12);
+
+    let mut document = TerminalDocument::new(16, 5);
+    document.apply_bytes(b"x\x1b[3eY");
+    assert_eq!(document.screen_text(), "x\n\n\n Y\n");
+    assert_eq!(document.snapshot().cursor.row, 3);
+    assert_eq!(document.snapshot().cursor.col, 2);
+}
+
+#[test]
+fn supports_tab_controls_used_by_terminal_apps() {
+    let mut document = TerminalDocument::new(24, 2);
+    document.apply_bytes(b"x\x1b[2IY");
+    assert_eq!(document.screen_text(), "x               Y\n");
+    assert_eq!(document.snapshot().cursor.col, 17);
+
+    let mut document = TerminalDocument::new(24, 2);
+    document.apply_bytes(b"\x1b[5G\x1bH\x1b[1G\x1b[IY");
+    assert_eq!(document.screen_text(), "    Y\n");
+    assert_eq!(document.snapshot().cursor.col, 5);
+
+    let mut document = TerminalDocument::new(24, 2);
+    document.apply_bytes(b"\x1b[9G\x1b[g\x1b[1G\x1b[IY");
+    assert_eq!(document.screen_text(), "                Y\n");
+    assert_eq!(document.snapshot().cursor.col, 17);
+}
+
+#[test]
+fn queues_device_query_responses_for_pty_writeback() {
+    let mut document = TerminalDocument::new(24, 5);
+    document.apply_bytes(b"\x1b[3;4H\x1b[6n\x1b[c\x1b[>c\x1b[5n");
+
+    assert_eq!(
+        String::from_utf8(document.take_pending_responses()).unwrap(),
+        "\x1b[3;4R\x1b[?62;4;c\x1b[>0;0;0c\x1b[0n",
+    );
+    assert!(document.take_pending_responses().is_empty());
+}
+
+#[test]
 fn supports_alt_screen_and_bracketed_paste_modes() {
     let mut document = TerminalDocument::new(8, 2);
     let before = document.snapshot();

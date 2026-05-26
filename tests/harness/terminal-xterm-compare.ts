@@ -96,6 +96,23 @@ export async function compareKiriTerminalToXterm(input: {
   return diffSnapshots(kiri, xterm)
 }
 
+export async function compareKiriTerminalBytesToXterm(input: {
+  readonly raw: Buffer
+  readonly cols: number
+  readonly rows: number
+}): Promise<readonly TerminalXtermDiff[]> {
+  const root = mkdtempSync(join(tmpdir(), 'kiri-term-xterm-fixture-'))
+  try {
+    const fixturePath = join(root, 'input.ansi')
+    writeFileSync(fixturePath, input.raw)
+    const kiri = runKiriDump(fixturePath, input.cols, input.rows)
+    const xterm = await runXterm(input.raw, input.cols, input.rows)
+    return diffSnapshots(kiri, xterm)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 function runKiriDump(fixturePath: string, cols: number, rows: number): KiriSnapshot {
   const root = mkdtempSync(join(tmpdir(), 'kiri-term-xterm-'))
   try {

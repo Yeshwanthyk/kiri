@@ -125,6 +125,8 @@ export function closeAgentRuntimeTerminal(agentId: string) {
 
 export function pasteAgentRuntimeTerminal(input: {
   readonly agentId: string
+  readonly cols?: number
+  readonly rows?: number
 }) {
   return defaultTerminalServerService.spawnAgentRuntime(input)
 }
@@ -189,7 +191,9 @@ export function makeTerminalServerService(
         input.cols ?? 100,
         input.rows ?? 30,
       )
-      scheduleHeadlessIdleKill(runtime, session)
+      if (process.env.KIRI_TERMINAL_BACKGROUND_IDLE_KILL === '1') {
+        scheduleHeadlessIdleKill(runtime, session)
+      }
       return {
         agentId: input.agentId,
         mode: 'runtime',

@@ -13,6 +13,7 @@ const env = {
   KIRI_DB_PATH: join(tempRoot, 'kiri.sqlite'),
   KIRI_STATE_DIR: join(tempRoot, 'state'),
   KIRI_SETTINGS_PATH: resolve(repoRoot, 'settings.json'),
+  KIRI_WORKFLOW_SPAWN_TERMINALS: '0',
 }
 
 const responseSchema = z.discriminatedUnion('ok', [
@@ -88,6 +89,10 @@ const workflowSchema = z.object({
   items: z.array(workflowItemSchema),
 })
 const workflowRowsSchema = z.array(workflowSchema.omit({ items: true }))
+const operationsSchema = z.object({
+  read: z.array(z.string()),
+  write: z.array(z.string()),
+})
 
 try {
   assertSkillTeachesAgents()
@@ -109,6 +114,14 @@ try {
   }
   const defaultPiModel = models.find((model) => model.runtime === 'pi' && model.isDefault)
   if (!defaultPiModel) throw new Error('No default pi model found')
+  const operations = operationsSchema.parse(runCall('kiri:ctl', {
+    operation: 'operations.list',
+  }))
+  for (const operation of ['terminal.open', 'terminal.input', 'terminal.close']) {
+    if (!operations.write.includes(operation)) {
+      throw new Error(`operations.list did not expose ${operation}`)
+    }
+  }
 
   const primary = projectSchema.parse(runCall('kiri:ctl', {
     operation: 'project.add',
@@ -197,6 +210,35 @@ try {
     params: { agentId: session.id },
   }))
   if (restored.archivedAt !== null) throw new Error('Session restore did not restore')
+
+  const terminalInput = z.object({
+    accepted: z.literal(true),
+    agentId: z.string(),
+    queued: z.literal(true),
+    spawned: z.literal(false),
+  }).parse(runCall('kiri:ctl', {
+    operation: 'terminal.input',
+    params: {
+      agentId: session.id,
+      text: 'agent harness queued terminal input',
+      submit: false,
+      spawn: false,
+    },
+  }))
+  if (terminalInput.agentId !== session.id) {
+    throw new Error('terminal.input returned the wrong agent id')
+  }
+  const terminalClose = z.object({
+    accepted: z.literal(true),
+    agentId: z.string(),
+    closed: z.literal(true),
+  }).parse(runCall('kiri:ctl', {
+    operation: 'terminal.close',
+    params: { agentId: session.id },
+  }))
+  if (terminalClose.agentId !== session.id) {
+    throw new Error('terminal.close returned the wrong agent id')
+  }
 
   const block = scratchpadSchema.parse(runCall('kiri:ctl', {
     operation: 'scratchpad.add',
@@ -361,6 +403,9 @@ try {
       'workflow.list',
       'workflow.archive',
       'workflow.restore',
+      'terminal.open listed',
+      'terminal.input',
+      'terminal.close',
       'terminal paste queue',
     ],
     projectId: primary.id,
@@ -384,6 +429,9 @@ function assertSkillTeachesAgents() {
     'session.rename',
     'session.archive',
     'session.restore',
+    'terminal.open',
+    'terminal.input',
+    'terminal.close',
     'scratchpad.add',
     'scratchpad.list',
     'scratchpad.delete',
@@ -421,6 +469,7 @@ function runJson(args: string[]) {
     cwd: repoRoot,
     env,
     encoding: 'utf8',
+    timeout: 20_000,
   })
   return JSON.parse(output) as unknown
 }

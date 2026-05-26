@@ -15,7 +15,9 @@ import type {
   RuntimeKind,
   SessionInterfaceMode,
   StartSessionInput,
+  TerminalCloseInput,
   TerminalInput,
+  TerminalOpenInput,
   ThinkingLevel,
   WorkflowItemOperationInput,
   WorkflowRunOperationInput,
@@ -41,7 +43,7 @@ import {
 import { promptAgent, steerAgent } from './runtime'
 import { triggerScratchpadSession } from './scratchpad-trigger'
 import { getSettings } from './settings'
-import { pasteAgentRuntimeTerminal } from './terminal-server'
+import { closeAgentRuntimeTerminal, pasteAgentRuntimeTerminal } from './terminal-server'
 import {
   deleteProjectSummaryWithRuntimeCleanup,
   deleteSessionSummaryWithRuntimeCleanup,
@@ -154,11 +156,22 @@ export type KiriControlApi = {
     readonly agentId: string
     readonly mode: 'prompt' | 'steer'
   }>
+  readonly terminalOpen: (input: TerminalOpenInput) => ControlEffect<{
+    readonly accepted: true
+    readonly agentId: string
+    readonly mode: 'runtime'
+    readonly opened: true
+  }>
   readonly terminalInput: (input: TerminalInput) => ControlEffect<{
     readonly accepted: true
     readonly agentId: string
     readonly queued: true
     readonly spawned: boolean
+  }>
+  readonly terminalClose: (input: TerminalCloseInput) => ControlEffect<{
+    readonly accepted: true
+    readonly agentId: string
+    readonly closed: true
   }>
   readonly listScratchpad: (input?: {
     readonly projectId?: string
@@ -210,6 +223,7 @@ export type KiriControlDependencies = {
   readonly steerAgent: typeof steerAgent
   readonly queueAgentTerminalInput: typeof queueAgentTerminalInput
   readonly pasteAgentRuntimeTerminal: typeof pasteAgentRuntimeTerminal
+  readonly closeAgentRuntimeTerminal: typeof closeAgentRuntimeTerminal
   readonly listScratchpadBlocks: (input?: {
     readonly projectId?: string
   }) => readonly ScratchpadBlock[]
@@ -247,6 +261,7 @@ const liveKiriControlDependencies: KiriControlDependencies = {
   steerAgent,
   queueAgentTerminalInput,
   pasteAgentRuntimeTerminal,
+  closeAgentRuntimeTerminal,
   listScratchpadBlocks,
   addScratchpadBlockSummary,
   deleteScratchpadBlockSummary,
@@ -385,6 +400,36 @@ export function makeKiriControl(
     },
   )
 
+  const terminalOpenEffect = Effect.fn('KiriControl.terminalOpen')(
+    function* (input: TerminalOpenInput) {
+      const result = yield* Effect.tryPromise({
+        try: () => dependencies.pasteAgentRuntimeTerminal({
+          agentId: input.agentId,
+          cols: input.cols,
+          rows: input.rows,
+        }),
+        catch: normalizeError,
+      })
+      return {
+        accepted: true as const,
+        agentId: result.agentId,
+        mode: result.mode,
+        opened: true as const,
+      }
+    },
+  )
+
+  const terminalCloseEffect = Effect.fn('KiriControl.terminalClose')(
+    function* (input: TerminalCloseInput) {
+      yield* fromSync(() => dependencies.closeAgentRuntimeTerminal(input.agentId))
+      return {
+        accepted: true as const,
+        agentId: input.agentId,
+        closed: true as const,
+      }
+    },
+  )
+
   const listScratchpad = Effect.fn('KiriControl.listScratchpad')(
     function* (input: { readonly projectId?: string } = {}) {
       return yield* fromSync(() => dependencies.listScratchpadBlocks(input))
@@ -483,7 +528,9 @@ export function makeKiriControl(
     deleteSession: deleteSessionEffect,
     restoreSession: restoreSessionEffect,
     agentPrompt: agentPromptEffect,
+    terminalOpen: terminalOpenEffect,
     terminalInput: terminalInputEffect,
+    terminalClose: terminalCloseEffect,
     listScratchpad,
     addScratchpad,
     deleteScratchpad,

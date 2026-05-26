@@ -21,6 +21,7 @@ const testDbPath = resolve(process.env.KIRI_DB_PATH ?? '.kiri/kiri.e2e.sqlite')
 const appRoot = process.cwd()
 const projectRoot = resolve(realpathSync(tmpdir()), 'kiri-pican-e2e-worktree')
 const userSettingsPath = resolve(appRoot, '.kiri', 'settings.json')
+const claudeHomePath = resolve(appRoot, '.kiri', 'claude-home')
 const fileOperationFixturePath = resolve(projectRoot, 'src/kiri-file-operation-e2e.tmp')
 const detailFixturePath = resolve(projectRoot, 'src/detail.ts')
 let fakeCodexServer: FakeCodexAppServer
@@ -877,6 +878,57 @@ test('terminal interface sessions render the agent runtime in chat and shell in 
   await expect(page.getByTestId('terminal-transcript')).toContainText(basename(projectRoot))
 })
 
+test('claude terminal interface supports paste, exit, resume, and continue', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop terminal interface flow')
+  const title = `Claude Terminal Paste Resume ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title, 'claude', 'medium', 'terminal')
+
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  await expect(page.getByTestId('terminal-transcript')).toContainText('claude:ready')
+  await expect(page.getByTestId('terminal-transcript')).toContainText('mode:fresh')
+  const freshTranscript = await page.getByTestId('terminal-transcript').textContent()
+  const sessionId = freshTranscript?.match(/claude:ready:([^:\s]+):/)?.[1]
+  if (!sessionId) throw new Error('Fake Claude terminal session id was not rendered')
+
+  let terminalInput = page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+  await terminalInput.click()
+  await expect(terminalInput).toBeFocused()
+  await page.keyboard.type('typed before paste')
+  await page.keyboard.press('Enter')
+  await dispatchTerminalPaste(page, 0, 'pasted before resume\n')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`claude:paste:${sessionId}:`)
+  await expect(page.getByTestId('terminal-transcript')).toContainText('typed before paste')
+  await expect(page.getByTestId('terminal-transcript')).toContainText('pasted before resume')
+
+  writeClaudeResumeFile(sessionId)
+  await page.keyboard.type('exit')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`claude:bye:${sessionId}:`)
+
+  await page.getByTestId('tab-terminal').click()
+  await page.getByTestId('tab-chat').click()
+  await expect(page.getByTestId('terminal-transcript')).toContainText('mode:resume')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`claude:ready:${sessionId}:`)
+
+  await page.reload()
+  await expect(page.getByTestId('selected-agent')).toHaveText(title)
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`claude:ready:${sessionId}:`)
+
+  terminalInput = page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+  await terminalInput.click()
+  await dispatchTerminalPaste(page, 0, 'pasted after resume\n')
+  await expect(page.getByTestId('terminal-transcript')).toContainText('pasted after resume')
+})
+
 test('codex terminal interface resumes after the PTY exits and keeps diffs available', async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, 'desktop terminal interface flow')
   const title = `Codex Terminal Resume ${testInfo.project.name}`
@@ -928,6 +980,60 @@ test('codex terminal interface resumes after the PTY exits and keeps diffs avail
     .poll(() => diffPathsForSessionTitle(title).includes('src/kiri-file-operation-e2e.tmp'))
     .toBe(true)
   await expect(page.getByTestId('diff-panel')).toContainText('Changed files')
+})
+
+test('terminal e2e harness covers human typing, paste, reopen, and continue flows', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop terminal interface flow')
+  const title = `Terminal Human Loop ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title, 'codex', 'low', 'terminal')
+
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  await expect(page.getByTestId('terminal-transcript')).toContainText('mode:fresh')
+  const freshTranscript = await page.getByTestId('terminal-transcript').textContent()
+  const sessionId = freshTranscript?.match(/session:(fake-session-[^\s]+)/)?.[1]
+  if (!sessionId) throw new Error('Fake Codex terminal session id was not rendered')
+
+  let terminalInput = page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+  await terminalInput.click()
+  await expect(terminalInput).toBeFocused()
+  await page.keyboard.type('remember typed')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`remembered:typed:session:${sessionId}`)
+
+  await dispatchTerminalPaste(page, 0, 'remember pasted\nstate\n')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`remembered:pasted:session:${sessionId}`)
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`state:pasted:session:${sessionId}:mode:fresh`)
+
+  await page.keyboard.type('exit')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`bye session:${sessionId}`)
+
+  await page.getByTestId('tab-terminal').click()
+  await page.getByTestId('tab-chat').click()
+  await expect(page.getByTestId('terminal-transcript')).toContainText('mode:resume')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`session:${sessionId}`)
+
+  await page.reload()
+  await expect(page.getByTestId('selected-agent')).toHaveText(title)
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`session:${sessionId}`)
+
+  terminalInput = page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+  await terminalInput.click()
+  await expect(terminalInput).toBeFocused()
+  await dispatchTerminalPaste(page, 0, 'remember reopened\n')
+  await page.keyboard.type('state')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`remembered:reopened:session:${sessionId}`)
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`state:reopened:session:${sessionId}:mode:resume`)
 })
 
 test('selected agent detail loads chat, diffs, and local drafts', async ({ page, isMobile }) => {
@@ -1540,6 +1646,12 @@ function readAgentRuntimeState(title: string) {
   } finally {
     database.close()
   }
+}
+
+function writeClaudeResumeFile(sessionId: string) {
+  const projectDir = resolve(claudeHomePath, '.claude/projects', resolve(projectRoot).replace(/[\\/]/g, '-'))
+  mkdirSync(projectDir, { recursive: true })
+  writeFileSync(resolve(projectDir, `${sessionId}.jsonl`), '{"type":"assistant","text":"resumed"}\n')
 }
 
 function readLatestCodexSessionInterfaceMode() {

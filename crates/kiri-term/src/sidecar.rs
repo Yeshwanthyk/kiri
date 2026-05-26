@@ -351,7 +351,7 @@ fn create_session(
     let session = SidecarSession {
         terminal_id: terminal_id.clone(),
         master: pair.master,
-        writer,
+        writer: Arc::clone(&writer),
         child,
         document: Arc::clone(&document),
         order: Arc::clone(&order),
@@ -404,6 +404,7 @@ fn create_session(
         &mut reader,
         document,
         order,
+        Arc::clone(&writer),
         Arc::clone(shared_sessions),
         Arc::clone(output),
     );
@@ -416,6 +417,7 @@ fn spawn_reader(
     reader: &mut Box<dyn Read + Send>,
     document: SharedDocument,
     order: SharedOrder,
+    writer: SharedWriter,
     sessions: SharedSessions,
     output: SharedOutput,
 ) {
@@ -473,9 +475,10 @@ fn spawn_reader(
                 }
                 Ok(n) => {
                     let _ordered = order.lock().expect("terminal order lock");
-                    let (patch, snapshot, emission) = {
+                    let (patch, snapshot, emission, responses) = {
                         let mut document = document.lock().expect("terminal document lock");
                         let patch = document.apply_bytes(&buffer[..n]);
+                        let responses = document.take_pending_responses();
                         let snapshot = document.snapshot();
                         let now_synchronized = snapshot.modes.synchronized_output;
                         let emission = synchronized_output_emission(
@@ -483,8 +486,14 @@ fn spawn_reader(
                             now_synchronized,
                         );
                         synchronized_output_active = now_synchronized;
-                        (patch, snapshot, emission)
+                        (patch, snapshot, emission, responses)
                     };
+                    if !responses.is_empty() {
+                        let _ = writer
+                            .lock()
+                            .expect("terminal writer lock")
+                            .write_all(&responses);
+                    }
                     pending_bytes += n;
                     pending_ops += patch.ops.len();
                     match emission {

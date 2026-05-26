@@ -79,17 +79,18 @@
 .session-dialog {
   position: fixed;
   z-index: 50;
-  top: 74px;
+  top: 72px;
   left: 50%;
   display: grid;
-  width: min(720px, calc(100vw - 32px));
-  border-radius: 18px;
+  width: min(660px, calc(100vw - 32px));
+  max-height: calc(100dvh - 104px);
+  border-radius: 16px;
   background: var(--panel-translucent);
   box-shadow:
     inset 0 0 0 1px var(--line),
     0 24px 70px var(--overlay);
   transform: translateX(-50%);
-  overflow: hidden;
+  overflow: auto;
 }
 
 .session-start-form label,
@@ -102,7 +103,7 @@
   grid-template-columns: 34px minmax(0, 1fr) 32px;
   align-items: center;
   gap: 10px;
-  padding: 14px 14px 12px;
+  padding: 14px 14px 10px;
 }
 
 .session-dialog-icon {
@@ -122,17 +123,6 @@
   margin-top: 2px;
   overflow: hidden;
   font-size: 15px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-launcher-head small {
-  display: block;
-  margin-top: 2px;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -161,13 +151,20 @@
   transform: scale(0.96);
 }
 
+.session-launcher-quick {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.72fr) minmax(220px, 1fr);
+  gap: 8px;
+  padding: 0 14px 10px;
+}
+
 .session-target-row {
   position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 10px;
-  padding: 0 14px 12px;
+  padding: 0;
 }
 
 .session-target-button {
@@ -209,8 +206,8 @@
 .session-project-picker {
   position: absolute;
   z-index: 2;
-  top: 42px;
-  right: 14px;
+  top: 40px;
+  right: 0;
   display: grid;
   width: min(330px, calc(100% - 28px));
   border: 1px solid var(--line);
@@ -331,7 +328,7 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
-  padding: 0 14px 12px;
+  padding: 0 14px 10px;
 }
 
 .session-launcher-tabs button {
@@ -365,22 +362,24 @@
 }
 
 .session-command-field {
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
-  min-height: 50px;
-  padding: 0 14px;
-  border-block: 1px solid var(--line-subtle);
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
   color: var(--muted);
 }
 
 .session-command-field input {
-  min-height: 48px;
+  min-height: 34px;
   padding: 0;
   border: 0;
   outline: 0;
   background: transparent;
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .session-command-field input::placeholder {
@@ -399,8 +398,8 @@
 
 .session-picker-section {
   display: grid;
-  gap: 8px;
-  padding: 0 14px 14px;
+  gap: 7px;
+  padding: 0 14px 10px;
 }
 
 .session-picker-section[data-disabled='true'] {
@@ -429,18 +428,18 @@
 
 .session-runtime-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 9px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .session-runtime-card {
   display: grid;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
-  min-height: 112px;
-  padding: 12px;
+  min-height: 66px;
+  padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 10px;
   background: var(--panel);
   color: var(--ink);
   font: inherit;
@@ -462,23 +461,16 @@
 }
 
 .session-runtime-card > span {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  display: grid;
+  min-width: 0;
+  gap: 3px;
 }
 
 .session-runtime-card strong {
   overflow: hidden;
-  font-size: 13px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-runtime-card small {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.35;
 }
 
 .session-runtime-card code,
@@ -494,13 +486,19 @@
 .session-model-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 7px;
 }
 
 .session-thinking-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
+}
+
+.session-launcher-options {
+  display: grid;
+  grid-template-columns: minmax(0, 0.62fr) minmax(0, 1fr);
+  gap: 0;
 }
 
 .session-model-chip,
@@ -510,8 +508,8 @@
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  min-height: 38px;
-  padding: 0 11px;
+  min-height: 34px;
+  padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--panel);
@@ -564,8 +562,8 @@
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
-  min-height: 58px;
-  padding: 8px 14px 14px;
+  min-height: 54px;
+  padding: 8px 14px 12px;
   border-top: 1px solid var(--line-subtle);
   background: var(--panel-translucent);
 }
