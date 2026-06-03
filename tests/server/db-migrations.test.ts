@@ -77,7 +77,7 @@ describe('DB migrations', () => {
       const agentSql = database
         .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_slots'")
         .get() as { sql?: string } | undefined
-      expect(agentSql?.sql).toContain("runtime IN ('pi', 'codex', 'claude', 'opencode')")
+      expect(agentSql?.sql).toContain("runtime IN ('codex', 'pi', 'claude', 'opencode')")
 
       const agentColumns = database
         .prepare('PRAGMA table_info(agent_slots)')
@@ -224,8 +224,8 @@ describe('DB migrations', () => {
       const taskSql = database
         .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_tasks'")
         .get() as { sql?: string } | undefined
-      expect(agentSql?.sql).toContain("runtime IN ('pi', 'codex', 'claude', 'opencode')")
-      expect(taskSql?.sql).toContain("source IN ('pi', 'codex', 'claude', 'opencode')")
+      expect(agentSql?.sql).toContain("runtime IN ('codex', 'pi', 'claude', 'opencode')")
+      expect(taskSql?.sql).toContain("source IN ('codex', 'pi', 'claude', 'opencode')")
 
       database
         .prepare(
