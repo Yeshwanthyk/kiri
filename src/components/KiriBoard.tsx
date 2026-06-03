@@ -10,7 +10,6 @@ import type {
   ThinkingLevel,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
-import { pickProjectDirectory } from '~/lib/host-capabilities'
 import type { ThemeSelection } from '~/theme/kiri-themes'
 import {
   addProjectMutation,
@@ -48,6 +47,7 @@ import type { ChatTypographySettings } from './kiri-board/storage'
 import { AgentSwitcherSheet, MobileTopBar } from './kiri-board/board-navigation'
 import { useBoardKeyboardShortcuts } from './kiri-board/board-keyboard-shortcuts'
 import { useBoardPreferenceEffects } from './kiri-board/board-preferences'
+import { useBoardProjectActions } from './kiri-board/board-project-actions'
 import { useBoardSelection } from './kiri-board/board-selection'
 import { useBoardSessionActions } from './kiri-board/board-session-actions'
 import { buildBoardCommandActions } from './kiri-board/command-actions'
@@ -93,9 +93,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     toggleProjectManager,
     toggleSettings,
   } = useBoardSurfaces()
-  const [pendingProjectDelete, setPendingProjectDelete] = React.useState<ProjectRow | null>(null)
-  const [projectDeleteInFlight, setProjectDeleteInFlight] = React.useState(false)
-  const [projectVisibilityPendingId, setProjectVisibilityPendingId] = React.useState<string | null>(null)
   const [keymap, setKeymap] = React.useState<KeymapSettings>(snapshot.preferences.keymap)
   const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(snapshot.preferences.theme)
   const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(
@@ -206,6 +203,22 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setChatFocusRequest(0)
   }, [])
 
+  const projectMutations = React.useMemo(() => ({
+    addProject,
+    chooseProjectDirectory,
+    deleteProject,
+    hideProject,
+    reorderProjects,
+    unhideProject,
+  }), [
+    addProject,
+    chooseProjectDirectory,
+    deleteProject,
+    hideProject,
+    reorderProjects,
+    unhideProject,
+  ])
+
   const {
     pendingDelete,
     deleteInFlight,
@@ -236,6 +249,30 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     resetChatFocus,
     setTab,
     closeSessionLauncher,
+  })
+
+  const {
+    pendingProjectDelete,
+    projectDeleteInFlight,
+    projectVisibilityPendingId,
+    requestDeleteProject,
+    cancelDeleteProject,
+    confirmDeleteProject,
+    handleAddProject,
+    handleDeleteProject,
+    handleHideProject,
+    handleUnhideProject,
+    handleReorderProjects,
+    handleChooseProjectDirectory,
+  } = useBoardProjectActions({
+    selectedProjectId: selection.projectId,
+    mutations: projectMutations,
+    applyWorkspace,
+    runWorkspaceMutation,
+    selectProject,
+    forgetProject,
+    activateProject,
+    activateProjectIfCurrent,
   })
 
   useBoardPreferenceEffects({
@@ -299,70 +336,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setTab,
     setTerminalFocusRequest,
   })
-
-  async function handleAddProject(input: { id?: string; name: string; cwd: string }) {
-    const next = await runWorkspaceMutation(() => addProject({ data: input }), applyWorkspace)
-    const project = next.projects.find((item) => item.cwd === input.cwd) ?? next.projects.at(-1)
-    if (project) selectProject(project.id)
-  }
-
-  async function handleDeleteProject(projectId: string) {
-    const next = await runWorkspaceMutation(
-      () => deleteProject({ data: { id: projectId } }),
-      applyWorkspace,
-    )
-    forgetProject(projectId)
-    if (selection.projectId === projectId) activateProject(next.selected.projectId)
-  }
-
-  async function confirmDeleteProject(projectId: string) {
-    setProjectDeleteInFlight(true)
-    try {
-      await handleDeleteProject(projectId)
-      setPendingProjectDelete(null)
-    } finally {
-      setProjectDeleteInFlight(false)
-    }
-  }
-
-  const handleHideProject = React.useCallback(async (projectId: string) => {
-    setProjectVisibilityPendingId(projectId)
-    try {
-      const next = await runWorkspaceMutation(
-        () => hideProject({ data: { id: projectId } }),
-        applyWorkspace,
-      )
-      forgetProject(projectId)
-      activateProjectIfCurrent(projectId, next.selected.projectId)
-    } finally {
-      setProjectVisibilityPendingId((current) => current === projectId ? null : current)
-    }
-  }, [applyWorkspace, forgetProject, hideProject, runWorkspaceMutation])
-
-  async function handleUnhideProject(projectId: string) {
-    setProjectVisibilityPendingId(projectId)
-    try {
-      const next = await runWorkspaceMutation(
-        () => unhideProject({ data: { id: projectId } }),
-        applyWorkspace,
-      )
-      const project = next.projects.find((item) => item.id === projectId)
-      if (project) selectProject(project.id)
-    } finally {
-      setProjectVisibilityPendingId((current) => current === projectId ? null : current)
-    }
-  }
-
-  async function handleReorderProjects(projectIds: string[]) {
-    await runWorkspaceMutation(
-      () => reorderProjects({ data: { ids: projectIds } }),
-      applyWorkspace,
-    )
-  }
-
-  async function handleChooseProjectDirectory() {
-    return pickProjectDirectory(() => chooseProjectDirectory())
-  }
 
   async function handleCaptureBlock(body: string, projectId: string | null) {
     await runWorkspaceMutation(
@@ -430,7 +403,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       openProjectManager,
       hideProject: (projectId) => void handleHideProject(projectId),
       unhideProject: (projectId) => void handleUnhideProject(projectId),
-      requestDeleteProject: setPendingProjectDelete,
+      requestDeleteProject,
       selectProject,
       selectAgent,
       setTab,
@@ -597,7 +570,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           onConfirm={() => void confirmDeleteProject(pendingProjectDelete.id)}
           onCancel={() => {
             if (projectDeleteInFlight) return
-            setPendingProjectDelete(null)
+            cancelDeleteProject()
           }}
         />
       ) : null}
