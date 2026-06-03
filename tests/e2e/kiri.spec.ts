@@ -1137,7 +1137,7 @@ async function createSession(
     .getByRole('button', { name: 'Start session' })
     .click()
   await renameLatestSessionForTest(page, title, existingSessionIds)
-  if (thinkingLevel) {
+  if (thinkingLevel && runtime === 'codex' && interfaceMode === 'gui') {
     await setThinkingLevel(page, thinkingLevel)
   }
   await expect(page.getByTestId('selected-agent')).toHaveText(title)
