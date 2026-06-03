@@ -62,6 +62,7 @@ import { useSettingsPreferenceActions } from './kiri-board/settings-preference-a
 import { SettingsScreen } from './kiri-board/settings-screen'
 import { SelectedAgentPane } from './kiri-board/selected-agent-pane'
 import type { SidebarTab } from './kiri-board/board-types'
+import { useBoardSurfaces } from './kiri-board/board-surfaces'
 import { useBoardWorkspace } from './kiri-board/board-workspace'
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
@@ -69,15 +70,29 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const previousSelectedProjectIdRef = React.useRef<string | null>(null)
   const [tab, setTab] = React.useState<SidebarTab>('chat')
   const [hydrated, setHydrated] = React.useState(false)
-  const [settingsOpen, setSettingsOpen] = React.useState(false)
-  const [projectManagerOpen, setProjectManagerOpen] = React.useState(false)
-  const [sessionLauncherOpen, setSessionLauncherOpen] = React.useState(false)
-  const [sessionLauncherPreset, setSessionLauncherPreset] = React.useState<{
-    projectId: string
-    runtime?: RuntimeKind
-  } | null>(null)
-  const [agentSwitcherOpen, setAgentSwitcherOpen] = React.useState(false)
-  const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
+  const {
+    settingsOpen,
+    projectManagerOpen,
+    sessionLauncherOpen,
+    sessionLauncherPreset,
+    agentSwitcherOpen,
+    commandPaletteOpen,
+    setSettingsOpen,
+    setProjectManagerOpen,
+    setSessionLauncherOpen,
+    setAgentSwitcherOpen,
+    setCommandPaletteOpen,
+    closeSettings,
+    closeProjectManager,
+    closeSessionLauncher,
+    closeAgentSwitcher,
+    closeCommandPalette,
+    openSessionLauncher: openSessionLauncherSurface,
+    openSettings,
+    openProjectManager,
+    toggleProjectManager,
+    toggleSettings,
+  } = useBoardSurfaces()
   const [pendingProjectDelete, setPendingProjectDelete] = React.useState<ProjectRow | null>(null)
   const [projectDeleteInFlight, setProjectDeleteInFlight] = React.useState(false)
   const [projectVisibilityPendingId, setProjectVisibilityPendingId] = React.useState<string | null>(null)
@@ -149,18 +164,13 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const selectAgent = React.useCallback((projectId: string, agentId: string) => {
     selectBoardAgent(projectId, agentId)
     setChatFocusRequest(0)
-    setAgentSwitcherOpen(false)
-  }, [selectBoardAgent])
+    closeAgentSwitcher()
+  }, [closeAgentSwitcher, selectBoardAgent])
 
   const selectProject = React.useCallback((projectId: string) => {
     selectBoardProject(projectId)
     setChatFocusRequest(0)
   }, [selectBoardProject])
-
-  const closeSessionLauncher = React.useCallback(() => {
-    setSessionLauncherOpen(false)
-    setSessionLauncherPreset(null)
-  }, [])
 
   const sessionMutations = React.useMemo(() => ({
     renameSession,
@@ -403,14 +413,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     const project = workspace.projects.find((item) => item.id === projectId)
     if (project) {
       activateProject(project.id)
-      setSessionLauncherPreset({ projectId: project.id, runtime })
+      openSessionLauncherSurface({ projectId: project.id, runtime })
     } else {
-      setSessionLauncherPreset(null)
+      openSessionLauncherSurface(null)
     }
-    setSettingsOpen(false)
-    setCommandPaletteOpen(false)
-    setAgentSwitcherOpen(false)
-    setSessionLauncherOpen(true)
   }
 
   const commandActions = React.useMemo(
@@ -420,27 +426,15 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       selectedAgent,
       openSessionLauncher,
       requestDeleteSession: handleDeleteSession,
-      openSettings: () => {
-        setSessionLauncherOpen(false)
-        setAgentSwitcherOpen(false)
-        setCommandPaletteOpen(false)
-        setProjectManagerOpen(false)
-        setSettingsOpen(true)
-      },
-      openProjectManager: () => {
-        setSessionLauncherOpen(false)
-        setAgentSwitcherOpen(false)
-        setCommandPaletteOpen(false)
-        setSettingsOpen(false)
-        setProjectManagerOpen(true)
-      },
+      openSettings,
+      openProjectManager,
       hideProject: (projectId) => void handleHideProject(projectId),
       unhideProject: (projectId) => void handleUnhideProject(projectId),
       requestDeleteProject: setPendingProjectDelete,
       selectProject,
       selectAgent,
       setTab,
-      closeCommandPalette: () => setCommandPaletteOpen(false),
+      closeCommandPalette,
     }),
     [
       selectedAgent,
@@ -477,7 +471,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onKeymapReset={() => void resetKeymapPreference()}
         onThemeChange={(next) => void changeThemePreference(next)}
         onChatTypographyChange={(next) => void changeChatTypographyPreference(next)}
-        onClose={() => setSettingsOpen(false)}
+        onClose={closeSettings}
       />
     )
   }
@@ -493,12 +487,12 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         hydrated={hydrated}
         onAddProject={handleAddProject}
         onChooseDirectory={handleChooseProjectDirectory}
-        onCloseCommandPalette={() => setCommandPaletteOpen(false)}
-        onCloseProjectManager={() => setProjectManagerOpen(false)}
+        onCloseCommandPalette={closeCommandPalette}
+        onCloseProjectManager={closeProjectManager}
         onDeleteProject={handleDeleteProject}
         onHideProject={handleHideProject}
-        onOpenProjectManager={() => setProjectManagerOpen(true)}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenProjectManager={openProjectManager}
+        onOpenSettings={openSettings}
         onReorderProjects={handleReorderProjects}
         onUnhideProject={handleUnhideProject}
       />
@@ -515,29 +509,17 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onOpenAgentSwitcher={() => setAgentSwitcherOpen(true)}
         onSelectAgent={(agentId) => {
           selectAgent(selectedProject.id, agentId)
-          setCommandPaletteOpen(false)
+          closeCommandPalette()
         }}
         onStartSession={() => openSessionLauncher()}
-        onOpenProjects={() => {
-          setSessionLauncherOpen(false)
-          setAgentSwitcherOpen(false)
-          setCommandPaletteOpen(false)
-          setSettingsOpen(false)
-          setProjectManagerOpen(true)
-        }}
-        onOpenSettings={() => {
-          setSessionLauncherOpen(false)
-          setAgentSwitcherOpen(false)
-          setCommandPaletteOpen(false)
-          setProjectManagerOpen(false)
-          setSettingsOpen(true)
-        }}
+        onOpenProjects={openProjectManager}
+        onOpenSettings={openSettings}
       />
 
       {commandPaletteOpen ? (
         <CommandPalette
           actions={commandActions}
-          onClose={() => setCommandPaletteOpen(false)}
+          onClose={closeCommandPalette}
         />
       ) : null}
 
@@ -548,7 +530,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           selectedAgentId={selection.agentId}
           onSelectAgent={selectAgent}
           onStartSession={openSessionLauncher}
-          onClose={() => setAgentSwitcherOpen(false)}
+          onClose={closeAgentSwitcher}
         />
       ) : null}
 
@@ -577,7 +559,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           onHide={handleHideProject}
           onReorderProjects={handleReorderProjects}
           onUnhide={handleUnhideProject}
-          onClose={() => setProjectManagerOpen(false)}
+          onClose={closeProjectManager}
         />
       ) : null}
 
@@ -630,14 +612,8 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         settingsOpen={settingsOpen}
         projectVisibilityPendingId={projectVisibilityPendingId}
         boardScrollRef={boardScrollRef}
-        onToggleProjects={() => {
-          setSettingsOpen(false)
-          setProjectManagerOpen((open) => !open)
-        }}
-        onToggleSettings={() => {
-          setProjectManagerOpen(false)
-          setSettingsOpen((open) => !open)
-        }}
+        onToggleProjects={toggleProjectManager}
+        onToggleSettings={toggleSettings}
         onHideProject={(projectId) => void handleHideProject(projectId)}
         onSelectAgent={selectAgent}
         onUnhideProject={(projectId) => void handleUnhideProject(projectId)}
