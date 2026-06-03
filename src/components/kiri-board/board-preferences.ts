@@ -17,8 +17,23 @@ import {
   readStoredThemeSelection,
   type ChatTypographySettings,
 } from './storage'
+import { useSettingsPreferenceActions } from './settings-preference-actions'
 
 type PersistPreference<T> = (input: { data: T }) => Promise<unknown>
+type PersistThemePreference = (input: { data: ThemeSelection }) => Promise<{ theme: ThemeSelection }>
+type PersistKeymapPreference = (input: { data: KeymapSettings }) => Promise<{ keymap: KeymapSettings }>
+type PersistChatTypographyPreference = (
+  input: { data: ChatTypographySettings },
+) => Promise<{ chatTypography: ChatTypographySettings }>
+
+type BoardPreferencesInput = {
+  snapshot: WorkspaceSnapshot
+  setAgentByProject: (selection: Record<string, string>) => void
+  persistTheme: PersistThemePreference
+  persistKeymap: PersistKeymapPreference
+  persistChatTypography: PersistChatTypographyPreference
+  persistAgentByProject: PersistPreference<Record<string, string>>
+}
 
 type BoardPreferenceEffectsInput = {
   snapshot: WorkspaceSnapshot
@@ -33,6 +48,57 @@ type BoardPreferenceEffectsInput = {
   persistKeymap: PersistPreference<KeymapSettings>
   persistChatTypography: PersistPreference<ChatTypographySettings>
   persistAgentByProject: PersistPreference<Record<string, string>>
+}
+
+export function useBoardPreferences({
+  snapshot,
+  setAgentByProject,
+  persistTheme,
+  persistKeymap,
+  persistChatTypography,
+  persistAgentByProject,
+}: BoardPreferencesInput) {
+  const [hydrated, setHydrated] = React.useState(false)
+  const [keymap, setKeymap] = React.useState<KeymapSettings>(snapshot.preferences.keymap)
+  const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(snapshot.preferences.theme)
+  const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(
+    snapshot.preferences.chatTypography,
+  )
+
+  useBoardPreferenceEffects({
+    snapshot,
+    themeSelection,
+    chatTypography,
+    setHydrated,
+    setThemeSelection,
+    setKeymap,
+    setChatTypography,
+    setAgentByProject,
+    persistTheme,
+    persistKeymap,
+    persistChatTypography,
+    persistAgentByProject,
+  })
+
+  const actions = useSettingsPreferenceActions({
+    keymap,
+    themeSelection,
+    chatTypography,
+    setKeymap,
+    setThemeSelection,
+    setChatTypography,
+    persistKeymap,
+    persistTheme,
+    persistChatTypography,
+  })
+
+  return {
+    hydrated,
+    keymap,
+    themeSelection,
+    chatTypography,
+    ...actions,
+  }
 }
 
 export function useBoardPreferenceEffects({

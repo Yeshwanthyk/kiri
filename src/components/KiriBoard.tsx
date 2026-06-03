@@ -7,7 +7,6 @@ import type {
   RuntimeKind,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
-import type { ThemeSelection } from '~/theme/kiri-themes'
 import {
   addProjectMutation,
   addScratchpadBlockMutation,
@@ -38,12 +37,10 @@ import {
   triggerScratchpadBlockMutation,
   unhideProjectMutation,
 } from '~/server/workspace'
-import type { KeymapSettings } from './kiri-board/navigation'
-import type { ChatTypographySettings } from './kiri-board/storage'
 
 import { AgentSwitcherSheet, MobileTopBar } from './kiri-board/board-navigation'
 import { useBoardKeyboardShortcuts } from './kiri-board/board-keyboard-shortcuts'
-import { useBoardPreferenceEffects } from './kiri-board/board-preferences'
+import { useBoardPreferences } from './kiri-board/board-preferences'
 import { useBoardProjectActions } from './kiri-board/board-project-actions'
 import { useBoardScratchpadActions } from './kiri-board/board-scratchpad-actions'
 import { useBoardSelection } from './kiri-board/board-selection'
@@ -56,7 +53,6 @@ import { EmptyProjectState } from './kiri-board/empty-project-state'
 import { ProjectManagerDialog } from './kiri-board/project-manager-dialog'
 import { ProjectBoardPane } from './kiri-board/project-board-pane'
 import { InlineSessionLauncher } from './kiri-board/session-launcher'
-import { useSettingsPreferenceActions } from './kiri-board/settings-preference-actions'
 import { SettingsScreen } from './kiri-board/settings-screen'
 import { SelectedAgentPane } from './kiri-board/selected-agent-pane'
 import type { SidebarTab } from './kiri-board/board-types'
@@ -67,7 +63,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const boardScrollRef = React.useRef<HTMLDivElement | null>(null)
   const previousSelectedProjectIdRef = React.useRef<string | null>(null)
   const [tab, setTab] = React.useState<SidebarTab>('chat')
-  const [hydrated, setHydrated] = React.useState(false)
   const {
     settingsOpen,
     projectManagerOpen,
@@ -91,11 +86,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     toggleProjectManager,
     toggleSettings,
   } = useBoardSurfaces()
-  const [keymap, setKeymap] = React.useState<KeymapSettings>(snapshot.preferences.keymap)
-  const [themeSelection, setThemeSelection] = React.useState<ThemeSelection>(snapshot.preferences.theme)
-  const [chatTypography, setChatTypography] = React.useState<ChatTypographySettings>(
-    snapshot.preferences.chatTypography,
-  )
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
   const [terminalFocusRequest, setTerminalFocusRequest] = React.useState(0)
   const addProject = useServerFn(addProjectMutation)
@@ -150,6 +140,23 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   } = useBoardSelection({
     snapshot,
     workspace,
+    persistAgentByProject: setAgentByProjectPreference,
+  })
+  const {
+    hydrated,
+    keymap,
+    themeSelection,
+    chatTypography,
+    changeThemePreference,
+    changeKeymapPreference,
+    resetKeymapPreference,
+    changeChatTypographyPreference,
+  } = useBoardPreferences({
+    snapshot,
+    setAgentByProject,
+    persistTheme: setThemePreference,
+    persistKeymap: setKeymapPreference,
+    persistChatTypography: setChatTypographyPreference,
     persistAgentByProject: setAgentByProjectPreference,
   })
   const visibleTerminalSelected = Boolean(
@@ -296,21 +303,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setTab,
   })
 
-  useBoardPreferenceEffects({
-    snapshot,
-    themeSelection,
-    chatTypography,
-    setHydrated,
-    setThemeSelection,
-    setKeymap,
-    setChatTypography,
-    setAgentByProject,
-    persistTheme: setThemePreference,
-    persistKeymap: setKeymapPreference,
-    persistChatTypography: setChatTypographyPreference,
-    persistAgentByProject: setAgentByProjectPreference,
-  })
-
   React.useEffect(() => {
     const previousProjectId = previousSelectedProjectIdRef.current
     previousSelectedProjectIdRef.current = selection.projectId
@@ -393,23 +385,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   )
 
   useHostMenuActions(commandActions)
-  const {
-    changeThemePreference,
-    changeKeymapPreference,
-    resetKeymapPreference,
-    changeChatTypographyPreference,
-  } = useSettingsPreferenceActions({
-    keymap,
-    themeSelection,
-    chatTypography,
-    setKeymap,
-    setThemeSelection,
-    setChatTypography,
-    persistKeymap: setKeymapPreference,
-    persistTheme: setThemePreference,
-    persistChatTypography: setChatTypographyPreference,
-  })
-
   if (settingsOpen) {
     return (
       <SettingsScreen
