@@ -5,9 +5,6 @@ import { useServerFn } from '@tanstack/react-start'
 import type {
   ProjectRow,
   RuntimeKind,
-  ScratchpadBlock,
-  SessionInterfaceMode,
-  ThinkingLevel,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import type { ThemeSelection } from '~/theme/kiri-themes'
@@ -48,6 +45,7 @@ import { AgentSwitcherSheet, MobileTopBar } from './kiri-board/board-navigation'
 import { useBoardKeyboardShortcuts } from './kiri-board/board-keyboard-shortcuts'
 import { useBoardPreferenceEffects } from './kiri-board/board-preferences'
 import { useBoardProjectActions } from './kiri-board/board-project-actions'
+import { useBoardScratchpadActions } from './kiri-board/board-scratchpad-actions'
 import { useBoardSelection } from './kiri-board/board-selection'
 import { useBoardSessionActions } from './kiri-board/board-session-actions'
 import { buildBoardCommandActions } from './kiri-board/command-actions'
@@ -219,6 +217,16 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     unhideProject,
   ])
 
+  const scratchpadMutations = React.useMemo(() => ({
+    addScratchpadBlock,
+    deleteScratchpadBlock,
+    triggerScratchpadBlock,
+  }), [
+    addScratchpadBlock,
+    deleteScratchpadBlock,
+    triggerScratchpadBlock,
+  ])
+
   const {
     pendingDelete,
     deleteInFlight,
@@ -273,6 +281,19 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     forgetProject,
     activateProject,
     activateProjectIfCurrent,
+  })
+
+  const {
+    handleCaptureBlock,
+    handleDeleteBlock,
+    handleTriggerBlock,
+  } = useBoardScratchpadActions({
+    selectedProjectId: selectedProject?.id,
+    mutations: scratchpadMutations,
+    applyWorkspace,
+    runWorkspaceMutation,
+    selectAgent,
+    setTab,
   })
 
   useBoardPreferenceEffects({
@@ -336,51 +357,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setTab,
     setTerminalFocusRequest,
   })
-
-  async function handleCaptureBlock(body: string, projectId: string | null) {
-    await runWorkspaceMutation(
-      () => addScratchpadBlock({ data: { body, projectId } }),
-      applyWorkspace,
-    )
-  }
-
-  async function handleDeleteBlock(id: string) {
-    await runWorkspaceMutation(
-      () => deleteScratchpadBlock({ data: { id } }),
-      applyWorkspace,
-    )
-  }
-
-  async function handleTriggerBlock(
-    block: ScratchpadBlock,
-    overrides?: {
-      projectId?: string
-      runtime?: RuntimeKind
-      interfaceMode?: SessionInterfaceMode
-      model?: string
-      thinkingLevel?: ThinkingLevel
-      title?: string
-    },
-  ) {
-    const projectId = overrides?.projectId ?? block.projectId ?? selectedProject?.id
-    if (!projectId) throw new Error('Pick a project before triggering a block')
-    const result = await runWorkspaceMutation(
-      () => triggerScratchpadBlock({
-        data: {
-          id: block.id,
-          projectId,
-          runtime: overrides?.runtime,
-          interfaceMode: overrides?.interfaceMode,
-          model: overrides?.model,
-          title: overrides?.title,
-          thinkingLevel: overrides?.thinkingLevel ?? 'medium',
-        },
-      }),
-      (next) => applyWorkspace(next.snapshot),
-    )
-    selectAgent(projectId, result.agentId)
-    setTab('chat')
-  }
 
   function openSessionLauncher(projectId = selectedProject?.id, runtime?: RuntimeKind) {
     const project = workspace.projects.find((item) => item.id === projectId)

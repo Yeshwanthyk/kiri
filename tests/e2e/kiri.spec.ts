@@ -925,7 +925,7 @@ test('escape leaves scratchpad input so sidebar keymaps work', async ({ page, is
   await expect(page.getByTestId('diff-panel')).toContainText('No diffs')
 })
 
-test('scratchpad trigger starts codex in terminal mode by default', async ({ page, isMobile }, testInfo) => {
+test('scratchpad trigger can start codex in terminal mode', async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, 'desktop terminal trigger flow')
   const title = `Scratchpad Trigger Seed ${testInfo.project.name}`
   const body = `scratchpad codex terminal ${testInfo.project.name}`
@@ -935,6 +935,7 @@ test('scratchpad trigger starts codex in terminal mode by default', async ({ pag
 
   await page.getByTestId('tab-scratchpad').click()
   await expect(page.getByText(/trigger as/i)).toBeVisible()
+  await page.getByRole('radio', { name: 'terminal' }).click()
   await expect(page.getByText(/terminal · codex/)).toBeVisible()
 
   await page.getByTestId('scratchpad-input').fill(body)
