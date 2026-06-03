@@ -11,7 +11,7 @@ import { useBoardKeyboardShortcuts } from './kiri-board/board-keyboard-shortcuts
 import { useBoardPreferences } from './kiri-board/board-preferences'
 import { useBoardProjectActions } from './kiri-board/board-project-actions'
 import { useBoardScratchpadActions } from './kiri-board/board-scratchpad-actions'
-import { useBoardSelection } from './kiri-board/board-selection'
+import { useBoardSelection, useProjectSelectionScroll } from './kiri-board/board-selection'
 import { useBoardServerActions } from './kiri-board/board-server-actions'
 import { useBoardSessionActions } from './kiri-board/board-session-actions'
 import { buildBoardCommandActions } from './kiri-board/command-actions'
@@ -30,7 +30,6 @@ import { useBoardWorkspace } from './kiri-board/board-workspace'
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const boardScrollRef = React.useRef<HTMLDivElement | null>(null)
-  const previousSelectedProjectIdRef = React.useRef<string | null>(null)
   const [tab, setTab] = React.useState<SidebarTab>('chat')
   const {
     settingsOpen,
@@ -203,29 +202,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setTab,
   })
 
-  React.useEffect(() => {
-    const previousProjectId = previousSelectedProjectIdRef.current
-    previousSelectedProjectIdRef.current = selection.projectId
-    if (!previousProjectId || previousProjectId === selection.projectId) return
-
-    const pane = boardScrollRef.current
-    if (!pane || !selection.projectId) return
-    const target = pane.querySelector<HTMLElement>('[data-project-selected="true"]')
-    if (!target) return
-
-    const paneRect = pane.getBoundingClientRect()
-    const targetRect = target.getBoundingClientRect()
-    const edgePadding = 18
-    const delta =
-      targetRect.top < paneRect.top + edgePadding
-        ? targetRect.top - paneRect.top - edgePadding
-        : targetRect.bottom > paneRect.bottom - edgePadding
-          ? targetRect.bottom - paneRect.bottom + edgePadding
-          : 0
-    if (Math.abs(delta) > 8) {
-      pane.scrollBy({ top: delta, behavior: 'auto' })
-    }
-  }, [selection.projectId])
+  useProjectSelectionScroll(selection.projectId, boardScrollRef)
 
   useBoardKeyboardShortcuts({
     agentSwitcherOpen,

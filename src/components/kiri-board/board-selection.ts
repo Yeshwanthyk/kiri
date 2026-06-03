@@ -105,6 +105,37 @@ export function useBoardSelection({
   ])
 }
 
+export function useProjectSelectionScroll(
+  selectedProjectId: string,
+  boardScrollRef: React.RefObject<HTMLDivElement | null>,
+) {
+  const previousSelectedProjectIdRef = React.useRef<string | null>(null)
+
+  React.useEffect(() => {
+    const previousProjectId = previousSelectedProjectIdRef.current
+    previousSelectedProjectIdRef.current = selectedProjectId
+    if (!previousProjectId || previousProjectId === selectedProjectId) return
+
+    const pane = boardScrollRef.current
+    if (!pane || !selectedProjectId) return
+    const target = pane.querySelector<HTMLElement>('[data-project-selected="true"]')
+    if (!target) return
+
+    const paneRect = pane.getBoundingClientRect()
+    const targetRect = target.getBoundingClientRect()
+    const edgePadding = 18
+    const delta =
+      targetRect.top < paneRect.top + edgePadding
+        ? targetRect.top - paneRect.top - edgePadding
+        : targetRect.bottom > paneRect.bottom - edgePadding
+          ? targetRect.bottom - paneRect.bottom + edgePadding
+          : 0
+    if (Math.abs(delta) > 8) {
+      pane.scrollBy({ top: delta, behavior: 'auto' })
+    }
+  }, [boardScrollRef, selectedProjectId])
+}
+
 export function resolveBoardSelection(
   workspace: WorkspaceSnapshot,
   activeProjectId: string,
