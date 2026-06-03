@@ -64,7 +64,7 @@ export function InlineSessionLauncher({
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const launcherRef = React.useRef<HTMLFormElement | null>(null)
-  const firstRuntimeRef = React.useRef<HTMLButtonElement>(null)
+  const runtimeButtonRefs = React.useRef(new Map<RuntimeKind, HTMLButtonElement>())
   const settingsRef = React.useRef(settings)
   const runtimes = runtimeOptions(settings)
   const selectedRuntime = runtimeOption(settings, runtime)
@@ -109,8 +109,8 @@ export function InlineSessionLauncher({
   useFocusReturn()
 
   React.useEffect(() => {
-    if (mode === 'new') firstRuntimeRef.current?.focus()
-  }, [mode])
+    if (mode === 'new') runtimeButtonRefs.current.get(runtime)?.focus()
+  }, [mode, runtime])
 
   React.useEffect(() => {
     settingsRef.current = settings
@@ -135,8 +135,8 @@ export function InlineSessionLauncher({
       normalizeInterfaceMode(nextRuntime, settings.runtimes[nextRuntime], current))
   }
 
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function startSession() {
+    if (pending) return
     setPending(true)
     setError(null)
     try {
@@ -153,6 +153,43 @@ export function InlineSessionLauncher({
     }
   }
 
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    await startSession()
+  }
+
+  function selectRuntimeByNumber(key: string) {
+    const number = Number(key)
+    if (!Number.isInteger(number) || number < 1) return false
+    const option = runtimes[number - 1]
+    if (!option) return false
+    updateRuntime(option.runtime)
+    runtimeButtonRefs.current.get(option.runtime)?.focus()
+    return true
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLFormElement>) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      onCancel()
+      return
+    }
+
+    if (mode === 'new' && !pending) {
+      if (selectRuntimeByNumber(event.key)) {
+        event.preventDefault()
+        return
+      }
+      if (event.key === 'Enter' && isRuntimeCardTarget(event.target)) {
+        event.preventDefault()
+        void startSession()
+        return
+      }
+    }
+
+    trapTabFocus(event, launcherRef.current)
+  }
+
   return (
     <>
       <button
@@ -165,14 +202,7 @@ export function InlineSessionLauncher({
         ref={launcherRef}
         className="session-start-form session-dialog"
         onSubmit={(event) => void submit(event)}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            onCancel()
-            return
-          }
-          trapTabFocus(event, launcherRef.current)
-        }}
+        onKeyDown={handleKeyDown}
         role="dialog"
         aria-modal="true"
         aria-labelledby="session-dialog-title"
@@ -223,19 +253,28 @@ export function InlineSessionLauncher({
               <div className="session-runtime-grid" data-testid="session-runtime">
                 {runtimes.map((item, index) => {
                   const active = runtime === item.runtime
+                  const shortcut = String(index + 1)
                   return (
                     <button
                       key={item.runtime}
-                      ref={index === 0 ? firstRuntimeRef : undefined}
+                      ref={(node) => {
+                        if (node) runtimeButtonRefs.current.set(item.runtime, node)
+                        else runtimeButtonRefs.current.delete(item.runtime)
+                      }}
                       type="button"
                       className="session-runtime-card"
+                      data-session-runtime-card="true"
                       data-active={active ? 'true' : undefined}
                       onClick={() => updateRuntime(item.runtime)}
                       disabled={pending}
                       aria-pressed={active}
+                      aria-keyshortcuts={shortcut}
                     >
-                      <span>
-                        <strong>{item.label}</strong>
+                      <span className="session-runtime-card-head">
+                        <span className="session-runtime-name">
+                          <kbd className="session-runtime-shortcut" aria-hidden="true">{shortcut}</kbd>
+                          <strong>{item.label}</strong>
+                        </span>
                         <code>{item.meta}</code>
                       </span>
                       <small>{item.detail}</small>
@@ -324,4 +363,9 @@ export function InlineSessionLauncher({
       </form>
     </>
   )
+}
+
+function isRuntimeCardTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement
+    && target.closest('[data-session-runtime-card="true"]') !== null
 }

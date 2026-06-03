@@ -257,11 +257,42 @@
   transform: scale(0.98);
 }
 
-.session-runtime-card > span {
+.session-runtime-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.session-runtime-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.session-runtime-shortcut {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.session-runtime-card:focus-visible .session-runtime-shortcut,
+.session-runtime-card[data-active='true'] .session-runtime-shortcut {
+  border-color: var(--accent-muted);
+  background: var(--accent-soft);
+  color: var(--ink);
 }
 
 .session-runtime-card strong {

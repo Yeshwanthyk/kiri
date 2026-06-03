@@ -224,6 +224,31 @@ test('start and remove session with keymaps', async ({ page }, testInfo) => {
   await expect(page.getByTestId('board-pane')).not.toContainText(title)
 })
 
+test('session launcher selects provider by number and enter starts it', async ({ page }, testInfo) => {
+  const title = `Number Provider ${testInfo.project.name}`
+
+  await page.goto('/')
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+
+  await pressShiftKey(page, 'KeyN')
+  await expect(page.getByTestId('session-launcher')).toBeVisible()
+
+  const claudeRuntime = page
+    .getByTestId('session-runtime')
+    .getByRole('button', { name: /^Claude\b/ })
+  await expect(claudeRuntime).toHaveAttribute('aria-keyshortcuts', '3')
+
+  await page.keyboard.press('3')
+  await expectRuntimeSelected(page, 'claude')
+  await expect(page.getByTestId('session-interface-mode')).toBeHidden()
+
+  const existingSessionIds = await startedSessionIds()
+  await page.keyboard.press('Enter')
+
+  await renameLatestSessionForTest(page, title, existingSessionIds)
+  await expect(page.getByTestId('selected-agent')).toHaveText(title)
+})
+
 test('session launcher resumes an existing local session', async ({ page }, testInfo) => {
   const firstTitle = `Resume First ${testInfo.project.name}`
   const secondTitle = `Resume Second ${testInfo.project.name}`
