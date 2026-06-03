@@ -1,9 +1,9 @@
 'use client'
 
 import {
-  Bot,
   Check,
   Plus,
+  TerminalSquare,
 } from 'lucide-react'
 import * as React from 'react'
 import type {
@@ -210,7 +210,7 @@ export function InlineSessionLauncher({
       >
         <div className="session-launcher-head">
           <span className="session-dialog-icon" aria-hidden="true">
-            <Bot size={16} />
+            <TerminalSquare size={16} />
           </span>
           <div>
             <p className="settings-kicker">Session launcher</p>
@@ -271,12 +271,10 @@ export function InlineSessionLauncher({
                       aria-keyshortcuts={shortcut}
                     >
                       <span className="session-runtime-card-head">
-                        <span className="session-runtime-name">
-                          <kbd className="session-runtime-shortcut" aria-hidden="true">{shortcut}</kbd>
-                          <strong>{item.label}</strong>
-                        </span>
-                        <code>{item.meta}</code>
+                        <kbd className="session-runtime-shortcut" aria-hidden="true">{shortcut}</kbd>
+                        <strong>{item.label}</strong>
                       </span>
+                      <code>{item.meta}</code>
                       <small>{item.detail}</small>
                     </button>
                   )
