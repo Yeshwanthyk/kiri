@@ -4,11 +4,9 @@ import * as React from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import type {
   ProjectRow,
-  ReviewTarget,
   RuntimeKind,
   ScratchpadBlock,
   SessionInterfaceMode,
-  SendMessageImage,
   ThinkingLevel,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
@@ -51,7 +49,7 @@ import { AgentSwitcherSheet, MobileTopBar } from './kiri-board/board-navigation'
 import { useBoardKeyboardShortcuts } from './kiri-board/board-keyboard-shortcuts'
 import { useBoardPreferenceEffects } from './kiri-board/board-preferences'
 import { useBoardSelection } from './kiri-board/board-selection'
-import { fallbackAgentAfterSessionDelete } from './kiri-board/board-session-actions'
+import { useBoardSessionActions } from './kiri-board/board-session-actions'
 import { buildBoardCommandActions } from './kiri-board/command-actions'
 import { useHostMenuActions } from './kiri-board/host-menu-actions'
 import { CommandPalette } from './kiri-board/command-palette'
@@ -63,10 +61,7 @@ import { InlineSessionLauncher } from './kiri-board/session-launcher'
 import { useSettingsPreferenceActions } from './kiri-board/settings-preference-actions'
 import { SettingsScreen } from './kiri-board/settings-screen'
 import { SelectedAgentPane } from './kiri-board/selected-agent-pane'
-import {
-  type RefreshAgentDetail,
-  type SidebarTab,
-} from './kiri-board/board-types'
+import type { SidebarTab } from './kiri-board/board-types'
 import { useBoardWorkspace } from './kiri-board/board-workspace'
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
@@ -83,8 +78,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   } | null>(null)
   const [agentSwitcherOpen, setAgentSwitcherOpen] = React.useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
-  const [pendingDelete, setPendingDelete] = React.useState<{ agentId: string; title: string } | null>(null)
-  const [deleteInFlight, setDeleteInFlight] = React.useState(false)
   const [pendingProjectDelete, setPendingProjectDelete] = React.useState<ProjectRow | null>(null)
   const [projectDeleteInFlight, setProjectDeleteInFlight] = React.useState(false)
   const [projectVisibilityPendingId, setProjectVisibilityPendingId] = React.useState<string | null>(null)
@@ -163,6 +156,77 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     selectBoardProject(projectId)
     setChatFocusRequest(0)
   }, [selectBoardProject])
+
+  const closeSessionLauncher = React.useCallback(() => {
+    setSessionLauncherOpen(false)
+    setSessionLauncherPreset(null)
+  }, [])
+
+  const sessionMutations = React.useMemo(() => ({
+    renameSession,
+    deleteSession,
+    sendMessage,
+    refreshTerminalDiffs,
+    steerMessage,
+    interruptMessage,
+    setThinkingLevel,
+    resetSession,
+    forkSession,
+    reviewSession,
+    answerQuestion,
+    startSession,
+    restoreSession,
+  }), [
+    answerQuestion,
+    deleteSession,
+    forkSession,
+    interruptMessage,
+    refreshTerminalDiffs,
+    renameSession,
+    resetSession,
+    restoreSession,
+    reviewSession,
+    sendMessage,
+    setThinkingLevel,
+    startSession,
+    steerMessage,
+  ])
+
+  const resetChatFocus = React.useCallback(() => {
+    setChatFocusRequest(0)
+  }, [])
+
+  const {
+    pendingDelete,
+    deleteInFlight,
+    cancelDeleteSession,
+    confirmDeleteSession,
+    handleRenameSession,
+    handleDeleteSession,
+    handleSendMessage,
+    handleRefreshTerminalDiffs,
+    handleSteerMessage,
+    handleInterruptMessage,
+    handleThinkingCommand,
+    handleResetSession,
+    handleForkSession,
+    handleReviewSession,
+    handleAnswerQuestion,
+    handleStartSession,
+    handleResumeSession,
+  } = useBoardSessionActions({
+    selectedProject,
+    mutations: sessionMutations,
+    applyWorkspace,
+    runWorkspaceMutation,
+    withWorkspacePolling,
+    selectAgent,
+    forgetProject,
+    activateProject,
+    resetChatFocus,
+    setTab,
+    closeSessionLauncher,
+  })
 
   useBoardPreferenceEffects({
     snapshot,
@@ -290,165 +354,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     return pickProjectDirectory(() => chooseProjectDirectory())
   }
 
-  async function handleRenameSession(agentId: string, title: string) {
-    await runWorkspaceMutation(
-      () => renameSession({ data: { agentId, title } }),
-      applyWorkspace,
-    )
-  }
-
-  function handleDeleteSession(agentId: string) {
-    const agent = selectedProject?.agents.find((item) => item.id === agentId)
-    if (!agent || !selectedProject) return
-    setPendingDelete({ agentId, title: agent.title })
-  }
-
-  async function confirmDeleteSession() {
-    if (!pendingDelete || !selectedProject) return
-    const { agentId } = pendingDelete
-    const currentProjectId = selectedProject.id
-    const currentProject = selectedProject
-    const currentIndex = currentProject.agents.findIndex((agent) => agent.id === agentId)
-    setDeleteInFlight(true)
-    try {
-      const next = await runWorkspaceMutation(
-        () => deleteSession({ data: { agentId } }),
-        applyWorkspace,
-      )
-      const project =
-        next.projects.find((item) => item.id === currentProjectId) ?? next.projects[0]
-      if (!project) return
-      const fallbackAgent = fallbackAgentAfterSessionDelete(project, currentIndex)
-      if (fallbackAgent) {
-        selectAgent(project.id, fallbackAgent.id)
-      } else {
-        forgetProject(project.id)
-        activateProject(project.id)
-        setChatFocusRequest(0)
-      }
-    } finally {
-      setDeleteInFlight(false)
-      setPendingDelete(null)
-    }
-  }
-
-  async function refreshDetailAfterSend(onDetailRefresh?: RefreshAgentDetail) {
-    await onDetailRefresh?.()
-  }
-
-  async function handleSendMessage(
-    agentId: string,
-    text: string,
-    images: SendMessageImage[] = [],
-    onDetailRefresh?: RefreshAgentDetail,
-  ) {
-    await withWorkspacePolling(
-      () => sendMessage({ data: { agentId, text, images } }),
-      (next) => applyWorkspace(next),
-      onDetailRefresh,
-    )
-    await refreshDetailAfterSend(onDetailRefresh)
-  }
-
-  async function handleRefreshTerminalDiffs(
-    agentId: string,
-    onDetailRefresh?: RefreshAgentDetail,
-  ) {
-    await runWorkspaceMutation(
-      () => refreshTerminalDiffs({ data: { agentId } }),
-      applyWorkspace,
-    )
-    await onDetailRefresh?.()
-  }
-
-  async function handleSteerMessage(
-    agentId: string,
-    text: string,
-    images: SendMessageImage[] = [],
-  ) {
-    await runWorkspaceMutation(
-      () => steerMessage({ data: { agentId, text, images } }),
-      applyWorkspace,
-    )
-  }
-
-  async function handleInterruptMessage(agentId: string) {
-    await runWorkspaceMutation(
-      () => interruptMessage({ data: { agentId } }),
-      applyWorkspace,
-    )
-  }
-
-  async function handleThinkingCommand(agentId: string, level?: ThinkingLevel) {
-    await runWorkspaceMutation(
-      () => setThinkingLevel({ data: { agentId, level } }),
-      applyWorkspace,
-    )
-  }
-
-  async function handleResetSession(agentId: string) {
-    await runWorkspaceMutation(
-      () => resetSession({ data: { agentId } }),
-      applyWorkspace,
-    )
-  }
-
-  async function handleForkSession(agentId: string) {
-    const result = await runWorkspaceMutation(
-      () => forkSession({ data: { agentId } }),
-      (next) => applyWorkspace(next.snapshot),
-    )
-    const project = result.snapshot.projects.find((item) =>
-      item.agents.some((agent) => agent.id === result.agentId),
-    )
-    if (project) {
-      selectAgent(project.id, result.agentId)
-    }
-  }
-
-  async function handleReviewSession(agentId: string, target: ReviewTarget) {
-    await runWorkspaceMutation(
-      () => reviewSession({ data: { agentId, target } }),
-      applyWorkspace,
-    )
-  }
-
-  async function handleAnswerQuestion(
-    agentId: string,
-    requestId: string,
-    answers: Record<string, string | string[]>,
-  ) {
-    await runWorkspaceMutation(
-      () => answerQuestion({ data: { agentId, requestId, answers } }),
-      applyWorkspace,
-    )
-  }
-
-  async function handleStartSession(input: {
-    projectId: string
-    runtime: RuntimeKind
-    interfaceMode: SessionInterfaceMode
-    model?: string
-    title?: string
-    thinkingLevel: ThinkingLevel
-  }) {
-    const next = await runWorkspaceMutation(
-      () => startSession({ data: input }),
-      applyWorkspace,
-    )
-    const project = next.projects.find((item) => item.id === input.projectId)
-    const agent =
-      (input.title
-        ? project?.agents.find((item) => item.title === input.title)
-        : undefined) ?? project?.agents[project.agents.length - 1]
-    if (project && agent) {
-      selectAgent(project.id, agent.id)
-    }
-    setTab('chat')
-    setSessionLauncherOpen(false)
-    setSessionLauncherPreset(null)
-  }
-
   async function handleCaptureBlock(body: string, projectId: string | null) {
     await runWorkspaceMutation(
       () => addScratchpadBlock({ data: { body, projectId } }),
@@ -494,22 +399,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setTab('chat')
   }
 
-  async function handleResumeSession(projectId: string, agentId: string, archived: boolean) {
-    if (!archived) {
-      selectAgent(projectId, agentId)
-      setTab('chat')
-      setSessionLauncherOpen(false)
-      return
-    }
-    await runWorkspaceMutation(
-      () => restoreSession({ data: { agentId } }),
-      applyWorkspace,
-    )
-    selectAgent(projectId, agentId)
-    setTab('chat')
-    setSessionLauncherOpen(false)
-  }
-
   function openSessionLauncher(projectId = selectedProject?.id, runtime?: RuntimeKind) {
     const project = workspace.projects.find((item) => item.id === projectId)
     if (project) {
@@ -522,11 +411,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setCommandPaletteOpen(false)
     setAgentSwitcherOpen(false)
     setSessionLauncherOpen(true)
-  }
-
-  function closeSessionLauncher() {
-    setSessionLauncherOpen(false)
-    setSessionLauncherPreset(null)
   }
 
   const commandActions = React.useMemo(
@@ -711,7 +595,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           onConfirm={() => void confirmDeleteSession()}
           onCancel={() => {
             if (deleteInFlight) return
-            setPendingDelete(null)
+            cancelDeleteSession()
           }}
         />
       ) : null}

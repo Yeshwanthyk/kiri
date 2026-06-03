@@ -12,7 +12,7 @@ type UseBoardWorkspaceInput = {
   readonly refreshWorkspaceRevision: () => Promise<WorkspaceRevision>
 }
 
-type BoardWorkspaceState = {
+export type BoardWorkspaceState = {
   readonly workspace: WorkspaceSnapshot
   readonly applyWorkspace: (next: WorkspaceSnapshot) => void
   readonly runWorkspaceMutation: <T>(
