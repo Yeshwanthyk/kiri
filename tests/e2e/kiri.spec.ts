@@ -4,6 +4,7 @@ import { rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { refreshReadModelEntriesIfChanged } from '../../src/server/read-model-indexer'
 import { startFakeCodexAppServer } from '../harness/fake-codex-app-server.mjs'
 
 test.describe.configure({ mode: 'serial', timeout: 60_000 })
@@ -127,7 +128,7 @@ test('empty workspace starts with an add-project path', async ({ page }) => {
   await expect(page.getByTestId('selected-agent').first()).toHaveText('No session')
 })
 
-test('user Pi model override preserves interface modes', async ({ page }) => {
+test('user Pi settings can opt into GUI interface mode', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   mkdirSync(dirname(userSettingsPath), { recursive: true })
@@ -136,6 +137,8 @@ test('user Pi model override preserves interface modes', async ({ page }) => {
       pi: {
         models: ['deepseek/deepseek-v4-flash'],
         contextWindows: { 'deepseek/deepseek-v4-flash': 1_000_000 },
+        interfaceModes: ['gui', 'terminal'],
+        defaultInterfaceMode: 'gui',
       },
     },
   }))
@@ -146,7 +149,6 @@ test('user Pi model override preserves interface modes', async ({ page }) => {
   await expect(page.getByTestId('session-launcher')).toBeVisible()
   await clickRuntime(page, 'pi')
   await expectRuntimeSelected(page, 'pi')
-  await expect(page.getByTestId('session-model')).toContainText('deepseek/deepseek-v4-flash')
   await expect(page.getByTestId('session-interface-mode').getByRole('button', { name: 'GUI' })).toBeVisible()
   await expect(page.getByTestId('session-interface-mode').getByRole('button', { name: 'Terminal' })).toBeVisible()
   expect(pageErrors.filter((message) => message.includes('interfaceModes'))).toEqual([])
@@ -198,19 +200,19 @@ test('start and remove session with keymaps', async ({ page }, testInfo) => {
   await pressShiftKey(page, 'KeyN')
   await expect(page.getByTestId('session-launcher')).toBeVisible()
 
-  const sessionModel = page.getByTestId('session-model')
   await expectRuntimeSelected(page, 'codex')
-  await expect(sessionModel).toContainText('gpt-5.5')
+  await expect(page.getByTestId('session-interface-mode').getByRole('button', { name: 'GUI' })).toBeVisible()
+  await expect(page.getByTestId('session-interface-mode').getByRole('button', { name: 'Terminal' })).toBeVisible()
 
   await clickRuntime(page, 'claude')
   await expectRuntimeSelected(page, 'claude')
-  await expect(sessionModel).toContainText('claude-opus-4-7')
-  await page.getByTestId('session-title').fill(title)
+  await expect(page.getByTestId('session-interface-mode')).toBeHidden()
   await page
     .getByTestId('session-launcher')
-    .getByRole('button', { name: /^Start .* session$/ })
+    .getByRole('button', { name: 'Start session' })
     .click()
 
+  await renameLatestSessionForTest(page, title)
   await expect(page.getByTestId('selected-agent')).toHaveText(title)
 
   await pressShiftKey(page, 'KeyX')
@@ -289,9 +291,7 @@ test('session launcher keeps runtime presets isolated from normal starts', async
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('session-launcher')).toBeVisible()
   await expectRuntimeSelected(page, 'claude')
-  await expect(page.getByTestId('session-model')).toContainText('claude-opus-4-7')
-  await expect(page.getByTestId('session-interface-mode').getByRole('button')).toHaveCount(1)
-  await expect(page.getByTestId('session-interface-mode').getByRole('button', { name: 'Terminal' })).toBeVisible()
+  await expect(page.getByTestId('session-interface-mode')).toBeHidden()
 
   await page.keyboard.press('Escape')
   await page.keyboard.press('Control+K')
@@ -299,9 +299,7 @@ test('session launcher keeps runtime presets isolated from normal starts', async
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('session-launcher')).toBeVisible()
   await expectRuntimeSelected(page, 'opencode')
-  await expect(page.getByTestId('session-model')).toContainText('opencode/gpt-5.5')
-  await expect(page.getByTestId('session-interface-mode').getByRole('button')).toHaveCount(1)
-  await expect(page.getByTestId('session-interface-mode').getByRole('button', { name: 'Terminal' })).toBeVisible()
+  await expect(page.getByTestId('session-interface-mode')).toBeHidden()
 
   await page.keyboard.press('Escape')
   await pressShiftKey(page, 'KeyN')
@@ -309,10 +307,7 @@ test('session launcher keeps runtime presets isolated from normal starts', async
   await expectRuntimeSelected(page, 'codex')
 })
 
-test('command menu starts, switches, and ends sessions', async ({ page }, testInfo) => {
-  const firstTitle = `Command First ${testInfo.project.name}`
-  const secondTitle = `Command Second ${testInfo.project.name}`
-
+test('command menu starts, switches, and ends sessions', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
 
@@ -326,18 +321,21 @@ test('command menu starts, switches, and ends sessions', async ({ page }, testIn
   await page.getByTestId('command-search').fill('start')
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('session-launcher')).toBeVisible()
-  await page.getByTestId('session-title').fill(firstTitle)
   await page
     .getByTestId('session-launcher')
-    .getByRole('button', { name: /^Start .* session$/ })
+    .getByRole('button', { name: 'Start session' })
     .click()
 
-  await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
-  await createSession(page, secondTitle)
+  const firstTitle = await selectedSessionTitle(page)
+  await startUntitledSession(page)
+  const secondTitle = await selectedSessionTitle(page)
+  expect(secondTitle).not.toBe(firstTitle)
 
   await page.keyboard.press('Control+K')
   await page.getByTestId('command-search').fill(firstTitle)
-  await page.keyboard.press('Enter')
+  await page
+    .getByRole('option', { name: new RegExp(`Switch to ${escapeRegExp(firstTitle)}`) })
+    .click()
   await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
 
   await page.keyboard.press('Control+K')
@@ -1057,7 +1055,7 @@ test('core controls expose accessible dialog, tab, and option semantics', async 
   await expect(projectsButton).toBeFocused()
 })
 
-test('launcher, confirm, and settings controls expose accessible states', async ({ page }, testInfo) => {
+test('launcher, confirm, and settings controls expose accessible states', async ({ page, isMobile }, testInfo) => {
   const title = `A11y Dialog ${testInfo.project.name}`
 
   await page.goto('/')
@@ -1085,9 +1083,13 @@ test('launcher, confirm, and settings controls expose accessible states', async 
 
   await createSession(page, title)
   const removeSessionButton = page.getByTestId('remove-session')
-  await removeSessionButton.focus()
-  await expect(removeSessionButton).toBeFocused()
-  await removeSessionButton.click()
+  if (isMobile) {
+    await pressShiftKey(page, 'KeyX')
+  } else {
+    await removeSessionButton.focus()
+    await expect(removeSessionButton).toBeFocused()
+    await removeSessionButton.click()
+  }
   const confirm = page.getByTestId('confirm-dialog')
   await expect(confirm).toHaveAttribute('role', 'alertdialog')
   await expect(confirm).toContainText(title)
@@ -1098,7 +1100,9 @@ test('launcher, confirm, and settings controls expose accessible states', async 
   await expect(page.getByTestId('confirm-dialog-confirm')).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(confirm).toBeHidden()
-  await expect(removeSessionButton).toBeFocused()
+  if (!isMobile) {
+    await expect(removeSessionButton).toBeFocused()
+  }
 
   await page.getByRole('button', { name: 'Settings' }).click()
   const themeModeTabs = page.getByRole('tablist', { name: 'Theme mode' })
@@ -1116,23 +1120,131 @@ test('launcher, confirm, and settings controls expose accessible states', async 
 async function createSession(
   page: import('@playwright/test').Page,
   title: string,
-  runtime: 'pi' | 'codex' | 'claude' | 'opencode' = 'pi',
+  runtime: 'pi' | 'codex' | 'claude' | 'opencode' = 'codex',
   thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh',
   interfaceMode: 'gui' | 'terminal' = 'gui',
 ) {
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
   await pressShiftKey(page, 'KeyN')
   await clickRuntime(page, runtime)
-  await clickInterfaceMode(page, terminalOnlyRuntime(runtime) ? 'terminal' : interfaceMode)
-  if (thinkingLevel) {
-    await clickThinkingLevel(page, thinkingLevel)
+  if (await sessionInterfaceModePickerVisible(page)) {
+    await clickInterfaceMode(page, interfaceMode)
   }
-  await page.getByTestId('session-title').fill(title)
   await page
     .getByTestId('session-launcher')
-    .getByRole('button', { name: /^Start .* session$/ })
+    .getByRole('button', { name: 'Start session' })
     .click()
+  await renameLatestSessionForTest(page, title)
+  if (thinkingLevel) {
+    await setThinkingLevel(page, thinkingLevel)
+  }
   await expect(page.getByTestId('selected-agent')).toHaveText(title)
+}
+
+async function startUntitledSession(page: import('@playwright/test').Page) {
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  await pressShiftKey(page, 'KeyN')
+  await page
+    .getByTestId('session-launcher')
+    .getByRole('button', { name: 'Start session' })
+    .click()
+  return selectedSessionTitle(page)
+}
+
+async function selectedSessionTitle(page: import('@playwright/test').Page) {
+  const selectedAgent = page.getByTestId('selected-agent')
+  await expect(selectedAgent).not.toHaveText('No session')
+  const title = (await selectedAgent.textContent())?.trim()
+  if (!title) throw new Error('Selected session title was empty')
+  return title
+}
+
+async function renameLatestSessionForTest(page: import('@playwright/test').Page, title: string) {
+  const row = await latestStartedSessionRow()
+  await updateSessionTitleForTest(row.id, title)
+  await page.reload()
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  await selectSessionByTitleForTest(page, title)
+  await expect(page.getByTestId('selected-agent')).toHaveText(title)
+}
+
+async function updateSessionTitleForTest(agentId: string, title: string) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const database = new DatabaseSync(testDbPath)
+    try {
+      database.exec('PRAGMA busy_timeout = 100')
+      database.prepare('UPDATE agent_slots SET title = ? WHERE id = ?').run(title, agentId)
+      refreshReadModelEntriesIfChanged(database, {
+        env: { ...process.env, KIRI_READ_MODEL_INDEXER: 'typescript' },
+      })
+      database.close()
+      return
+    } catch (error) {
+      database.close()
+      if (!(error instanceof Error) || !error.message.includes('database is locked')) throw error
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+  throw new Error(`Could not rename session ${agentId}`)
+}
+
+async function selectSessionByTitleForTest(page: import('@playwright/test').Page, title: string) {
+  const boardCell = page.getByTestId('agent-cell').filter({ hasText: title }).first()
+  if (await boardCell.isVisible().catch(() => false)) {
+    await boardCell.click()
+    return
+  }
+  const titleButton = page.getByRole('button', { name: new RegExp(escapeRegExp(title)) })
+  const count = await titleButton.count()
+  for (let index = 0; index < count; index += 1) {
+    const button = titleButton.nth(index)
+    if (await button.isVisible().catch(() => false)) {
+      await button.click()
+      return
+    }
+  }
+  throw new Error(`Session ${title} was not visible after rename`)
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+async function latestStartedSessionRow() {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const database = new DatabaseSync(testDbPath)
+    const row = database
+      .prepare(`
+        SELECT id
+        FROM agent_slots
+        WHERE slot LIKE 'session-%' AND archived_at IS NULL
+        ORDER BY position DESC, id DESC
+        LIMIT 1
+      `)
+      .get() as { id: string } | undefined
+    database.close()
+    if (row) return row
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error('No started session to rename')
+}
+
+async function showSelectedAgentChat(page: import('@playwright/test').Page) {
+  const chatTabs = page.getByRole('tab', { name: /Chat/ })
+  const count = await chatTabs.count()
+  for (let index = 0; index < count; index += 1) {
+    const tab = chatTabs.nth(index)
+    if (await tab.isVisible().catch(() => false)) {
+      await tab.click()
+      await expect(tab).toHaveAttribute('aria-selected', 'true')
+      return
+    }
+  }
+}
+
+async function sessionInterfaceModePickerVisible(page: import('@playwright/test').Page) {
+  const picker = page.getByTestId('session-interface-mode')
+  return await picker.isVisible().catch(() => false)
 }
 
 async function clickInterfaceMode(
@@ -1173,18 +1285,15 @@ async function expectRuntimeSelected(
   ).toHaveAttribute('aria-pressed', 'true')
 }
 
-function terminalOnlyRuntime(runtime: 'pi' | 'codex' | 'claude' | 'opencode') {
-  return runtime === 'claude' || runtime === 'opencode'
-}
-
-async function clickThinkingLevel(
+async function setThinkingLevel(
   page: import('@playwright/test').Page,
   thinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh',
 ) {
-  await page
-    .getByTestId('session-thinking-level')
-    .getByRole('button', { name: thinkingLevel })
-    .click()
+  await showSelectedAgentChat(page)
+  await expect(page.getByTestId('chat-input')).toBeVisible()
+  await page.getByTestId('chat-input').fill(`/thinking ${thinkingLevel}`)
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('thinking-level')).toContainText(`Thinking ${thinkingLevel === 'minimal' ? 'low' : thinkingLevel}`)
 }
 
 function seedSessionWithDetail(input: {

@@ -1,24 +1,5 @@
 {
   "runtimes": {
-    "pi": {
-      "models": [
-        "openai-codex/gpt-5.5",
-        "vibeproxy-anthropic/claude-opus-4-7"
-      ],
-      "defaultModel": "openai-codex/gpt-5.5",
-      "contextWindows": {
-        "openai-codex/gpt-5.5": 258000,
-        "vibeproxy-anthropic/claude-opus-4-7": 1000000
-      },
-      "label": "Pi",
-      "meta": "provider hub",
-      "detail": "Use Pi provider routing and runtime-aware commands.",
-      "interfaceModes": [
-        "gui",
-        "terminal"
-      ],
-      "defaultInterfaceMode": "gui"
-    },
     "codex": {
       "models": [
         "gpt-5.5",
@@ -30,13 +11,29 @@
         "gpt-5.4": 272000
       },
       "label": "Codex",
-      "meta": "local app",
       "detail": "Attach or start a Codex session against this repo.",
       "interfaceModes": [
         "gui",
         "terminal"
       ],
       "defaultInterfaceMode": "gui"
+    },
+    "pi": {
+      "models": [
+        "openai-codex/gpt-5.5",
+        "vibeproxy-anthropic/claude-opus-4-7"
+      ],
+      "defaultModel": "openai-codex/gpt-5.5",
+      "contextWindows": {
+        "openai-codex/gpt-5.5": 258000,
+        "vibeproxy-anthropic/claude-opus-4-7": 1000000
+      },
+      "label": "Pi",
+      "detail": "Run Pi in the agent terminal for this project.",
+      "interfaceModes": [
+        "terminal"
+      ],
+      "defaultInterfaceMode": "terminal"
     },
     "claude": {
       "models": [
@@ -49,7 +46,6 @@
         "claude-sonnet-4-5": 200000
       },
       "label": "Claude",
-      "meta": "terminal",
       "detail": "Run Claude Code in the agent terminal for this project.",
       "interfaceModes": [
         "terminal"
@@ -67,7 +63,6 @@
         "opencode/gpt-5.4": 272000
       },
       "label": "OpenCode",
-      "meta": "terminal",
       "detail": "Run OpenCode TUI in the agent terminal for this project.",
       "interfaceModes": [
         "terminal"

@@ -1,4 +1,4 @@
-import type { RuntimeKind, SessionInterfaceMode, WorkspaceSnapshot } from '~/lib/contracts'
+import { runtimeKinds, type RuntimeKind, type SessionInterfaceMode, type WorkspaceSnapshot } from '~/lib/contracts'
 import { formatTokenCount } from './format'
 
 type RuntimeSettings = WorkspaceSnapshot['settings']['runtimes'][RuntimeKind]
@@ -20,7 +20,7 @@ export type ModelOption = {
 }
 
 export function runtimeOptions(settings: WorkspaceSnapshot['settings']): readonly RuntimeOption[] {
-  return (Object.keys(settings.runtimes) as RuntimeKind[]).map((runtime) => {
+  return runtimeKinds.map((runtime) => {
     const runtimeSettings = settings.runtimes[runtime]
     const interfaceModes = runtimeInterfaceModes(runtime, runtimeSettings)
     const defaultInterfaceMode = normalizeInterfaceMode(
@@ -31,13 +31,17 @@ export function runtimeOptions(settings: WorkspaceSnapshot['settings']): readonl
     return {
       runtime,
       label: runtimeSettings.label ?? runtime,
-      meta: runtimeSettings.meta ?? interfaceModes.join('/'),
+      meta: formatInterfaceModes(interfaceModes),
       detail: runtimeSettings.detail ?? runtimeSettings.defaultModel,
       defaultModel: runtimeSettings.defaultModel,
       interfaceModes,
       defaultInterfaceMode,
     }
   })
+}
+
+function formatInterfaceModes(modes: readonly SessionInterfaceMode[]) {
+  return modes.map((mode) => mode === 'gui' ? 'GUI' : 'Terminal').join(' / ')
 }
 
 export function runtimeOption(

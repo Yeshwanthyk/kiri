@@ -123,6 +123,34 @@ describe('settings service', () => {
       'deepseek/deepseek-v4-flash',
     ])
     expect(settings.runtimes.pi.contextWindows?.['deepseek/deepseek-v4-flash']).toBe(1_000_000)
+    expect(settings.runtimes.pi.interfaceModes).toEqual(['terminal'])
+    expect(settings.runtimes.pi.defaultInterfaceMode).toBe('terminal')
+  })
+
+  it('allows user settings to opt Pi back into GUI launches', () => {
+    const files = new Map([
+      ['/repo/settings.json', validSettingsJson],
+      ['/state/settings.json', JSON.stringify({
+        runtimes: {
+          pi: {
+            interfaceModes: ['gui', 'terminal'],
+            defaultInterfaceMode: 'gui',
+          },
+        },
+      })],
+    ])
+
+    const settings = loadSettings(
+      '/repo/settings.json',
+      (path) => {
+        const value = files.get(path)
+        if (value === undefined) throw new Error(`missing ${path}`)
+        return value
+      },
+      '/state/settings.json',
+      (path) => files.has(path),
+    )
+
     expect(settings.runtimes.pi.interfaceModes).toEqual(['gui', 'terminal'])
     expect(settings.runtimes.pi.defaultInterfaceMode).toBe('gui')
   })

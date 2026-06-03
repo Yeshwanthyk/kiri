@@ -7,7 +7,7 @@ import {
   uiPreferencesSchema,
 } from './ui-preferences'
 
-export const runtimeKinds = ['pi', 'codex', 'claude', 'opencode'] as const
+export const runtimeKinds = ['codex', 'pi', 'claude', 'opencode'] as const
 export const runtimeKindSchema = z.enum(runtimeKinds)
 export type RuntimeKind = z.infer<typeof runtimeKindSchema>
 
@@ -22,9 +22,9 @@ export function sessionInterfaceModeForRuntime(
   switch (runtime) {
     case 'claude':
     case 'opencode':
+    case 'pi':
       return 'terminal'
     case 'codex':
-    case 'pi':
       return interfaceMode ?? 'gui'
     default:
       return assertNeverRuntime(runtime)

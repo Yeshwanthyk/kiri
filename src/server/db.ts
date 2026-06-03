@@ -20,7 +20,6 @@ import type {
 import {
   agentDetailSchema,
   runtimeKindSchema,
-  sessionInterfaceModeForRuntime,
   sessionInterfaceModeSchema,
 } from '~/lib/contracts'
 import {
@@ -100,7 +99,13 @@ import {
   safeProjectPiSessionFile,
 } from './db/session-operations'
 import type { PiRpcEvent, PiRpcMessage } from './pi-rpc'
-import { assertConfiguredModel, getRuntimeSettings, getSettings } from './settings'
+import {
+  assertConfiguredModel,
+  defaultRuntime,
+  getRuntimeSettings,
+  getSettings,
+  normalizeConfiguredInterfaceMode,
+} from './settings'
 import { getKiriConfig, runtimeSessionDirPath, type KiriConfig } from './kiri-config'
 import { getUiPreferences } from './preferences'
 import { refreshReadModelEntriesIfChanged } from './read-model-indexer'
@@ -319,10 +324,13 @@ function insertSession(input: StartSessionInput) {
   const database = getDb()
   const projectId = input.projectId.trim()
   assertSessionProjectExists(database, projectId)
-  const runtime = runtimeKindSchema.parse(input.runtime ?? 'pi')
-  const requestedInterfaceMode = sessionInterfaceModeSchema.parse(input.interfaceMode ?? 'gui')
-  const interfaceMode = sessionInterfaceModeForRuntime(runtime, requestedInterfaceMode)
-  const runtimeSettings = getRuntimeSettings(runtime)
+  const settings = getSettings()
+  const runtime = runtimeKindSchema.parse(input.runtime ?? defaultRuntime(settings))
+  const requestedInterfaceMode = input.interfaceMode
+    ? sessionInterfaceModeSchema.parse(input.interfaceMode)
+    : undefined
+  const interfaceMode = normalizeConfiguredInterfaceMode(runtime, requestedInterfaceMode, settings)
+  const runtimeSettings = settings.runtimes[runtime] ?? getRuntimeSettings(runtime)
   const model = input.model?.trim() || runtimeSettings.defaultModel
   assertConfiguredModel(runtime, model)
 

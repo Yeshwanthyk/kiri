@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { Context, Data, Effect, Layer } from 'effect'
-import type { KiriSettings, RuntimeKind } from '~/lib/contracts'
-import { kiriSettingsSchema } from '~/lib/contracts'
+import type { KiriSettings, RuntimeKind, SessionInterfaceMode } from '~/lib/contracts'
+import { kiriSettingsSchema, runtimeKinds, sessionInterfaceModeForRuntime } from '~/lib/contracts'
 import bundledSettings from '../../settings.json' with { type: 'json' }
 import {
   KiriConfigService,
@@ -113,6 +113,30 @@ function parseSettingsObject(_settingsPath: string, settings: unknown): KiriSett
 
 export function getRuntimeSettings(runtime: RuntimeKind) {
   return getSettings().runtimes[runtime]
+}
+
+export function defaultRuntime(settings: KiriSettings = getSettings()): RuntimeKind {
+  const runtime = runtimeKinds.find((kind) => Boolean(settings.runtimes[kind]))
+  if (!runtime) throw new Error('No runtime configured')
+  return runtime
+}
+
+export function normalizeConfiguredInterfaceMode(
+  runtime: RuntimeKind,
+  requested?: SessionInterfaceMode,
+  settings: KiriSettings = getSettings(),
+): SessionInterfaceMode {
+  const runtimeSettings = settings.runtimes[runtime]
+  const modes = runtimeSettings.interfaceModes?.length
+    ? runtimeSettings.interfaceModes
+    : [sessionInterfaceModeForRuntime(runtime)]
+  if (requested && modes.includes(requested)) return requested
+  if (runtimeSettings.defaultInterfaceMode && modes.includes(runtimeSettings.defaultInterfaceMode)) {
+    return runtimeSettings.defaultInterfaceMode
+  }
+  const fallback = modes[0]
+  if (!fallback) throw new Error(`Runtime ${runtime} must expose at least one interface mode`)
+  return fallback
 }
 
 export function assertConfiguredModel(runtime: RuntimeKind, model: string) {

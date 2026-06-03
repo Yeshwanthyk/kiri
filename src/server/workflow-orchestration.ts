@@ -8,7 +8,6 @@ import type {
 } from '~/lib/contracts'
 import {
   createWorkflowRunInputSchema,
-  sessionInterfaceModeForRuntime,
 } from '~/lib/contracts'
 import {
   addScratchpadBlockSummary,
@@ -25,7 +24,7 @@ import {
   setWorkflowItemTracking,
   startSessionSummary,
 } from './db'
-import { getSettings } from './settings'
+import { defaultRuntime, getSettings, normalizeConfiguredInterfaceMode } from './settings'
 import { pasteAgentRuntimeTerminal } from './terminal-server'
 
 type NormalizedWorkflowItem = {
@@ -174,11 +173,12 @@ async function launchWorkflowItem(item: {
 }) {
   const run = getWorkflowRun(item.runId)
   try {
-    const runtime = item.runtime ?? 'pi'
+    const settings = getSettings()
+    const runtime = item.runtime ?? defaultRuntime(settings)
     const session = startSessionSummary({
       projectId: run.projectId,
       runtime,
-      interfaceMode: item.interfaceMode ?? 'gui',
+      interfaceMode: normalizeConfiguredInterfaceMode(runtime, item.interfaceMode ?? undefined, settings),
       model: item.model ?? undefined,
       title: item.title,
       thinkingLevel: parseThinkingLevel(item.thinkingLevel),
@@ -259,7 +259,7 @@ function normalizeWorkflowItems(input: CreateWorkflowRunInput): readonly Normali
       }
     }
 
-    const runtime = item.runtime ?? defaults.runtime ?? 'pi'
+    const runtime = item.runtime ?? defaults.runtime ?? defaultRuntime(settings)
     const runtimeSettings = settings.runtimes[runtime]
     const model = item.model ?? defaults.model ?? runtimeSettings.defaultModel
     if (!runtimeSettings.models.includes(model)) {
@@ -271,10 +271,7 @@ function normalizeWorkflowItems(input: CreateWorkflowRunInput): readonly Normali
       title: item.title,
       body: item.body,
       runtime,
-      interfaceMode: sessionInterfaceModeForRuntime(
-        runtime,
-        item.interfaceMode ?? defaults.interfaceMode ?? 'gui',
-      ),
+      interfaceMode: normalizeConfiguredInterfaceMode(runtime, item.interfaceMode ?? defaults.interfaceMode, settings),
       model,
       thinkingLevel: item.thinkingLevel ?? defaults.thinkingLevel ?? 'medium',
       terminalPaste: item.terminalPaste ?? defaults.terminalPaste ?? { submit: true },

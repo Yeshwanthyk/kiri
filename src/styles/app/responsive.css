@@ -229,21 +229,9 @@
   }
 
   .session-runtime-grid,
-  .session-model-list,
   .project-add-form,
   .project-list {
     grid-template-columns: 1fr;
-  }
-
-  .session-target-row {
-    grid-template-columns: 1fr;
-  }
-
-  .session-project-picker {
-    position: static;
-    width: 100%;
-    margin-top: -4px;
-    grid-column: 1;
   }
 
   .settings-rail {

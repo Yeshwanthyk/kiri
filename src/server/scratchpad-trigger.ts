@@ -4,7 +4,6 @@ import type {
   SessionInterfaceMode,
   ThinkingLevel,
 } from '~/lib/contracts'
-import { sessionInterfaceModeForRuntime } from '~/lib/contracts'
 import { Context, Data, Effect, Either, Layer } from 'effect'
 import {
   getScratchpadBlock,
@@ -15,6 +14,7 @@ import {
 } from './db'
 import { deleteSessionSummaryWithRuntimeCleanup } from './runtime-cleanup'
 import { promptAgent } from './runtime'
+import { defaultRuntime, getSettings, normalizeConfiguredInterfaceMode } from './settings'
 import { pasteAgentRuntimeTerminal } from './terminal-server'
 
 type TriggerScratchpadInput = {
@@ -157,9 +157,9 @@ async function triggerScratchpadSessionWithDeps(
   const block = dependencies.getScratchpadBlock(input.id)
   if (!block) throw new Error(`Scratchpad block not found: ${input.id}`)
 
-  const runtime = input.runtime ?? 'pi'
-  const requestedInterfaceMode = input.interfaceMode ?? (runtime === 'codex' ? 'terminal' : 'gui')
-  const interfaceMode = sessionInterfaceModeForRuntime(runtime, requestedInterfaceMode)
+  const settings = getSettings()
+  const runtime = input.runtime ?? defaultRuntime(settings)
+  const interfaceMode = normalizeConfiguredInterfaceMode(runtime, input.interfaceMode, settings)
   const agentId = dependencies.startSessionAndGetId({
     projectId: input.projectId,
     runtime,
