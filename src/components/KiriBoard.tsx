@@ -50,7 +50,7 @@ import type { ChatTypographySettings } from './kiri-board/storage'
 import { AgentSwitcherSheet, MobileTopBar } from './kiri-board/board-navigation'
 import { useBoardKeyboardShortcuts } from './kiri-board/board-keyboard-shortcuts'
 import { useBoardPreferenceEffects } from './kiri-board/board-preferences'
-import { resolveBoardSelection } from './kiri-board/board-selection'
+import { useBoardSelection } from './kiri-board/board-selection'
 import { fallbackAgentAfterSessionDelete } from './kiri-board/board-session-actions'
 import { buildBoardCommandActions } from './kiri-board/command-actions'
 import { useHostMenuActions } from './kiri-board/host-menu-actions'
@@ -72,11 +72,6 @@ import { useBoardWorkspace } from './kiri-board/board-workspace'
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const boardScrollRef = React.useRef<HTMLDivElement | null>(null)
   const previousSelectedProjectIdRef = React.useRef<string | null>(null)
-  const [activeProjectId, setActiveProjectId] = React.useState<string>(snapshot.selected.projectId)
-  const [agentByProject, setAgentByProject] = React.useState<Record<string, string>>(() =>
-    snapshot.preferences.agentByProject,
-  )
-  const agentByProjectRef = React.useRef(agentByProject)
   const [tab, setTab] = React.useState<SidebarTab>('chat')
   const [hydrated, setHydrated] = React.useState(false)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
@@ -139,50 +134,35 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     refreshWorkspaceRevision,
   })
 
-  const { selectedProject, selectedAgent, selection } = React.useMemo(
-    () => resolveBoardSelection(workspace, activeProjectId, agentByProject),
-    [activeProjectId, agentByProject, workspace],
-  )
+  const {
+    selectedProject,
+    selectedAgent,
+    selection,
+    setAgentByProject,
+    selectProject: selectBoardProject,
+    selectAgent: selectBoardAgent,
+    forgetProject,
+    activateProject,
+    activateProjectIfCurrent,
+  } = useBoardSelection({
+    snapshot,
+    workspace,
+    persistAgentByProject: setAgentByProjectPreference,
+  })
   const visibleTerminalSelected = Boolean(
     selectedAgent && (tab === 'terminal' || (tab === 'chat' && selectedAgent.interfaceMode === 'terminal')),
   )
 
   const selectAgent = React.useCallback((projectId: string, agentId: string) => {
-    setActiveProjectId(projectId)
+    selectBoardAgent(projectId, agentId)
     setChatFocusRequest(0)
     setAgentSwitcherOpen(false)
-    const previous = agentByProjectRef.current
-    if (previous[projectId] === agentId) return
-    const next = { ...previous, [projectId]: agentId }
-    persistAgentByProject(next, previous)
-  }, [])
+  }, [selectBoardAgent])
 
-  const selectProject = (projectId: string) => {
-    setActiveProjectId(projectId)
+  const selectProject = React.useCallback((projectId: string) => {
+    selectBoardProject(projectId)
     setChatFocusRequest(0)
-  }
-
-  const forgetProject = React.useCallback((projectId: string) => {
-    const previous = agentByProjectRef.current
-    if (!(projectId in previous)) return
-    const next = { ...previous }
-    delete next[projectId]
-    persistAgentByProject(next, previous)
-  }, [])
-
-  function persistAgentByProject(next: Record<string, string>, previous: Record<string, string>) {
-    agentByProjectRef.current = next
-    setAgentByProject(next)
-    void setAgentByProjectPreference({ data: next }).catch((error) => {
-      console.error('Failed to save selected session preference', error)
-      agentByProjectRef.current = previous
-      setAgentByProject(previous)
-    })
-  }
-
-  React.useEffect(() => {
-    agentByProjectRef.current = agentByProject
-  }, [agentByProject])
+  }, [selectBoardProject])
 
   useBoardPreferenceEffects({
     snapshot,
@@ -258,7 +238,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       applyWorkspace,
     )
     forgetProject(projectId)
-    if (selection.projectId === projectId) setActiveProjectId(next.selected.projectId)
+    if (selection.projectId === projectId) activateProject(next.selected.projectId)
   }
 
   async function confirmDeleteProject(projectId: string) {
@@ -279,7 +259,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         applyWorkspace,
       )
       forgetProject(projectId)
-      setActiveProjectId((current) => current === projectId ? next.selected.projectId : current)
+      activateProjectIfCurrent(projectId, next.selected.projectId)
     } finally {
       setProjectVisibilityPendingId((current) => current === projectId ? null : current)
     }
@@ -343,7 +323,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         selectAgent(project.id, fallbackAgent.id)
       } else {
         forgetProject(project.id)
-        setActiveProjectId(project.id)
+        activateProject(project.id)
         setChatFocusRequest(0)
       }
     } finally {
@@ -533,7 +513,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   function openSessionLauncher(projectId = selectedProject?.id, runtime?: RuntimeKind) {
     const project = workspace.projects.find((item) => item.id === projectId)
     if (project) {
-      setActiveProjectId(project.id)
+      activateProject(project.id)
       setSessionLauncherPreset({ projectId: project.id, runtime })
     } else {
       setSessionLauncherPreset(null)
