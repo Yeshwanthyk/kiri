@@ -207,12 +207,13 @@ test('start and remove session with keymaps', async ({ page }, testInfo) => {
   await clickRuntime(page, 'claude')
   await expectRuntimeSelected(page, 'claude')
   await expect(page.getByTestId('session-interface-mode')).toBeHidden()
+  const existingSessionIds = await startedSessionIds()
   await page
     .getByTestId('session-launcher')
     .getByRole('button', { name: 'Start session' })
     .click()
 
-  await renameLatestSessionForTest(page, title)
+  await renameLatestSessionForTest(page, title, existingSessionIds)
   await expect(page.getByTestId('selected-agent')).toHaveText(title)
 
   await pressShiftKey(page, 'KeyX')
@@ -1130,11 +1131,12 @@ async function createSession(
   if (await sessionInterfaceModePickerVisible(page)) {
     await clickInterfaceMode(page, interfaceMode)
   }
+  const existingSessionIds = await startedSessionIds()
   await page
     .getByTestId('session-launcher')
     .getByRole('button', { name: 'Start session' })
     .click()
-  await renameLatestSessionForTest(page, title)
+  await renameLatestSessionForTest(page, title, existingSessionIds)
   if (thinkingLevel) {
     await setThinkingLevel(page, thinkingLevel)
   }
@@ -1143,12 +1145,15 @@ async function createSession(
 
 async function startUntitledSession(page: import('@playwright/test').Page) {
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  const existingSessionIds = await startedSessionIds()
   await pressShiftKey(page, 'KeyN')
   await page
     .getByTestId('session-launcher')
     .getByRole('button', { name: 'Start session' })
     .click()
-  return selectedSessionTitle(page)
+  const row = await latestStartedSessionRow(existingSessionIds)
+  await expect(page.getByTestId('selected-agent')).toHaveText(row.title)
+  return row.title
 }
 
 async function selectedSessionTitle(page: import('@playwright/test').Page) {
@@ -1159,8 +1164,12 @@ async function selectedSessionTitle(page: import('@playwright/test').Page) {
   return title
 }
 
-async function renameLatestSessionForTest(page: import('@playwright/test').Page, title: string) {
-  const row = await latestStartedSessionRow()
+async function renameLatestSessionForTest(
+  page: import('@playwright/test').Page,
+  title: string,
+  existingSessionIds: ReadonlySet<string>,
+) {
+  const row = await latestStartedSessionRow(existingSessionIds)
   await updateSessionTitleForTest(row.id, title)
   await page.reload()
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
@@ -1210,19 +1219,35 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-async function latestStartedSessionRow() {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const database = new DatabaseSync(testDbPath)
-    const row = database
+async function startedSessionIds() {
+  const database = new DatabaseSync(testDbPath)
+  try {
+    const rows = database
       .prepare(`
         SELECT id
         FROM agent_slots
         WHERE slot LIKE 'session-%' AND archived_at IS NULL
-        ORDER BY position DESC, id DESC
-        LIMIT 1
       `)
-      .get() as { id: string } | undefined
+      .all() as Array<{ id: string }>
+    return new Set(rows.map((row) => row.id))
+  } finally {
     database.close()
+  }
+}
+
+async function latestStartedSessionRow(existingSessionIds: ReadonlySet<string>) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const database = new DatabaseSync(testDbPath)
+    const rows = database
+      .prepare(`
+        SELECT id, title
+        FROM agent_slots
+        WHERE slot LIKE 'session-%' AND archived_at IS NULL
+        ORDER BY position DESC, id DESC
+      `)
+      .all() as Array<{ id: string; title: string }>
+    database.close()
+    const row = rows.find((item) => !existingSessionIds.has(item.id))
     if (row) return row
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
