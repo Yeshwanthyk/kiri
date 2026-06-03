@@ -67,13 +67,11 @@ import {
   type RefreshAgentDetail,
   type SidebarTab,
 } from './kiri-board/board-types'
-import { pollWorkspaceDuringAction, pollWorkspaceInBackground } from './kiri-board/workspace-polling'
-import { createWorkspaceDedupe, createWorkspaceRevisionGate } from './kiri-board/workspace-fingerprint'
+import { useBoardWorkspace } from './kiri-board/board-workspace'
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const boardScrollRef = React.useRef<HTMLDivElement | null>(null)
   const previousSelectedProjectIdRef = React.useRef<string | null>(null)
-  const [workspace, setWorkspace] = React.useState(snapshot)
   const [activeProjectId, setActiveProjectId] = React.useState<string>(snapshot.selected.projectId)
   const [agentByProject, setAgentByProject] = React.useState<Record<string, string>>(() =>
     snapshot.preferences.agentByProject,
@@ -130,39 +128,16 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const startSession = useServerFn(startSessionMutation)
   const triggerScratchpadBlock = useServerFn(triggerScratchpadBlockMutation)
   const unhideProject = useServerFn(unhideProjectMutation)
-  const refreshWorkspaceRef = React.useRef(refreshWorkspace)
-  const refreshWorkspaceRevisionRef = React.useRef(refreshWorkspaceRevision)
-  const activeWorkspaceMutationsRef = React.useRef(0)
-  const workspaceActivityEpochRef = React.useRef(0)
-  const workspaceDedupeRef = React.useRef(createWorkspaceDedupe(snapshot))
-  const workspaceRevisionGateRef = React.useRef(createWorkspaceRevisionGate())
-  const applyWorkspace = React.useCallback((next: WorkspaceSnapshot) => {
-    workspaceDedupeRef.current.apply(next, setWorkspace)
-  }, [])
-  const beginWorkspaceMutation = React.useCallback(() => {
-    activeWorkspaceMutationsRef.current += 1
-    workspaceActivityEpochRef.current += 1
-    let ended = false
-    return () => {
-      if (ended) return
-      ended = true
-      activeWorkspaceMutationsRef.current -= 1
-      workspaceActivityEpochRef.current += 1
-    }
-  }, [])
-  const runWorkspaceMutation = React.useCallback(async <T,>(
-    action: () => Promise<T>,
-    onResult: (result: T) => void,
-  ) => {
-    const endWorkspaceMutation = beginWorkspaceMutation()
-    try {
-      const result = await action()
-      onResult(result)
-      return result
-    } finally {
-      endWorkspaceMutation()
-    }
-  }, [beginWorkspaceMutation])
+  const {
+    workspace,
+    applyWorkspace,
+    runWorkspaceMutation,
+    withWorkspacePolling,
+  } = useBoardWorkspace({
+    snapshot,
+    refreshWorkspace,
+    refreshWorkspaceRevision,
+  })
 
   const { selectedProject, selectedAgent, selection } = React.useMemo(
     () => resolveBoardSelection(workspace, activeProjectId, agentByProject),
@@ -208,33 +183,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   React.useEffect(() => {
     agentByProjectRef.current = agentByProject
   }, [agentByProject])
-
-  React.useEffect(() => {
-    applyWorkspace(snapshot)
-  }, [applyWorkspace, snapshot])
-
-  React.useEffect(() => {
-    refreshWorkspaceRef.current = refreshWorkspace
-  }, [refreshWorkspace])
-
-  React.useEffect(() => {
-    refreshWorkspaceRevisionRef.current = refreshWorkspaceRevision
-  }, [refreshWorkspaceRevision])
-
-  React.useEffect(() =>
-    pollWorkspaceInBackground({
-      refreshWorkspace: () =>
-        workspaceRevisionGateRef.current.refreshIfChanged({
-          refreshRevision: () => refreshWorkspaceRevisionRef.current(),
-          refreshWorkspace: () => refreshWorkspaceRef.current(),
-        }),
-      onWorkspace: (next) => {
-        if (next) applyWorkspace(next)
-      },
-      isIdle: () => activeWorkspaceMutationsRef.current === 0,
-      idleToken: () => workspaceActivityEpochRef.current,
-    }),
-  [applyWorkspace])
 
   useBoardPreferenceEffects({
     snapshot,
@@ -401,30 +349,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     } finally {
       setDeleteInFlight(false)
       setPendingDelete(null)
-    }
-  }
-
-  async function withWorkspacePolling(
-    action: () => Promise<WorkspaceSnapshot>,
-    onResult: (result: WorkspaceSnapshot) => void,
-    onPoll?: RefreshAgentDetail,
-  ) {
-    const endWorkspaceMutation = beginWorkspaceMutation()
-    const gatedOnPoll = onPoll
-      ? async () => {
-          if (workspaceDedupeRef.current.didChange()) await onPoll()
-        }
-      : undefined
-    try {
-      await pollWorkspaceDuringAction({
-        action,
-        refreshWorkspace,
-        onResult,
-        onWorkspace: applyWorkspace,
-        onPoll: gatedOnPoll,
-      })
-    } finally {
-      endWorkspaceMutation()
     }
   }
 
