@@ -1,42 +1,10 @@
 'use client'
 
 import * as React from 'react'
-import { useServerFn } from '@tanstack/react-start'
 import type {
-  ProjectRow,
   RuntimeKind,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
-import {
-  addProjectMutation,
-  addScratchpadBlockMutation,
-  answerQuestionMutation,
-  chooseProjectDirectoryMutation,
-  deleteProjectMutation,
-  deleteScratchpadBlockMutation,
-  deleteSessionMutation,
-  fetchWorkspaceSnapshot,
-  fetchWorkspaceRevision,
-  forkSessionMutation,
-  hideProjectMutation,
-  interruptMessageMutation,
-  renameSessionMutation,
-  refreshTerminalDiffsMutation,
-  reorderProjectsMutation,
-  resetSessionMutation,
-  restoreSessionMutation,
-  reviewSessionMutation,
-  sendMessageMutation,
-  setAgentByProjectPreferenceMutation,
-  setChatTypographyPreferenceMutation,
-  setKeymapPreferenceMutation,
-  setThemePreferenceMutation,
-  setThinkingLevelMutation,
-  startSessionMutation,
-  steerMessageMutation,
-  triggerScratchpadBlockMutation,
-  unhideProjectMutation,
-} from '~/server/workspace'
 
 import { AgentSwitcherSheet, MobileTopBar } from './kiri-board/board-navigation'
 import { useBoardKeyboardShortcuts } from './kiri-board/board-keyboard-shortcuts'
@@ -44,6 +12,7 @@ import { useBoardPreferences } from './kiri-board/board-preferences'
 import { useBoardProjectActions } from './kiri-board/board-project-actions'
 import { useBoardScratchpadActions } from './kiri-board/board-scratchpad-actions'
 import { useBoardSelection } from './kiri-board/board-selection'
+import { useBoardServerActions } from './kiri-board/board-server-actions'
 import { useBoardSessionActions } from './kiri-board/board-session-actions'
 import { buildBoardCommandActions } from './kiri-board/command-actions'
 import { useHostMenuActions } from './kiri-board/host-menu-actions'
@@ -88,34 +57,21 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   } = useBoardSurfaces()
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
   const [terminalFocusRequest, setTerminalFocusRequest] = React.useState(0)
-  const addProject = useServerFn(addProjectMutation)
-  const addScratchpadBlock = useServerFn(addScratchpadBlockMutation)
-  const answerQuestion = useServerFn(answerQuestionMutation)
-  const chooseProjectDirectory = useServerFn(chooseProjectDirectoryMutation)
-  const deleteProject = useServerFn(deleteProjectMutation)
-  const deleteScratchpadBlock = useServerFn(deleteScratchpadBlockMutation)
-  const deleteSession = useServerFn(deleteSessionMutation)
-  const forkSession = useServerFn(forkSessionMutation)
-  const hideProject = useServerFn(hideProjectMutation)
-  const refreshWorkspace = useServerFn(fetchWorkspaceSnapshot)
-  const refreshWorkspaceRevision = useServerFn(fetchWorkspaceRevision)
-  const resetSession = useServerFn(resetSessionMutation)
-  const restoreSession = useServerFn(restoreSessionMutation)
-  const reviewSession = useServerFn(reviewSessionMutation)
-  const sendMessage = useServerFn(sendMessageMutation)
-  const setAgentByProjectPreference = useServerFn(setAgentByProjectPreferenceMutation)
-  const setChatTypographyPreference = useServerFn(setChatTypographyPreferenceMutation)
-  const setKeymapPreference = useServerFn(setKeymapPreferenceMutation)
-  const setThemePreference = useServerFn(setThemePreferenceMutation)
-  const setThinkingLevel = useServerFn(setThinkingLevelMutation)
-  const steerMessage = useServerFn(steerMessageMutation)
-  const interruptMessage = useServerFn(interruptMessageMutation)
-  const renameSession = useServerFn(renameSessionMutation)
-  const refreshTerminalDiffs = useServerFn(refreshTerminalDiffsMutation)
-  const reorderProjects = useServerFn(reorderProjectsMutation)
-  const startSession = useServerFn(startSessionMutation)
-  const triggerScratchpadBlock = useServerFn(triggerScratchpadBlockMutation)
-  const unhideProject = useServerFn(unhideProjectMutation)
+  const {
+    workspaceQueries: {
+      refreshWorkspace,
+      refreshWorkspaceRevision,
+    },
+    preferenceMutations: {
+      setAgentByProjectPreference,
+      setChatTypographyPreference,
+      setKeymapPreference,
+      setThemePreference,
+    },
+    sessionMutations,
+    projectMutations,
+    scratchpadMutations,
+  } = useBoardServerActions()
   const {
     workspace,
     applyWorkspace,
@@ -174,65 +130,9 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setChatFocusRequest(0)
   }, [selectBoardProject])
 
-  const sessionMutations = React.useMemo(() => ({
-    renameSession,
-    deleteSession,
-    sendMessage,
-    refreshTerminalDiffs,
-    steerMessage,
-    interruptMessage,
-    setThinkingLevel,
-    resetSession,
-    forkSession,
-    reviewSession,
-    answerQuestion,
-    startSession,
-    restoreSession,
-  }), [
-    answerQuestion,
-    deleteSession,
-    forkSession,
-    interruptMessage,
-    refreshTerminalDiffs,
-    renameSession,
-    resetSession,
-    restoreSession,
-    reviewSession,
-    sendMessage,
-    setThinkingLevel,
-    startSession,
-    steerMessage,
-  ])
-
   const resetChatFocus = React.useCallback(() => {
     setChatFocusRequest(0)
   }, [])
-
-  const projectMutations = React.useMemo(() => ({
-    addProject,
-    chooseProjectDirectory,
-    deleteProject,
-    hideProject,
-    reorderProjects,
-    unhideProject,
-  }), [
-    addProject,
-    chooseProjectDirectory,
-    deleteProject,
-    hideProject,
-    reorderProjects,
-    unhideProject,
-  ])
-
-  const scratchpadMutations = React.useMemo(() => ({
-    addScratchpadBlock,
-    deleteScratchpadBlock,
-    triggerScratchpadBlock,
-  }), [
-    addScratchpadBlock,
-    deleteScratchpadBlock,
-    triggerScratchpadBlock,
-  ])
 
   const {
     pendingDelete,
