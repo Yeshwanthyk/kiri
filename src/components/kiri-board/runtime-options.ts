@@ -1,5 +1,4 @@
 import { runtimeKinds, type RuntimeKind, type SessionInterfaceMode, type WorkspaceSnapshot } from '~/lib/contracts'
-import { formatTokenCount } from './format'
 
 type RuntimeSettings = WorkspaceSnapshot['settings']['runtimes'][RuntimeKind]
 
@@ -8,15 +7,8 @@ export type RuntimeOption = {
   readonly label: string
   readonly meta: string
   readonly detail: string
-  readonly defaultModel: string
   readonly interfaceModes: readonly SessionInterfaceMode[]
   readonly defaultInterfaceMode: SessionInterfaceMode
-}
-
-export type ModelOption = {
-  readonly model: string
-  readonly contextWindow: number | null
-  readonly contextLabel: string | null
 }
 
 export function runtimeOptions(settings: WorkspaceSnapshot['settings']): readonly RuntimeOption[] {
@@ -32,8 +24,7 @@ export function runtimeOptions(settings: WorkspaceSnapshot['settings']): readonl
       runtime,
       label: runtimeSettings.label ?? runtime,
       meta: formatInterfaceModes(interfaceModes),
-      detail: runtimeSettings.detail ?? runtimeSettings.defaultModel,
-      defaultModel: runtimeSettings.defaultModel,
+      detail: runtimeSettings.detail ?? formatInterfaceModes(interfaceModes),
       interfaceModes,
       defaultInterfaceMode,
     }
@@ -56,30 +47,6 @@ export function runtimeOption(
     throw new Error('At least one runtime must be configured')
   }
   return fallback
-}
-
-export function modelOptions(
-  settings: WorkspaceSnapshot['settings'],
-  runtime: RuntimeKind,
-): readonly ModelOption[] {
-  const runtimeSettings = settings.runtimes[runtime]
-  return runtimeSettings.models.map((model) => {
-    const contextWindow = runtimeSettings.contextWindows?.[model] ?? null
-    return {
-      model,
-      contextWindow,
-      contextLabel: contextWindow ? formatTokenCount(contextWindow) : null,
-    }
-  })
-}
-
-export function normalizeRuntimeModel(
-  settings: WorkspaceSnapshot['settings'],
-  runtime: RuntimeKind,
-  model: string,
-): string {
-  const runtimeSettings = settings.runtimes[runtime]
-  return runtimeSettings.models.includes(model) ? model : runtimeSettings.defaultModel
 }
 
 export function normalizeInterfaceMode(

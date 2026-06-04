@@ -41,7 +41,6 @@ describe('ScratchpadTriggerService', () => {
       id: 'block-1',
       projectId: 'project-1',
       runtime: 'codex',
-      thinkingLevel: 'medium',
     }))
 
     expect(calls).toEqual([
@@ -74,7 +73,6 @@ describe('ScratchpadTriggerService', () => {
       id: 'block-1',
       projectId: 'project-1',
       runtime: 'pi',
-      thinkingLevel: 'medium',
     }))
 
     expect(calls).toEqual([
@@ -112,7 +110,6 @@ describe('ScratchpadTriggerService', () => {
       projectId: 'project-1',
       runtime: 'codex',
       interfaceMode: 'terminal',
-      thinkingLevel: 'medium',
     }))
 
     expect(result.agentId).toBe('agent-1')
@@ -144,7 +141,6 @@ describe('ScratchpadTriggerService', () => {
       projectId: 'project-1',
       runtime: 'codex',
       interfaceMode: 'gui',
-      thinkingLevel: 'medium',
     }))).resolves.toMatchObject({ agentId: 'agent-1' })
 
     await new Promise((resolve) => setImmediate(resolve))
@@ -177,7 +173,6 @@ describe('ScratchpadTriggerService', () => {
       projectId: 'project-1',
       runtime: 'codex',
       interfaceMode: 'gui',
-      thinkingLevel: 'medium',
     }))).rejects.toMatchObject({ message: 'Mark failed' })
 
     expect(calls).toEqual(['start', 'mark', 'delete:agent-1'])
@@ -198,7 +193,6 @@ describe('ScratchpadTriggerService', () => {
       projectId: 'project-1',
       runtime: 'codex',
       interfaceMode: 'gui',
-      thinkingLevel: 'medium',
     }))).rejects.toMatchObject({ message: 'Scratchpad block not found: missing' })
     expect(calls).toEqual([])
   })

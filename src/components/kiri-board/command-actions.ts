@@ -152,7 +152,7 @@ export function buildBoardCommandActions(input: BoardCommandActionsInput): Comma
       ...runtimeOptions(workspace.settings).map((option) => ({
         id: `start-${option.runtime}-${project.id}`,
         title: `Start ${option.label} in ${project.name}`,
-        detail: option.defaultModel,
+        detail: option.meta,
         icon: Plus,
         disabled: false,
         run: () => openSessionLauncher(project.id, option.runtime),

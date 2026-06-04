@@ -76,7 +76,7 @@ export type ScratchpadTriggerDependencies = {
     readonly interfaceMode: SessionInterfaceMode
     readonly model?: string
     readonly title?: string
-    readonly thinkingLevel: ThinkingLevel
+    readonly thinkingLevel?: ThinkingLevel
   }) => string
   readonly markScratchpadBlockTriggered: (id: string, agentId: string) => void
   readonly listSessionSummaries: (input: { readonly includeArchived: true }) => readonly TriggerScratchpadSession[]
@@ -166,7 +166,7 @@ async function triggerScratchpadSessionWithDeps(
     interfaceMode,
     model: input.model,
     title: input.title,
-    thinkingLevel: input.thinkingLevel ?? 'medium',
+    thinkingLevel: input.thinkingLevel,
   })
 
   try {

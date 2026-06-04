@@ -38,6 +38,7 @@ export type TerminalMode = z.infer<typeof terminalModeSchema>
 export const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
 export const thinkingLevelSchema = z.enum(thinkingLevels)
 export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>
+export const defaultThinkingLevel = 'medium' satisfies ThinkingLevel
 
 const agentStatuses = [
   'idle',
@@ -448,9 +449,9 @@ export const startSessionInputSchema = z.object({
   runtime: runtimeKindSchema.optional(),
   interfaceMode: sessionInterfaceModeSchema.default('gui'),
   model: z.string().trim().optional(),
-  thinkingLevel: thinkingLevelSchema.default('medium'),
+  thinkingLevel: thinkingLevelSchema.default(defaultThinkingLevel),
 })
-export type StartSessionInput = z.infer<typeof startSessionInputSchema>
+export type StartSessionInput = z.input<typeof startSessionInputSchema>
 
 export const deleteSessionInputSchema = z.object({
   agentId: z.string().trim().min(1),
@@ -486,7 +487,7 @@ export const triggerScratchpadBlockInputSchema = z.object({
   interfaceMode: sessionInterfaceModeSchema.optional(),
   model: z.string().trim().optional(),
   title: z.string().trim().optional(),
-  thinkingLevel: thinkingLevelSchema.default('medium'),
+  thinkingLevel: thinkingLevelSchema.default(defaultThinkingLevel),
 })
 type TriggerScratchpadBlockInput = z.infer<typeof triggerScratchpadBlockInputSchema>
 

@@ -273,7 +273,7 @@ function normalizeWorkflowItems(input: CreateWorkflowRunInput): readonly Normali
       runtime,
       interfaceMode: normalizeConfiguredInterfaceMode(runtime, item.interfaceMode ?? defaults.interfaceMode, settings),
       model,
-      thinkingLevel: item.thinkingLevel ?? defaults.thinkingLevel ?? 'medium',
+      thinkingLevel: item.thinkingLevel ?? defaults.thinkingLevel ?? null,
       terminalPaste: item.terminalPaste ?? defaults.terminalPaste ?? { submit: true },
       attachScratchpad,
       tracked: item.tracked,

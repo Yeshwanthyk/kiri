@@ -33,7 +33,7 @@ type BoardScratchpadMutations = {
       runtime?: RuntimeKind
       interfaceMode?: SessionInterfaceMode
       model?: string
-      thinkingLevel: ThinkingLevel
+      thinkingLevel?: ThinkingLevel
       title?: string
     },
     { snapshot: WorkspaceSnapshot; agentId: string }
@@ -87,7 +87,7 @@ export function useBoardScratchpadActions({
           interfaceMode: overrides?.interfaceMode,
           model: overrides?.model,
           title: overrides?.title,
-          thinkingLevel: overrides?.thinkingLevel ?? 'medium',
+          thinkingLevel: overrides?.thinkingLevel,
         },
       }),
       (next) => applyWorkspace(next.snapshot),

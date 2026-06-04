@@ -11,7 +11,7 @@ import type {
   ProjectRow,
   RuntimeKind,
   SessionInterfaceMode,
-  ThinkingLevel,
+  StartSessionInput,
   WorkspaceSnapshot,
 } from '~/lib/contracts'
 import { errorMessage, formatAgo } from './format'
@@ -37,14 +37,7 @@ export function InlineSessionLauncher({
   settings: WorkspaceSnapshot['settings']
   initialProjectId?: string
   initialRuntime?: RuntimeKind
-  onStartSession: (input: {
-    projectId: string
-    runtime: RuntimeKind
-    interfaceMode: SessionInterfaceMode
-    model?: string
-    title?: string
-    thinkingLevel: ThinkingLevel
-  }) => Promise<void>
+  onStartSession: (input: StartSessionInput) => Promise<void>
   onResumeSession: (projectId: string, agentId: string, archived: boolean) => void | Promise<void>
   onCancel: () => void
 }) {
@@ -144,7 +137,6 @@ export function InlineSessionLauncher({
         projectId: launchProject.id,
         runtime,
         interfaceMode: selectedInterfaceMode,
-        thinkingLevel: 'medium',
       })
     } catch (cause) {
       setError(errorMessage(cause))

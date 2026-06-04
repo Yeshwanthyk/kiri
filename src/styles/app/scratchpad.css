@@ -296,10 +296,6 @@
   display: none;
 }
 
-.scratchpad-trigger-row[data-disabled='true'] {
-  opacity: 0.62;
-}
-
 .scratchpad-trigger-chip {
   display: inline-flex;
   align-items: center;
@@ -324,21 +320,10 @@
     color 160ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-.scratchpad-trigger-model {
-  justify-content: space-between;
-  min-width: min(220px, 92%);
-}
-
 .scratchpad-trigger-chip span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.scratchpad-trigger-chip code {
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
 }
 
 .scratchpad-trigger-chip:hover,

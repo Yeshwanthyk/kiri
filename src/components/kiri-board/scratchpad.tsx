@@ -1,11 +1,8 @@
 import { Check, NotebookPen, Plus, Send, Trash2 } from 'lucide-react'
 import * as React from 'react'
-import type { ProjectRow, RuntimeKind, ScratchpadBlock, SessionInterfaceMode, ThinkingLevel, WorkspaceSnapshot } from '~/lib/contracts'
+import type { ProjectRow, RuntimeKind, ScratchpadBlock, SessionInterfaceMode, WorkspaceSnapshot } from '~/lib/contracts'
 import { errorMessage, formatBlockDay, formatBlockTime } from './format'
-import { supportsThinking } from './slash-commands'
-import { modelOptions, normalizeInterfaceMode, normalizeRuntimeModel, runtimeOption, runtimeOptions } from './runtime-options'
-
-const scratchpadThinkingLevels = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly ThinkingLevel[]
+import { normalizeInterfaceMode, runtimeOption, runtimeOptions } from './runtime-options'
 
 type ScratchpadState = {
   draft: string
@@ -101,8 +98,6 @@ export function ScratchpadPanel({
     overrides?: {
       runtime?: RuntimeKind
       interfaceMode?: SessionInterfaceMode
-      model?: string
-      thinkingLevel?: ThinkingLevel
     },
   ) => Promise<void>
 }) {
@@ -116,13 +111,10 @@ export function ScratchpadPanel({
   const [triggerInterfaceMode, setTriggerInterfaceMode] = React.useState<SessionInterfaceMode>(
     initialTriggerRuntime.defaultInterfaceMode,
   )
-  const [triggerModel, setTriggerModel] = React.useState(initialTriggerRuntime.defaultModel)
-  const [triggerThinkingLevel, setTriggerThinkingLevel] = React.useState<ThinkingLevel>('medium')
   const captureRef = React.useRef<HTMLTextAreaElement>(null)
   const selectedTriggerRuntime = runtimeOption(settings, triggerRuntime)
-  const triggerModels = modelOptions(settings, triggerRuntime)
-  const triggerSupportsThinking = supportsThinking(triggerRuntime)
   const triggerInterfaceModes = selectedTriggerRuntime.interfaceModes
+  const canChooseTriggerInterface = triggerInterfaceModes.length > 1
   const selectedTriggerInterfaceMode = normalizeInterfaceMode(
     triggerRuntime,
     settings.runtimes[triggerRuntime],
@@ -134,11 +126,6 @@ export function ScratchpadPanel({
   }, [])
 
   React.useEffect(() => {
-    const nextModel = normalizeRuntimeModel(settings, triggerRuntime, triggerModel)
-    if (nextModel !== triggerModel) setTriggerModel(nextModel)
-  }, [settings, triggerModel, triggerModels, triggerRuntime])
-
-  React.useEffect(() => {
     if (!state.notice) return undefined
     const timeout = window.setTimeout(() => {
       dispatch({ type: 'noticeCleared' })
@@ -148,7 +135,6 @@ export function ScratchpadPanel({
 
   function updateTriggerRuntime(runtime: RuntimeKind) {
     setTriggerRuntime(runtime)
-    setTriggerModel(settings.runtimes[runtime].defaultModel)
     setTriggerInterfaceMode((current) =>
       normalizeInterfaceMode(runtime, settings.runtimes[runtime], current))
   }
@@ -192,8 +178,6 @@ export function ScratchpadPanel({
       await onTrigger(block, {
         runtime: triggerRuntime,
         interfaceMode: selectedTriggerInterfaceMode,
-        model: triggerModel,
-        thinkingLevel: triggerThinkingLevel,
       })
       dispatch({
         type: 'noticeShown',
@@ -296,26 +280,7 @@ export function ScratchpadPanel({
       <section className="scratchpad-trigger-config" aria-label="Scratchpad trigger profile">
         <div className="scratchpad-trigger-head">
           <span>trigger as</span>
-          <strong>{selectedTriggerInterfaceMode} · {triggerRuntime} · {triggerModel} · {triggerThinkingLevel}</strong>
-        </div>
-        <div className="scratchpad-trigger-row" role="radiogroup" aria-label="Trigger interface">
-          {triggerInterfaceModes.map((mode) => {
-            const active = selectedTriggerInterfaceMode === mode
-            return (
-              <button
-                key={mode}
-                type="button"
-                className="scratchpad-trigger-chip"
-                data-active={active ? 'true' : undefined}
-                onClick={() => setTriggerInterfaceMode(mode)}
-                disabled={state.pendingId !== null}
-                role="radio"
-                aria-checked={active}
-              >
-                {mode}
-              </button>
-            )
-          })}
+          <strong>{selectedTriggerRuntime.label} · {selectedTriggerInterfaceMode}</strong>
         </div>
         <div className="scratchpad-trigger-row" role="radiogroup" aria-label="Trigger runtime">
           {triggerRuntimes.map((option) => {
@@ -336,50 +301,27 @@ export function ScratchpadPanel({
             )
           })}
         </div>
-        <div className="scratchpad-trigger-row" role="radiogroup" aria-label="Trigger model">
-          {triggerModels.map((model) => {
-            const active = triggerModel === model.model
-            return (
-              <button
-                key={model.model}
-                type="button"
-                className="scratchpad-trigger-chip scratchpad-trigger-model"
-                data-active={active ? 'true' : undefined}
-                onClick={() => setTriggerModel(model.model)}
-                disabled={state.pendingId !== null}
-                role="radio"
-                aria-checked={active}
-              >
-                <span>{model.model}</span>
-                {model.contextLabel ? <code>{model.contextLabel}</code> : null}
-              </button>
-            )
-          })}
-        </div>
-        <div
-          className="scratchpad-trigger-row"
-          data-disabled={triggerSupportsThinking ? undefined : 'true'}
-          role="radiogroup"
-          aria-label="Trigger thinking level"
-        >
-          {scratchpadThinkingLevels.map((level) => {
-            const active = triggerThinkingLevel === level
-            return (
-              <button
-                key={level}
-                type="button"
-                className="scratchpad-trigger-chip"
-                data-active={active ? 'true' : undefined}
-                onClick={() => setTriggerThinkingLevel(level)}
-                disabled={state.pendingId !== null || !triggerSupportsThinking}
-                role="radio"
-                aria-checked={active}
-              >
-                {level}
-              </button>
-            )
-          })}
-        </div>
+        {canChooseTriggerInterface ? (
+          <div className="scratchpad-trigger-row" role="radiogroup" aria-label="Trigger interface">
+            {triggerInterfaceModes.map((mode) => {
+              const active = selectedTriggerInterfaceMode === mode
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  className="scratchpad-trigger-chip"
+                  data-active={active ? 'true' : undefined}
+                  onClick={() => setTriggerInterfaceMode(mode)}
+                  disabled={state.pendingId !== null}
+                  role="radio"
+                  aria-checked={active}
+                >
+                  {mode}
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
       </section>
 
       <div className="scratchpad-list" role="list">

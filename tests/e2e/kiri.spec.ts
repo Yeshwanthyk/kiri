@@ -960,8 +960,10 @@ test('scratchpad trigger can start codex in terminal mode', async ({ page, isMob
 
   await page.getByTestId('tab-scratchpad').click()
   await expect(page.getByText(/trigger as/i)).toBeVisible()
+  await expect(page.getByTestId('scratchpad-panel').getByRole('radiogroup', { name: 'Trigger model' })).toHaveCount(0)
+  await expect(page.getByTestId('scratchpad-panel').getByRole('radiogroup', { name: 'Trigger thinking level' })).toHaveCount(0)
   await page.getByRole('radio', { name: 'terminal' }).click()
-  await expect(page.getByText(/terminal · codex/)).toBeVisible()
+  await expect(page.getByText(/Codex · terminal/)).toBeVisible()
 
   await page.getByTestId('scratchpad-input').fill(body)
   await page.getByTestId('scratchpad-panel').getByRole('button', { name: 'Capture' }).click()
