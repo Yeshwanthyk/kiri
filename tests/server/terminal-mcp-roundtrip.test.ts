@@ -62,6 +62,7 @@ function dependencies(handle: KiritermDaemonHandle): KiriControlDependencies {
     pasteAgentRuntimeTerminal: (input) =>
       Promise.resolve({ agentId: input.agentId, mode: 'runtime' as const }),
     getAgentLaunchConfig: () => launchConfig(),
+    callerAgentId: () => null,
     terminalControlRequest: async (route, body) => {
       const response = await fetch(
         `http://${handle.info.host}:${handle.info.port}/api/${route}`,

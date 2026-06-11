@@ -393,17 +393,31 @@ export const terminalWaitForInputSchema = terminalTargetSchema.extend({
 })
 export type TerminalWaitForInput = z.infer<typeof terminalWaitForInputSchema>
 
-// Blocks until one ('any') or every ('all') of a workflow's live worker
-// terminals matches the pattern, so an orchestrating agent sleeps in a single
-// call instead of polling each worker.
+// Waits on a workflow's live worker terminals with one condition engine and
+// two delivery modes. Conditions: `pattern` (regex over screen/output) and/or
+// `idleMs` (worker quiet for that long) — first to fire wins per worker; with
+// neither, it is a pure timer (wake mode only). Delivery: 'return' blocks the
+// call and resolves with the result (scripts, tests, short agent waits);
+// 'wake' returns immediately and, when the condition fires or times out,
+// injects a compact summary into the receiving agent's terminal as a fresh
+// user turn — the orchestrator ends its turn and spends no tokens waiting.
 export const workflowAwaitInputSchema = z.object({
   id: z.string().trim().min(1),
-  pattern: z.string().min(1).max(2_000),
+  pattern: z.string().min(1).max(2_000).optional(),
   flags: z.string().regex(/^[gimsuy]*$/).default(''),
+  idleMs: z.number().int().min(250).max(600_000).optional(),
   timeoutMs: z.number().int().positive().max(600_000).default(60_000),
   scope: z.enum(['screen', 'output']).default('screen'),
   quorum: z.enum(['any', 'all']).default('any'),
-})
+  deliver: z.enum(['return', 'wake']).default('return'),
+  // Wake mode: note-to-self included in the wake message, and the agent that
+  // receives it (defaults to the calling agent's KIRI_AGENT_ID).
+  note: z.string().max(2_000).optional(),
+  deliverTo: z.string().trim().min(1).optional(),
+}).refine(
+  (value) => value.pattern !== undefined || value.idleMs !== undefined || value.deliver === 'wake',
+  { message: 'Provide pattern and/or idleMs (a pure timer needs deliver:"wake")' },
+)
 export type WorkflowAwaitInput = z.infer<typeof workflowAwaitInputSchema>
 
 // Terminal WebSocket protocol v2: JSON frames in both directions. The server

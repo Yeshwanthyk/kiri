@@ -349,6 +349,61 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     })
   }
 
+  // Resolves once the session has produced no parsed output for `settleMs`
+  // (measured from this call or the last output, whichever is later), rejects
+  // on timeout/abort. Exited sessions are immediately idle. This is the
+  // "worker went quiet" primitive behind idle-based wakes.
+  function waitForIdle(session: TerminalRegistrySession, options: {
+    readonly settleMs: number
+    readonly timeoutMs: number
+    readonly signal?: AbortSignal
+  }) {
+    return new Promise<{ quietMs: number }>((resolve, reject) => {
+      if (options.signal?.aborted) {
+        reject(new Error(`Wait aborted for ${session.key}`))
+        return
+      }
+      if (session.exited) {
+        resolve({ quietMs: 0 })
+        return
+      }
+      let settled = false
+      let settleTimer: ReturnType<typeof setTimeout> | null = null
+      const fire = () => {
+        if (settled) return
+        settle()
+        resolve({ quietMs: options.settleMs })
+      }
+      const arm = () => {
+        if (settleTimer) timers.clearTimeout(settleTimer)
+        settleTimer = timers.setTimeout(fire, options.settleMs)
+      }
+      const listener = () => {
+        if (!settled) arm()
+      }
+      const onAbort = () => {
+        if (settled) return
+        settle()
+        reject(new Error(`Wait aborted for ${session.key}`))
+      }
+      const timeoutTimer = timers.setTimeout(() => {
+        if (settled) return
+        settle()
+        reject(new Error(`Timed out waiting for idle on ${session.key}`))
+      }, options.timeoutMs)
+      function settle() {
+        settled = true
+        session.screenListeners.delete(listener)
+        if (settleTimer) timers.clearTimeout(settleTimer)
+        timers.clearTimeout(timeoutTimer)
+        options.signal?.removeEventListener('abort', onAbort)
+      }
+      options.signal?.addEventListener('abort', onAbort, { once: true })
+      session.screenListeners.add(listener)
+      arm()
+    })
+  }
+
   function exit(session: TerminalRegistrySession, message: string) {
     session.exited = true
     if (session.idleTimer) {
@@ -398,6 +453,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     snapshot,
     readScreen,
     waitForScreen,
+    waitForIdle,
     exit,
     closeAgentRuntime,
     closeAll,

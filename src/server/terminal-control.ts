@@ -37,16 +37,136 @@ const waitForSchema = z.object({
   scope: z.enum(['screen', 'output']).default('screen'),
 })
 
+export const waitTargetSchema = z.object({
+  key: z.string().min(1),
+  label: z.string().max(200).optional(),
+  pattern: z.string().min(1).max(2_000).optional(),
+  flags: z.string().regex(/^[gimsuy]*$/).default(''),
+  scope: z.enum(['screen', 'output']).default('screen'),
+  // Resolve when the session produces no output for this long.
+  idleMs: z.number().int().min(250).max(600_000).optional(),
+}).refine((value) => value.pattern !== undefined || value.idleMs !== undefined, {
+  message: 'Each target needs pattern and/or idleMs',
+})
+export type WaitTarget = z.infer<typeof waitTargetSchema>
+
 const waitAnySchema = z.object({
-  targets: z.array(z.object({
-    key: z.string().min(1),
-    pattern: z.string().min(1),
-    flags: z.string().regex(/^[gimsuy]*$/).default(''),
-    scope: z.enum(['screen', 'output']).default('screen'),
-  })).min(1).max(32),
+  targets: z.array(waitTargetSchema).min(1).max(32),
   timeoutMs: z.number().int().positive().max(600_000).default(60_000),
   quorum: z.enum(['any', 'all']).default('any'),
 })
+
+export type WaitTargetMatch = {
+  readonly key: string
+  readonly label?: string
+  readonly match?: string
+  readonly idle?: boolean
+  readonly tail: string[]
+}
+
+export type WaitTargetsResult = {
+  readonly matched: boolean
+  readonly matches: WaitTargetMatch[]
+  readonly missing: string[]
+  readonly elapsedMs: number
+}
+
+export function readScreenTail(
+  registry: TerminalRegistryApi,
+  session: Parameters<TerminalRegistryApi['readScreen']>[0],
+  lines = 5,
+) {
+  return registry.readScreen(session).lines
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(-lines)
+}
+
+// The shared condition engine: each live target resolves on its regex match
+// and/or output-idle settle (whichever first); 'any' aborts the losers as
+// soon as one target wins; missing/exited sessions are reported, not fatal.
+export async function runWaitTargets(
+  registry: TerminalRegistryApi,
+  targets: readonly WaitTarget[],
+  options: { readonly timeoutMs: number; readonly quorum: 'any' | 'all' },
+): Promise<WaitTargetsResult> {
+  const startedAt = Date.now()
+  const missing: string[] = []
+  const live = targets.flatMap((target) => {
+    const session = registry.sessions.get(target.key)
+    if (!session || session.exited) {
+      missing.push(target.key)
+      return []
+    }
+    return [{ target, session }]
+  })
+  if (live.length === 0) {
+    return { matched: false, matches: [], missing, elapsedMs: Date.now() - startedAt }
+  }
+  const controller = new AbortController()
+  const waits = live.map(({ target, session }) => {
+    const races: Array<Promise<WaitTargetMatch>> = []
+    if (target.pattern !== undefined) {
+      races.push(registry.waitForScreen(session, {
+        pattern: new RegExp(target.pattern, target.flags),
+        timeoutMs: options.timeoutMs,
+        scope: target.scope,
+        signal: controller.signal,
+      }).then((result) => ({
+        key: target.key,
+        ...(target.label === undefined ? {} : { label: target.label }),
+        match: result.match,
+        tail: readScreenTail(registry, session),
+      })))
+    }
+    if (target.idleMs !== undefined) {
+      races.push(registry.waitForIdle(session, {
+        settleMs: target.idleMs,
+        timeoutMs: options.timeoutMs,
+        signal: controller.signal,
+      }).then(() => ({
+        key: target.key,
+        ...(target.label === undefined ? {} : { label: target.label }),
+        idle: true,
+        tail: readScreenTail(registry, session),
+      })))
+    }
+    return Promise.race(races).then(
+      (result): WaitTargetMatch | null => result,
+      (): WaitTargetMatch | null => null,
+    )
+  })
+  if (options.quorum === 'any') {
+    const winner = await new Promise<WaitTargetMatch | null>((resolve) => {
+      let pending = waits.length
+      for (const wait of waits) {
+        void wait.then((result) => {
+          if (result) {
+            resolve(result)
+            return
+          }
+          pending -= 1
+          if (pending === 0) resolve(null)
+        })
+      }
+    })
+    controller.abort()
+    return {
+      matched: winner !== null,
+      matches: winner ? [winner] : [],
+      missing,
+      elapsedMs: Date.now() - startedAt,
+    }
+  }
+  const results = await Promise.all(waits)
+  const matches = results.filter((result): result is WaitTargetMatch => result !== null)
+  return {
+    matched: matches.length === live.length && missing.length === 0,
+    matches,
+    missing,
+    elapsedMs: Date.now() - startedAt,
+  }
+}
 
 export async function handleSessionControlRoute(
   route: string,
@@ -125,75 +245,17 @@ export async function handleSessionControlRoute(
   }
 
   // Multiplexed wait: block until one ('any') or every ('all') live target
-  // matches its pattern. Targets whose sessions are gone are reported as
-  // missing rather than failing the whole wait — workers may legitimately
-  // have exited. This is the primitive behind workflow.await: orchestrating
-  // agents sleep in one call instead of polling each worker.
+  // satisfies its condition (regex and/or output-idle). Targets whose
+  // sessions are gone are reported as missing rather than failing the whole
+  // wait — workers may legitimately have exited. This is the engine behind
+  // workflow.await in both delivery modes.
   if (route === 'POST /api/sessions/wait-any') {
     const input = waitAnySchema.parse(body)
-    const startedAt = Date.now()
-    const missing: string[] = []
-    const live = input.targets.flatMap((target) => {
-      const session = registry.sessions.get(target.key)
-      if (!session || session.exited) {
-        missing.push(target.key)
-        return []
-      }
-      return [{ target, session }]
+    const result = await runWaitTargets(registry, input.targets, {
+      timeoutMs: input.timeoutMs,
+      quorum: input.quorum,
     })
-    if (live.length === 0) {
-      return { status: 200, body: { matched: false, matches: [], missing, elapsedMs: 0 } }
-    }
-    const controller = new AbortController()
-    type WaitMatch = { key: string; match: string }
-    const waits = live.map(({ target, session }) =>
-      registry.waitForScreen(session, {
-        pattern: new RegExp(target.pattern, target.flags),
-        timeoutMs: input.timeoutMs,
-        scope: target.scope,
-        signal: controller.signal,
-      }).then(
-        (result): WaitMatch | null => ({ key: target.key, match: result.match }),
-        (): WaitMatch | null => null,
-      ))
-    let matches: WaitMatch[]
-    if (input.quorum === 'any') {
-      const winner = await new Promise<WaitMatch | null>((resolve) => {
-        let pending = waits.length
-        for (const wait of waits) {
-          void wait.then((result) => {
-            if (result) {
-              resolve(result)
-              return
-            }
-            pending -= 1
-            if (pending === 0) resolve(null)
-          })
-        }
-      })
-      controller.abort()
-      matches = winner ? [winner] : []
-      return {
-        status: 200,
-        body: {
-          matched: winner !== null,
-          matches,
-          missing,
-          elapsedMs: Date.now() - startedAt,
-        },
-      }
-    }
-    const results = await Promise.all(waits)
-    matches = results.filter((result): result is WaitMatch => result !== null)
-    return {
-      status: 200,
-      body: {
-        matched: matches.length === live.length && missing.length === 0,
-        matches,
-        missing,
-        elapsedMs: Date.now() - startedAt,
-      },
-    }
+    return { status: 200, body: result }
   }
 
   if (route === 'POST /api/sessions/kill') {

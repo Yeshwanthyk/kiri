@@ -26,6 +26,11 @@ import {
   sendControlJson,
 } from './terminal-control'
 import {
+  handleSubscriptionControlRoute,
+  makeTerminalSubscriptions,
+  type TerminalSubscriptionsApi,
+} from './terminal-subscriptions'
+import {
   buildTerminalProcessLaunch,
   type TerminalAgentLaunchConfig,
   type TerminalProcessLaunch,
@@ -60,6 +65,12 @@ export type TerminalServerApi = {
   readonly close: () => Promise<void>
 }
 
+export type TerminalServerControlContext = {
+  readonly token: string
+  readonly registry: ReturnType<typeof makeTerminalRegistry>
+  readonly subscriptions: TerminalSubscriptionsApi
+}
+
 export type TerminalServerOptions = {
   // Session modes that may be reclaimed after the idle window with no clients.
   readonly idleKillModes?: readonly TerminalMode[]
@@ -67,11 +78,14 @@ export type TerminalServerOptions = {
   readonly handleHttpRequest?: (
     request: IncomingMessage,
     response: ServerResponse,
-    context: { readonly token: string; readonly registry: ReturnType<typeof makeTerminalRegistry> },
+    context: TerminalServerControlContext,
   ) => boolean
   // Content written into a freshly spawned session's emulator before the
   // banner (the daemon restores previous scrollback for shells this way).
   readonly restoreContent?: (key: string, mode: TerminalMode) => string | null
+  // Pending wake subscriptions are journaled here so a restarted owner can
+  // re-arm them (daemon only).
+  readonly subscriptionsJournalPath?: string
 }
 
 type TerminalServerRuntime = {
@@ -79,6 +93,7 @@ type TerminalServerRuntime = {
   readonly registry: ReturnType<typeof makeTerminalRegistry>
   readonly dependencies: TerminalServerDependencies
   readonly options: TerminalServerOptions
+  subscriptions: TerminalSubscriptionsApi
   setInfo: (info: TerminalServerInfo | null) => void
   setHttpServer: (server: Server | null) => void
   setWebSocketServer: (server: WebSocketServer | null) => void
@@ -204,19 +219,29 @@ export function closeTerminalServerForTests() {
 export function makeTerminalServerService(
   dependencies: Partial<TerminalServerDependencies> = {},
   options: TerminalServerOptions = {},
-): TerminalServerApi & { readonly registry: ReturnType<typeof makeTerminalRegistry> } {
+): TerminalServerApi & {
+  readonly registry: ReturnType<typeof makeTerminalRegistry>
+  readonly subscriptions: TerminalSubscriptionsApi
+} {
   let terminalServer: TerminalServerInfo | null = null
   let httpServer: Server | null = null
   let webSocketServer: WebSocketServer | null = null
   let terminalServerPromise: Promise<TerminalServerInfo> | null = null
+  const registry = makeTerminalRegistry({
+    idleKillMs,
+    socketOpenState: WebSocket.OPEN,
+    idleKillModes: options.idleKillModes,
+  })
+  const subscriptions = makeTerminalSubscriptions({
+    registry,
+    spawnForDelivery: (agentId) => service.spawnAgentRuntime({ agentId }),
+    journalPath: options.subscriptionsJournalPath,
+  })
   const runtime: TerminalServerRuntime = {
     token: randomBytes(32).toString('base64url'),
-    registry: makeTerminalRegistry({
-      idleKillMs,
-      socketOpenState: WebSocket.OPEN,
-      idleKillModes: options.idleKillModes,
-    }),
+    registry,
     options,
+    subscriptions,
     dependencies: {
       getAgentLaunchConfig,
       buildTerminalProcessLaunch,
@@ -237,8 +262,9 @@ export function makeTerminalServerService(
     },
   }
 
-  return {
-    registry: runtime.registry,
+  const service = {
+    registry,
+    subscriptions,
     ensure: () => {
       if (terminalServer) return Promise.resolve(terminalServer)
       if (terminalServerPromise) return terminalServerPromise
@@ -249,7 +275,11 @@ export function makeTerminalServerService(
       return terminalServerPromise
     },
     prepareAgent: () => Promise.resolve(),
-    spawnAgentRuntime: async (input) => {
+    spawnAgentRuntime: async (input: {
+      readonly agentId: string
+      readonly cols?: number
+      readonly rows?: number
+    }) => {
       await ensureRuntimeTerminalServer(runtime)
       const config = runtime.dependencies.getAgentLaunchConfig(input.agentId)
       const session = await getOrCreateTerminalSession(
@@ -262,10 +292,10 @@ export function makeTerminalServerService(
       runtime.registry.scheduleIdleKill(session)
       return {
         agentId: input.agentId,
-        mode: 'runtime',
+        mode: 'runtime' as const,
       }
     },
-    closeAgentRuntime: (agentId) => {
+    closeAgentRuntime: (agentId: string) => {
       runtime.registry.closeAgentRuntime(agentId)
     },
     close: async () => {
@@ -284,6 +314,8 @@ export function makeTerminalServerService(
       ])
     },
   }
+
+  return service
 
   function ensureRuntimeTerminalServer(runtime: TerminalServerRuntime) {
     if (terminalServer) return Promise.resolve(terminalServer)
@@ -330,6 +362,7 @@ async function startTerminalServer(runtime: TerminalServerRuntime): Promise<Term
     const handled = handler(request, response, {
       token: runtime.token,
       registry: runtime.registry,
+      subscriptions: runtime.subscriptions,
     })
     if (handled) return
     response.statusCode = 404
@@ -528,7 +561,7 @@ function listen(server: Server, port: number, host: string, wss: WebSocketServer
 function defaultControlHandler(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { readonly token: string; readonly registry: ReturnType<typeof makeTerminalRegistry> },
+  context: TerminalServerControlContext,
 ): boolean {
   const url = new URL(request.url ?? '/', 'http://kiriterm.invalid')
   if (!url.pathname.startsWith('/api/')) return false
@@ -551,6 +584,15 @@ function defaultControlHandler(
     const result = await handleSessionControlRoute(route, body, context.registry)
     if (result) {
       sendControlJson(response, result.status, result.body)
+      return
+    }
+    const subscriptionResult = await handleSubscriptionControlRoute(
+      route,
+      body,
+      context.subscriptions,
+    )
+    if (subscriptionResult) {
+      sendControlJson(response, subscriptionResult.status, subscriptionResult.body)
       return
     }
     sendControlJson(response, 404, { error: `Unknown route ${route}` })

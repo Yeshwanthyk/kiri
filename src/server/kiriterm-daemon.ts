@@ -18,10 +18,11 @@ import {
   isControlRequestAuthorized,
   readControlRequestBody,
   sendControlJson,
-  type TerminalRegistryApi,
 } from './terminal-control'
+import { handleSubscriptionControlRoute } from './terminal-subscriptions'
 import {
   makeTerminalServerService,
+  type TerminalServerControlContext,
   type TerminalServerInfo,
 } from './terminal-server'
 import type { TerminalAgentLaunchConfig } from './terminal-launch'
@@ -212,6 +213,7 @@ export async function startKiritermDaemon(
     },
     {
       idleKillModes: ['shell'],
+      subscriptionsJournalPath: join(stateDir, 'subscriptions.json'),
       handleHttpRequest: (request, response, context) =>
         handleControlRequest(request, response, context),
       restoreContent: (key, mode) => {
@@ -286,7 +288,7 @@ export async function startKiritermDaemon(
   function handleControlRequest(
     request: IncomingMessage,
     response: ServerResponse,
-    context: { readonly token: string; readonly registry: TerminalRegistryApi },
+    context: TerminalServerControlContext,
   ): boolean {
     const url = new URL(request.url ?? '/', 'http://kiriterm.invalid')
     if (!url.pathname.startsWith('/api/')) return false
@@ -301,7 +303,7 @@ export async function startKiritermDaemon(
   async function dispatchControlRequest(
     request: IncomingMessage,
     response: ServerResponse,
-    context: { readonly token: string; readonly registry: TerminalRegistryApi },
+    context: TerminalServerControlContext,
     url: URL,
   ) {
     if (!isControlRequestAuthorized(request, context.token)) {
@@ -315,6 +317,16 @@ export async function startKiritermDaemon(
     const sessionResult = await handleSessionControlRoute(route, body, registry)
     if (sessionResult) {
       sendControlJson(response, sessionResult.status, sessionResult.body)
+      return
+    }
+
+    const subscriptionResult = await handleSubscriptionControlRoute(
+      route,
+      body,
+      context.subscriptions,
+    )
+    if (subscriptionResult) {
+      sendControlJson(response, subscriptionResult.status, subscriptionResult.body)
       return
     }
 

@@ -228,6 +228,9 @@ export type KiriControlDependencies = {
   readonly pasteAgentRuntimeTerminal: typeof pasteAgentRuntimeTerminal
   readonly getAgentLaunchConfig: typeof getAgentLaunchConfig
   readonly terminalControlRequest: typeof terminalControlRequest
+  // The agent identity of this control-plane process (KIRI_AGENT_ID for MCP
+  // servers spawned inside an agent's session); wake delivery defaults here.
+  readonly callerAgentId: () => string | null
   readonly listScratchpadBlocks: (input?: {
     readonly projectId?: string
   }) => readonly ScratchpadBlock[]
@@ -267,6 +270,7 @@ const liveKiriControlDependencies: KiriControlDependencies = {
   pasteAgentRuntimeTerminal,
   getAgentLaunchConfig,
   terminalControlRequest,
+  callerAgentId: () => process.env.KIRI_AGENT_ID?.trim() || null,
   listScratchpadBlocks,
   addScratchpadBlockSummary,
   deleteScratchpadBlockSummary,
@@ -466,9 +470,11 @@ export function makeKiriControl(
     },
   )
 
-  // Sleep until one/all of the workflow's live worker terminals matches the
-  // pattern — the push-style alternative to polling terminal.wait-for per
-  // worker. Matches are mapped back to agent ids and workflow item titles.
+  // One condition engine, two delivery modes. deliver:'return' blocks until
+  // workers match (regex and/or idle) and resolves with the result;
+  // deliver:'wake' registers a subscription with the session owner and
+  // returns immediately — the result is later typed into the receiving
+  // agent's terminal as a fresh user turn, so orchestrators wait for free.
   const workflowAwaitEffect = Effect.fn('KiriControl.workflowAwait')(
     function* (input: WorkflowAwaitInput) {
       const run = yield* fromSync(() => dependencies.getWorkflowRun(input.id))
@@ -476,19 +482,61 @@ export function makeKiriControl(
       if (agents.length === 0) {
         return {
           matched: false,
+          subscribed: false,
           reason: 'no_active_agents',
           matches: [],
           agents: 0,
         }
       }
+      const targets = agents.map((agent) => ({
+        key: `${agent.agentId}:runtime`,
+        label: agent.title || agent.agentId,
+        ...(input.pattern === undefined ? {} : { pattern: input.pattern }),
+        flags: input.flags,
+        scope: input.scope,
+        // A wake with no condition is a pure timer: idle over the timeout
+        // window keeps the target schema satisfied while the timeout drives
+        // the wake.
+        ...(input.idleMs !== undefined
+          ? { idleMs: input.idleMs }
+          : input.pattern === undefined
+            ? { idleMs: Math.min(input.timeoutMs, 600_000) }
+            : {}),
+      }))
+
+      if (input.deliver === 'wake') {
+        const deliverAgentId = input.deliverTo ?? dependencies.callerAgentId()
+        if (!deliverAgentId) {
+          return yield* normalizeError(new Error(
+            'deliver:"wake" needs deliverTo (no KIRI_AGENT_ID in this environment)',
+          ))
+        }
+        const payload = yield* Effect.tryPromise({
+          try: () => dependencies.terminalControlRequest('sessions/subscribe', {
+            targets,
+            timeoutMs: input.timeoutMs,
+            quorum: input.quorum,
+            deliver: {
+              agentId: deliverAgentId,
+              ...(input.note === undefined ? {} : { note: input.note }),
+              title: workflowTitle(run) ?? input.id,
+            },
+          }),
+          catch: normalizeError,
+        })
+        return {
+          subscribed: true,
+          deliverTo: deliverAgentId,
+          agents: agents.length,
+          ...(typeof payload === 'object' && payload !== null && 'id' in payload
+            ? { subscriptionId: payload.id }
+            : {}),
+        }
+      }
+
       const payload = yield* Effect.tryPromise({
         try: () => dependencies.terminalControlRequest('sessions/wait-any', {
-          targets: agents.map((agent) => ({
-            key: `${agent.agentId}:runtime`,
-            pattern: input.pattern,
-            flags: input.flags,
-            scope: input.scope,
-          })),
+          targets,
           timeoutMs: input.timeoutMs,
           quorum: input.quorum,
         }),
@@ -722,6 +770,13 @@ type WorkflowAwaitAgent = {
   readonly title: string
 }
 
+function workflowTitle(run: unknown): string | null {
+  if (run && typeof run === 'object' && 'title' in run && typeof run.title === 'string') {
+    return run.title
+  }
+  return null
+}
+
 function workflowActiveAgents(run: unknown): WorkflowAwaitAgent[] {
   if (!run || typeof run !== 'object' || !('items' in run) || !Array.isArray(run.items)) {
     return []
@@ -746,7 +801,7 @@ function resolveWorkflowAwaitPayload(payload: unknown, agents: readonly Workflow
   const byKey = new Map(agents.map((agent) => [`${agent.agentId}:runtime`, agent]))
   let matched = false
   let elapsedMs: number | undefined
-  const matches: Array<WorkflowAwaitAgent & { match: string }> = []
+  const matches: Array<WorkflowAwaitAgent & { match: string; idle: boolean; tail: string[] }> = []
   const missing: string[] = []
   if (payload && typeof payload === 'object') {
     if ('matched' in payload && typeof payload.matched === 'boolean') matched = payload.matched
@@ -760,6 +815,10 @@ function resolveWorkflowAwaitPayload(payload: unknown, agents: readonly Workflow
         matches.push({
           ...agent,
           match: 'match' in candidate && typeof candidate.match === 'string' ? candidate.match : '',
+          idle: 'idle' in candidate && candidate.idle === true,
+          tail: 'tail' in candidate && Array.isArray(candidate.tail)
+            ? candidate.tail.filter((line: unknown): line is string => typeof line === 'string')
+            : [],
         })
       }
     }

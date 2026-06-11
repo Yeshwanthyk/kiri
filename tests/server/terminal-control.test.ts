@@ -139,6 +139,46 @@ describe('sessions/wait-any control route', () => {
     expect(noneLive?.body).toMatchObject({ matched: false, missing: ['gone:runtime'] })
   })
 
+  it('resolves idle targets and includes screen tails in matches', async () => {
+    // Real timers for the settle window.
+    const registry = makeTerminalRegistry({ idleKillMs: 60_000, socketOpenState: 1 })
+    const session = registry.register({
+      key: 'idle:runtime',
+      cwd: '/repo',
+      mode: 'runtime',
+      label: 'codex',
+      proc: proc(),
+      cols: 80,
+      rows: 24,
+    })
+    registry.append(session, 'finished step 3\r\n')
+
+    const result = await handleSessionControlRoute('POST /api/sessions/wait-any', {
+      targets: [{ key: 'idle:runtime', label: 'Worker', idleMs: 250 }],
+      timeoutMs: 5_000,
+      quorum: 'any',
+    }, registry)
+
+    expect(result?.body).toMatchObject({
+      matched: true,
+      matches: [{
+        key: 'idle:runtime',
+        label: 'Worker',
+        idle: true,
+        tail: ['finished step 3'],
+      }],
+    })
+  })
+
+  it('rejects targets that have neither pattern nor idleMs', async () => {
+    const { registry } = createRegistry()
+    register(registry, 'a:runtime')
+    await expect(handleSessionControlRoute('POST /api/sessions/wait-any', {
+      targets: [{ key: 'a:runtime' }],
+      timeoutMs: 1_000,
+    }, registry)).rejects.toThrow(/pattern and\/or idleMs/)
+  })
+
   it('any-quorum reports no match when every wait times out', async () => {
     const { registry, timers } = createRegistry()
     register(registry, 'a:runtime')

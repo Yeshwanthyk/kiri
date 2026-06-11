@@ -278,6 +278,59 @@ describe('terminal registry', () => {
     await expect(timingOut).rejects.toThrow('Timed out')
   })
 
+  it('waitForIdle resolves after output settles and resets on activity', async () => {
+    // Real timers: idle settling is time-based by nature.
+    const registry = makeTerminalRegistry({ idleKillMs: 60_000, socketOpenState: 1 })
+    const session = registerSession(registry)
+
+    let resolved = false
+    const waiting = registry.waitForIdle(session, { settleMs: 250, timeoutMs: 5_000 })
+      .then((result) => {
+        resolved = true
+        return result
+      })
+
+    // Activity within the settle window keeps it pending.
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    registry.append(session, 'still working\r\n')
+    await drain(session)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(resolved).toBe(false)
+
+    await expect(waiting).resolves.toEqual({ quietMs: 250 })
+
+    // Exited sessions are immediately idle.
+    registry.kill(session)
+    await expect(registry.waitForIdle(session, { settleMs: 250, timeoutMs: 1_000 }))
+      .resolves.toEqual({ quietMs: 0 })
+  })
+
+  it('waitForIdle honors abort and timeout', async () => {
+    const registry = makeTerminalRegistry({ idleKillMs: 60_000, socketOpenState: 1 })
+    const session = registerSession(registry)
+    const controller = new AbortController()
+
+    const aborting = registry.waitForIdle(session, {
+      settleMs: 60_000,
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    })
+    controller.abort()
+    await expect(aborting).rejects.toThrow('aborted')
+    expect(session.screenListeners.size).toBe(0)
+
+    // Timeout fires when activity never settles.
+    const interval = setInterval(() => {
+      registry.append(session, 'busy\r\n')
+    }, 40)
+    try {
+      await expect(registry.waitForIdle(session, { settleMs: 300, timeoutMs: 250 }))
+        .rejects.toThrow('Timed out')
+    } finally {
+      clearInterval(interval)
+    }
+  })
+
   it('waitForScreen aborts cleanly and releases its listener', async () => {
     const { registry } = createRegistry()
     const session = registerSession(registry)

@@ -294,6 +294,7 @@ function testDependencies(
       runtimeStateJson: null,
     }),
     terminalControlRequest: () => Promise.resolve({}),
+    callerAgentId: () => null,
     listScratchpadBlocks: () => [scratchpadBlock],
     addScratchpadBlockSummary: (input) => ({ ...scratchpadBlock, body: input.body }),
     deleteScratchpadBlockSummary: (id) => ({ ...scratchpadBlock, id }),

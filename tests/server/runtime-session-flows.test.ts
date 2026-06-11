@@ -101,6 +101,21 @@ async function waitFor(client: Client, agentId: string, pattern: string) {
   }))
 }
 
+// Like waitFor, but tolerates the session not existing yet (e.g. a wake
+// delivery is still respawning the receiving terminal).
+async function waitForEventually(client: Client, agentId: string, pattern: string) {
+  const deadline = Date.now() + 20_000
+  for (;;) {
+    try {
+      return await waitFor(client, agentId, pattern)
+    } catch (error) {
+      if (Date.now() > deadline) throw error
+      if (!(error instanceof Error) || !error.message.includes('No session')) throw error
+      await sleep(250)
+    }
+  }
+}
+
 function sleep(ms: number) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms))
 }
@@ -215,6 +230,96 @@ describe('runtime session flows over MCP', () => {
     expect(triggeredBlock?.triggeredAgentId).toBe(triggered.agentId)
     expect(triggeredBlock?.triggeredAt).not.toBeNull()
   }, 120_000)
+
+  it('workflow.await deliver:wake injects results into the orchestrator as a fresh turn', async () => {
+    const client = await startClient()
+
+    // Orchestrator: a live fake-claude session.
+    const orchestrator = await createSession(client, 'claude', 'Orchestrator')
+    await sendInput(client, orchestrator.id, 'orchestrator-online')
+    expect((await waitFor(client, orchestrator.id, 'claude-reply:orchestrator-online')).matched)
+      .toBe(true)
+
+    // Worker: one workflow item on fake-codex.
+    const created = z.object({ id: z.string() }).parse(await call(client, 'kiri_do', {
+      operation: 'workflow.create',
+      params: {
+        projectId: 'flows',
+        title: 'Wake run',
+        defaults: { interfaceMode: 'terminal', attachScratchpad: false },
+        items: [{ action: 'launch', runtime: 'codex', title: 'Worker', body: 'boot-task' }],
+      },
+    }))
+    await call(client, 'kiri_do', { operation: 'workflow.dispatch', params: { id: created.id } })
+    const shown = z.object({
+      items: z.array(z.object({ activeAgentId: z.string().nullable() })),
+    }).parse(await call(client, 'kiri_get', { operation: 'workflow.show', params: { id: created.id } }))
+    const worker = shown.items[0]?.activeAgentId
+    if (!worker) throw new Error('no worker agent')
+    await call(client, 'kiri_do', { operation: 'terminal.spawn', params: { agentId: worker } })
+    expect((await waitFor(client, worker, 'fake-codex-terminal mode:fresh')).matched).toBe(true)
+
+    // Subscribe in wake mode: returns immediately, no held call.
+    const subscribed = z.object({
+      subscribed: z.boolean(),
+      subscriptionId: z.string().optional(),
+      deliverTo: z.string(),
+    }).parse(await call(client, 'kiri_do', {
+      operation: 'workflow.await',
+      params: {
+        id: created.id,
+        pattern: 'echo:finish-now',
+        deliver: 'wake',
+        deliverTo: orchestrator.id,
+        note: 'read worker output and integrate',
+        timeoutMs: 30_000,
+      },
+    }))
+    expect(subscribed).toMatchObject({ subscribed: true, deliverTo: orchestrator.id })
+
+    // Worker reports → wake is typed into the orchestrator, which replies to
+    // it like any other user turn.
+    await sendInput(client, worker, 'finish-now')
+    expect((await waitFor(client, orchestrator.id, 'claude-reply:.*kiri wake')).matched).toBe(true)
+    expect((await waitFor(client, orchestrator.id, 'claude-reply:note: read worker output and integrate'))
+      .matched).toBe(true)
+
+    // If the orchestrator's terminal is dead at delivery time, the wake
+    // respawns it (with conversation resume) and still lands.
+    await call(client, 'kiri_do', {
+      operation: 'terminal.kill',
+      params: { agentId: orchestrator.id, mode: 'runtime' },
+    })
+    await call(client, 'kiri_do', {
+      operation: 'workflow.await',
+      params: {
+        id: created.id,
+        pattern: 'echo:second-round',
+        deliver: 'wake',
+        deliverTo: orchestrator.id,
+        note: 'second wake',
+        timeoutMs: 30_000,
+      },
+    })
+    await sendInput(client, worker, 'second-round')
+    expect((await waitForEventually(client, orchestrator.id, 'fake-claude mode:resume')).matched)
+      .toBe(true)
+    expect((await waitForEventually(client, orchestrator.id, 'claude-reply:note: second wake')).matched)
+      .toBe(true)
+
+    // The same operation in return mode resolves on worker idleness — no
+    // marker engineering needed.
+    const idle = z.object({
+      matched: z.boolean(),
+      matches: z.array(z.object({ agentId: z.string(), idle: z.boolean(), tail: z.array(z.string()) })),
+    }).parse(await call(client, 'kiri_do', {
+      operation: 'workflow.await',
+      params: { id: created.id, idleMs: 1_000, timeoutMs: 20_000 },
+    }))
+    expect(idle.matched).toBe(true)
+    expect(idle.matches[0]).toMatchObject({ agentId: worker, idle: true })
+    expect(idle.matches[0]?.tail.join(' ')).toContain('second-round')
+  }, 180_000)
 
   it('workflow items can be retriggered after their terminal dies', async () => {
     const client = await startClient()

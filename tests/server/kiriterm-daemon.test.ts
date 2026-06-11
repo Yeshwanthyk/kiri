@@ -196,6 +196,59 @@ describe('kiriterm daemon', () => {
     expect(snapshot.data).toContain('restored scrollback from previous session')
   }, 30_000)
 
+  it('delivers wake subscriptions into a runtime session over the control api', async () => {
+    const stateDir = tempStateDir()
+    const previousBin = process.env.KIRI_CODEX_BIN
+    const previousHome = process.env.KIRI_CODEX_HOME
+    process.env.KIRI_CODEX_BIN = join(process.cwd(), 'tests/harness/fake-codex-terminal.mjs')
+    process.env.KIRI_CODEX_HOME = stateDir
+    cleanups.push(() => {
+      if (previousBin === undefined) delete process.env.KIRI_CODEX_BIN
+      else process.env.KIRI_CODEX_BIN = previousBin
+      if (previousHome === undefined) delete process.env.KIRI_CODEX_HOME
+      else process.env.KIRI_CODEX_HOME = previousHome
+    })
+
+    const handle = await startDaemon(stateDir)
+    // Orchestrator: a fake-codex runtime session. Worker: a shell session.
+    await apiJson(handle, 'agents/upsert', {
+      config: { ...launchConfig(stateDir), id: 'orch-agent' },
+    })
+    await apiJson(handle, 'agents/spawn', { agentId: 'orch-agent' })
+    await apiJson(handle, 'agents/upsert', { config: launchConfig(stateDir) })
+    const worker = await attachShell(handle, 'agent-t1')
+    await worker.nextFrame((frame) => frame.type === 'snapshot')
+
+    const subscribed = await apiJson(handle, 'sessions/subscribe', {
+      targets: [{ key: 'proj-t1:shell', label: 'Shell worker', pattern: 'wake-trigger-99' }],
+      timeoutMs: 15_000,
+      quorum: 'any',
+      deliver: { agentId: 'orch-agent', note: 'go integrate', title: 'daemon wake' },
+    })
+    expect(subscribed).toMatchObject({ ok: true })
+
+    worker.socket.send(JSON.stringify({ type: 'input', data: "printf 'wake-%s\\n' trigger-99\r" }))
+
+    // The wake is typed into the orchestrator's terminal; the fake echoes it.
+    const woke = await apiJson(handle, 'sessions/wait-for', {
+      key: 'orch-agent:runtime',
+      pattern: 'echo:.*kiri wake',
+      scope: 'output',
+      timeoutMs: 15_000,
+    })
+    expect(woke).toMatchObject({ matched: true })
+    const noted = await apiJson(handle, 'sessions/wait-for', {
+      key: 'orch-agent:runtime',
+      pattern: 'note: go integrate',
+      scope: 'output',
+      timeoutMs: 15_000,
+    })
+    expect(noted).toMatchObject({ matched: true })
+
+    const listed = await apiJson(handle, 'subscriptions')
+    expect(JSON.stringify(listed)).toContain('"delivered"')
+  }, 30_000)
+
   it('refuses to double-start and shuts down via the control api', async () => {
     const stateDir = tempStateDir()
     const handle = await startDaemon(stateDir)
