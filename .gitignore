@@ -27,3 +27,6 @@ yarn.lock
 /blob-report/
 /playwright/.cache/
 /*.jsonl
+
+# Rust build output
+target/

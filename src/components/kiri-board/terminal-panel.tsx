@@ -12,6 +12,7 @@ import {
   monoFonts,
   type ChatTypographySettings,
 } from './storage'
+import { terminalThemeForHost } from './terminal-theme'
 
 type XTermTerminalInstance = InstanceType<(typeof import('@xterm/xterm'))['Terminal']>
 type XTermFitAddonInstance = InstanceType<(typeof import('@xterm/addon-fit'))['FitAddon']>
@@ -81,6 +82,9 @@ export function TerminalPanel({
 
   React.useEffect(() => {
     themeModeRef.current = themeMode
+    const term = terminalRef.current
+    const host = hostRef.current
+    if (term && host) term.options.theme = terminalThemeForHost(host, themeMode)
   }, [themeMode])
 
   React.useEffect(() => {
@@ -116,6 +120,7 @@ export function TerminalPanel({
     let term: XTermTerminalInstance | null = null
     let fitAddon: XTermFitAddonInstance | null = null
     let resizeObserver: ResizeObserver | null = null
+    let themeObserver: MutationObserver | null = null
     let pendingWrite = ''
     let writeFrame: number | null = null
     let debugFrame: number | null = null
@@ -209,13 +214,25 @@ export function TerminalPanel({
           cursorBlink: true,
           convertEol: true,
           scrollback: terminalScrollbackRows,
-          theme: terminalTheme(),
+          theme: terminalThemeForHost(host, themeModeRef.current),
         })
         terminalRef.current = term
         fitAddon = new FitAddon()
         fitAddonRef.current = fitAddon
         term.loadAddon(fitAddon)
         term.open(host)
+        void loadTerminalEnhancements(term, terminalDisposables, () => disposed)
+        themeObserver = new MutationObserver(() => {
+          const currentTerm = terminalRef.current
+          const currentHost = hostRef.current
+          if (currentTerm && currentHost) {
+            currentTerm.options.theme = terminalThemeForHost(currentHost, themeModeRef.current)
+          }
+        })
+        themeObserver.observe(host.ownerDocument.documentElement, {
+          attributes: true,
+          attributeFilter: ['data-theme', 'data-theme-mode', 'style'],
+        })
         term.attachCustomKeyEventHandler((event) => {
           if (isTerminalToggleFocusEvent(event, toggleFocusKey)) {
             term?.blur()
@@ -304,6 +321,7 @@ export function TerminalPanel({
       if (writeFrame !== null) window.cancelAnimationFrame(writeFrame)
       if (debugFrame !== null) window.cancelAnimationFrame(debugFrame)
       resizeObserver?.disconnect()
+      themeObserver?.disconnect()
       for (const disposable of terminalDisposables) {
         disposable.dispose()
       }
@@ -457,28 +475,42 @@ function terminalWebSocketUrl(
   return url.toString()
 }
 
-function terminalTheme() {
-  return {
-    background: '#101216',
-    foreground: '#e6e8ef',
-    cursor: '#f5c15c',
-    cursorAccent: '#101216',
-    selectionBackground: '#334155',
-    black: '#101216',
-    red: '#ef4444',
-    green: '#22c55e',
-    yellow: '#f5c15c',
-    blue: '#60a5fa',
-    magenta: '#c084fc',
-    cyan: '#2dd4bf',
-    white: '#e6e8ef',
-    brightBlack: '#64748b',
-    brightRed: '#f87171',
-    brightGreen: '#4ade80',
-    brightYellow: '#facc15',
-    brightBlue: '#93c5fd',
-    brightMagenta: '#d8b4fe',
-    brightCyan: '#67e8f9',
-    brightWhite: '#f8fafc',
+// Progressive enhancements: GPU rendering, Unicode 11 widths, font ligatures.
+// Each is optional — failures leave the DOM renderer / default tables active.
+async function loadTerminalEnhancements(
+  term: XTermTerminalInstance,
+  disposables: TerminalDisposable[],
+  isDisposed: () => boolean,
+) {
+  try {
+    const { WebglAddon } = await import('@xterm/addon-webgl')
+    if (isDisposed()) return
+    const webgl = new WebglAddon()
+    webgl.onContextLoss(() => {
+      webgl.dispose()
+    })
+    term.loadAddon(webgl)
+    disposables.push(webgl)
+  } catch {
+    // WebGL2 unavailable; xterm keeps the DOM renderer.
+  }
+  try {
+    const { Unicode11Addon } = await import('@xterm/addon-unicode11')
+    if (isDisposed()) return
+    term.loadAddon(new Unicode11Addon())
+    term.unicode.activeVersion = '11'
+  } catch {
+    // Default unicode width tables remain active.
+  }
+  try {
+    const fonts: FontFaceSet | undefined = document.fonts
+    if (fonts) await fonts.ready
+    const { LigaturesAddon } = await import('@xterm/addon-ligatures')
+    if (isDisposed()) return
+    const ligatures = new LigaturesAddon()
+    term.loadAddon(ligatures)
+    disposables.push(ligatures)
+  } catch {
+    // Font access unavailable; ligatures stay off.
   }
 }
