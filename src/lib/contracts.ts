@@ -366,6 +366,33 @@ export const terminalInputSchema = z.object({
 })
 export type TerminalInput = z.infer<typeof terminalInputSchema>
 
+// Terminal control-plane operations: observe and drive terminal sessions the
+// way a human would (read the screen, press keys, wait for output).
+export const terminalTargetSchema = z.object({
+  agentId: z.string().trim().min(1),
+  mode: terminalModeSchema.default('runtime'),
+})
+export type TerminalTarget = z.infer<typeof terminalTargetSchema>
+
+export const terminalReadInputSchema = terminalTargetSchema
+export type TerminalReadInput = z.infer<typeof terminalReadInputSchema>
+
+export const terminalKeysInputSchema = terminalTargetSchema.extend({
+  text: z.string().max(40_000).optional(),
+  keys: z.array(z.string().trim().min(1)).max(64).default([]),
+}).refine((value) => Boolean(value.text) || value.keys.length > 0, {
+  message: 'Provide text and/or keys',
+})
+export type TerminalKeysInput = z.infer<typeof terminalKeysInputSchema>
+
+export const terminalWaitForInputSchema = terminalTargetSchema.extend({
+  pattern: z.string().min(1).max(2_000),
+  flags: z.string().regex(/^[gimsuy]*$/).default(''),
+  timeoutMs: z.number().int().positive().max(600_000).default(30_000),
+  scope: z.enum(['screen', 'output']).default('screen'),
+})
+export type TerminalWaitForInput = z.infer<typeof terminalWaitForInputSchema>
+
 // Terminal WebSocket protocol v2: JSON frames in both directions. The server
 // opens each attachment with a `snapshot` frame (serialized emulator state to
 // write into a freshly reset terminal), then streams `data` frames. Clients
@@ -528,6 +555,8 @@ export const kiriReadOperations = [
   'agent.detail',
   'agent.events.list',
   'scratchpad.list',
+  'terminal.read',
+  'terminal.list',
   'workflow.list',
   'workflow.show',
 ] as const
@@ -545,6 +574,10 @@ export const kiriWriteOperations = [
   'session.restore',
   'agent.prompt',
   'terminal.input',
+  'terminal.keys',
+  'terminal.wait-for',
+  'terminal.spawn',
+  'terminal.kill',
   'scratchpad.add',
   'scratchpad.delete',
   'scratchpad.trigger',

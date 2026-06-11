@@ -204,6 +204,59 @@ describe('KiriControl service construction', () => {
       thinkingLevel: 'medium',
     }))).rejects.toMatchObject({ message: 'Trigger failed' })
   })
+
+  it('routes terminal control operations to the session owner with resolved keys', async () => {
+    const requests: Array<{ route: string; body: unknown }> = []
+    const control = makeKiriControl(testDependencies({
+      terminalControlRequest: (route, body) => {
+        requests.push({ route, body })
+        return Promise.resolve({ ok: true })
+      },
+    }))
+
+    await Effect.runPromise(control.terminalRead({ agentId: 'agent-1', mode: 'runtime' }))
+    await Effect.runPromise(control.terminalRead({ agentId: 'agent-1', mode: 'shell' }))
+    await Effect.runPromise(control.terminalKeys({
+      agentId: 'agent-1',
+      mode: 'shell',
+      keys: ['up', 'enter'],
+    }))
+    await Effect.runPromise(control.terminalWaitFor({
+      agentId: 'agent-1',
+      mode: 'shell',
+      pattern: 'done',
+      flags: '',
+      timeoutMs: 5_000,
+      scope: 'screen',
+    }))
+    await Effect.runPromise(control.terminalKill({ agentId: 'agent-1', mode: 'shell' }))
+    await Effect.runPromise(control.terminalList())
+
+    expect(requests).toEqual([
+      { route: 'sessions/read', body: { key: 'agent-1:runtime' } },
+      // Shell sessions are keyed by the agent's project.
+      { route: 'sessions/read', body: { key: 'project-1:shell' } },
+      { route: 'sessions/input', body: { key: 'project-1:shell', keys: ['up', 'enter'] } },
+      {
+        route: 'sessions/wait-for',
+        body: {
+          key: 'project-1:shell',
+          pattern: 'done',
+          flags: '',
+          timeoutMs: 5_000,
+          scope: 'screen',
+        },
+      },
+      { route: 'sessions/kill', body: { key: 'project-1:shell' } },
+      { route: 'sessions', body: undefined },
+    ])
+  })
+
+  it('spawns runtime terminals through the existing paste path', async () => {
+    const control = makeKiriControl(testDependencies())
+    await expect(Effect.runPromise(control.terminalSpawn({ agentId: 'agent-9' })))
+      .resolves.toEqual({ agentId: 'agent-9', mode: 'runtime' })
+  })
 })
 
 function testDependencies(
@@ -230,6 +283,17 @@ function testDependencies(
     steerAgent: () => Promise.resolve({}),
     queueAgentTerminalInput: () => undefined,
     pasteAgentRuntimeTerminal: (input) => Promise.resolve({ agentId: input.agentId, mode: 'runtime' as const }),
+    getAgentLaunchConfig: (agentId) => ({
+      id: agentId,
+      projectId: 'project-1',
+      runtime: 'codex' as const,
+      sessionDir: '/tmp/session',
+      sessionFile: null,
+      model: 'gpt-5.3-codex',
+      cwd: '/tmp/project',
+      runtimeStateJson: null,
+    }),
+    terminalControlRequest: () => Promise.resolve({}),
     listScratchpadBlocks: () => [scratchpadBlock],
     addScratchpadBlockSummary: (input) => ({ ...scratchpadBlock, body: input.body }),
     deleteScratchpadBlockSummary: (id) => ({ ...scratchpadBlock, id }),

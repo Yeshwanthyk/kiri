@@ -90,6 +90,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/runtime.ts` | use-case | runtime registry-backed command surface | migrating | required | Runtime command service now dispatches through `RuntimeRegistry`; review/verification pending. |
 | `src/server/scratchpad-trigger.ts` | use-case | scratchpad trigger service method | migrating | required | Effect service and injectable dependencies added; compatibility export preserved. |
 | `src/server/settings.ts` | config | `config/settings-service.ts` with typed config errors | migrating | required | Typed injectable settings service added; review/verification pending. |
+| `src/server/terminal-control.ts` | use-case | shared terminal session control routes (read/input/wait-for) for daemon and embedded server | not-started | required | Added with the terminal MCP control plane; plain async handlers; Effect service seam pending. |
 | `src/server/terminal-env.ts` | pure | terminal process env normalization helpers | explicit-non-migration | not-required | Pure environment normalization extracted from terminal launch; keep Effect-free unless filesystem/process dependencies are added. |
 | `src/server/terminal-launch.ts` | process-adapter | terminal launch resolver service | migrating | required | Typed injectable terminal launch service added; review/verification pending. |
 | `src/server/terminal-registry.ts` | runtime-adapter | terminal session registry for PTY/socket state | migrating | required | Extracted from `terminal-server.ts`; review/verification pending. |

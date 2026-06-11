@@ -20,6 +20,10 @@ import {
   runtimeKindSchema,
   startSessionInputSchema,
   terminalInputSchema,
+  terminalKeysInputSchema,
+  terminalReadInputSchema,
+  terminalTargetSchema,
+  terminalWaitForInputSchema,
   triggerScratchpadBlockInputSchema,
   unhideProjectInputSchema,
   workflowItemOperationInputSchema,
@@ -138,6 +142,10 @@ async function dispatchReadOperation(
       const input = parseParams(listScratchpadParamsSchema, params)
       return shapeResult(await run(control.listScratchpad({ projectId: input.projectId })), options)
     }
+    case 'terminal.read':
+      return shapeResult(await run(control.terminalRead(parseParams(terminalReadInputSchema, params))), options)
+    case 'terminal.list':
+      return shapeResult(await run(control.terminalList()), options)
     case 'workflow.list': {
       const input = parseParams(listWorkflowRunsInputSchema, params)
       return shapeResult(await run(control.listWorkflowRuns(input)), options)
@@ -186,6 +194,18 @@ async function dispatchWriteOperation(
       break
     case 'terminal.input':
       result = await run(control.terminalInput(parseParams(terminalInputSchema, params)))
+      break
+    case 'terminal.keys':
+      result = await run(control.terminalKeys(parseParams(terminalKeysInputSchema, params)))
+      break
+    case 'terminal.wait-for':
+      result = await run(control.terminalWaitFor(parseParams(terminalWaitForInputSchema, params)))
+      break
+    case 'terminal.spawn':
+      result = await run(control.terminalSpawn(parseParams(agentIdParamsSchema, params)))
+      break
+    case 'terminal.kill':
+      result = await run(control.terminalKill(parseParams(terminalTargetSchema, params)))
       break
     case 'scratchpad.add':
       result = await run(control.addScratchpad(parseParams(addScratchpadBlockInputSchema, params)))

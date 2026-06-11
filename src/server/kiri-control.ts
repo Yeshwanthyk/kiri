@@ -16,6 +16,10 @@ import type {
   SessionInterfaceMode,
   StartSessionInput,
   TerminalInput,
+  TerminalKeysInput,
+  TerminalReadInput,
+  TerminalTarget,
+  TerminalWaitForInput,
   ThinkingLevel,
   WorkflowItemOperationInput,
   WorkflowRunOperationInput,
@@ -37,11 +41,12 @@ import {
   startSessionSummary,
   unhideProjectSummary,
   queueAgentTerminalInput,
+  getAgentLaunchConfig,
 } from './db'
 import { promptAgent, steerAgent } from './runtime'
 import { triggerScratchpadSession } from './scratchpad-trigger'
 import { getSettings } from './settings'
-import { pasteAgentRuntimeTerminal } from './terminal-server'
+import { pasteAgentRuntimeTerminal, terminalControlRequest } from './terminal-server'
 import {
   deleteProjectSummaryWithRuntimeCleanup,
   deleteSessionSummaryWithRuntimeCleanup,
@@ -160,6 +165,15 @@ export type KiriControlApi = {
     readonly queued: true
     readonly spawned: boolean
   }>
+  readonly terminalRead: (input: TerminalReadInput) => ControlEffect<unknown>
+  readonly terminalList: () => ControlEffect<unknown>
+  readonly terminalKeys: (input: TerminalKeysInput) => ControlEffect<unknown>
+  readonly terminalWaitFor: (input: TerminalWaitForInput) => ControlEffect<unknown>
+  readonly terminalSpawn: (input: { readonly agentId: string }) => ControlEffect<{
+    readonly agentId: string
+    readonly mode: 'runtime'
+  }>
+  readonly terminalKill: (input: TerminalTarget) => ControlEffect<unknown>
   readonly listScratchpad: (input?: {
     readonly projectId?: string
   }) => ControlEffect<readonly ScratchpadBlock[]>
@@ -210,6 +224,8 @@ export type KiriControlDependencies = {
   readonly steerAgent: typeof steerAgent
   readonly queueAgentTerminalInput: typeof queueAgentTerminalInput
   readonly pasteAgentRuntimeTerminal: typeof pasteAgentRuntimeTerminal
+  readonly getAgentLaunchConfig: typeof getAgentLaunchConfig
+  readonly terminalControlRequest: typeof terminalControlRequest
   readonly listScratchpadBlocks: (input?: {
     readonly projectId?: string
   }) => readonly ScratchpadBlock[]
@@ -247,6 +263,8 @@ const liveKiriControlDependencies: KiriControlDependencies = {
   steerAgent,
   queueAgentTerminalInput,
   pasteAgentRuntimeTerminal,
+  getAgentLaunchConfig,
+  terminalControlRequest,
   listScratchpadBlocks,
   addScratchpadBlockSummary,
   deleteScratchpadBlockSummary,
@@ -385,6 +403,77 @@ export function makeKiriControl(
     },
   )
 
+  const terminalSessionKey = (target: TerminalTarget) =>
+    target.mode === 'runtime'
+      ? `${target.agentId}:runtime`
+      : `${dependencies.getAgentLaunchConfig(target.agentId).projectId}:shell`
+
+  const terminalReadEffect = Effect.fn('KiriControl.terminalRead')(
+    function* (input: TerminalReadInput) {
+      const key = yield* fromSync(() => terminalSessionKey(input))
+      return yield* Effect.tryPromise({
+        try: () => dependencies.terminalControlRequest('sessions/read', { key }),
+        catch: normalizeError,
+      })
+    },
+  )
+
+  const terminalListEffect = Effect.fn('KiriControl.terminalList')(function* () {
+    return yield* Effect.tryPromise({
+      try: () => dependencies.terminalControlRequest('sessions'),
+      catch: normalizeError,
+    })
+  })
+
+  const terminalKeysEffect = Effect.fn('KiriControl.terminalKeys')(
+    function* (input: TerminalKeysInput) {
+      const key = yield* fromSync(() => terminalSessionKey(input))
+      return yield* Effect.tryPromise({
+        try: () => dependencies.terminalControlRequest('sessions/input', {
+          key,
+          ...(input.text !== undefined ? { data: input.text } : {}),
+          ...(input.keys.length > 0 ? { keys: input.keys } : {}),
+        }),
+        catch: normalizeError,
+      })
+    },
+  )
+
+  const terminalWaitForEffect = Effect.fn('KiriControl.terminalWaitFor')(
+    function* (input: TerminalWaitForInput) {
+      const key = yield* fromSync(() => terminalSessionKey(input))
+      return yield* Effect.tryPromise({
+        try: () => dependencies.terminalControlRequest('sessions/wait-for', {
+          key,
+          pattern: input.pattern,
+          flags: input.flags,
+          timeoutMs: input.timeoutMs,
+          scope: input.scope,
+        }),
+        catch: normalizeError,
+      })
+    },
+  )
+
+  const terminalSpawnEffect = Effect.fn('KiriControl.terminalSpawn')(
+    function* (input: { readonly agentId: string }) {
+      return yield* Effect.tryPromise({
+        try: () => dependencies.pasteAgentRuntimeTerminal({ agentId: input.agentId }),
+        catch: normalizeError,
+      })
+    },
+  )
+
+  const terminalKillEffect = Effect.fn('KiriControl.terminalKill')(
+    function* (input: TerminalTarget) {
+      const key = yield* fromSync(() => terminalSessionKey(input))
+      return yield* Effect.tryPromise({
+        try: () => dependencies.terminalControlRequest('sessions/kill', { key }),
+        catch: normalizeError,
+      })
+    },
+  )
+
   const listScratchpad = Effect.fn('KiriControl.listScratchpad')(
     function* (input: { readonly projectId?: string } = {}) {
       return yield* fromSync(() => dependencies.listScratchpadBlocks(input))
@@ -484,6 +573,12 @@ export function makeKiriControl(
     restoreSession: restoreSessionEffect,
     agentPrompt: agentPromptEffect,
     terminalInput: terminalInputEffect,
+    terminalRead: terminalReadEffect,
+    terminalList: terminalListEffect,
+    terminalKeys: terminalKeysEffect,
+    terminalWaitFor: terminalWaitForEffect,
+    terminalSpawn: terminalSpawnEffect,
+    terminalKill: terminalKillEffect,
     listScratchpad,
     addScratchpad,
     deleteScratchpad,

@@ -20,6 +20,12 @@ import {
   takeAgentTerminalInputs,
 } from './db'
 import {
+  handleSessionControlRoute,
+  isControlRequestAuthorized,
+  readControlRequestBody,
+  sendControlJson,
+} from './terminal-control'
+import {
   buildTerminalProcessLaunch,
   type TerminalAgentLaunchConfig,
   type TerminalProcessLaunch,
@@ -320,7 +326,8 @@ async function startTerminalServer(runtime: TerminalServerRuntime): Promise<Term
   const host = process.env.KIRI_TERMINAL_HOST ?? '127.0.0.1'
   const requestedPort = numberFromEnv(process.env.KIRI_TERMINAL_PORT, 0)
   const server = createServer((request, response) => {
-    const handled = runtime.options.handleHttpRequest?.(request, response, {
+    const handler = runtime.options.handleHttpRequest ?? defaultControlHandler
+    const handled = handler(request, response, {
       token: runtime.token,
       registry: runtime.registry,
     })
@@ -512,6 +519,70 @@ function listen(server: Server, port: number, host: string, wss: WebSocketServer
     wss.once('error', onError)
     server.listen(port, host)
   })
+}
+
+// The embedded server exposes the same session-control routes the kiriterm
+// daemon serves, so MCP/CLI terminal operations work against either owner.
+function defaultControlHandler(
+  request: IncomingMessage,
+  response: ServerResponse,
+  context: { readonly token: string; readonly registry: ReturnType<typeof makeTerminalRegistry> },
+): boolean {
+  const url = new URL(request.url ?? '/', 'http://kiriterm.invalid')
+  if (!url.pathname.startsWith('/api/')) return false
+  void (async () => {
+    if (!isControlRequestAuthorized(request, context.token)) {
+      sendControlJson(response, 401, { error: 'Unauthorized' })
+      return
+    }
+    const route = `${request.method ?? 'GET'} ${url.pathname}`
+    if (route === 'GET /api/health') {
+      sendControlJson(response, 200, {
+        ok: true,
+        pid: process.pid,
+        version: 'embedded',
+        sessions: context.registry.sessions.size,
+      })
+      return
+    }
+    const body = request.method === 'GET' ? {} : await readControlRequestBody(request)
+    const result = await handleSessionControlRoute(route, body, context.registry)
+    if (result) {
+      sendControlJson(response, result.status, result.body)
+      return
+    }
+    sendControlJson(response, 404, { error: `Unknown route ${route}` })
+  })().catch((error) => {
+    sendControlJson(response, 500, {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  })
+  return true
+}
+
+// Runs a control-API request against whichever terminal owner this process
+// uses (kiriterm daemon or embedded server). Backbone of the MCP/CLI
+// terminal.read / wait-for / keys operations.
+export async function terminalControlRequest(route: string, body?: unknown): Promise<unknown> {
+  const info = await defaultTerminalServerService.ensure()
+  const response = await fetch(`http://${info.host}:${info.port}/api/${route}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: {
+      authorization: `Bearer ${info.token}`,
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(630_000),
+  })
+  const payload: unknown = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const message =
+      typeof payload === 'object' && payload !== null && 'error' in payload
+        ? String(payload.error)
+        : `Terminal control request failed: ${route} (${response.status})`
+    throw new Error(message)
+  }
+  return payload
 }
 
 function closeWithReason(socket: WebSocket, reason: string) {

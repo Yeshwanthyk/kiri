@@ -77,9 +77,81 @@ const termStopCommand = Command.make('stop', {}, () =>
   }),
 ).pipe(Command.withDescription('Stop the kiriterm session daemon'))
 
+const termModeOption = Options.text('mode').pipe(
+  Options.withDescription('Terminal mode: runtime (agent) or shell'),
+  Options.withDefault('runtime'),
+)
+const termAgentArg = Args.text({ name: 'agentId' })
+
+const termListCommand = Command.make('ls', {}, () =>
+  runTermOperation('terminal.list', {}),
+).pipe(Command.withDescription('List live terminal sessions'))
+
+const termReadCommand = Command.make(
+  'read',
+  { agentId: termAgentArg, mode: termModeOption },
+  ({ agentId, mode }) => runTermOperation('terminal.read', { agentId, mode }),
+).pipe(Command.withDescription('Read the current terminal screen'))
+
+const termInputCommand = Command.make(
+  'input',
+  {
+    agentId: termAgentArg,
+    text: Args.text({ name: 'text' }),
+    noSubmit: Options.boolean('no-submit').pipe(
+      Options.withDescription('Do not press enter after the text'),
+    ),
+  },
+  ({ agentId, text, noSubmit }) =>
+    runTermOperation('terminal.input', { agentId, text, submit: !noSubmit }),
+).pipe(Command.withDescription('Type text into an agent runtime terminal'))
+
+const termKeysCommand = Command.make(
+  'keys',
+  {
+    agentId: termAgentArg,
+    mode: termModeOption,
+    keys: Args.text({ name: 'keys' }).pipe(Args.repeated),
+  },
+  ({ agentId, mode, keys }) => runTermOperation('terminal.keys', { agentId, mode, keys }),
+).pipe(Command.withDescription('Press named keys (enter, up, c-c, f1...) in a terminal'))
+
+const termWaitForCommand = Command.make(
+  'wait-for',
+  {
+    agentId: termAgentArg,
+    pattern: Args.text({ name: 'pattern' }),
+    mode: termModeOption,
+    timeout: Options.integer('timeout-ms').pipe(Options.withDefault(30_000)),
+    scope: Options.text('scope').pipe(
+      Options.withDescription('Match against the visible screen or recent raw output'),
+      Options.withDefault('screen'),
+    ),
+  },
+  ({ agentId, pattern, mode, timeout, scope }) =>
+    runTermOperation('terminal.wait-for', { agentId, mode, pattern, timeoutMs: timeout, scope }),
+).pipe(Command.withDescription('Wait until a regex matches the terminal'))
+
+function runTermOperation(operation: string, params: Record<string, unknown>) {
+  return Effect.gen(function* () {
+    const control = yield* KiriControl
+    const response = yield* Effect.promise(() =>
+      runKiriOperationWithBackendFallback(control, { operation, params }))
+    yield* Console.log(globalThis.JSON.stringify(response))
+  })
+}
+
 const termCommand = Command.make('term', {}).pipe(
-  Command.withDescription('Kiriterm terminal session daemon'),
-  Command.withSubcommands([termDaemonCommand, termStopCommand]),
+  Command.withDescription('Kiriterm terminal sessions: daemon lifecycle and human-parity control'),
+  Command.withSubcommands([
+    termDaemonCommand,
+    termStopCommand,
+    termListCommand,
+    termReadCommand,
+    termInputCommand,
+    termKeysCommand,
+    termWaitForCommand,
+  ]),
 )
 
 export const kirictlCommand = Command.make('kirictl', {}).pipe(

@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto'
 import {
   chmodSync,
   existsSync,
@@ -14,8 +13,13 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { TerminalMode } from '~/lib/contracts'
-import { encodeTerminalKeys } from '~/lib/terminal-keys'
-import type { makeTerminalRegistry } from './terminal-registry'
+import {
+  handleSessionControlRoute,
+  isControlRequestAuthorized,
+  readControlRequestBody,
+  sendControlJson,
+  type TerminalRegistryApi,
+} from './terminal-control'
 import {
   makeTerminalServerService,
   type TerminalServerInfo,
@@ -78,28 +82,6 @@ const agentInputSchema = z.object({
   agentId: z.string().min(1),
   text: z.string().min(1),
   submit: z.boolean().default(true),
-})
-
-const sessionKeySchema = z.object({ key: z.string().min(1) })
-
-const sessionInputSchema = z.object({
-  key: z.string().min(1),
-  data: z.string().optional(),
-  keys: z.array(z.string()).optional(),
-})
-
-const sessionResizeSchema = z.object({
-  key: z.string().min(1),
-  cols: z.number().int().positive(),
-  rows: z.number().int().positive(),
-})
-
-const waitForSchema = z.object({
-  key: z.string().min(1),
-  pattern: z.string().min(1),
-  flags: z.string().regex(/^[gimsuy]*$/).default(''),
-  timeoutMs: z.number().int().positive().max(600_000).default(30_000),
-  scope: z.enum(['screen', 'output']).default('screen'),
 })
 
 type AgentEntry = {
@@ -304,12 +286,14 @@ export async function startKiritermDaemon(
   function handleControlRequest(
     request: IncomingMessage,
     response: ServerResponse,
-    context: { readonly token: string; readonly registry: ReturnType<typeof makeTerminalRegistry> },
+    context: { readonly token: string; readonly registry: TerminalRegistryApi },
   ): boolean {
     const url = new URL(request.url ?? '/', 'http://kiriterm.invalid')
     if (!url.pathname.startsWith('/api/')) return false
     void dispatchControlRequest(request, response, context, url).catch((error) => {
-      sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) })
+      sendControlJson(response, 500, {
+        error: error instanceof Error ? error.message : String(error),
+      })
     })
     return true
   }
@@ -317,18 +301,25 @@ export async function startKiritermDaemon(
   async function dispatchControlRequest(
     request: IncomingMessage,
     response: ServerResponse,
-    context: { readonly token: string; readonly registry: ReturnType<typeof makeTerminalRegistry> },
+    context: { readonly token: string; readonly registry: TerminalRegistryApi },
     url: URL,
   ) {
-    if (!isAuthorized(request, context.token)) {
-      sendJson(response, 401, { error: 'Unauthorized' })
+    if (!isControlRequestAuthorized(request, context.token)) {
+      sendControlJson(response, 401, { error: 'Unauthorized' })
       return
     }
     const registry = context.registry
     const route = `${request.method ?? 'GET'} ${url.pathname}`
+    const body = request.method === 'GET' ? {} : await readControlRequestBody(request)
+
+    const sessionResult = await handleSessionControlRoute(route, body, registry)
+    if (sessionResult) {
+      sendControlJson(response, sessionResult.status, sessionResult.body)
+      return
+    }
 
     if (route === 'GET /api/health') {
-      sendJson(response, 200, {
+      sendControlJson(response, 200, {
         ok: true,
         pid: process.pid,
         version: record.version,
@@ -338,163 +329,66 @@ export async function startKiritermDaemon(
     }
 
     if (route === 'POST /api/agents/upsert') {
-      const body = upsertAgentSchema.parse(await readJsonBody(request))
-      const entry = agents.get(body.config.id)
-      agents.set(body.config.id, {
+      const input = upsertAgentSchema.parse(body)
+      const entry = agents.get(input.config.id)
+      agents.set(input.config.id, {
         config: {
-          ...body.config,
-          sessionFile: body.config.sessionFile,
-          runtimeStateJson: body.config.runtimeStateJson ?? null,
+          ...input.config,
+          sessionFile: input.config.sessionFile,
+          runtimeStateJson: input.config.runtimeStateJson ?? null,
         },
-        pendingInputs: [...(entry?.pendingInputs ?? []), ...(body.pendingInputs ?? [])],
+        pendingInputs: [...(entry?.pendingInputs ?? []), ...(input.pendingInputs ?? [])],
       })
-      sendJson(response, 200, { ok: true })
+      sendControlJson(response, 200, { ok: true })
       return
     }
 
     if (route === 'POST /api/agents/spawn') {
-      const body = spawnAgentSchema.parse(await readJsonBody(request))
-      await service.spawnAgentRuntime(body)
-      sendJson(response, 200, { ok: true, codexLaunches: codexLaunches.splice(0) })
+      const input = spawnAgentSchema.parse(body)
+      await service.spawnAgentRuntime(input)
+      sendControlJson(response, 200, { ok: true, codexLaunches: codexLaunches.splice(0) })
       return
     }
 
     if (route === 'POST /api/agents/close-runtime') {
-      const body = agentIdSchema.parse(await readJsonBody(request))
-      service.closeAgentRuntime(body.agentId)
-      sendJson(response, 200, { ok: true })
+      const input = agentIdSchema.parse(body)
+      service.closeAgentRuntime(input.agentId)
+      sendControlJson(response, 200, { ok: true })
       return
     }
 
     if (route === 'POST /api/agents/input') {
-      const body = agentInputSchema.parse(await readJsonBody(request))
-      const session = registry.sessions.get(`${body.agentId}:runtime`)
-      const data = body.submit ? `${body.text}\r` : body.text
+      const input = agentInputSchema.parse(body)
+      const session = registry.sessions.get(`${input.agentId}:runtime`)
+      const data = input.submit ? `${input.text}\r` : input.text
       if (session && !session.exited) {
         session.proc.write(data)
-        sendJson(response, 200, { ok: true, delivered: true })
+        sendControlJson(response, 200, { ok: true, delivered: true })
         return
       }
-      const entry = agents.get(body.agentId)
+      const entry = agents.get(input.agentId)
       if (!entry) {
-        sendJson(response, 404, { error: `Unknown agent ${body.agentId}` })
+        sendControlJson(response, 404, { error: `Unknown agent ${input.agentId}` })
         return
       }
       entry.pendingInputs.push({
-        text: body.text,
-        submit: body.submit,
+        text: input.text,
+        submit: input.submit,
         createdAt: new Date().toISOString(),
       })
-      sendJson(response, 200, { ok: true, delivered: false, queued: true })
-      return
-    }
-
-    if (route === 'GET /api/sessions') {
-      const sessions = Array.from(registry.sessions.values()).map((session) => ({
-        key: session.key,
-        mode: session.mode,
-        label: session.label,
-        cwd: session.cwd,
-        cols: session.cols,
-        rows: session.rows,
-        attachedClients: session.sockets.size,
-        exited: session.exited,
-      }))
-      sendJson(response, 200, { sessions })
-      return
-    }
-
-    if (route === 'POST /api/sessions/read') {
-      const body = sessionKeySchema.parse(await readJsonBody(request))
-      const session = registry.sessions.get(body.key)
-      if (!session) {
-        sendJson(response, 404, { error: `No session ${body.key}` })
-        return
-      }
-      await drained(session)
-      sendJson(response, 200, { screen: registry.readScreen(session) })
-      return
-    }
-
-    if (route === 'POST /api/sessions/snapshot') {
-      const body = sessionKeySchema.parse(await readJsonBody(request))
-      const session = registry.sessions.get(body.key)
-      if (!session) {
-        sendJson(response, 404, { error: `No session ${body.key}` })
-        return
-      }
-      await drained(session)
-      sendJson(response, 200, { snapshot: registry.snapshot(session) })
-      return
-    }
-
-    if (route === 'POST /api/sessions/input') {
-      const body = sessionInputSchema.parse(await readJsonBody(request))
-      const session = registry.sessions.get(body.key)
-      if (!session || session.exited) {
-        sendJson(response, 404, { error: `No live session ${body.key}` })
-        return
-      }
-      const data = `${body.data ?? ''}${body.keys ? encodeTerminalKeys(body.keys) : ''}`
-      if (data) session.proc.write(data)
-      sendJson(response, 200, { ok: true })
-      return
-    }
-
-    if (route === 'POST /api/sessions/resize') {
-      const body = sessionResizeSchema.parse(await readJsonBody(request))
-      const session = registry.sessions.get(body.key)
-      if (!session || session.exited) {
-        sendJson(response, 404, { error: `No live session ${body.key}` })
-        return
-      }
-      registry.resize(session, body.cols, body.rows)
-      sendJson(response, 200, { ok: true })
-      return
-    }
-
-    if (route === 'POST /api/sessions/wait-for') {
-      const body = waitForSchema.parse(await readJsonBody(request))
-      const session = registry.sessions.get(body.key)
-      if (!session) {
-        sendJson(response, 404, { error: `No session ${body.key}` })
-        return
-      }
-      const startedAt = Date.now()
-      try {
-        const result = await registry.waitForScreen(session, {
-          pattern: new RegExp(body.pattern, body.flags),
-          timeoutMs: body.timeoutMs,
-          scope: body.scope,
-        })
-        sendJson(response, 200, {
-          matched: true,
-          match: result.match,
-          elapsedMs: Date.now() - startedAt,
-        })
-      } catch {
-        sendJson(response, 200, { matched: false, elapsedMs: Date.now() - startedAt })
-      }
-      return
-    }
-
-    if (route === 'POST /api/sessions/kill') {
-      const body = sessionKeySchema.parse(await readJsonBody(request))
-      const session = registry.sessions.get(body.key)
-      if (session) registry.kill(session)
-      sendJson(response, 200, { ok: true })
+      sendControlJson(response, 200, { ok: true, delivered: false, queued: true })
       return
     }
 
     if (route === 'POST /api/shutdown') {
-      sendJson(response, 200, { ok: true })
+      sendControlJson(response, 200, { ok: true })
       void close().then(() => {
         options.onRequestShutdown?.()
       })
       return
     }
 
-    sendJson(response, 404, { error: `Unknown route ${route}` })
+    sendControlJson(response, 404, { error: `Unknown route ${route}` })
   }
 }
 
@@ -533,46 +427,6 @@ function loadPersistedSessions(sessionsDir: string) {
     }
   }
   return restored
-}
-
-function drained(session: { readonly headless: { write: (data: string, callback?: () => void) => void } }) {
-  return new Promise<void>((resolve) => {
-    session.headless.write('', () => {
-      resolve()
-    })
-  })
-}
-
-function isAuthorized(request: IncomingMessage, token: string) {
-  const header = request.headers.authorization
-  if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false
-  const presented = Buffer.from(header.slice('Bearer '.length))
-  const expected = Buffer.from(token)
-  return presented.length === expected.length && timingSafeEqual(presented, expected)
-}
-
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = []
-  let total = 0
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    total += buffer.length
-    if (total > 10_000_000) throw new Error('Request body too large')
-    chunks.push(buffer)
-  }
-  if (chunks.length === 0) return {}
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
-}
-
-function sendJson(response: ServerResponse, status: number, value: unknown) {
-  if (response.headersSent) {
-    response.end()
-    return
-  }
-  const body = JSON.stringify(value)
-  response.statusCode = status
-  response.setHeader('content-type', 'application/json')
-  response.end(body)
 }
 
 function writeFileAtomic(path: string, contents: string) {
