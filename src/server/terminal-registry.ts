@@ -1,9 +1,19 @@
-import type { RuntimeKind, TerminalMode } from '~/lib/contracts'
+import { SerializeAddon } from '@xterm/addon-serialize'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
+// The headless UMD bundle defeats node's CJS named-export detection, so plain
+// node ESM (tsx harnesses, kirictl) only sees a default export. The type-only
+// import is erased at runtime.
+import xtermHeadless, { type Terminal as HeadlessTerminal } from '@xterm/headless'
+import type { RuntimeKind, TerminalMode, TerminalServerFrame } from '~/lib/contracts'
+
+const { Terminal: HeadlessTerminalCtor } = xtermHeadless
 
 export type TerminalRegistryProc = {
   readonly resize: (cols: number, rows: number) => void
   readonly write: (data: string) => void
   readonly kill: () => void
+  readonly pause?: () => void
+  readonly resume?: () => void
 }
 
 export type TerminalRegistrySocket = {
@@ -19,6 +29,20 @@ export type TerminalRegistryLaunchConfig = {
   readonly cwd: string
 }
 
+export type TerminalScreen = {
+  readonly lines: string[]
+  readonly cursorX: number
+  readonly cursorY: number
+  readonly cols: number
+  readonly rows: number
+  readonly bufferType: 'normal' | 'alternate'
+}
+
+type PendingAttach = {
+  readonly socket: TerminalRegistrySocket
+  readonly buffered: string[]
+}
+
 export type TerminalRegistrySession = {
   readonly key: string
   readonly cwd: string
@@ -26,9 +50,16 @@ export type TerminalRegistrySession = {
   readonly label: string
   readonly proc: TerminalRegistryProc
   readonly sockets: Set<TerminalRegistrySocket>
-  readonly replayChunks: string[]
-  buffer: string
-  replayBytes: number
+  readonly headless: HeadlessTerminal
+  readonly serializer: SerializeAddon
+  readonly pendingAttaches: PendingAttach[]
+  readonly outstandingBytes: Map<TerminalRegistrySocket, number>
+  readonly recentOutputChunks: string[]
+  readonly screenListeners: Set<() => void>
+  recentOutputBytes: number
+  cols: number
+  rows: number
+  paused: boolean
   idleTimer: ReturnType<typeof setTimeout> | null
   exited: boolean
 }
@@ -39,9 +70,12 @@ type TerminalRegistryTimers = {
 }
 
 type TerminalRegistryInput = {
-  readonly maxReplayBytes: number
   readonly idleKillMs: number
   readonly socketOpenState: number
+  readonly scrollback?: number
+  readonly highWatermarkBytes?: number
+  readonly lowWatermarkBytes?: number
+  readonly maxRecentOutputBytes?: number
   readonly timers?: TerminalRegistryTimers
 }
 
@@ -50,9 +84,18 @@ const defaultTimers: TerminalRegistryTimers = {
   clearTimeout,
 }
 
+const defaultScrollback = 10_000
+const defaultHighWatermarkBytes = 256_000
+const defaultLowWatermarkBytes = 64_000
+const defaultMaxRecentOutputBytes = 64_000
+
 export function makeTerminalRegistry(input: TerminalRegistryInput) {
   const sessions = new Map<string, TerminalRegistrySession>()
   const timers = input.timers ?? defaultTimers
+  const scrollback = input.scrollback ?? defaultScrollback
+  const highWatermark = input.highWatermarkBytes ?? defaultHighWatermarkBytes
+  const lowWatermark = input.lowWatermarkBytes ?? defaultLowWatermarkBytes
+  const maxRecentOutputBytes = input.maxRecentOutputBytes ?? defaultMaxRecentOutputBytes
 
   function sessionKey(config: TerminalRegistryLaunchConfig, mode: TerminalMode) {
     return mode === 'shell'
@@ -64,7 +107,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     const key = sessionKey(config, mode)
     const existing = sessions.get(key)
     if (existing && existing.cwd === config.cwd) {
-      existing.proc.resize(cols, rows)
+      resize(existing, cols, rows)
       return existing
     }
     if (existing) kill(existing)
@@ -77,8 +120,20 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     readonly mode: TerminalMode
     readonly label: string
     readonly proc: TerminalRegistryProc
-    readonly initialBuffer: string
+    readonly cols: number
+    readonly rows: number
+    readonly banner?: string
   }) {
+    const headless = new HeadlessTerminalCtor({
+      cols: inputSession.cols,
+      rows: inputSession.rows,
+      scrollback,
+      allowProposedApi: true,
+    })
+    headless.loadAddon(new Unicode11Addon())
+    headless.unicode.activeVersion = '11'
+    const serializer = new SerializeAddon()
+    headless.loadAddon(serializer)
     const session: TerminalRegistrySession = {
       key: inputSession.key,
       cwd: inputSession.cwd,
@@ -86,33 +141,68 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       label: inputSession.label,
       proc: inputSession.proc,
       sockets: new Set(),
-      replayChunks: inputSession.initialBuffer ? [inputSession.initialBuffer] : [],
-      buffer: inputSession.initialBuffer,
-      replayBytes: inputSession.initialBuffer.length,
+      headless,
+      serializer,
+      pendingAttaches: [],
+      outstandingBytes: new Map(),
+      recentOutputChunks: [],
+      screenListeners: new Set(),
+      recentOutputBytes: 0,
+      cols: inputSession.cols,
+      rows: inputSession.rows,
+      paused: false,
       idleTimer: null,
       exited: false,
     }
-    trimReplay(session)
-    session.buffer = session.replayChunks.join('')
     sessions.set(session.key, session)
+    if (inputSession.banner) append(session, inputSession.banner)
     return session
   }
 
+  // Attach sequencing: the emulator parses writes asynchronously, so a snapshot
+  // taken synchronously could miss output that is appended but not yet parsed.
+  // A zero-byte write sentinel flushes the queue; live output arriving before
+  // the sentinel fires is buffered per attaching socket and replayed after the
+  // snapshot, preserving exact ordering without duplication.
   function attach(session: TerminalRegistrySession, socket: TerminalRegistrySocket) {
+    if (session.exited) {
+      socket.close()
+      return
+    }
     if (session.idleTimer) {
       timers.clearTimeout(session.idleTimer)
       session.idleTimer = null
     }
-    session.sockets.add(socket)
-    if (session.buffer) socket.send(session.buffer)
+    const pending: PendingAttach = { socket, buffered: [] }
+    session.pendingAttaches.push(pending)
+    session.headless.write('', () => {
+      const index = session.pendingAttaches.indexOf(pending)
+      if (index === -1) return
+      session.pendingAttaches.splice(index, 1)
+      if (socket.readyState !== input.socketOpenState) return
+      sendFrame(socket, {
+        type: 'snapshot',
+        data: session.serializer.serialize(),
+        cols: session.cols,
+        rows: session.rows,
+      })
+      session.sockets.add(socket)
+      session.outstandingBytes.set(socket, 0)
+      for (const chunk of pending.buffered) {
+        sendData(session, socket, chunk)
+      }
+    })
   }
 
   function detach(session: TerminalRegistrySession, socket: TerminalRegistrySocket) {
     session.sockets.delete(socket)
+    session.outstandingBytes.delete(socket)
+    removePendingAttach(session, socket)
+    maybeResume(session)
     if (session.exited) return
-    if (session.sockets.size > 0 || session.idleTimer) return
+    if (session.sockets.size > 0 || session.pendingAttaches.length > 0 || session.idleTimer) return
     session.idleTimer = timers.setTimeout(() => {
-      if (session.sockets.size === 0) kill(session)
+      if (session.sockets.size === 0 && session.pendingAttaches.length === 0) kill(session)
     }, input.idleKillMs)
   }
 
@@ -125,20 +215,104 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     }
     deleteOwnedSession(session)
     session.proc.kill()
+    disposeEmulator(session)
   }
 
   function append(session: TerminalRegistrySession, data: string) {
     if (!data) return
-    session.replayChunks.push(data)
-    session.replayBytes += data.length
-    trimReplay(session)
-    session.buffer = session.replayChunks.join('')
+    session.headless.write(data, () => {
+      for (const listener of session.screenListeners) listener()
+    })
+    session.recentOutputChunks.push(data)
+    session.recentOutputBytes += data.length
+    while (
+      session.recentOutputBytes > maxRecentOutputBytes &&
+      session.recentOutputChunks.length > 1
+    ) {
+      const removed = session.recentOutputChunks.shift() ?? ''
+      session.recentOutputBytes -= removed.length
+    }
   }
 
   function broadcast(session: TerminalRegistrySession, data: string) {
     for (const socket of session.sockets) {
-      if (socket.readyState === input.socketOpenState) socket.send(data)
+      sendData(session, socket, data)
     }
+    for (const pending of session.pendingAttaches) {
+      pending.buffered.push(data)
+    }
+  }
+
+  function ack(session: TerminalRegistrySession, socket: TerminalRegistrySocket, bytes: number) {
+    const outstanding = session.outstandingBytes.get(socket)
+    if (outstanding === undefined) return
+    session.outstandingBytes.set(socket, Math.max(0, outstanding - bytes))
+    maybeResume(session)
+  }
+
+  function resize(session: TerminalRegistrySession, cols: number, rows: number) {
+    session.cols = cols
+    session.rows = rows
+    session.proc.resize(cols, rows)
+    session.headless.resize(cols, rows)
+  }
+
+  function snapshot(session: TerminalRegistrySession, scrollbackLines?: number) {
+    return session.serializer.serialize(
+      scrollbackLines === undefined ? undefined : { scrollback: scrollbackLines },
+    )
+  }
+
+  function readScreen(session: TerminalRegistrySession): TerminalScreen {
+    const buffer = session.headless.buffer.active
+    const lines: string[] = []
+    for (let y = buffer.baseY; y < buffer.baseY + session.rows; y += 1) {
+      lines.push(buffer.getLine(y)?.translateToString(true) ?? '')
+    }
+    return {
+      lines,
+      cursorX: buffer.cursorX,
+      cursorY: buffer.cursorY,
+      cols: session.cols,
+      rows: session.rows,
+      bufferType: buffer.type,
+    }
+  }
+
+  // Resolves once `pattern` matches the visible screen ('screen' scope) or the
+  // recent raw output window ('output' scope), or rejects on timeout. Matching
+  // re-runs after every parsed output chunk.
+  function waitForScreen(session: TerminalRegistrySession, options: {
+    readonly pattern: RegExp
+    readonly timeoutMs: number
+    readonly scope?: 'screen' | 'output'
+  }) {
+    const scope = options.scope ?? 'screen'
+    const matchTarget = () =>
+      scope === 'screen'
+        ? readScreen(session).lines.join('\n')
+        : session.recentOutputChunks.join('')
+    return new Promise<{ match: string }>((resolve, reject) => {
+      let settled = false
+      const listener = () => {
+        const match = options.pattern.exec(matchTarget())
+        if (!match || settled) return
+        settle()
+        resolve({ match: match[0] })
+      }
+      const timer = timers.setTimeout(() => {
+        if (settled) return
+        settle()
+        reject(new Error(`Timed out waiting for ${options.pattern} on ${session.key}`))
+      }, options.timeoutMs)
+      function settle() {
+        settled = true
+        session.screenListeners.delete(listener)
+        timers.clearTimeout(timer)
+      }
+      session.screenListeners.add(listener)
+      listener()
+    })
   }
 
   function exit(session: TerminalRegistrySession, message: string) {
@@ -148,11 +322,18 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       session.idleTimer = null
     }
     append(session, message)
-    broadcast(session, message)
+    const frame: TerminalServerFrame = { type: 'exit', message }
     for (const socket of session.sockets) {
+      if (socket.readyState === input.socketOpenState) sendFrame(socket, frame)
       socket.close()
     }
+    for (const pending of session.pendingAttaches) {
+      if (pending.socket.readyState === input.socketOpenState) sendFrame(pending.socket, frame)
+      pending.socket.close()
+    }
+    session.pendingAttaches.length = 0
     deleteOwnedSession(session)
+    disposeEmulator(session)
   }
 
   function closeAgentRuntime(agentId: string) {
@@ -177,23 +358,48 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     kill,
     append,
     broadcast,
+    ack,
+    resize,
+    snapshot,
+    readScreen,
+    waitForScreen,
     exit,
     closeAgentRuntime,
     closeAll,
   }
 
-  function trimReplay(session: TerminalRegistrySession) {
-    while (
-      session.replayBytes > input.maxReplayBytes &&
-      session.replayChunks.length > 1
-    ) {
-      const removed = session.replayChunks.shift() ?? ''
-      session.replayBytes -= removed.length
+  function sendData(
+    session: TerminalRegistrySession,
+    socket: TerminalRegistrySocket,
+    data: string,
+  ) {
+    if (socket.readyState !== input.socketOpenState) return
+    sendFrame(socket, { type: 'data', data })
+    const outstanding = (session.outstandingBytes.get(socket) ?? 0) + data.length
+    session.outstandingBytes.set(socket, outstanding)
+    if (outstanding > highWatermark && !session.paused) {
+      session.paused = true
+      session.proc.pause?.()
     }
-    if (session.replayBytes <= input.maxReplayBytes) return
-    const tail = session.replayChunks[0]?.slice(-input.maxReplayBytes) ?? ''
-    session.replayChunks.splice(0, session.replayChunks.length, tail)
-    session.replayBytes = tail.length
+  }
+
+  function maybeResume(session: TerminalRegistrySession) {
+    if (!session.paused) return
+    for (const outstanding of session.outstandingBytes.values()) {
+      if (outstanding >= lowWatermark) return
+    }
+    session.paused = false
+    session.proc.resume?.()
+  }
+
+  function removePendingAttach(session: TerminalRegistrySession, socket: TerminalRegistrySocket) {
+    const index = session.pendingAttaches.findIndex((pending) => pending.socket === socket)
+    if (index !== -1) session.pendingAttaches.splice(index, 1)
+  }
+
+  function disposeEmulator(session: TerminalRegistrySession) {
+    session.screenListeners.clear()
+    session.headless.dispose()
   }
 
   function deleteOwnedSession(session: TerminalRegistrySession) {
@@ -201,4 +407,8 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       sessions.delete(session.key)
     }
   }
+}
+
+function sendFrame(socket: TerminalRegistrySocket, frame: TerminalServerFrame) {
+  socket.send(JSON.stringify(frame))
 }

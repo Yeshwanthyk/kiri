@@ -6,7 +6,13 @@ import { parse } from 'node:url'
 import { Context, Effect, Layer } from 'effect'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import * as pty from 'node-pty'
-import { terminalModeSchema, type TerminalMode } from '~/lib/contracts'
+import {
+  terminalClientFrameSchema,
+  terminalModeSchema,
+  type TerminalClientFrame,
+  type TerminalMode,
+  type TerminalServerFrame,
+} from '~/lib/contracts'
 import { rememberCodexTerminalSession } from './codex-cli-sessions'
 import {
   getAgentLaunchConfig,
@@ -26,17 +32,6 @@ type TerminalServerInfo = {
   path: string
   token: string
 }
-
-type TerminalClientMessage =
-  | {
-      type: 'input'
-      data: string
-    }
-  | {
-      type: 'resize'
-      cols: number
-      rows: number
-    }
 
 export type TerminalServerApi = {
   readonly ensure: () => Promise<TerminalServerInfo>
@@ -81,7 +76,6 @@ export type TerminalServerDependencies = {
 }
 
 const terminalPath = '/terminal'
-const maxReplayBytes = 1_000_000
 const idleKillMs = 5 * 60 * 1000
 
 export class TerminalServerService extends Context.Tag('@kiri/TerminalServer')<
@@ -130,7 +124,6 @@ export function makeTerminalServerService(
   const runtime: TerminalServerRuntime = {
     token: randomBytes(32).toString('base64url'),
     registry: makeTerminalRegistry({
-      maxReplayBytes,
       idleKillMs,
       socketOpenState: WebSocket.OPEN,
     }),
@@ -303,7 +296,11 @@ async function handleTerminalConnection(
       session.proc.write(message.data)
       return
     }
-    session.proc.resize(message.cols, message.rows)
+    if (message.type === 'ack') {
+      runtime.registry.ack(session, socket, message.bytes)
+      return
+    }
+    runtime.registry.resize(session, message.cols, message.rows)
   })
 
   socket.on('close', () => {
@@ -342,7 +339,9 @@ async function getOrCreateTerminalSession(
     mode,
     label: launch.label,
     proc,
-    initialBuffer: `\r\n[kiri terminal: ${launch.label} @ ${config.cwd}]\r\n`,
+    cols,
+    rows,
+    banner: `\r\n[kiri terminal: ${launch.label} @ ${config.cwd}]\r\n`,
   })
   if (mode === 'runtime' && launch.label === 'codex') {
     void runtime.dependencies.rememberCodexTerminalSession(config, launch.env, {
@@ -421,7 +420,13 @@ function listen(server: Server, port: number, host: string, wss: WebSocketServer
 }
 
 function closeWithReason(socket: WebSocket, reason: string) {
-  if (socket.readyState === WebSocket.OPEN) socket.send(`\r\n[kiri terminal error: ${reason}]\r\n`)
+  if (socket.readyState === WebSocket.OPEN) {
+    const frame: TerminalServerFrame = {
+      type: 'exit',
+      message: `\r\n[kiri terminal error: ${reason}]\r\n`,
+    }
+    socket.send(JSON.stringify(frame))
+  }
   socket.close()
 }
 
@@ -429,22 +434,13 @@ function logTerminalServerError(error: Error) {
   console.error('Kiri terminal server error', error)
 }
 
-function parseClientMessage(raw: RawData): TerminalClientMessage | null {
+function parseClientMessage(raw: RawData): TerminalClientFrame | null {
   try {
-    const message: unknown = JSON.parse(rawDataToString(raw))
-    if (!message || typeof message !== 'object') return null
-    if ('type' in message && message.type === 'input' && 'data' in message && typeof message.data === 'string') {
-      return { type: 'input', data: message.data }
-    }
-    if ('type' in message && message.type === 'resize') {
-      const cols = positiveInt('cols' in message ? message.cols : undefined, 100)
-      const rows = positiveInt('rows' in message ? message.rows : undefined, 30)
-      return { type: 'resize', cols, rows }
-    }
+    const parsed = terminalClientFrameSchema.safeParse(JSON.parse(rawDataToString(raw)))
+    return parsed.success ? parsed.data : null
   } catch {
     return null
   }
-  return null
 }
 
 function rawDataToString(raw: RawData) {

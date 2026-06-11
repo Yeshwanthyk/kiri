@@ -366,6 +366,34 @@ export const terminalInputSchema = z.object({
 })
 export type TerminalInput = z.infer<typeof terminalInputSchema>
 
+// Terminal WebSocket protocol v2: JSON frames in both directions. The server
+// opens each attachment with a `snapshot` frame (serialized emulator state to
+// write into a freshly reset terminal), then streams `data` frames. Clients
+// acknowledge applied bytes via `ack` frames so the server can pause the PTY
+// when a client falls behind (flow control).
+export const terminalClientFrameSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('input'), data: z.string() }),
+  z.object({
+    type: z.literal('resize'),
+    cols: z.number().int().positive(),
+    rows: z.number().int().positive(),
+  }),
+  z.object({ type: z.literal('ack'), bytes: z.number().int().positive() }),
+])
+export type TerminalClientFrame = z.infer<typeof terminalClientFrameSchema>
+
+export const terminalServerFrameSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('snapshot'),
+    data: z.string(),
+    cols: z.number().int().positive(),
+    rows: z.number().int().positive(),
+  }),
+  z.object({ type: z.literal('data'), data: z.string() }),
+  z.object({ type: z.literal('exit'), message: z.string() }),
+])
+export type TerminalServerFrame = z.infer<typeof terminalServerFrameSchema>
+
 export const steerMessageInputSchema = z.object({
   agentId: z.string().trim().min(1),
   text: z.string().trim().min(1),

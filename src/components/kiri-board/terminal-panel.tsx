@@ -4,7 +4,14 @@ import '@xterm/xterm/css/xterm.css'
 import { useServerFn } from '@tanstack/react-start'
 import { KeyboardOff } from 'lucide-react'
 import * as React from 'react'
-import type { AgentCell, ProjectRow, TerminalConfig, TerminalMode } from '~/lib/contracts'
+import {
+  terminalServerFrameSchema,
+  type AgentCell,
+  type ProjectRow,
+  type TerminalConfig,
+  type TerminalMode,
+  type TerminalServerFrame,
+} from '~/lib/contracts'
 import { terminalConfigQuery } from '~/server/workspace'
 import type { ThemeMode } from '~/theme/kiri-themes'
 import {
@@ -122,6 +129,7 @@ export function TerminalPanel({
     let resizeObserver: ResizeObserver | null = null
     let themeObserver: MutationObserver | null = null
     let pendingWrite = ''
+    let pendingServerBytes = 0
     let writeFrame: number | null = null
     let debugFrame: number | null = null
     const terminalDisposables: TerminalDisposable[] = []
@@ -158,9 +166,41 @@ export function TerminalPanel({
       writeFrame = window.requestAnimationFrame(() => {
         writeFrame = null
         const chunk = pendingWrite
+        const ackBytes = pendingServerBytes
         pendingWrite = ''
-        term?.write(chunk, scheduleDebugSnapshot)
+        pendingServerBytes = 0
+        term?.write(chunk, () => {
+          // Flow control: tell the server how many of its bytes were applied so
+          // it can resume a paused PTY once this client catches up.
+          if (ackBytes > 0 && socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'ack', bytes: ackBytes }))
+          }
+          scheduleDebugSnapshot()
+        })
       })
+    }
+
+    function handleServerFrame(frame: TerminalServerFrame) {
+      if (frame.type === 'snapshot') {
+        if (!term) return
+        term.reset()
+        if (term.cols !== frame.cols || term.rows !== frame.rows) {
+          term.resize(frame.cols, frame.rows)
+        }
+        recordTerminalPayload(frame.data)
+        enqueueWrite(frame.data)
+        appendTranscript(frame.data)
+        return
+      }
+      if (frame.type === 'data') {
+        pendingServerBytes += frame.data.length
+        recordTerminalPayload(frame.data)
+        enqueueWrite(frame.data)
+        appendTranscript(frame.data)
+        return
+      }
+      enqueueWrite(frame.message)
+      appendTranscript(frame.message)
     }
 
     function recordTerminalPayload(data: string) {
@@ -264,18 +304,24 @@ export function TerminalPanel({
           if (!term || !socket) return
           setStatus('Connected')
           socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+          // The screen content arrives via the snapshot frame; the banner is
+          // transcript-only so the snapshot reset does not wipe it.
           const banner = mode === 'runtime'
             ? `kiri agent terminal · ${terminalConfig.runtime} · ${terminalConfig.model} · ${project.cwd}\r\n\r\n`
             : `kiri shell terminal · ${project.cwd}\r\n\r\n`
-          enqueueWrite(banner)
           appendTranscript(banner)
         }
         socket.onmessage = (event) => {
-          if (typeof event.data === 'string') {
-            recordTerminalPayload(event.data)
-            enqueueWrite(event.data)
-            appendTranscript(event.data)
+          if (typeof event.data !== 'string') return
+          const frame = parseServerFrame(event.data)
+          if (frame) {
+            handleServerFrame(frame)
+            return
           }
+          // Unframed payloads (e.g. older servers) are written through as-is.
+          recordTerminalPayload(event.data)
+          enqueueWrite(event.data)
+          appendTranscript(event.data)
         }
         socket.onclose = () => {
           if (!disposed) {
@@ -416,6 +462,16 @@ export function terminalShouldCustomScrollWheel(
   buffer: { readonly type: 'normal' | 'alternate'; readonly baseY: number } | undefined,
 ) {
   return buffer?.type === 'normal' && buffer.baseY > 0
+}
+
+function parseServerFrame(data: string): TerminalServerFrame | null {
+  if (!data.startsWith('{')) return null
+  try {
+    const parsed = terminalServerFrameSchema.safeParse(JSON.parse(data))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
 }
 
 function countOccurrences(value: string, pattern: string) {

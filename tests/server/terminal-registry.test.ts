@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
-import { makeTerminalRegistry } from '../../src/server/terminal-registry'
+import { terminalServerFrameSchema, type TerminalServerFrame } from '../../src/lib/contracts'
+import {
+  makeTerminalRegistry,
+  type TerminalRegistrySession,
+} from '../../src/server/terminal-registry'
 
 function proc() {
   return {
     resize: vi.fn(),
     write: vi.fn(),
     kill: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
   }
 }
 
@@ -17,23 +23,60 @@ function socket(openState = 1) {
   }
 }
 
-function createRegistry() {
+function sentFrames(target: ReturnType<typeof socket>): TerminalServerFrame[] {
+  return target.send.mock.calls.map((call) => {
+    const raw: unknown = call[0]
+    if (typeof raw !== 'string') throw new Error('expected string frame')
+    return terminalServerFrameSchema.parse(JSON.parse(raw))
+  })
+}
+
+function drain(session: TerminalRegistrySession) {
+  return new Promise<void>((resolve) => {
+    session.headless.write('', () => {
+      resolve()
+    })
+  })
+}
+
+type RegistryOptions = {
+  idleKillMs?: number
+  highWatermarkBytes?: number
+  lowWatermarkBytes?: number
+}
+
+function createRegistry(options: RegistryOptions = {}) {
   const timers: Array<() => void> = []
-  return {
-    timers,
-    registry: makeTerminalRegistry({
-      maxReplayBytes: 12,
-      idleKillMs: 100,
-      socketOpenState: 1,
-      timers: {
-        setTimeout: (callback) => {
-          timers.push(callback)
-          return timers.length as unknown as ReturnType<typeof setTimeout>
-        },
-        clearTimeout: () => undefined,
+  const registry = makeTerminalRegistry({
+    idleKillMs: options.idleKillMs ?? 100,
+    socketOpenState: 1,
+    highWatermarkBytes: options.highWatermarkBytes,
+    lowWatermarkBytes: options.lowWatermarkBytes,
+    timers: {
+      setTimeout: (callback) => {
+        timers.push(callback)
+        return timers.length as unknown as ReturnType<typeof setTimeout>
       },
-    }),
-  }
+      clearTimeout: () => undefined,
+    },
+  })
+  return { timers, registry }
+}
+
+function registerSession(
+  registry: ReturnType<typeof makeTerminalRegistry>,
+  overrides: { key?: string; cwd?: string; banner?: string; proc?: ReturnType<typeof proc> } = {},
+) {
+  return registry.register({
+    key: overrides.key ?? 'agent-1:runtime',
+    cwd: overrides.cwd ?? '/repo',
+    mode: 'runtime',
+    label: 'codex',
+    proc: overrides.proc ?? proc(),
+    cols: 80,
+    rows: 24,
+    banner: overrides.banner,
+  })
 }
 
 describe('terminal registry', () => {
@@ -50,17 +93,10 @@ describe('terminal registry', () => {
     expect(registry.sessionKey(config, 'runtime')).toBe('agent-1:runtime')
   })
 
-  it('reuses matching cwd sessions and kills stale cwd sessions', () => {
+  it('reuses matching cwd sessions, resizing both pty and emulator', () => {
     const { registry } = createRegistry()
     const firstProc = proc()
-    const session = registry.register({
-      key: 'agent-1:runtime',
-      cwd: '/repo',
-      mode: 'runtime',
-      label: 'codex',
-      proc: firstProc,
-      initialBuffer: '',
-    })
+    const session = registerSession(registry, { proc: firstProc })
     const config = {
       id: 'agent-1',
       projectId: 'project-1',
@@ -70,6 +106,9 @@ describe('terminal registry', () => {
 
     expect(registry.getReusable(config, 'runtime', 120, 40)).toBe(session)
     expect(firstProc.resize).toHaveBeenCalledWith(120, 40)
+    expect(session.headless.cols).toBe(120)
+    expect(session.headless.rows).toBe(40)
+    expect(registry.readScreen(session).cols).toBe(120)
 
     expect(registry.getReusable({ ...config, cwd: '/other' }, 'runtime', 80, 24)).toBeNull()
     expect(firstProc.kill).toHaveBeenCalledTimes(1)
@@ -78,15 +117,7 @@ describe('terminal registry', () => {
 
   it('does not let stale process exit unregister a replacement session with the same key', () => {
     const { registry } = createRegistry()
-    const oldProc = proc()
-    const oldSession = registry.register({
-      key: 'agent-1:runtime',
-      cwd: '/repo',
-      mode: 'runtime',
-      label: 'codex',
-      proc: oldProc,
-      initialBuffer: '',
-    })
+    const oldSession = registerSession(registry)
     const config = {
       id: 'agent-1',
       projectId: 'project-1',
@@ -95,177 +126,255 @@ describe('terminal registry', () => {
     }
 
     expect(registry.getReusable(config, 'runtime', 80, 24)).toBeNull()
-    const replacement = registry.register({
-      key: 'agent-1:runtime',
-      cwd: '/other',
-      mode: 'runtime',
-      label: 'codex',
-      proc: proc(),
-      initialBuffer: '',
-    })
+    const replacement = registerSession(registry, { cwd: '/other' })
     registry.exit(oldSession, 'old exit')
 
     expect(registry.sessions.get('agent-1:runtime')).toBe(replacement)
   })
 
-  it('caps replay buffer and broadcasts only to open sockets', () => {
+  it('parses output into a readable screen with cursor position', async () => {
     const { registry } = createRegistry()
-    const session = registry.register({
-      key: 'agent-1:runtime',
-      cwd: '/repo',
-      mode: 'runtime',
-      label: 'codex',
-      proc: proc(),
-      initialBuffer: 'hello',
-    })
+    const session = registerSession(registry)
+
+    registry.append(session, 'hello \x1b[31mworld\x1b[0m\r\nsecond')
+    await drain(session)
+
+    const screen = registry.readScreen(session)
+    expect(screen.lines[0]).toBe('hello world')
+    expect(screen.lines[1]).toBe('second')
+    expect(screen.cursorX).toBe(6)
+    expect(screen.cursorY).toBe(1)
+    expect(screen.bufferType).toBe('normal')
+  })
+
+  it('sends a snapshot frame on attach and streams subsequent data frames', async () => {
+    const { registry } = createRegistry()
+    const session = registerSession(registry, { banner: '[banner]\r\n' })
+    registry.append(session, 'before-attach\r\n')
+
+    const client = socket(1)
+    registry.attach(session, client)
+    await drain(session)
+
+    registry.append(session, 'after-attach')
+    registry.broadcast(session, 'after-attach')
+    await drain(session)
+
+    const frames = sentFrames(client)
+    expect(frames[0]?.type).toBe('snapshot')
+    if (frames[0]?.type !== 'snapshot') throw new Error('expected snapshot frame')
+    expect(frames[0].cols).toBe(80)
+    expect(frames[0].rows).toBe(24)
+    expect(frames[0].data).toContain('[banner]')
+    expect(frames[0].data).toContain('before-attach')
+    expect(frames[0].data).not.toContain('after-attach')
+    expect(frames[1]).toEqual({ type: 'data', data: 'after-attach' })
+  })
+
+  it('buffers output that races an attach and replays it after the snapshot', async () => {
+    const { registry } = createRegistry()
+    const session = registerSession(registry)
+    registry.append(session, 'first')
+
+    const client = socket(1)
+    registry.attach(session, client)
+    // Arrives while the attach sentinel is still queued: must not be lost and
+    // must not be duplicated inside the snapshot.
+    registry.append(session, 'second')
+    registry.broadcast(session, 'second')
+    await drain(session)
+
+    const frames = sentFrames(client)
+    expect(frames[0]?.type).toBe('snapshot')
+    if (frames[0]?.type !== 'snapshot') throw new Error('expected snapshot frame')
+    expect(frames[0].data).toContain('first')
+    expect(frames[0].data).not.toContain('second')
+    expect(frames[1]).toEqual({ type: 'data', data: 'second' })
+  })
+
+  it('round-trips a snapshot into an identical screen', async () => {
+    const { registry } = createRegistry()
+    const original = registerSession(registry)
+    registry.append(original, 'line one\r\n\x1b[1;33mbold yellow\x1b[0m\r\n')
+    registry.append(original, 'tail without newline')
+    await drain(original)
+
+    const restored = registerSession(registry, { key: 'agent-2:runtime' })
+    registry.append(restored, registry.snapshot(original))
+    await drain(restored)
+
+    expect(registry.readScreen(restored).lines).toEqual(registry.readScreen(original).lines)
+    expect(registry.readScreen(restored).cursorX).toBe(registry.readScreen(original).cursorX)
+    expect(registry.readScreen(restored).cursorY).toBe(registry.readScreen(original).cursorY)
+  })
+
+  it('broadcasts only to open sockets', async () => {
+    const { registry } = createRegistry()
+    const session = registerSession(registry)
     const open = socket(1)
     const closed = socket(3)
     registry.attach(session, open)
     registry.attach(session, closed)
+    await drain(session)
 
-    registry.append(session, '-0123456789abcdef')
     registry.broadcast(session, 'next')
 
-    expect(session.buffer).toBe('456789abcdef')
-    expect(open.send).toHaveBeenCalledWith('hello')
-    expect(open.send).toHaveBeenCalledWith('next')
-    expect(closed.send).toHaveBeenCalledWith('hello')
-    expect(closed.send).not.toHaveBeenCalledWith('next')
+    expect(sentFrames(open).some((frame) => frame.type === 'data' && frame.data === 'next')).toBe(true)
+    expect(sentFrames(closed)).toHaveLength(0)
   })
 
-  it('trims replay on chunk boundaries before slicing a single oversized chunk', () => {
-    const { registry } = createRegistry()
-    const session = registry.register({
-      key: 'agent-1:runtime',
-      cwd: '/repo',
-      mode: 'runtime',
-      label: 'codex',
-      proc: proc(),
-      initialBuffer: '',
+  it('pauses the pty past the high watermark and resumes after acks', async () => {
+    const { registry } = createRegistry({ highWatermarkBytes: 10, lowWatermarkBytes: 5 })
+    const fakeProc = proc()
+    const session = registerSession(registry, { proc: fakeProc })
+    const client = socket(1)
+    registry.attach(session, client)
+    await drain(session)
+
+    registry.broadcast(session, '0123456789abc')
+    expect(fakeProc.pause).toHaveBeenCalledTimes(1)
+    expect(session.paused).toBe(true)
+
+    registry.ack(session, client, 4)
+    expect(fakeProc.resume).not.toHaveBeenCalled()
+
+    registry.ack(session, client, 9)
+    expect(fakeProc.resume).toHaveBeenCalledTimes(1)
+    expect(session.paused).toBe(false)
+  })
+
+  it('resumes a paused pty when the slow socket detaches', async () => {
+    const { registry } = createRegistry({ highWatermarkBytes: 10, lowWatermarkBytes: 5 })
+    const fakeProc = proc()
+    const session = registerSession(registry, { proc: fakeProc })
+    const client = socket(1)
+    registry.attach(session, client)
+    await drain(session)
+
+    registry.broadcast(session, '0123456789abc')
+    expect(session.paused).toBe(true)
+
+    registry.detach(session, client)
+    expect(fakeProc.resume).toHaveBeenCalledTimes(1)
+  })
+
+  it('waitForScreen resolves on screen matches and rejects on timeout', async () => {
+    const { registry, timers } = createRegistry()
+    const session = registerSession(registry)
+
+    const waiting = registry.waitForScreen(session, {
+      pattern: /ready \d+/,
+      timeoutMs: 1_000,
     })
+    registry.append(session, 'booting...\r\nready 42\r\n')
+    await expect(waiting).resolves.toEqual({ match: 'ready 42' })
 
-    registry.append(session, 'abcde')
-    registry.append(session, 'fghij')
-    registry.append(session, 'klm')
-
-    expect(session.buffer).toBe('fghijklm')
-    expect(session.replayBytes).toBe(8)
-
-    registry.append(session, 'mnopqrstuvwxyz')
-
-    expect(session.buffer).toBe('opqrstuvwxyz')
-    expect(session.replayChunks).toEqual(['opqrstuvwxyz'])
-    expect(session.replayBytes).toBe(12)
-  })
-
-  it('sends the chunk-trimmed replay buffer on attach', () => {
-    const { registry } = createRegistry()
-    const session = registry.register({
-      key: 'agent-1:runtime',
-      cwd: '/repo',
-      mode: 'runtime',
-      label: 'codex',
-      proc: proc(),
-      initialBuffer: '',
+    const timingOut = registry.waitForScreen(session, {
+      pattern: /never-appears/,
+      timeoutMs: 1_000,
     })
-    registry.append(session, 'abcde')
-    registry.append(session, 'fghij')
-    registry.append(session, 'klm')
-    const attached = socket(1)
-
-    registry.attach(session, attached)
-
-    expect(attached.send).toHaveBeenCalledWith('fghijklm')
+    const timeout = timers.at(-1)
+    timeout?.()
+    await expect(timingOut).rejects.toThrow('Timed out')
   })
 
-  it('kills idle sessions after the last socket detaches and cancels idle kill on reattach', () => {
-    const timers: Array<() => void> = []
+  it('waitForScreen output scope matches raw output no longer on screen', async () => {
+    const { registry } = createRegistry()
+    const session = registerSession(registry)
+
+    // Print a marker, then clear screen + scrollback: it is gone from the
+    // visible screen but still matchable in the recent raw output window.
+    registry.append(session, 'vanishing-marker\r\n[2J[3J[H')
+    await drain(session)
+    expect(registry.readScreen(session).lines.join('\n')).not.toContain('vanishing-marker')
+
+    const waiting = registry.waitForScreen(session, {
+      pattern: /vanishing-marker/,
+      timeoutMs: 1_000,
+      scope: 'output',
+    })
+    await expect(waiting).resolves.toEqual({ match: 'vanishing-marker' })
+  })
+
+  it('kills idle sessions after the last socket detaches and cancels idle kill on reattach', async () => {
+    const timerCallbacks: Array<() => void> = []
     const activeTimers = new Set<ReturnType<typeof setTimeout>>()
     const registry = makeTerminalRegistry({
-      maxReplayBytes: 12,
       idleKillMs: 100,
       socketOpenState: 1,
       timers: {
         setTimeout: (callback) => {
-          const timer = (timers.length + 1) as unknown as ReturnType<typeof setTimeout>
+          const timer = (timerCallbacks.length + 1) as unknown as ReturnType<typeof setTimeout>
           activeTimers.add(timer)
-          timers.push(() => {
+          timerCallbacks.push(() => {
             if (activeTimers.has(timer)) callback()
           })
           return timer
         },
         clearTimeout: (timer) => {
-          clearTimeout(timer)
           activeTimers.delete(timer)
         },
       },
     })
     const fakeProc = proc()
-    const session = registry.register({
-      key: 'agent-1:runtime',
-      cwd: '/repo',
-      mode: 'runtime',
-      label: 'codex',
-      proc: fakeProc,
-      initialBuffer: '',
-    })
+    const session = registerSession(registry, { proc: fakeProc })
     const first = socket()
 
     registry.attach(session, first)
+    await drain(session)
     registry.detach(session, first)
-    expect(timers).toHaveLength(1)
+    expect(timerCallbacks).toHaveLength(1)
 
     registry.attach(session, first)
+    await drain(session)
     expect(activeTimers.size).toBe(0)
     expect(session.idleTimer).toBeNull()
     registry.detach(session, first)
-    expect(timers).toHaveLength(2)
+    expect(timerCallbacks).toHaveLength(2)
 
-    timers[0]?.()
+    timerCallbacks[0]?.()
     expect(fakeProc.kill).not.toHaveBeenCalled()
-    timers[0]?.()
-    expect(fakeProc.kill).not.toHaveBeenCalled()
-    timers[1]?.()
+    timerCallbacks[1]?.()
     expect(fakeProc.kill).toHaveBeenCalledTimes(1)
     expect(registry.sessions.has(session.key)).toBe(false)
   })
 
+  it('exit notifies attached and pending sockets and removes the session', async () => {
+    const { registry } = createRegistry()
+    const session = registerSession(registry)
+    const attached = socket(1)
+    registry.attach(session, attached)
+    await drain(session)
+    const pending = socket(1)
+    registry.attach(session, pending)
+
+    registry.exit(session, '[exited]')
+
+    const attachedFrames = sentFrames(attached)
+    expect(attachedFrames.at(-1)).toEqual({ type: 'exit', message: '[exited]' })
+    expect(attached.close).toHaveBeenCalled()
+    expect(sentFrames(pending)).toEqual([{ type: 'exit', message: '[exited]' }])
+    expect(pending.close).toHaveBeenCalled()
+    expect(registry.sessions.has(session.key)).toBe(false)
+  })
+
   it('closeAgentRuntime and closeAll cleanup sessions without touching shell-only keys accidentally', () => {
-    const clearTimeout = vi.fn()
-    const timer = 1 as unknown as ReturnType<typeof setTimeout>
-    const registry = makeTerminalRegistry({
-      maxReplayBytes: 12,
-      idleKillMs: 100,
-      socketOpenState: 1,
-      timers: {
-        setTimeout: () => timer,
-        clearTimeout,
-      },
-    })
+    const { registry } = createRegistry()
     const runtimeProc = proc()
     const shellProc = proc()
-    const runtimeSession = registry.register({
-      key: 'agent-1:runtime',
-      cwd: '/repo',
-      mode: 'runtime',
-      label: 'codex',
-      proc: runtimeProc,
-      initialBuffer: '',
-    })
+    const runtimeSession = registerSession(registry, { proc: runtimeProc })
     registry.register({
       key: 'project-1:shell',
       cwd: '/repo',
       mode: 'shell',
       label: 'shell',
       proc: shellProc,
-      initialBuffer: '',
+      cols: 80,
+      rows: 24,
     })
-    runtimeSession.idleTimer = timer
 
     registry.closeAgentRuntime('agent-1')
     expect(runtimeProc.kill).toHaveBeenCalledTimes(1)
-    expect(clearTimeout).toHaveBeenCalledTimes(1)
-    expect(runtimeSession.idleTimer).toBeNull()
     expect(shellProc.kill).not.toHaveBeenCalled()
 
     registry.exit(runtimeSession, 'late runtime exit')
