@@ -195,6 +195,7 @@ export type WorkspaceServiceDependencies = {
   readonly answerAgentQuestion: (input: AnswerQuestionInput) => Promise<unknown>
   readonly getAgentLaunchConfig: (agentId: string) => AgentLaunchConfig
   readonly ensureTerminalServer: () => Promise<TerminalServerConfig>
+  readonly prepareTerminalAgent: TerminalServerApi['prepareAgent']
   readonly refreshTerminalSessionDiffs: (agentId: string) => WorkspaceSnapshot
   readonly startSession: (input: StartSessionInput) => WorkspaceSnapshot
   readonly addScratchpadBlock: (input: AddScratchpadBlockInput) => WorkspaceSnapshot
@@ -236,6 +237,7 @@ function liveWorkspaceServiceDependencies(
     answerAgentQuestion,
     getAgentLaunchConfig,
     ensureTerminalServer: input.terminalServer.ensure,
+    prepareTerminalAgent: input.terminalServer.prepareAgent,
     refreshTerminalSessionDiffs,
     startSession,
     addScratchpadBlock,
@@ -354,6 +356,12 @@ export function makeWorkspaceService(
       const server = yield* promiseCall(
         'WorkspaceService.terminalConfig.server',
         dependencies.ensureTerminalServer,
+      )
+      // Push the freshest launch config to the session owner (the kiriterm
+      // daemon has no database access) before the client opens its socket.
+      yield* promiseCall(
+        'WorkspaceService.terminalConfig.prepareAgent',
+        () => dependencies.prepareTerminalAgent({ config, mode: input.mode }),
       )
       return {
         ...server,

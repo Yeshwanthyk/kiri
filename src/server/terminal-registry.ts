@@ -77,6 +77,10 @@ type TerminalRegistryInput = {
   readonly lowWatermarkBytes?: number
   readonly maxRecentOutputBytes?: number
   readonly timers?: TerminalRegistryTimers
+  // Which session modes are killed after sitting idle with no clients. The
+  // daemon disables this for runtime sessions so background agents keep
+  // running detached; shells stay reclaimable.
+  readonly idleKillModes?: readonly TerminalMode[]
 }
 
 const defaultTimers: TerminalRegistryTimers = {
@@ -96,6 +100,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   const highWatermark = input.highWatermarkBytes ?? defaultHighWatermarkBytes
   const lowWatermark = input.lowWatermarkBytes ?? defaultLowWatermarkBytes
   const maxRecentOutputBytes = input.maxRecentOutputBytes ?? defaultMaxRecentOutputBytes
+  const idleKillModes = input.idleKillModes ?? ['shell', 'runtime']
 
   function sessionKey(config: TerminalRegistryLaunchConfig, mode: TerminalMode) {
     return mode === 'shell'
@@ -199,8 +204,13 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     session.outstandingBytes.delete(socket)
     removePendingAttach(session, socket)
     maybeResume(session)
-    if (session.exited) return
-    if (session.sockets.size > 0 || session.pendingAttaches.length > 0 || session.idleTimer) return
+    scheduleIdleKill(session)
+  }
+
+  function scheduleIdleKill(session: TerminalRegistrySession) {
+    if (session.exited || session.idleTimer) return
+    if (!idleKillModes.includes(session.mode)) return
+    if (session.sockets.size > 0 || session.pendingAttaches.length > 0) return
     session.idleTimer = timers.setTimeout(() => {
       if (session.sockets.size === 0 && session.pendingAttaches.length === 0) kill(session)
     }, input.idleKillMs)
@@ -355,6 +365,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     register,
     attach,
     detach,
+    scheduleIdleKill,
     kill,
     append,
     broadcast,

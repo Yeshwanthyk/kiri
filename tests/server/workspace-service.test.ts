@@ -148,6 +148,7 @@ describe('WorkspaceService', () => {
         path: '/term',
         token: 'token',
       }),
+      prepareTerminalAgent: () => Promise.resolve(),
     }))
 
     await expect(Effect.runPromise(service.terminalConfig({
@@ -244,6 +245,7 @@ describe('WorkspaceService', () => {
         mode: 'runtime' as const,
       }),
       closeAgentRuntime: () => undefined,
+      prepareAgent: () => Promise.resolve(),
       close: () => Promise.resolve(),
     })
     const preferencesLayer = Layer.succeed(UiPreferencesService, {
@@ -310,6 +312,7 @@ function testDependencies(
       path: '/term',
       token: 'token',
     }),
+    prepareTerminalAgent: () => Promise.resolve(),
     refreshTerminalSessionDiffs: () => snapshot,
     startSession: () => snapshot,
     addScratchpadBlock: () => snapshot,

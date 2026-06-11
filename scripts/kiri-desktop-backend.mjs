@@ -10,6 +10,9 @@ import { serve } from 'srvx/node'
 import { serveStatic } from 'srvx/static'
 
 const execFile = promisify(execFileCallback)
+// Desktop sessions default to the detached kiriterm daemon so terminals and
+// background agents survive backend/UI restarts. Set 0 to force embedded.
+process.env.KIRI_TERMINAL_DAEMON ??= '1'
 const rootDir = resolve(process.env.KIRI_ROOT_DIR ?? process.cwd())
 const kiriHome = resolve(process.env.KIRI_HOME ?? join(homedir(), '.kiri'))
 const stateDir = resolve(process.env.KIRI_STATE_DIR ?? join(kiriHome, 'userdata'))

@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type Server } from 'node:http'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { platform } from 'node:os'
@@ -26,7 +26,7 @@ import {
 } from './terminal-launch'
 import { makeTerminalRegistry, type TerminalRegistrySession } from './terminal-registry'
 
-type TerminalServerInfo = {
+export type TerminalServerInfo = {
   host: string
   port: number
   path: string
@@ -35,6 +35,13 @@ type TerminalServerInfo = {
 
 export type TerminalServerApi = {
   readonly ensure: () => Promise<TerminalServerInfo>
+  // Pushes the freshest launch config to the session owner before a client
+  // attaches. The embedded server resolves configs itself, so this is a no-op
+  // there; the kiriterm daemon depends on it (it has no database access).
+  readonly prepareAgent: (input: {
+    readonly config: TerminalAgentLaunchConfig
+    readonly mode: TerminalMode
+  }) => Promise<void>
   readonly spawnAgentRuntime: (input: {
     readonly agentId: string
     readonly cols?: number
@@ -47,10 +54,25 @@ export type TerminalServerApi = {
   readonly close: () => Promise<void>
 }
 
+export type TerminalServerOptions = {
+  // Session modes that may be reclaimed after the idle window with no clients.
+  readonly idleKillModes?: readonly TerminalMode[]
+  // Daemon control API hook; return true when the request was handled.
+  readonly handleHttpRequest?: (
+    request: IncomingMessage,
+    response: ServerResponse,
+    context: { readonly token: string; readonly registry: ReturnType<typeof makeTerminalRegistry> },
+  ) => boolean
+  // Content written into a freshly spawned session's emulator before the
+  // banner (the daemon restores previous scrollback for shells this way).
+  readonly restoreContent?: (key: string, mode: TerminalMode) => string | null
+}
+
 type TerminalServerRuntime = {
   readonly token: string
   readonly registry: ReturnType<typeof makeTerminalRegistry>
   readonly dependencies: TerminalServerDependencies
+  readonly options: TerminalServerOptions
   setInfo: (info: TerminalServerInfo | null) => void
   setHttpServer: (server: Server | null) => void
   setWebSocketServer: (server: WebSocketServer | null) => void
@@ -94,7 +116,66 @@ export class TerminalServerService extends Context.Tag('@kiri/TerminalServer')<
   )
 }
 
-const defaultTerminalServerService = makeTerminalServerService()
+// Default service facade: prefers the detached kiriterm daemon (sessions
+// survive backend/UI restarts) when KIRI_TERMINAL_DAEMON=1, falling back to
+// the embedded in-process server. The choice is sticky for the process so
+// sessions never split across two owners.
+const defaultTerminalServerService = makeTerminalServerFacade()
+
+function makeTerminalServerFacade(): TerminalServerApi {
+  let chosen: TerminalServerApi | null = null
+  let choosing: Promise<TerminalServerApi> | null = null
+  let embedded: TerminalServerApi | null = null
+
+  const embeddedService = () => {
+    embedded ??= makeTerminalServerService()
+    return embedded
+  }
+
+  function choose(): Promise<TerminalServerApi> {
+    if (chosen) return Promise.resolve(chosen)
+    if (choosing) return choosing
+    choosing = (async () => {
+      if (process.env.KIRI_TERMINAL_DAEMON === '1') {
+        try {
+          const { makeKiritermDaemonClient } = await import('./kiriterm-daemon-client')
+          const client = makeKiritermDaemonClient()
+          await client.ensure()
+          chosen = client
+          return client
+        } catch (error) {
+          console.error(
+            'kiriterm daemon unavailable; falling back to embedded terminal server',
+            error,
+          )
+        }
+      }
+      chosen = embeddedService()
+      return chosen
+    })().finally(() => {
+      choosing = null
+    })
+    return choosing
+  }
+
+  return {
+    ensure: () => choose().then((service) => service.ensure()),
+    prepareAgent: (input) => choose().then((service) => service.prepareAgent(input)),
+    spawnAgentRuntime: (input) => choose().then((service) => service.spawnAgentRuntime(input)),
+    closeAgentRuntime: (agentId) => {
+      choose()
+        .then((service) => service.closeAgentRuntime(agentId))
+        .catch((error) => {
+          console.error('Kiri terminal close failed', error)
+        })
+    },
+    close: async () => {
+      if (embedded) await embedded.close()
+      chosen = null
+      embedded = null
+    },
+  }
+}
 
 export function ensureTerminalServer(): Promise<TerminalServerInfo> {
   return defaultTerminalServerService.ensure()
@@ -116,7 +197,8 @@ export function closeTerminalServerForTests() {
 
 export function makeTerminalServerService(
   dependencies: Partial<TerminalServerDependencies> = {},
-): TerminalServerApi {
+  options: TerminalServerOptions = {},
+): TerminalServerApi & { readonly registry: ReturnType<typeof makeTerminalRegistry> } {
   let terminalServer: TerminalServerInfo | null = null
   let httpServer: Server | null = null
   let webSocketServer: WebSocketServer | null = null
@@ -126,7 +208,9 @@ export function makeTerminalServerService(
     registry: makeTerminalRegistry({
       idleKillMs,
       socketOpenState: WebSocket.OPEN,
+      idleKillModes: options.idleKillModes,
     }),
+    options,
     dependencies: {
       getAgentLaunchConfig,
       buildTerminalProcessLaunch,
@@ -148,6 +232,7 @@ export function makeTerminalServerService(
   }
 
   return {
+    registry: runtime.registry,
     ensure: () => {
       if (terminalServer) return Promise.resolve(terminalServer)
       if (terminalServerPromise) return terminalServerPromise
@@ -157,6 +242,7 @@ export function makeTerminalServerService(
       })
       return terminalServerPromise
     },
+    prepareAgent: () => Promise.resolve(),
     spawnAgentRuntime: async (input) => {
       await ensureRuntimeTerminalServer(runtime)
       const config = runtime.dependencies.getAgentLaunchConfig(input.agentId)
@@ -167,7 +253,7 @@ export function makeTerminalServerService(
         input.cols ?? 100,
         input.rows ?? 30,
       )
-      scheduleHeadlessIdleKill(runtime, session)
+      runtime.registry.scheduleIdleKill(session)
       return {
         agentId: input.agentId,
         mode: 'runtime',
@@ -233,7 +319,15 @@ function closeHttpServer(server: Server | null) {
 async function startTerminalServer(runtime: TerminalServerRuntime): Promise<TerminalServerInfo> {
   const host = process.env.KIRI_TERMINAL_HOST ?? '127.0.0.1'
   const requestedPort = numberFromEnv(process.env.KIRI_TERMINAL_PORT, 0)
-  const server = createServer()
+  const server = createServer((request, response) => {
+    const handled = runtime.options.handleHttpRequest?.(request, response, {
+      token: runtime.token,
+      registry: runtime.registry,
+    })
+    if (handled) return
+    response.statusCode = 404
+    response.end()
+  })
   const wss = new WebSocketServer({ server, path: terminalPath })
 
   wss.on('connection', (socket, request) => {
@@ -333,6 +427,7 @@ async function getOrCreateTerminalSession(
     cwd: launch.cwd,
     env: launch.env,
   })
+  const restored = runtime.options.restoreContent?.(key, mode)
   const session = runtime.registry.register({
     key,
     cwd: config.cwd,
@@ -341,7 +436,7 @@ async function getOrCreateTerminalSession(
     proc,
     cols,
     rows,
-    banner: `\r\n[kiri terminal: ${launch.label} @ ${config.cwd}]\r\n`,
+    banner: `${restored ?? ''}\r\n[kiri terminal: ${launch.label} @ ${config.cwd}]\r\n`,
   })
   if (mode === 'runtime' && launch.label === 'codex') {
     void runtime.dependencies.rememberCodexTerminalSession(config, launch.env, {
@@ -512,16 +607,6 @@ function sameTerminalInput(
   right: { readonly text: string; readonly submit: boolean; readonly createdAt: string },
 ) {
   return left.text === right.text && left.submit === right.submit && left.createdAt === right.createdAt
-}
-
-function scheduleHeadlessIdleKill(
-  runtime: TerminalServerRuntime,
-  session: TerminalRegistrySession,
-) {
-  if (session.exited || session.sockets.size > 0 || session.idleTimer) return
-  session.idleTimer = setTimeout(() => {
-    if (session.sockets.size === 0) runtime.registry.kill(session)
-  }, idleKillMs)
 }
 
 async function cleanupStaleClaudeSession(launch: ReturnType<typeof buildTerminalProcessLaunch>) {

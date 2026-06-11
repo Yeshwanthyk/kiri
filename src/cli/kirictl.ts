@@ -10,6 +10,11 @@ import { Console, Effect, Layer, Option } from 'effect'
 import { KiriControl, type KiriControlApi } from '~/server/kiri-control'
 import { runKiriMcpServer } from '~/server/kiri-mcp'
 import { runKiriOperation } from '~/server/kiri-router'
+import {
+  defaultKiritermStateDir,
+  readKiritermDaemonRecord,
+  runKiritermDaemon,
+} from '~/server/kiriterm-daemon'
 
 const version = '0.1.0'
 
@@ -48,11 +53,41 @@ const mcpCommand = Command.make('mcp', {}, () =>
   }),
 ).pipe(Command.withDescription('Run the Kiri MCP server over stdio'))
 
+const termDaemonCommand = Command.make('daemon', {}, () =>
+  Effect.promise(() => runKiritermDaemon()),
+).pipe(Command.withDescription('Run the kiriterm session daemon (detached terminal sessions)'))
+
+const termStopCommand = Command.make('stop', {}, () =>
+  Effect.gen(function* () {
+    const record = readKiritermDaemonRecord(defaultKiritermStateDir())
+    if (!record) {
+      yield* Console.log('kiriterm daemon is not running')
+      return
+    }
+    const message = yield* Effect.promise(() =>
+      fetch(`http://${record.host}:${record.port}/api/shutdown`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${record.token}` },
+        signal: AbortSignal.timeout(3_000),
+      }).then(
+        () => `kiriterm daemon (pid ${record.pid}) asked to shut down`,
+        () => 'kiriterm daemon did not respond; it may already be stopped',
+      ))
+    yield* Console.log(message)
+  }),
+).pipe(Command.withDescription('Stop the kiriterm session daemon'))
+
+const termCommand = Command.make('term', {}).pipe(
+  Command.withDescription('Kiriterm terminal session daemon'),
+  Command.withSubcommands([termDaemonCommand, termStopCommand]),
+)
+
 export const kirictlCommand = Command.make('kirictl', {}).pipe(
   Command.withDescription('Agent-first JSON control surface for Kiri'),
   Command.withSubcommands([
     callCommand,
     mcpCommand,
+    termCommand,
   ]),
 )
 
