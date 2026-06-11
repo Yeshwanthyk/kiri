@@ -694,11 +694,15 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
   )
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('terminal-transcript')).toContainText('KIRI_SCROLL_1200')
+  const shellPane = page
+    .getByTestId('terminal-panel')
+    .locator('[data-terminal-mode="shell"]')
+    .first()
   await expect.poll(async () =>
-    Number(await page.getByTestId('terminal-panel').getAttribute('data-terminal-base-y') ?? 0),
+    Number(await shellPane.getAttribute('data-terminal-base-y') ?? 0),
   ).toBeGreaterThan(0)
   const baseYBeforeSwitch = Number(
-    await page.getByTestId('terminal-panel').getAttribute('data-terminal-base-y') ?? 0,
+    await shellPane.getAttribute('data-terminal-base-y') ?? 0,
   )
 
   await page.getByTestId('tab-chat').click()
@@ -713,7 +717,7 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
     ),
   ).toBe(true)
   await expect.poll(async () =>
-    Number(await page.getByTestId('terminal-panel').getAttribute('data-terminal-base-y') ?? 0),
+    Number(await shellPane.getAttribute('data-terminal-base-y') ?? 0),
   ).toBeGreaterThanOrEqual(baseYBeforeSwitch)
   await terminalInput.click()
   await page.keyboard.type(

@@ -52,6 +52,8 @@ export function TerminalPanel({
   typography,
   visible,
   embedded = false,
+  blurRequest = 0,
+  onStatusChange,
 }: {
   agent: AgentCell
   focusRequest: number
@@ -65,6 +67,8 @@ export function TerminalPanel({
   // Inside the terminal workspace the chrome (header) is rendered by the
   // workspace itself; embedded panes only show the terminal surface.
   embedded?: boolean
+  blurRequest?: number
+  onStatusChange?: (status: string) => void
 }) {
   const getTerminalConfig = useServerFn(terminalConfigQuery)
   const getTerminalConfigRef = React.useRef(getTerminalConfig)
@@ -126,6 +130,15 @@ export function TerminalPanel({
     if (focusRequest === 0 || !visible) return
     terminalRef.current?.focus()
   }, [focusRequest, visible])
+
+  React.useEffect(() => {
+    if (blurRequest === 0 || !visible) return
+    terminalRef.current?.blur()
+  }, [blurRequest, visible])
+
+  React.useEffect(() => {
+    onStatusChange?.(status)
+  }, [onStatusChange, status])
 
   React.useEffect(() => {
     let disposed = false
@@ -506,7 +519,7 @@ function terminalEventKey(event: KeyboardEvent) {
   return event.key.toLowerCase()
 }
 
-function formatTerminalKey(key: string) {
+export function formatTerminalKey(key: string) {
   if (key === 'tab') return 'Tab'
   if (key.startsWith('arrow')) return key.replace('arrow', 'Arrow ')
   return key.toUpperCase()

@@ -18,5 +18,10 @@ export default defineConfig({
       '@xterm/addon-ligatures': '@xterm/addon-ligatures/lib/addon-ligatures.mjs',
     },
   },
+  ssr: {
+    // UMD/CJS bundles that the dev SSR module runner cannot inline
+    // ("exports is not defined"); load them through node instead.
+    external: ['@xterm/headless', '@xterm/addon-serialize', '@xterm/addon-unicode11'],
+  },
   plugins: [tailwindcss(), tanstackStart(), viteReact()],
 })

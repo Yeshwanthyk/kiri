@@ -1,6 +1,6 @@
 'use client'
 
-import { Columns2, Plus, Rows2, X } from 'lucide-react'
+import { Columns2, KeyboardOff, Plus, Rows2, X } from 'lucide-react'
 import * as React from 'react'
 import type { AgentCell, ProjectRow } from '~/lib/contracts'
 import type { ThemeMode } from '~/theme/kiri-themes'
@@ -19,7 +19,7 @@ import {
   type PaneNode,
   type TerminalLayout,
 } from './terminal-layout'
-import { TerminalPanel } from './terminal-panel'
+import { formatTerminalKey, TerminalPanel } from './terminal-panel'
 
 const idGenerator = makeTerminalLayoutIdGenerator()
 
@@ -52,6 +52,8 @@ export function TerminalWorkspace({
       typeof window === 'undefined' ? null : window.localStorage.getItem(layoutStorageKey(project.id)),
       idGenerator,
     ))
+  const [paneStatus, setPaneStatus] = React.useState<Record<string, string>>({})
+  const [blurRequest, setBlurRequest] = React.useState(0)
 
   React.useEffect(() => {
     setLayout(parseTerminalLayout(
@@ -135,6 +137,14 @@ export function TerminalWorkspace({
         <div className="terminal-header-actions">
           <button
             type="button"
+            aria-label={`Toggle terminal focus (Shift+${formatTerminalKey(toggleFocusKey)})`}
+            title={`Toggle terminal focus (Shift+${formatTerminalKey(toggleFocusKey)})`}
+            onClick={() => setBlurRequest((current) => current + 1)}
+          >
+            <KeyboardOff size={13} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
             aria-label="Split right (Cmd+D)"
             title="Split right (Cmd+D)"
             onClick={() => setLayout((current) =>
@@ -160,6 +170,9 @@ export function TerminalWorkspace({
           >
             <X size={13} aria-hidden="true" />
           </button>
+          <span className="terminal-status">
+            {paneStatus[layout.activePaneId] ?? 'Connecting'}
+          </span>
         </div>
       </div>
       {layout.tabs.map((tab) => (
@@ -179,6 +192,11 @@ export function TerminalWorkspace({
             typography={typography}
             toggleFocusKey={toggleFocusKey}
             focusRequest={focusRequest}
+            blurRequest={blurRequest}
+            onPaneStatus={(paneId, status) => {
+              setPaneStatus((current) =>
+                current[paneId] === status ? current : { ...current, [paneId]: status })
+            }}
           />
         </div>
       ))}
@@ -197,6 +215,8 @@ function WorkspaceNode({
   typography,
   toggleFocusKey,
   focusRequest,
+  blurRequest,
+  onPaneStatus,
 }: {
   node: PaneNode
   layout: TerminalLayout
@@ -208,6 +228,8 @@ function WorkspaceNode({
   typography: ChatTypographySettings
   toggleFocusKey: string
   focusRequest: number
+  blurRequest: number
+  onPaneStatus: (paneId: string, status: string) => void
 }) {
   if (node.kind === 'leaf') {
     const active = layout.activePaneId === node.id
@@ -223,6 +245,7 @@ function WorkspaceNode({
           key={`terminal-${project.id}-shell-${node.termId}`}
           agent={agent}
           focusRequest={active ? focusRequest : 0}
+          blurRequest={active ? blurRequest : 0}
           toggleFocusKey={toggleFocusKey}
           typography={typography}
           mode="shell"
@@ -231,6 +254,9 @@ function WorkspaceNode({
           themeMode={themeMode}
           visible={tabVisible}
           embedded
+          onStatusChange={(status) => {
+            onPaneStatus(node.id, status)
+          }}
         />
       </div>
     )
@@ -254,6 +280,8 @@ function WorkspaceNode({
         typography={typography}
         toggleFocusKey={toggleFocusKey}
         focusRequest={focusRequest}
+        blurRequest={blurRequest}
+        onPaneStatus={onPaneStatus}
       />
       <SplitDivider node={node} setLayout={setLayout} />
       <WorkspaceNode
@@ -267,6 +295,8 @@ function WorkspaceNode({
         typography={typography}
         toggleFocusKey={toggleFocusKey}
         focusRequest={focusRequest}
+        blurRequest={blurRequest}
+        onPaneStatus={onPaneStatus}
       />
     </div>
   )
