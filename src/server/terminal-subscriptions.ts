@@ -56,6 +56,8 @@ export type TerminalSubscriptionsDependencies = {
   // Text and Enter are written separately: some TUIs (Claude Code) treat
   // text+CR in one chunk as a paste and leave it unsubmitted.
   readonly submitDelayMs?: number
+  // Briefly batch ready wakes for the same receiver into one submitted turn.
+  readonly batchDelayMs?: number
   readonly timers?: {
     readonly setTimeout: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>
   }
@@ -80,9 +82,11 @@ export function makeTerminalSubscriptions(
   dependencies: TerminalSubscriptionsDependencies,
 ): TerminalSubscriptionsApi {
   const submitDelayMs = dependencies.submitDelayMs ?? 150
+  const batchDelayMs = dependencies.batchDelayMs ?? 25
   const timers = dependencies.timers ?? { setTimeout }
   const records = new Map<string, SubscriptionRecord>()
   const inFlight = new Set<Promise<void>>()
+  const pendingDeliveries = new Map<string, PendingDelivery>()
   let counter = 0
 
   for (const restored of loadJournal(dependencies.journalPath)) {
@@ -139,31 +143,90 @@ export function makeTerminalSubscriptions(
   async function deliver(record: SubscriptionRecord, result: WaitTargetsResult) {
     const text = composeWake(record, result)
     const key = `${record.deliver.agentId}:runtime`
-    let session = dependencies.registry.sessions.get(key)
-    if ((!session || session.exited) && dependencies.spawnForDelivery) {
+    await enqueueDelivery(key, { record, result, text })
+  }
+
+  async function enqueueDelivery(
+    key: string,
+    item: PendingDeliveryItem,
+  ) {
+    const existing = pendingDeliveries.get(key)
+    if (existing) {
+      if (existing.flushing) {
+        await existing.promise
+        return enqueueDelivery(key, item)
+      }
+      existing.items.push(item)
+      return existing.promise
+    }
+
+    let resolveDelivery!: () => void
+    const pending: PendingDelivery = {
+      key,
+      items: [item],
+      flushing: false,
+      promise: new Promise((resolve) => {
+        resolveDelivery = resolve
+      }),
+    }
+    pendingDeliveries.set(key, pending)
+    timers.setTimeout(() => {
+      pending.flushing = true
+      void flushDelivery(pending).catch((error) => {
+        failPending(pending, error instanceof Error ? error.message : String(error))
+      }).finally(() => {
+        if (pendingDeliveries.get(key) === pending) pendingDeliveries.delete(key)
+        resolveDelivery()
+      })
+    }, batchDelayMs)
+    return pending.promise
+  }
+
+  async function flushDelivery(pending: PendingDelivery) {
+    let target = dependencies.registry.sessions.get(pending.key)
+    if ((!target || target.exited) && dependencies.spawnForDelivery) {
       try {
-        await dependencies.spawnForDelivery(record.deliver.agentId)
+        await dependencies.spawnForDelivery(pending.items[0]?.record.deliver.agentId ?? '')
       } catch (error) {
-        record.status = 'failed'
-        record.outcome = `spawn for delivery failed: ${error instanceof Error ? error.message : String(error)}`
-        persist()
+        failPending(pending, `spawn for delivery failed: ${error instanceof Error ? error.message : String(error)}`)
         return
       }
-      session = dependencies.registry.sessions.get(key)
+      target = dependencies.registry.sessions.get(pending.key)
     }
-    if (!session || session.exited) {
-      record.status = 'failed'
-      record.outcome = `no live session ${key} to deliver to`
-      persist()
+
+    if (!target || target.exited) {
+      failPending(pending, `no live session ${pending.key} to deliver to`)
       return
     }
-    const target = session
-    target.proc.write(text)
-    timers.setTimeout(() => {
-      if (!target.exited) target.proc.write('\r')
-    }, submitDelayMs)
-    record.status = 'delivered'
-    record.outcome = result.matched ? 'condition met' : 'timed out'
+
+    target.proc.write(pending.items.map((item) => item.text).join('\n\n'))
+    await submitDelivery(target)
+    for (const item of pending.items) {
+      item.record.status = 'delivered'
+      item.record.outcome = item.result.matched ? 'condition met' : 'timed out'
+    }
+    persist()
+  }
+
+  function submitDelivery(target: NonNullable<ReturnType<TerminalRegistryApi['sessions']['get']>>) {
+    return new Promise<void>((resolve, reject) => {
+      timers.setTimeout(() => {
+        try {
+          if (target.exited) throw new Error(`session ${target.key} exited before submit`)
+          target.proc.write('\r')
+          resolve()
+        } catch (error) {
+          reject(error)
+        }
+      }, submitDelayMs)
+    })
+  }
+
+  function failPending(pending: PendingDelivery, outcome: string) {
+    for (const item of pending.items) {
+      item.record.status = 'failed'
+      item.record.outcome = outcome
+    }
     persist()
   }
 
@@ -201,6 +264,19 @@ export function makeTerminalSubscriptions(
     writeFileSync(tmp, serialized, { mode: 0o600 })
     renameSync(tmp, dependencies.journalPath)
   }
+}
+
+type PendingDeliveryItem = {
+  readonly record: SubscriptionRecord
+  readonly result: WaitTargetsResult
+  readonly text: string
+}
+
+type PendingDelivery = {
+  readonly key: string
+  readonly items: PendingDeliveryItem[]
+  readonly promise: Promise<void>
+  flushing: boolean
 }
 
 export async function handleSubscriptionControlRoute(

@@ -62,6 +62,14 @@ async function apiJson(handle: KiritermDaemonHandle, route: string, body?: unkno
   return payload
 }
 
+async function until(predicate: () => Promise<boolean> | boolean, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs
+  while (!(await predicate())) {
+    if (Date.now() > deadline) throw new Error('condition not reached')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
 type AttachedSocket = {
   readonly socket: WebSocket
   readonly frames: TerminalServerFrame[]
@@ -245,8 +253,7 @@ describe('kiriterm daemon', () => {
     })
     expect(noted).toMatchObject({ matched: true })
 
-    const listed = await apiJson(handle, 'subscriptions')
-    expect(JSON.stringify(listed)).toContain('"delivered"')
+    await until(async () => JSON.stringify(await apiJson(handle, 'subscriptions')).includes('"delivered"'))
   }, 30_000)
 
   it('refuses to double-start and shuts down via the control api', async () => {
