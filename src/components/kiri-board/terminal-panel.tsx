@@ -46,19 +46,25 @@ export function TerminalPanel({
   focusRequest,
   mode,
   project,
+  termId = 'main',
   themeMode,
   toggleFocusKey,
   typography,
   visible,
+  embedded = false,
 }: {
   agent: AgentCell
   focusRequest: number
   mode: TerminalMode
   project: ProjectRow
+  termId?: string
   themeMode: ThemeMode
   toggleFocusKey: string
   typography: ChatTypographySettings
   visible: boolean
+  // Inside the terminal workspace the chrome (header) is rendered by the
+  // workspace itself; embedded panes only show the terminal surface.
+  embedded?: boolean
 }) {
   const getTerminalConfig = useServerFn(terminalConfigQuery)
   const getTerminalConfigRef = React.useRef(getTerminalConfig)
@@ -298,7 +304,7 @@ export function TerminalPanel({
         })
         resizeObserver.observe(host)
 
-        const url = terminalWebSocketUrl(terminalConfig, agent.id, term.cols, term.rows)
+        const url = terminalWebSocketUrl(terminalConfig, agent.id, term.cols, term.rows, termId)
         socket = new WebSocket(url)
         socket.onopen = () => {
           if (!term || !socket) return
@@ -378,15 +384,17 @@ export function TerminalPanel({
       debugEnabledRef.current = false
       term?.dispose()
     }
-  }, [agent.id, connectionGeneration, mode, project.cwd, toggleFocusKey])
+  }, [agent.id, connectionGeneration, mode, project.cwd, termId, toggleFocusKey])
 
   const label = mode === 'runtime' ? 'Agent terminal' : 'Shell terminal'
   const toggleFocusLabel = `Toggle terminal focus (Shift+${formatTerminalKey(toggleFocusKey)})`
   return (
     <section
-      className="terminal-panel"
+      className={embedded ? 'terminal-panel terminal-panel-embedded' : 'terminal-panel'}
       data-terminal-mode={mode}
-      data-testid={visible ? 'terminal-panel' : undefined}
+      data-terminal-id={termId}
+      data-terminal-status={embedded ? status : undefined}
+      data-testid={visible && !embedded ? 'terminal-panel' : undefined}
       data-terminal-buffer-type={debugSnapshot?.bufferType}
       data-terminal-base-y={debugSnapshot?.baseY}
       data-terminal-viewport-y={debugSnapshot?.viewportY}
@@ -398,24 +406,26 @@ export function TerminalPanel({
       data-terminal-alternate-exit-count={debugSnapshot?.alternateExitCount}
       hidden={!visible}
     >
-      <div className="terminal-header">
-        <div>
-          <strong>{label}</strong>
-          <span>{project.cwd}</span>
-          <span>{mode === 'runtime' ? `${agent.runtime} · ${agent.model}` : project.name}</span>
+      {embedded ? null : (
+        <div className="terminal-header">
+          <div>
+            <strong>{label}</strong>
+            <span>{project.cwd}</span>
+            <span>{mode === 'runtime' ? `${agent.runtime} · ${agent.model}` : project.name}</span>
+          </div>
+          <div className="terminal-header-actions">
+            <button
+              type="button"
+              aria-label={toggleFocusLabel}
+              title={toggleFocusLabel}
+              onClick={() => terminalRef.current?.blur()}
+            >
+              <KeyboardOff size={13} aria-hidden="true" />
+            </button>
+            <span className="terminal-status">{status}</span>
+          </div>
         </div>
-        <div className="terminal-header-actions">
-          <button
-            type="button"
-            aria-label={toggleFocusLabel}
-            title={toggleFocusLabel}
-            onClick={() => terminalRef.current?.blur()}
-          >
-            <KeyboardOff size={13} aria-hidden="true" />
-          </button>
-          <span className="terminal-status">{status}</span>
-        </div>
-      </div>
+      )}
       <div ref={hostRef} className="terminal-host" />
       {transcript !== null ? (
         <pre
@@ -514,6 +524,7 @@ function terminalWebSocketUrl(
   agentId: string,
   cols: number,
   rows: number,
+  termId: string,
 ) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const pageHost = window.location.hostname
@@ -528,6 +539,7 @@ function terminalWebSocketUrl(
   url.searchParams.set('cols', String(cols))
   url.searchParams.set('rows', String(rows))
   url.searchParams.set('token', config.token)
+  if (termId !== 'main') url.searchParams.set('termId', termId)
   return url.toString()
 }
 

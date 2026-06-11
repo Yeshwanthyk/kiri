@@ -22,6 +22,7 @@ import { ScratchpadHeader, ScratchpadPanel } from './scratchpad'
 import { ChatPanel } from './chat-panel'
 import { DiffPanel } from './diff-panel'
 import { TerminalPanel } from './terminal-panel'
+import { TerminalWorkspace } from './terminal-workspace'
 import { mergeAgentDetail, prependAgentDetailPages } from './agent-detail'
 import type { RefreshAgentDetail, SidebarTab } from './board-types'
 import type { KeymapSettings } from './navigation'
@@ -367,13 +368,12 @@ export function SelectedAgentPane({
         />
       ) : null}
       {agent && mountedTerminalModes.shell ? (
-        <TerminalPanel
-          key={`terminal-${selectedProject.id}-shell`}
+        <TerminalWorkspace
+          key={`terminal-workspace-${selectedProject.id}`}
           agent={agent}
           focusRequest={terminalFocusRequest}
           toggleFocusKey={keymap.toggleTerminalFocus}
           typography={chatTypography}
-          mode="shell"
           project={selectedProject}
           themeMode={themeMode}
           visible={visibleTerminalMode === 'shell'}

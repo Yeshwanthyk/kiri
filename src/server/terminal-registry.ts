@@ -102,14 +102,24 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   const maxRecentOutputBytes = input.maxRecentOutputBytes ?? defaultMaxRecentOutputBytes
   const idleKillModes = input.idleKillModes ?? ['shell', 'runtime']
 
-  function sessionKey(config: TerminalRegistryLaunchConfig, mode: TerminalMode) {
-    return mode === 'shell'
+  // Shell sessions support multiple terminals per project via termId; the
+  // default 'main' keeps the historical key so persisted snapshots and MCP
+  // shell targeting stay stable.
+  function sessionKey(config: TerminalRegistryLaunchConfig, mode: TerminalMode, termId = 'main') {
+    if (mode !== 'shell') return `${config.id}:runtime`
+    return termId === 'main'
       ? `${config.projectId}:shell`
-      : `${config.id}:runtime`
+      : `${config.projectId}:shell:${termId}`
   }
 
-  function getReusable(config: TerminalRegistryLaunchConfig, mode: TerminalMode, cols: number, rows: number) {
-    const key = sessionKey(config, mode)
+  function getReusable(
+    config: TerminalRegistryLaunchConfig,
+    mode: TerminalMode,
+    cols: number,
+    rows: number,
+    termId = 'main',
+  ) {
+    const key = sessionKey(config, mode, termId)
     const existing = sessions.get(key)
     if (existing && existing.cwd === config.cwd) {
       resize(existing, cols, rows)

@@ -10,6 +10,7 @@ import { Console, Effect, Layer, Option } from 'effect'
 import { KiriControl, type KiriControlApi } from '~/server/kiri-control'
 import { runKiriMcpServer } from '~/server/kiri-mcp'
 import { runKiriOperation } from '~/server/kiri-router'
+import { knownTerminalKeys } from '~/lib/terminal-keys'
 import {
   defaultKiritermStateDir,
   readKiritermDaemonRecord,
@@ -114,7 +115,7 @@ const termKeysCommand = Command.make(
     keys: Args.text({ name: 'keys' }).pipe(Args.repeated),
   },
   ({ agentId, mode, keys }) => runTermOperation('terminal.keys', { agentId, mode, keys }),
-).pipe(Command.withDescription('Press named keys (enter, up, c-c, f1...) in a terminal'))
+).pipe(Command.withDescription(`Press named keys in a terminal: ${knownTerminalKeys().join(', ')}`))
 
 const termWaitForCommand = Command.make(
   'wait-for',

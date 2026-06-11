@@ -383,7 +383,8 @@ async function handleTerminalConnection(
     const mode = parseTerminalMode(query.mode)
     const cols = positiveInt(query.cols, 100)
     const rows = positiveInt(query.rows, 30)
-    session = await getOrCreateTerminalSession(runtime, config, mode, cols, rows)
+    const termId = parseTermId(query.termId)
+    session = await getOrCreateTerminalSession(runtime, config, mode, cols, rows, termId)
     attachTerminalSocket(runtime, session, socket)
   } catch (error) {
     closeWithReason(socket, error instanceof Error ? error.message : String(error))
@@ -415,9 +416,10 @@ async function getOrCreateTerminalSession(
   mode: TerminalMode,
   cols: number,
   rows: number,
+  termId = 'main',
 ) {
-  const key = runtime.registry.sessionKey(config, mode)
-  const existing = runtime.registry.getReusable(config, mode, cols, rows)
+  const key = runtime.registry.sessionKey(config, mode, termId)
+  const existing = runtime.registry.getReusable(config, mode, cols, rows, termId)
   if (existing) {
     writePendingTerminalInputs(runtime, config.id, existing, mode)
     return existing
@@ -624,6 +626,10 @@ function defaultShell() {
 
 function parseTerminalMode(value: unknown): TerminalMode {
   return terminalModeSchema.catch('shell').parse(value)
+}
+
+function parseTermId(value: unknown) {
+  return typeof value === 'string' && /^[a-z0-9-]{1,32}$/i.test(value) ? value : 'main'
 }
 
 function terminalPasteData(text: string, submit: boolean) {
