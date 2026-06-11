@@ -37,6 +37,17 @@ const waitForSchema = z.object({
   scope: z.enum(['screen', 'output']).default('screen'),
 })
 
+const waitAnySchema = z.object({
+  targets: z.array(z.object({
+    key: z.string().min(1),
+    pattern: z.string().min(1),
+    flags: z.string().regex(/^[gimsuy]*$/).default(''),
+    scope: z.enum(['screen', 'output']).default('screen'),
+  })).min(1).max(32),
+  timeoutMs: z.number().int().positive().max(600_000).default(60_000),
+  quorum: z.enum(['any', 'all']).default('any'),
+})
+
 export async function handleSessionControlRoute(
   route: string,
   body: unknown,
@@ -110,6 +121,78 @@ export async function handleSessionControlRoute(
       }
     } catch {
       return { status: 200, body: { matched: false, elapsedMs: Date.now() - startedAt } }
+    }
+  }
+
+  // Multiplexed wait: block until one ('any') or every ('all') live target
+  // matches its pattern. Targets whose sessions are gone are reported as
+  // missing rather than failing the whole wait — workers may legitimately
+  // have exited. This is the primitive behind workflow.await: orchestrating
+  // agents sleep in one call instead of polling each worker.
+  if (route === 'POST /api/sessions/wait-any') {
+    const input = waitAnySchema.parse(body)
+    const startedAt = Date.now()
+    const missing: string[] = []
+    const live = input.targets.flatMap((target) => {
+      const session = registry.sessions.get(target.key)
+      if (!session || session.exited) {
+        missing.push(target.key)
+        return []
+      }
+      return [{ target, session }]
+    })
+    if (live.length === 0) {
+      return { status: 200, body: { matched: false, matches: [], missing, elapsedMs: 0 } }
+    }
+    const controller = new AbortController()
+    type WaitMatch = { key: string; match: string }
+    const waits = live.map(({ target, session }) =>
+      registry.waitForScreen(session, {
+        pattern: new RegExp(target.pattern, target.flags),
+        timeoutMs: input.timeoutMs,
+        scope: target.scope,
+        signal: controller.signal,
+      }).then(
+        (result): WaitMatch | null => ({ key: target.key, match: result.match }),
+        (): WaitMatch | null => null,
+      ))
+    let matches: WaitMatch[]
+    if (input.quorum === 'any') {
+      const winner = await new Promise<WaitMatch | null>((resolve) => {
+        let pending = waits.length
+        for (const wait of waits) {
+          void wait.then((result) => {
+            if (result) {
+              resolve(result)
+              return
+            }
+            pending -= 1
+            if (pending === 0) resolve(null)
+          })
+        }
+      })
+      controller.abort()
+      matches = winner ? [winner] : []
+      return {
+        status: 200,
+        body: {
+          matched: winner !== null,
+          matches,
+          missing,
+          elapsedMs: Date.now() - startedAt,
+        },
+      }
+    }
+    const results = await Promise.all(waits)
+    matches = results.filter((result): result is WaitMatch => result !== null)
+    return {
+      status: 200,
+      body: {
+        matched: matches.length === live.length && missing.length === 0,
+        matches,
+        missing,
+        elapsedMs: Date.now() - startedAt,
+      },
     }
   }
 

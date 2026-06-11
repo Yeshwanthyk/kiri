@@ -56,6 +56,18 @@ const waitForSchema = z.object({
   match: z.string().optional(),
 })
 
+const awaitResultSchema = z.object({
+  matched: z.boolean(),
+  agents: z.number(),
+  matches: z.array(z.object({
+    agentId: z.string(),
+    itemId: z.string(),
+    title: z.string(),
+    match: z.string(),
+  })),
+  missing: z.array(z.string()).optional(),
+})
+
 afterEach(async () => {
   await Promise.allSettled(clients.splice(0).map((client) => client.close()))
   for (const root of tempRoots.splice(0)) {
@@ -199,14 +211,21 @@ describe('workflow orchestration over MCP', () => {
     expect(running.items.find((item) => item.title === 'Implementer')?.attempts.at(0)?.status)
       .toBe('launched')
 
-    // Both worker terminals come up (observed the way an agent would: wait-for).
-    for (const agentId of [implementer, reviewer]) {
-      const ready = waitForSchema.parse(await call(client, 'kiri_do', {
-        operation: 'terminal.wait-for',
-        params: { agentId, mode: 'runtime', pattern: 'fake-codex-terminal mode:fresh', timeoutMs: 20_000 },
-      }))
-      expect(ready.matched).toBe(true)
-    }
+    // The main agent sleeps in ONE call until every worker terminal is up —
+    // no per-worker polling.
+    const allReady = awaitResultSchema.parse(await call(client, 'kiri_do', {
+      operation: 'workflow.await',
+      params: {
+        id: created.id,
+        pattern: 'fake-codex-terminal mode:fresh',
+        quorum: 'all',
+        timeoutMs: 20_000,
+      },
+    }))
+    expect(allReady.matched).toBe(true)
+    expect(allReady.agents).toBe(2)
+    expect(allReady.matches.map((match) => match.agentId).sort())
+      .toEqual([implementer, reviewer].sort())
 
     // The workflow body was handed to the worker at launch (long lines wrap
     // on screen, so match against the raw output window).
@@ -226,16 +245,20 @@ describe('workflow orchestration over MCP', () => {
       operation: 'terminal.input',
       params: { agentId: implementer, text: 'implement slugify --emit-diff', submit: true },
     })
-    const implemented = waitForSchema.parse(await call(client, 'kiri_do', {
-      operation: 'terminal.wait-for',
+    // Sleep until ANY worker reports; the result tells the main agent which
+    // one woke it (here: the implementer item).
+    const implemented = awaitResultSchema.parse(await call(client, 'kiri_do', {
+      operation: 'workflow.await',
       params: {
-        agentId: implementer,
-        mode: 'runtime',
+        id: created.id,
         pattern: 'echo:implement slugify --emit-diff:session:[a-z0-9-]+',
+        quorum: 'any',
         timeoutMs: 20_000,
       },
     }))
     expect(implemented.matched).toBe(true)
+    expect(implemented.matches).toHaveLength(1)
+    expect(implemented.matches[0]).toMatchObject({ agentId: implementer, title: 'Implementer' })
     const implementerReport = screenLine(
       await call(client, 'kiri_get', {
         operation: 'terminal.read',

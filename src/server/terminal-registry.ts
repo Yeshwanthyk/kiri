@@ -300,12 +300,15 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   }
 
   // Resolves once `pattern` matches the visible screen ('screen' scope) or the
-  // recent raw output window ('output' scope), or rejects on timeout. Matching
-  // re-runs after every parsed output chunk.
+  // recent raw output window ('output' scope), or rejects on timeout or abort.
+  // Matching re-runs after every parsed output chunk. The abort signal lets
+  // multiplexed waits (wait-any) release their listeners as soon as another
+  // session wins the race.
   function waitForScreen(session: TerminalRegistrySession, options: {
     readonly pattern: RegExp
     readonly timeoutMs: number
     readonly scope?: 'screen' | 'output'
+    readonly signal?: AbortSignal
   }) {
     const scope = options.scope ?? 'screen'
     const matchTarget = () =>
@@ -313,12 +316,21 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
         ? readScreen(session).lines.join('\n')
         : session.recentOutputChunks.join('')
     return new Promise<{ match: string }>((resolve, reject) => {
+      if (options.signal?.aborted) {
+        reject(new Error(`Wait aborted for ${session.key}`))
+        return
+      }
       let settled = false
       const listener = () => {
         const match = options.pattern.exec(matchTarget())
         if (!match || settled) return
         settle()
         resolve({ match: match[0] })
+      }
+      const onAbort = () => {
+        if (settled) return
+        settle()
+        reject(new Error(`Wait aborted for ${session.key}`))
       }
       const timer = timers.setTimeout(() => {
         if (settled) return
@@ -329,7 +341,9 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
         settled = true
         session.screenListeners.delete(listener)
         timers.clearTimeout(timer)
+        options.signal?.removeEventListener('abort', onAbort)
       }
+      options.signal?.addEventListener('abort', onAbort, { once: true })
       session.screenListeners.add(listener)
       listener()
     })

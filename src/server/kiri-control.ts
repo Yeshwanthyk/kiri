@@ -21,6 +21,7 @@ import type {
   TerminalTarget,
   TerminalWaitForInput,
   ThinkingLevel,
+  WorkflowAwaitInput,
   WorkflowItemOperationInput,
   WorkflowRunOperationInput,
   WorkspaceSnapshot,
@@ -182,6 +183,7 @@ export type KiriControlApi = {
   readonly triggerScratchpad: (input: TriggerScratchpadInput) => ControlEffect<TriggerScratchpadResult>
   readonly listWorkflowRuns: (input?: ListWorkflowRunsInput) => ControlEffect<unknown>
   readonly getWorkflowRun: (id: string) => ControlEffect<unknown>
+  readonly workflowAwait: (input: WorkflowAwaitInput) => ControlEffect<unknown>
   readonly validateWorkflow: (input: CreateWorkflowRunInput) => ControlEffect<unknown>
   readonly createWorkflowRun: (input: CreateWorkflowRunInput) => ControlEffect<unknown>
   readonly dispatchWorkflowRun: (input: WorkflowRunOperationInput) => ControlEffect<unknown>
@@ -464,6 +466,38 @@ export function makeKiriControl(
     },
   )
 
+  // Sleep until one/all of the workflow's live worker terminals matches the
+  // pattern — the push-style alternative to polling terminal.wait-for per
+  // worker. Matches are mapped back to agent ids and workflow item titles.
+  const workflowAwaitEffect = Effect.fn('KiriControl.workflowAwait')(
+    function* (input: WorkflowAwaitInput) {
+      const run = yield* fromSync(() => dependencies.getWorkflowRun(input.id))
+      const agents = workflowActiveAgents(run)
+      if (agents.length === 0) {
+        return {
+          matched: false,
+          reason: 'no_active_agents',
+          matches: [],
+          agents: 0,
+        }
+      }
+      const payload = yield* Effect.tryPromise({
+        try: () => dependencies.terminalControlRequest('sessions/wait-any', {
+          targets: agents.map((agent) => ({
+            key: `${agent.agentId}:runtime`,
+            pattern: input.pattern,
+            flags: input.flags,
+            scope: input.scope,
+          })),
+          timeoutMs: input.timeoutMs,
+          quorum: input.quorum,
+        }),
+        catch: normalizeError,
+      })
+      return resolveWorkflowAwaitPayload(payload, agents)
+    },
+  )
+
   const terminalKillEffect = Effect.fn('KiriControl.terminalKill')(
     function* (input: TerminalTarget) {
       const key = yield* fromSync(() => terminalSessionKey(input))
@@ -579,6 +613,7 @@ export function makeKiriControl(
     terminalWaitFor: terminalWaitForEffect,
     terminalSpawn: terminalSpawnEffect,
     terminalKill: terminalKillEffect,
+    workflowAwait: workflowAwaitEffect,
     listScratchpad,
     addScratchpad,
     deleteScratchpad,
@@ -679,4 +714,67 @@ function normalizeError(error: unknown) {
     message: error instanceof Error ? error.message : String(error),
     cause: error,
   })
+}
+
+type WorkflowAwaitAgent = {
+  readonly agentId: string
+  readonly itemId: string
+  readonly title: string
+}
+
+function workflowActiveAgents(run: unknown): WorkflowAwaitAgent[] {
+  if (!run || typeof run !== 'object' || !('items' in run) || !Array.isArray(run.items)) {
+    return []
+  }
+  const agents: WorkflowAwaitAgent[] = []
+  for (const item of run.items) {
+    if (!item || typeof item !== 'object') continue
+    const agentId = 'activeAgentId' in item && typeof item.activeAgentId === 'string'
+      ? item.activeAgentId
+      : null
+    if (!agentId) continue
+    agents.push({
+      agentId,
+      itemId: 'id' in item && typeof item.id === 'string' ? item.id : '',
+      title: 'title' in item && typeof item.title === 'string' ? item.title : '',
+    })
+  }
+  return agents
+}
+
+function resolveWorkflowAwaitPayload(payload: unknown, agents: readonly WorkflowAwaitAgent[]) {
+  const byKey = new Map(agents.map((agent) => [`${agent.agentId}:runtime`, agent]))
+  let matched = false
+  let elapsedMs: number | undefined
+  const matches: Array<WorkflowAwaitAgent & { match: string }> = []
+  const missing: string[] = []
+  if (payload && typeof payload === 'object') {
+    if ('matched' in payload && typeof payload.matched === 'boolean') matched = payload.matched
+    if ('elapsedMs' in payload && typeof payload.elapsedMs === 'number') elapsedMs = payload.elapsedMs
+    if ('matches' in payload && Array.isArray(payload.matches)) {
+      for (const candidate of payload.matches) {
+        if (!candidate || typeof candidate !== 'object') continue
+        const key = 'key' in candidate && typeof candidate.key === 'string' ? candidate.key : null
+        const agent = key ? byKey.get(key) : undefined
+        if (!agent) continue
+        matches.push({
+          ...agent,
+          match: 'match' in candidate && typeof candidate.match === 'string' ? candidate.match : '',
+        })
+      }
+    }
+    if ('missing' in payload && Array.isArray(payload.missing)) {
+      for (const key of payload.missing) {
+        if (typeof key !== 'string') continue
+        missing.push(byKey.get(key)?.agentId ?? key)
+      }
+    }
+  }
+  return {
+    matched,
+    matches,
+    missing,
+    agents: agents.length,
+    ...(elapsedMs === undefined ? {} : { elapsedMs }),
+  }
 }

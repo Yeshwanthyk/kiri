@@ -278,6 +278,30 @@ describe('terminal registry', () => {
     await expect(timingOut).rejects.toThrow('Timed out')
   })
 
+  it('waitForScreen aborts cleanly and releases its listener', async () => {
+    const { registry } = createRegistry()
+    const session = registerSession(registry)
+    const controller = new AbortController()
+
+    const waiting = registry.waitForScreen(session, {
+      pattern: /never/,
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    })
+    expect(session.screenListeners.size).toBe(1)
+    controller.abort()
+    await expect(waiting).rejects.toThrow('aborted')
+    expect(session.screenListeners.size).toBe(0)
+
+    // An already-aborted signal rejects without registering anything.
+    await expect(registry.waitForScreen(session, {
+      pattern: /never/,
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    })).rejects.toThrow('aborted')
+    expect(session.screenListeners.size).toBe(0)
+  })
+
   it('waitForScreen output scope matches raw output no longer on screen', async () => {
     const { registry } = createRegistry()
     const session = registerSession(registry)

@@ -25,6 +25,7 @@ import {
   terminalTargetSchema,
   terminalWaitForInputSchema,
   triggerScratchpadBlockInputSchema,
+  workflowAwaitInputSchema,
   unhideProjectInputSchema,
   workflowItemOperationInputSchema,
   workflowRunOperationInputSchema,
@@ -224,6 +225,9 @@ async function dispatchWriteOperation(
       break
     case 'workflow.dispatch':
       result = await run(control.dispatchWorkflowRun(parseParams(workflowRunOperationInputSchema, params)))
+      break
+    case 'workflow.await':
+      result = await run(control.workflowAwait(parseParams(workflowAwaitInputSchema, params)))
       break
     case 'workflow.retrigger':
       result = await run(control.retriggerWorkflowItem(parseParams(workflowItemOperationInputSchema, params)))

@@ -393,6 +393,19 @@ export const terminalWaitForInputSchema = terminalTargetSchema.extend({
 })
 export type TerminalWaitForInput = z.infer<typeof terminalWaitForInputSchema>
 
+// Blocks until one ('any') or every ('all') of a workflow's live worker
+// terminals matches the pattern, so an orchestrating agent sleeps in a single
+// call instead of polling each worker.
+export const workflowAwaitInputSchema = z.object({
+  id: z.string().trim().min(1),
+  pattern: z.string().min(1).max(2_000),
+  flags: z.string().regex(/^[gimsuy]*$/).default(''),
+  timeoutMs: z.number().int().positive().max(600_000).default(60_000),
+  scope: z.enum(['screen', 'output']).default('screen'),
+  quorum: z.enum(['any', 'all']).default('any'),
+})
+export type WorkflowAwaitInput = z.infer<typeof workflowAwaitInputSchema>
+
 // Terminal WebSocket protocol v2: JSON frames in both directions. The server
 // opens each attachment with a `snapshot` frame (serialized emulator state to
 // write into a freshly reset terminal), then streams `data` frames. Clients
@@ -584,6 +597,7 @@ export const kiriWriteOperations = [
   'workflow.validate',
   'workflow.create',
   'workflow.dispatch',
+  'workflow.await',
   'workflow.retrigger',
   'workflow.track',
   'workflow.untrack',
