@@ -147,6 +147,18 @@ describe('terminal registry', () => {
     expect(screen.bufferType).toBe('normal')
   })
 
+  it('tracks output sequence only for content writes', async () => {
+    const { registry } = createRegistry()
+    const session = registerSession(registry)
+
+    expect(session.outputSeq).toBe(0)
+    registry.append(session, '')
+    expect(session.outputSeq).toBe(0)
+
+    registry.append(session, 'hello')
+    expect(session.outputSeq).toBe(1)
+  })
+
   it('sends a snapshot frame on attach and streams subsequent data frames', async () => {
     const { registry } = createRegistry()
     const session = registerSession(registry, { banner: '[banner]\r\n' })

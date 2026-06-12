@@ -57,6 +57,7 @@ export type TerminalRegistrySession = {
   readonly recentOutputChunks: string[]
   readonly screenListeners: Set<() => void>
   recentOutputBytes: number
+  outputSeq: number
   cols: number
   rows: number
   paused: boolean
@@ -163,6 +164,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       recentOutputChunks: [],
       screenListeners: new Set(),
       recentOutputBytes: 0,
+      outputSeq: 0,
       cols: inputSession.cols,
       rows: inputSession.rows,
       paused: false,
@@ -252,6 +254,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       const removed = session.recentOutputChunks.shift() ?? ''
       session.recentOutputBytes -= removed.length
     }
+    session.outputSeq += 1
   }
 
   function broadcast(session: TerminalRegistrySession, data: string) {

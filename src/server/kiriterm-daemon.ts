@@ -259,12 +259,14 @@ export async function startKiritermDaemon(
   return { info, record, stateDir, close }
 
   function dumpSessions() {
+    const liveKeys = new Set<string>()
     for (const session of service.registry.sessions.values()) {
       if (session.exited) continue
+      liveKeys.add(session.key)
+      const stamp = `${session.outputSeq}:${session.cols}:${session.rows}`
+      if (lastDumpByKey.get(session.key) === stamp) continue
       try {
         const snapshot = service.registry.snapshot(session)
-        if (lastDumpByKey.get(session.key) === snapshot) continue
-        lastDumpByKey.set(session.key, snapshot)
         const persisted: PersistedSession = {
           key: session.key,
           mode: session.mode,
@@ -279,9 +281,13 @@ export async function startKiritermDaemon(
           join(sessionsDir, `${encodeURIComponent(session.key)}.json`),
           JSON.stringify(persisted),
         )
+        lastDumpByKey.set(session.key, stamp)
       } catch (error) {
         console.error('kiriterm: failed to persist session snapshot', session.key, error)
       }
+    }
+    for (const key of lastDumpByKey.keys()) {
+      if (!liveKeys.has(key)) lastDumpByKey.delete(key)
     }
   }
 

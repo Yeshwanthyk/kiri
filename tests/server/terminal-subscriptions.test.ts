@@ -399,4 +399,46 @@ describe('terminal subscriptions (wake delivery)', () => {
     expect(wake).toContain('restart survivor')
     expect(second.list().find((record) => record.id === id)?.status).toBe('delivered')
   })
+
+  it('bounds settled records while preserving pending subscriptions in the journal', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kiri-subs-prune-'))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+    const journalPath = join(dir, 'subscriptions.json')
+    const { registry, register } = setup()
+    const orchestrator = register('orch-prune:runtime')
+    const subscriptions = makeTerminalSubscriptions({
+      registry,
+      journalPath,
+      batchDelayMs: 5,
+      submitDelayMs: 5,
+    })
+
+    for (let index = 0; index < 101; index += 1) {
+      subscriptions.subscribe({
+        targets: [{ key: `missing-${index}:runtime`, pattern: 'x', flags: '', scope: 'screen' }],
+        timeoutMs: 60_000,
+        quorum: 'any',
+        deliver: { agentId: 'orch-prune', title: 'prune wake' },
+      })
+    }
+    await subscriptions.settled()
+    await until(() => writesOf(orchestrator.proc).includes('\r'))
+
+    const worker = register('worker-pending:runtime')
+    const pending = subscriptions.subscribe({
+      targets: [{ key: 'worker-pending:runtime', pattern: 'NEVER', flags: '', scope: 'screen' }],
+      timeoutMs: 60_000,
+      quorum: 'any',
+      deliver: { agentId: 'orch-prune', title: 'pending wake' },
+    })
+    expect(worker.session.exited).toBe(false)
+
+    const records = subscriptions.list()
+    expect(records.filter((record) => record.status !== 'pending')).toHaveLength(100)
+    expect(records.find((record) => record.id === pending.id)).toMatchObject({ status: 'pending' })
+
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as Array<{ status: string; id: string }>
+    expect(journal.filter((record) => record.status !== 'pending')).toHaveLength(100)
+    expect(journal.find((record) => record.id === pending.id)).toMatchObject({ status: 'pending' })
+  })
 })

@@ -83,6 +83,7 @@ export function makeTerminalSubscriptions(
 ): TerminalSubscriptionsApi {
   const submitDelayMs = dependencies.submitDelayMs ?? 150
   const batchDelayMs = dependencies.batchDelayMs ?? 25
+  const maxSettledRecords = 100
   const timers = dependencies.timers ?? { setTimeout }
   const records = new Map<string, SubscriptionRecord>()
   const inFlight = new Set<Promise<void>>()
@@ -133,6 +134,7 @@ export function makeTerminalSubscriptions(
     })().catch((error) => {
       record.status = 'failed'
       record.outcome = error instanceof Error ? error.message : String(error)
+      pruneSettled()
       persist()
     }).finally(() => {
       inFlight.delete(run)
@@ -205,6 +207,7 @@ export function makeTerminalSubscriptions(
       item.record.status = 'delivered'
       item.record.outcome = item.result.matched ? 'condition met' : 'timed out'
     }
+    pruneSettled()
     persist()
   }
 
@@ -227,6 +230,7 @@ export function makeTerminalSubscriptions(
       item.record.status = 'failed'
       item.record.outcome = outcome
     }
+    pruneSettled()
     persist()
   }
 
@@ -263,6 +267,16 @@ export function makeTerminalSubscriptions(
     const tmp = `${dependencies.journalPath}.tmp`
     writeFileSync(tmp, serialized, { mode: 0o600 })
     renameSync(tmp, dependencies.journalPath)
+  }
+
+  function pruneSettled() {
+    const settled = Array.from(records.values())
+      .filter((record) => record.status !== 'pending')
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    while (settled.length > maxSettledRecords) {
+      const oldest = settled.shift()
+      if (oldest) records.delete(oldest.id)
+    }
   }
 }
 
