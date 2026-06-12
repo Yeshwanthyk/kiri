@@ -621,6 +621,12 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
       if (!decoded) return
       const turnId = decoded.turnId ?? decoded.turn?.id
       if (threadId && turnId) {
+        const turnKey = codexTurnKey(threadId, turnId)
+        if (turnKey) {
+          const shouldProject = yield* Effect.sync(() =>
+            retainedState.rememberTurnStartProjection(turnKey))
+          if (!shouldProject) return
+        }
         yield* Effect.sync(() => retainedState.rememberTurn(threadId, turnId))
       }
       if (turnId) {

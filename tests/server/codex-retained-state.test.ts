@@ -32,6 +32,7 @@ describe('codex retained state', () => {
     state.rememberThread('agent-1', 'thread-old')
     state.rememberTurn('thread-old', 'turn-old')
     state.rememberRepoDiffRefreshedTurn(codexRetainedTurnKey('thread-old', 'turn-old'))
+    state.rememberTurnStartProjection(codexRetainedTurnKey('thread-old', 'turn-old'))
 
     state.rememberThread('agent-1', 'thread-new')
 
@@ -44,6 +45,7 @@ describe('codex retained state', () => {
       agentThreads: 1,
       threadTurns: 0,
       repoDiffRefreshedTurns: 0,
+      turnStartProjections: 0,
     })
   })
 
@@ -67,6 +69,7 @@ describe('codex retained state', () => {
     state.queues.set('agent-1', Promise.resolve())
     state.bumpGeneration('agent-1')
     state.rememberRepoDiffRefreshedTurn(codexRetainedTurnKey('thread-2', 'turn-2'))
+    state.rememberTurnStartProjection(codexRetainedTurnKey('thread-2', 'turn-2'))
 
     state.forgetAgent('agent-1')
 
@@ -77,6 +80,7 @@ describe('codex retained state', () => {
       queues: 0,
       sessionGenerations: 0,
       repoDiffRefreshedTurns: 0,
+      turnStartProjections: 0,
     })
   })
 
@@ -110,6 +114,18 @@ describe('codex retained state', () => {
     expect(state.stats().repoDiffRefreshedTurns).toBe(2)
   })
 
+  it('dedupes turn-start projection guards and evicts oldest turn keys', () => {
+    const state = makeCodexRetainedState({ maxTurnStartProjections: 2 })
+
+    expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-1', 'turn-1'))).toBe(true)
+    expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-1', 'turn-1'))).toBe(false)
+    expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-2', 'turn-2'))).toBe(true)
+    expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-3', 'turn-3'))).toBe(true)
+
+    expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-1', 'turn-1'))).toBe(true)
+    expect(state.stats().turnStartProjections).toBe(2)
+  })
+
   it('clears runtime maps for tests without clearing adapter ownership', () => {
     const state = makeCodexRetainedState()
     state.rememberAdapter('ws://codex', testAdapter())
@@ -129,6 +145,7 @@ describe('codex retained state', () => {
       agentThreads: 0,
       threadTurns: 0,
       repoDiffRefreshedTurns: 0,
+      turnStartProjections: 0,
     })
   })
 })
