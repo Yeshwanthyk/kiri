@@ -1,6 +1,6 @@
 import { Effect, Either, Layer } from 'effect'
 import { describe, expect, it } from 'vitest'
-import type { WorkspaceSnapshot } from '~/lib/contracts'
+import type { AgentDetail, WorkspaceSnapshot } from '~/lib/contracts'
 import { defaultUiPreferences } from '~/lib/ui-preferences'
 import {
   makeWorkspaceService,
@@ -25,6 +25,31 @@ const snapshot: WorkspaceSnapshot = {
   archivedSessions: [],
   scratchpadBlocks: [],
   selected: { projectId: '', agentId: '' },
+}
+
+const agentDetail: AgentDetail = {
+  id: 'agent-1',
+  projectId: 'project-1',
+  slot: 'session-a-aaaaaa',
+  title: 'Agent',
+  runtime: 'pi',
+  interfaceMode: 'gui',
+  model: 'sonnet',
+  status: 'idle',
+  sessionDir: '/tmp/session',
+  sessionFile: null,
+  preview: 'Ready.',
+  messageCount: 0,
+  diffCount: 0,
+  contextUsage: null,
+  pendingQuestion: null,
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  isSession: true,
+  messages: [],
+  timelineEvents: [],
+  timeline: [],
+  diffs: [],
+  tasks: [],
 }
 
 describe('WorkspaceService', () => {
@@ -72,7 +97,7 @@ describe('WorkspaceService', () => {
     expect(calls).toEqual(['revision'])
   })
 
-  it('refreshes read models before full snapshot hydration', async () => {
+  it('does not refresh read models before full snapshot hydration', async () => {
     const calls: string[] = []
     const service = makeWorkspaceService(testDependencies({
       refreshReadModels: () => {
@@ -87,7 +112,27 @@ describe('WorkspaceService', () => {
 
     await expect(Effect.runPromise(service.snapshot())).resolves.toBe(snapshot)
 
-    expect(calls).toEqual(['read-models', 'snapshot'])
+    expect(calls).toEqual(['snapshot'])
+  })
+
+  it('does not refresh read models before agent detail hydration', async () => {
+    const calls: string[] = []
+    const service = makeWorkspaceService(testDependencies({
+      refreshReadModels: () => {
+        calls.push('read-models')
+        return []
+      },
+      getAgentDetail: (input) => {
+        calls.push(`detail:${input.agentId}`)
+        return agentDetail
+      },
+    }))
+
+    await expect(Effect.runPromise(
+      service.agentDetail({ agentId: 'agent-1', limit: 500, offset: 0 }),
+    )).resolves.toBe(agentDetail)
+
+    expect(calls).toEqual(['detail:agent-1'])
   })
 
   it('refreshes read models after sync snapshot mutations', async () => {
