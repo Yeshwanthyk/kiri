@@ -23,7 +23,7 @@ packaging gate repeatedly.
 | [003](003-read-models-off-read-path.md) | Remove read-model refresh from snapshot/agentDetail read paths | P1 | S | LOW | — | DONE — refresh stays on mutations only; full gates pass |
 | [004](004-daemon-terminal-memory.md) | Stop per-30s scrollback serialization; bound daemon maps | P1 | M | LOW | — | DONE - output-seq dump gating; settled subscriptions capped |
 | [005](005-unmount-hidden-terminal-tabs.md) | Unmount hidden terminal tabs in the renderer | P2 | M | MED | — | DONE - inactive shell tabs unmount; targeted + manual smoke pass |
-| [006](006-lazy-heavy-panels-and-fonts.md) | Code-split diff/settings panels; latin-only font subsets | P2 | M | LOW | — | TODO |
+| [006](006-lazy-heavy-panels-and-fonts.md) | Code-split diff/settings panels; latin-only font subsets | P2 | M | LOW | — | DONE - lazy diff/settings; latin fonts; full e2e blocked by existing harness/snapshot failures |
 | [007](007-renderer-render-path-memoization.md) | Memoize the chat timeline render path | P2 | S | LOW | 001 (optional, see plan) | TODO |
 | [008](008-desktop-package-slimming.md) | Prune runtime-unused dependencies from the asar | P3 | L | MED | do LAST | TODO |
 

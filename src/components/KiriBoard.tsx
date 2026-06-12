@@ -22,11 +22,13 @@ import { EmptyProjectState } from './kiri-board/empty-project-state'
 import { ProjectManagerDialog } from './kiri-board/project-manager-dialog'
 import { ProjectBoardPane } from './kiri-board/project-board-pane'
 import { InlineSessionLauncher } from './kiri-board/session-launcher'
-import { SettingsScreen } from './kiri-board/settings-screen'
 import { SelectedAgentPane } from './kiri-board/selected-agent-pane'
 import type { SidebarTab } from './kiri-board/board-types'
 import { useBoardSurfaces } from './kiri-board/board-surfaces'
 import { useBoardWorkspace } from './kiri-board/board-workspace'
+
+const SettingsScreen = React.lazy(() =>
+  import('./kiri-board/settings-screen').then((module) => ({ default: module.SettingsScreen })))
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const boardScrollRef = React.useRef<HTMLDivElement | null>(null)
@@ -264,16 +266,18 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   useHostMenuActions(commandActions)
   if (settingsOpen) {
     return (
-      <SettingsScreen
-        keymap={keymap}
-        themeSelection={themeSelection}
-        chatTypography={chatTypography}
-        onKeymapChange={(action, value) => void changeKeymapPreference(action, value)}
-        onKeymapReset={() => void resetKeymapPreference()}
-        onThemeChange={(next) => void changeThemePreference(next)}
-        onChatTypographyChange={(next) => void changeChatTypographyPreference(next)}
-        onClose={closeSettings}
-      />
+      <React.Suspense fallback={<div className="empty-panel">Loading settings...</div>}>
+        <SettingsScreen
+          keymap={keymap}
+          themeSelection={themeSelection}
+          chatTypography={chatTypography}
+          onKeymapChange={(action, value) => void changeKeymapPreference(action, value)}
+          onKeymapReset={() => void resetKeymapPreference()}
+          onThemeChange={(next) => void changeThemePreference(next)}
+          onChatTypographyChange={(next) => void changeChatTypographyPreference(next)}
+          onClose={closeSettings}
+        />
+      </React.Suspense>
     )
   }
 

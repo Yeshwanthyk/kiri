@@ -20,13 +20,15 @@ import type { ThemeMode } from '~/theme/kiri-themes'
 import { errorMessage, formatKeyShort, formatThinkingLevel } from './format'
 import { ScratchpadHeader, ScratchpadPanel } from './scratchpad'
 import { ChatPanel } from './chat-panel'
-import { DiffPanel } from './diff-panel'
 import { TerminalPanel } from './terminal-panel'
 import { TerminalWorkspace } from './terminal-workspace'
 import { mergeAgentDetail, prependAgentDetailPages } from './agent-detail'
 import type { RefreshAgentDetail, SidebarTab } from './board-types'
 import type { KeymapSettings } from './navigation'
 import type { ChatTypographySettings } from './storage'
+
+const DiffPanel = React.lazy(() =>
+  import('./diff-panel').then((module) => ({ default: module.DiffPanel })))
 
 type OlderDetailPage = {
   readonly agentId: string
@@ -341,11 +343,13 @@ export function SelectedAgentPane({
           onLoadOlderHistory={loadOlderHistory}
         />
       ) : agent && tab === 'diffs' ? (
-        <DiffPanel
-          key={agent.id}
-          agent={agent}
-          themeMode={themeMode}
-        />
+        <React.Suspense fallback={<div className="empty-panel">Loading diff view...</div>}>
+          <DiffPanel
+            key={agent.id}
+            agent={agent}
+            themeMode={themeMode}
+          />
+        </React.Suspense>
       ) : agent && (tab === 'terminal' || (tab === 'chat' && chatUsesTerminal)) ? null : !agent ? (
         <EmptySessionPanel
           project={selectedProject}
