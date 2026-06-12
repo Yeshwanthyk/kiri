@@ -1,12 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { openKiriDatabase } from '../../src/server/db/connection'
 import { insertProject } from '../../src/server/db/projects'
 import { insertSessionRow } from '../../src/server/db/sessions'
 import {
+  clearPiHydrationStamps,
   createForkedSessionRow,
   hydratePersistedPiSessionRows,
   resetSessionRows,
@@ -41,6 +42,14 @@ function piJsonl(userText: string, assistantText: string, updatedAt = '2026-01-0
 }
 
 describe('session operations repository', () => {
+  beforeEach(() => {
+    clearPiHydrationStamps()
+  })
+
+  afterEach(() => {
+    clearPiHydrationStamps()
+  })
+
   it('resets all persisted session detail state', () => {
     const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-reset-'))
     const cwd = join(root, 'project')
@@ -224,6 +233,105 @@ describe('session operations repository', () => {
         { role: 'user', text: 'Resume me' },
         { role: 'assistant', text: 'Hydrated answer' },
       ])
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('skips persisted Pi hydration when the session file is unchanged', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-hydrate-cache-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const slot = 'session-a-aaaaaa'
+      const sessionDir = join(root, 'pi-sessions', projectId, slot)
+      const agentId = `${projectId}-${slot}`
+      mkdirSync(sessionDir, { recursive: true })
+      writeFileSync(join(sessionDir, 'session.jsonl'), piJsonl('Resume me', 'Hydrated answer'))
+
+      hydratePersistedPiSessionRows(database, {
+        piSessionsDir: join(root, 'pi-sessions'),
+        defaultModel: 'test-model',
+      })
+      const thread = database
+        .prepare('SELECT id FROM threads WHERE agent_id = ? AND active = 1')
+        .get(agentId) as { id: string }
+      database
+        .prepare('INSERT INTO messages (id, thread_id, role, text, timestamp) VALUES (?, ?, ?, ?, ?)')
+        .run('sentinel-message', thread.id, 'assistant', 'keep me', '2026-01-02T00:00:02.000Z')
+
+      hydratePersistedPiSessionRows(database, {
+        piSessionsDir: join(root, 'pi-sessions'),
+        defaultModel: 'test-model',
+      })
+
+      expect(
+        database.prepare('SELECT text FROM messages WHERE id = ?').get('sentinel-message'),
+      ).toEqual({ text: 'keep me' })
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rehydrates persisted Pi sessions when the session file changes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-hydrate-change-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const slot = 'session-a-aaaaaa'
+      const sessionDir = join(root, 'pi-sessions', projectId, slot)
+      const sessionFile = join(sessionDir, 'session.jsonl')
+      const agentId = `${projectId}-${slot}`
+      mkdirSync(sessionDir, { recursive: true })
+      writeFileSync(sessionFile, piJsonl('Resume me', 'Hydrated answer'))
+
+      hydratePersistedPiSessionRows(database, {
+        piSessionsDir: join(root, 'pi-sessions'),
+        defaultModel: 'test-model',
+      })
+      const thread = database
+        .prepare('SELECT id FROM threads WHERE agent_id = ? AND active = 1')
+        .get(agentId) as { id: string }
+      database
+        .prepare('INSERT INTO messages (id, thread_id, role, text, timestamp) VALUES (?, ?, ?, ?, ?)')
+        .run('sentinel-message', thread.id, 'assistant', 'delete me', '2026-01-02T00:00:02.000Z')
+      appendFileSync(sessionFile, `\n${JSON.stringify({
+        type: 'message',
+        id: 'assistant-2',
+        timestamp: '2026-01-02T00:00:03.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ text: 'Fresh answer' }],
+          usage: { totalTokens: 88 },
+        },
+      })}\n`)
+
+      hydratePersistedPiSessionRows(database, {
+        piSessionsDir: join(root, 'pi-sessions'),
+        defaultModel: 'test-model',
+      })
+
+      expect(
+        database.prepare('SELECT text FROM messages WHERE id = ?').get('sentinel-message'),
+      ).toBeUndefined()
+      expect(
+        database
+          .prepare('SELECT text FROM messages WHERE id = ?')
+          .get(`pi-jsonl-${agentId}-assistant-2`),
+      ).toEqual({ text: 'Fresh answer' })
+      expect(
+        database
+          .prepare('SELECT used_tokens AS usedTokens FROM agent_context_usage WHERE agent_id = ?')
+          .get(agentId),
+      ).toEqual({ usedTokens: 88 })
     } finally {
       database.close()
       rmSync(root, { recursive: true, force: true })
