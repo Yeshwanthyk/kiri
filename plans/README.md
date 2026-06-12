@@ -25,7 +25,7 @@ packaging gate repeatedly.
 | [005](005-unmount-hidden-terminal-tabs.md) | Unmount hidden terminal tabs in the renderer | P2 | M | MED | — | DONE - inactive shell tabs unmount; targeted + manual smoke pass |
 | [006](006-lazy-heavy-panels-and-fonts.md) | Code-split diff/settings panels; latin-only font subsets | P2 | M | LOW | — | DONE - lazy diff/settings; latin fonts; full e2e blocked by existing harness/snapshot failures |
 | [007](007-renderer-render-path-memoization.md) | Memoize the chat timeline render path | P2 | S | LOW | 001 (optional, see plan) | DONE - rich body, timestamp, diff stats, load-history callback memoized |
-| [008](008-desktop-package-slimming.md) | Prune runtime-unused dependencies from the asar | P3 | L | MED | do LAST | TODO |
+| [008](008-desktop-package-slimming.md) | Prune runtime-unused dependencies from the asar | P3 | L | MED | do LAST | DONE - dependency split; app.asar 207,753,251 -> 124,511,616 bytes |
 
 Status values: TODO / IN PROGRESS / DONE / BLOCKED / REJECTED. Executors:
 update your row when you start and when you finish (DONE rows should note
