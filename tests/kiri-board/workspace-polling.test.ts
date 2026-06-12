@@ -116,6 +116,39 @@ describe('workspace polling', () => {
     }
   })
 
+  it('passes null action-poll snapshots through to the caller', async () => {
+    vi.useFakeTimers()
+    try {
+      let finishAction!: () => void
+      const action = new Promise<'done'>((resolve) => {
+        finishAction = () => resolve('done')
+      })
+      const refreshWorkspace = vi.fn(() => Promise.resolve(null))
+      const onWorkspace = vi.fn()
+      const onPoll = vi.fn(() => Promise.resolve())
+
+      const result = pollWorkspaceDuringAction({
+        action: () => action,
+        refreshWorkspace,
+        onResult: vi.fn(),
+        onWorkspace,
+        onPoll,
+        timers: nodeFakeTimers(),
+      })
+
+      await vi.advanceTimersByTimeAsync(250)
+      expect(refreshWorkspace).toHaveBeenCalledTimes(1)
+      expect(onWorkspace).toHaveBeenCalledWith(null)
+
+      finishAction()
+      await result
+
+      expect(onPoll).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('refreshes workspace snapshots in the background', async () => {
     vi.useFakeTimers()
     try {

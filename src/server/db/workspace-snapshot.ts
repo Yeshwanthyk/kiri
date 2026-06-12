@@ -215,7 +215,7 @@ export function readWorkspaceRevision(
         COALESCE(GROUP_CONCAT(
           id || ':' || project_id || ':' || slot || ':' || title || ':' || runtime || ':' ||
           interface_mode || ':' || model || ':' || status || ':' || session_dir || ':' ||
-          COALESCE(session_file, '') || ':' || COALESCE(runtime_state_json, '') || ':' ||
+          COALESCE(session_file, '') || ':' || COALESCE(runtime_state_updated_at, '') || ':' ||
           position || ':' || COALESCE(archived_at, ''),
           char(31)
         ), '') AS marker
@@ -231,7 +231,6 @@ export function readWorkspaceRevision(
           status,
           session_dir,
           session_file,
-          runtime_state_json,
           runtime_state_updated_at,
           position,
           archived_at
@@ -270,8 +269,7 @@ export function readWorkspaceRevision(
         COALESCE(MAX(created_at), '') AS createdAt,
         COALESCE(MAX(COALESCE(triggered_at, '')), '') AS triggeredAt,
         COALESCE(GROUP_CONCAT(
-          id || ':' || COALESCE(project_id, '') || ':' || body || ':' ||
-          COALESCE(triggered_agent_id, ''),
+          id || ':' || COALESCE(project_id, '') || ':' || COALESCE(triggered_agent_id, ''),
           char(31)
         ), '') AS marker
       FROM scratchpad_blocks

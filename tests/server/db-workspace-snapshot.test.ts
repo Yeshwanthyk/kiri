@@ -237,6 +237,26 @@ describe('workspace snapshot projection', () => {
         settings,
         preferences: defaultUiPreferences,
       })
+      database
+        .prepare(
+          `
+            UPDATE scratchpad_blocks
+            SET triggered_at = ?, triggered_agent_id = ?
+            WHERE id = ?
+          `,
+        )
+        .run('2026-01-04T00:00:00.000Z', agentId, 'scratch-1')
+      const afterScratchpadTriggered = readWorkspaceRevision(database, {
+        settings,
+        preferences: defaultUiPreferences,
+      })
+      database
+        .prepare('DELETE FROM scratchpad_blocks WHERE id = ?')
+        .run('scratch-1')
+      const afterScratchpadDelete = readWorkspaceRevision(database, {
+        settings,
+        preferences: defaultUiPreferences,
+      })
 
       expect(afterSession.revision).not.toBe(before.revision)
       expect(afterRuntimeState.revision).not.toBe(afterSession.revision)
@@ -244,6 +264,8 @@ describe('workspace snapshot projection', () => {
       expect(afterDiff.revision).not.toBe(afterThread.revision)
       expect(afterContext.revision).not.toBe(afterDiff.revision)
       expect(afterScratchpad.revision).not.toBe(afterContext.revision)
+      expect(afterScratchpadTriggered.revision).not.toBe(afterScratchpad.revision)
+      expect(afterScratchpadDelete.revision).not.toBe(afterScratchpadTriggered.revision)
     } finally {
       database.close()
       rmSync(root, { recursive: true, force: true })

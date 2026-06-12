@@ -75,23 +75,30 @@ export function useBoardWorkspace({
     onPoll?: RefreshAgentDetail,
   ) => {
     const endWorkspaceMutation = beginWorkspaceMutation()
+    let tickChanged = false
     const gatedOnPoll = onPoll
       ? async () => {
-          if (workspaceDedupeRef.current.didChange()) await onPoll()
+          if (tickChanged) await onPoll()
         }
       : undefined
     try {
-      await pollWorkspaceDuringAction({
+      await pollWorkspaceDuringAction<WorkspaceSnapshot, WorkspaceSnapshot | null>({
         action,
-        refreshWorkspace: () => refreshWorkspaceRef.current(),
+        refreshWorkspace: () =>
+          workspaceRevisionGateRef.current.refreshIfChanged({
+            refreshRevision: () => refreshWorkspaceRevisionRef.current(),
+            refreshWorkspace: () => refreshWorkspaceRef.current(),
+          }),
         onResult,
-        onWorkspace: applyWorkspace,
+        onWorkspace: (next) => {
+          tickChanged = next !== null && workspaceDedupeRef.current.apply(next, setWorkspace)
+        },
         onPoll: gatedOnPoll,
       })
     } finally {
       endWorkspaceMutation()
     }
-  }, [applyWorkspace, beginWorkspaceMutation])
+  }, [beginWorkspaceMutation])
 
   React.useEffect(() => {
     applyWorkspace(snapshot)
