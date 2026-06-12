@@ -11,6 +11,7 @@ import {
   TerminalLaunchError,
   type TerminalAgentLaunchConfig,
 } from '~/server/terminal-launch'
+import { writeCodexTerminalSessionId } from '~/server/codex-terminal-session'
 
 const shell = { command: '/bin/zsh', args: ['-l', '-i'] }
 
@@ -213,6 +214,28 @@ describe('buildTerminalProcessLaunch', () => {
       '--model',
       'test-model',
       'codex-session-id',
+    ])
+    expect(launch.initialTerminalInput).toBeNull()
+  })
+
+  it('resumes Codex from the Kiri session directory when runtime state is missing', () => {
+    vi.stubEnv('KIRI_CODEX_BIN', '/tmp/bin/codex')
+    const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-session-'))
+    writeCodexTerminalSessionId(sessionDir, 'sidecar-codex-session')
+
+    const launch = buildTerminalProcessLaunch({
+      ...launchConfig('codex'),
+      sessionDir,
+    }, 'runtime', shell)
+
+    expect(launch.command).toBe('/tmp/bin/codex')
+    expect(launch.args).toEqual([
+      'resume',
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--no-alt-screen',
+      '--model',
+      'test-model',
+      'sidecar-codex-session',
     ])
     expect(launch.initialTerminalInput).toBeNull()
   })

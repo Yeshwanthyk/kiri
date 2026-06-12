@@ -10,6 +10,10 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { TerminalAgentLaunchConfig } from './terminal-launch'
 import { getAgentRuntimeState, setAgentRuntimeState } from './db'
+import {
+  normalizeCodexSessionId,
+  writeCodexTerminalSessionId,
+} from './codex-terminal-session'
 
 type CodexSessionCandidate = {
   readonly path: string
@@ -21,6 +25,7 @@ type CodexSessionDiscoveryInput = {
   readonly cwd: string
   readonly limit?: number
   readonly newerThanMs?: number
+  readonly closestToMs?: number
   readonly requireUnique?: boolean
 }
 
@@ -49,7 +54,7 @@ export function findLatestCodexSessionForCwd(input: CodexSessionDiscoveryInput) 
     .filter((candidate) => input.newerThanMs === undefined || candidate.mtimeMs >= input.newerThanMs)
     .sort((left, right) => right.mtimeMs - left.mtimeMs)
     .slice(0, input.limit ?? 200)
-  const matchingSessionIds: string[] = []
+  const matchingSessions: Array<{ id: string; sortMs: number }> = []
 
   for (const candidate of candidates) {
     const firstLine = readFirstLine(candidate.path)
@@ -65,15 +70,26 @@ export function findLatestCodexSessionForCwd(input: CodexSessionDiscoveryInput) 
         ? normalizePath(payload.cwd)
         : undefined
       if (id && sessionCwd === cwd) {
-        if (!input.requireUnique) return id
-        matchingSessionIds.push(id)
+        const payloadTimestamp = 'timestamp' in payload && typeof payload.timestamp === 'string'
+          ? Date.parse(payload.timestamp)
+          : NaN
+        const sortMs = Number.isFinite(payloadTimestamp) ? payloadTimestamp : candidate.mtimeMs
+        matchingSessions.push({ id, sortMs })
       }
     } catch {
       continue
     }
   }
 
-  return matchingSessionIds.length === 1 ? matchingSessionIds[0] : null
+  if (input.closestToMs !== undefined) {
+    const closestToMs = input.closestToMs
+    matchingSessions.sort((left, right) =>
+      Math.abs(left.sortMs - closestToMs) - Math.abs(right.sortMs - closestToMs)
+      || left.sortMs - right.sortMs)
+    return matchingSessions[0]?.id ?? null
+  }
+  if (!input.requireUnique) return matchingSessions[0]?.id ?? null
+  return matchingSessions.length === 1 ? matchingSessions[0].id : null
 }
 
 export async function rememberCodexTerminalSession(
@@ -83,20 +99,29 @@ export async function rememberCodexTerminalSession(
 ) {
   if (config.runtime !== 'codex') return
   latestLaunchTokenByAgentId.set(config.id, input.launchToken)
-  if (stateHasCodexResume(getAgentRuntimeState(config.id))) return
+  const initialResume = codexResumeIdFromState(getAgentRuntimeState(config.id))
+  if (initialResume) {
+    writeCodexTerminalSessionId(config.sessionDir, initialResume)
+    return
+  }
 
   const sessionId = await waitForLatestCodexSessionForCwd({
     codexHome: env.CODEX_HOME,
     cwd: config.cwd,
     newerThanMs: input.launchedAtMs - 1000,
-    requireUnique: true,
+    closestToMs: input.launchedAtMs,
   })
   if (!sessionId) return
   if (latestLaunchTokenByAgentId.get(config.id) !== input.launchToken) return
 
   const currentState = getAgentRuntimeState(config.id)
   if (latestLaunchTokenByAgentId.get(config.id) !== input.launchToken) return
-  if (stateHasCodexResume(currentState)) return
+  const currentResume = codexResumeIdFromState(currentState)
+  if (currentResume) {
+    writeCodexTerminalSessionId(config.sessionDir, currentResume)
+    return
+  }
+  writeCodexTerminalSessionId(config.sessionDir, sessionId)
   setAgentRuntimeState(config.id, { ...currentState, codexSessionId: sessionId })
 }
 
@@ -150,12 +175,8 @@ function readFirstLine(path: string) {
   }
 }
 
-function stateHasCodexResume(state: Record<string, unknown>) {
-  return Boolean(stringValue(state.resume) ?? stringValue(state.codexSessionId))
-}
-
-function stringValue(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value : undefined
+function codexResumeIdFromState(state: Record<string, unknown>) {
+  return normalizeCodexSessionId(state.resume) ?? normalizeCodexSessionId(state.codexSessionId)
 }
 
 function normalizePath(path: string) {

@@ -10,6 +10,7 @@ import {
 export { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { commonTerminalEnv, removeColorDisablingEnv } from './terminal-env'
+import { readCodexTerminalSessionId } from './codex-terminal-session'
 
 export type TerminalAgentLaunchConfig = {
   id: string
@@ -265,7 +266,9 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
   return Effect.gen(function* () {
   const state = yield* parseRuntimeState(config.runtimeStateJson)
   const initialTerminalInput = firstPendingTerminalInput(state)
-  const resume = stringValue(state.resume) ?? stringValue(state.codexSessionId)
+  const resume = stringValue(state.resume)
+    ?? stringValue(state.codexSessionId)
+    ?? readCodexTerminalSessionId(config.sessionDir)
   const args = resume
     ? ['resume', '--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen']
     : ['--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen']

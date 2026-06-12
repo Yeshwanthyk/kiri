@@ -67,6 +67,20 @@ describe('Codex CLI session discovery', () => {
     })).toBeNull()
   })
 
+  it('chooses the closest same-cwd Codex session for a launch when later reopens exist', () => {
+    const codexHome = mkdtempSync(join(tmpdir(), 'kiri-codex-home-'))
+    const cwd = '/tmp/project'
+    writeCodexSession(codexHome, '2026/05/15/rollout-first.jsonl', 'first-session', cwd, 10)
+    writeCodexSession(codexHome, '2026/05/15/rollout-reopen.jsonl', 'reopen-session', cwd, 40)
+
+    expect(findLatestCodexSessionForCwd({
+      codexHome,
+      cwd,
+      newerThanMs: 5_000,
+      closestToMs: 9_500,
+    })).toBe('first-session')
+  })
+
   it('waits briefly for Codex to write session metadata after terminal launch', async () => {
     const codexHome = mkdtempSync(join(tmpdir(), 'kiri-codex-home-'))
     const cwd = '/tmp/project'

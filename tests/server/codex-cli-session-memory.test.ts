@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TerminalAgentLaunchConfig } from '~/server/terminal-launch'
+import { readCodexTerminalSessionId } from '~/server/codex-terminal-session'
 
 const dbMock = vi.hoisted(() => {
   const state = new Map<string, Record<string, unknown>>()
@@ -50,6 +51,7 @@ describe('Codex terminal session memory', () => {
 
     expect(dbMock.setAgentRuntimeState).toHaveBeenCalledTimes(1)
     expect(dbMock.state.get(config.id)).toEqual({ codexSessionId: 'current-session' })
+    expect(readCodexTerminalSessionId(config.sessionDir)).toBe('current-session')
   })
 
   it('does not replace an existing explicit Codex resume state', async () => {
@@ -68,6 +70,23 @@ describe('Codex terminal session memory', () => {
     expect(dbMock.setAgentRuntimeState).not.toHaveBeenCalled()
     expect(dbMock.state.get(config.id)).toEqual({ resume: 'explicit-session' })
   })
+
+  it('remembers the launch-local Codex session when later same-cwd sessions already exist', async () => {
+    const { rememberCodexTerminalSession } = await import('~/server/codex-cli-sessions')
+    const codexHome = mkdtempSync(join(tmpdir(), 'kiri-codex-home-'))
+    const cwd = '/tmp/project'
+    const config = launchConfig({ id: 'agent-reopen', cwd })
+    writeCodexSession(codexHome, '2026/05/15/rollout-original.jsonl', 'original-session', cwd, 10)
+    writeCodexSession(codexHome, '2026/05/15/rollout-reopen.jsonl', 'reopen-session', cwd, 40)
+
+    await rememberCodexTerminalSession(config, { CODEX_HOME: codexHome }, {
+      launchedAtMs: 9_500,
+      launchToken: 'launch-token',
+    })
+
+    expect(dbMock.state.get(config.id)).toEqual({ codexSessionId: 'original-session' })
+    expect(readCodexTerminalSessionId(config.sessionDir)).toBe('original-session')
+  })
 })
 
 function launchConfig(input: { id: string; cwd: string }): TerminalAgentLaunchConfig {
@@ -75,7 +94,7 @@ function launchConfig(input: { id: string; cwd: string }): TerminalAgentLaunchCo
     id: input.id,
     projectId: 'project-1',
     runtime: 'codex',
-    sessionDir: '/tmp/kiri-session',
+    sessionDir: mkdtempSync(join(tmpdir(), 'kiri-session-')),
     sessionFile: 'session.jsonl',
     model: 'test-model',
     cwd: input.cwd,
