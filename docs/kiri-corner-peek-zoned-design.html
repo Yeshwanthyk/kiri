@@ -1,0 +1,1703 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kiri Corner Peek Zoned Design</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --paper: oklch(0.145 0.012 255);
+      --paper-2: oklch(0.165 0.013 255);
+      --panel: oklch(0.185 0.014 255);
+      --panel-2: oklch(0.235 0.016 255);
+      --panel-3: oklch(0.275 0.018 255);
+      --ink: oklch(0.91 0.01 84);
+      --muted: oklch(0.66 0.016 248);
+      --dim: oklch(0.5 0.016 248);
+      --line: oklch(0.31 0.018 255);
+      --line-soft: oklch(0.25 0.016 255);
+      --accent: oklch(0.74 0.105 166);
+      --accent-2: oklch(0.72 0.13 55);
+      --warn: oklch(0.78 0.13 72);
+      --danger: oklch(0.68 0.17 25);
+      --ok: oklch(0.72 0.12 150);
+      --radius-control: 10px;
+      --radius-panel: 20px;
+      --shadow-panel: inset 0 0 0 1px var(--line-soft), 0 16px 42px oklch(0.08 0.01 255 / 0.28);
+      --sans: "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--sans);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .page {
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, color-mix(in oklab, var(--panel) 40%, transparent), transparent 280px),
+        var(--paper);
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      min-height: 58px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 0 28px;
+      border-bottom: 1px solid var(--line-soft);
+      background: color-mix(in oklab, var(--paper) 88%, transparent);
+      backdrop-filter: blur(12px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: inset 0 0 0 1px var(--line);
+      color: var(--accent);
+      font-weight: 800;
+    }
+
+    .nav {
+      display: flex;
+      gap: 4px;
+      overflow: auto;
+      scrollbar-width: none;
+    }
+
+    .nav::-webkit-scrollbar {
+      display: none;
+    }
+
+    .nav a {
+      display: inline-flex;
+      min-height: 30px;
+      align-items: center;
+      padding: 0 10px;
+      border-radius: 9px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      transition: color 160ms cubic-bezier(0.2, 0, 0, 1), background-color 160ms cubic-bezier(0.2, 0, 0, 1);
+      white-space: nowrap;
+    }
+
+    .nav a:hover,
+    .nav a:focus-visible {
+      background: var(--panel);
+      color: var(--ink);
+      outline: none;
+    }
+
+    main {
+      display: grid;
+      gap: 52px;
+      width: min(1240px, calc(100vw - 44px));
+      margin: 0 auto;
+      padding: 52px 0 72px;
+    }
+
+    section {
+      scroll-margin-top: 82px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      max-width: 780px;
+      font-size: 58px;
+      font-weight: 820;
+      line-height: 0.96;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    h2 {
+      font-size: 28px;
+      line-height: 1;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    h3 {
+      font-size: 18px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .kicker {
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 0.95fr) minmax(420px, 1.05fr);
+      gap: 26px;
+      align-items: start;
+    }
+
+    .hero-copy {
+      display: grid;
+      gap: 22px;
+      padding: 10px 0;
+    }
+
+    .lede,
+    .section-head p,
+    .card p,
+    .rule-card p,
+    .callout p {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.58;
+      text-wrap: pretty;
+    }
+
+    .lede {
+      max-width: 72ch;
+      font-size: 15px;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+    }
+
+    .button {
+      display: inline-flex;
+      min-height: 38px;
+      align-items: center;
+      gap: 8px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-control);
+      background: var(--panel);
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 12px;
+      transition: transform 160ms cubic-bezier(0.2, 0, 0, 1), background-color 160ms cubic-bezier(0.2, 0, 0, 1);
+    }
+
+    .button.primary {
+      border-color: color-mix(in oklab, var(--accent) 42%, var(--line));
+      background: color-mix(in oklab, var(--accent) 17%, var(--panel));
+    }
+
+    .button:active {
+      transform: scale(0.96);
+    }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 22px;
+      margin-bottom: 18px;
+    }
+
+    .section-head p {
+      max-width: 74ch;
+    }
+
+    .shell-mock {
+      overflow: hidden;
+      border-radius: 24px;
+      background: var(--paper-2);
+      box-shadow:
+        inset 0 0 0 1px var(--line),
+        0 26px 70px oklch(0.08 0.01 255 / 0.34);
+    }
+
+    .window-bar {
+      display: flex;
+      min-height: 42px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 13px;
+      border-bottom: 1px solid var(--line-soft);
+      background: color-mix(in oklab, var(--panel) 72%, transparent);
+    }
+
+    .traffic {
+      display: inline-flex;
+      gap: 6px;
+    }
+
+    .traffic span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--line);
+    }
+
+    .traffic span:nth-child(1) { background: oklch(0.66 0.18 25); }
+    .traffic span:nth-child(2) { background: oklch(0.78 0.14 72); }
+    .traffic span:nth-child(3) { background: oklch(0.72 0.13 150); }
+
+    .crumb {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .canvas {
+      position: relative;
+      display: grid;
+      min-height: 500px;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      padding: 14px;
+      background: var(--paper);
+    }
+
+    .resource-tabs {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding-right: 52px;
+    }
+
+    .tab-strip {
+      display: flex;
+      min-width: 0;
+      gap: 6px;
+      overflow: hidden;
+    }
+
+    .tab {
+      display: inline-grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      min-width: 0;
+      min-height: 34px;
+      align-items: center;
+      gap: 7px;
+      padding: 0 10px;
+      border-radius: 11px;
+      background: var(--panel);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .tab strong {
+      overflow: hidden;
+      color: inherit;
+      font-size: 10.5px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tab.active {
+      background: color-mix(in oklab, var(--accent) 14%, var(--panel));
+      color: var(--ink);
+      box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 46%, var(--line));
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+
+    .tab.active .dot {
+      background: var(--accent);
+    }
+
+    .tab[data-kind="terminal"] .dot,
+    .mini-tab.terminal {
+      background: var(--warn);
+    }
+
+    .tab[data-kind="scratch"] .dot,
+    .mini-tab.scratch {
+      background: var(--accent-2);
+    }
+
+    .tab-handle {
+      color: color-mix(in oklab, var(--muted) 62%, transparent);
+      font-size: 12px;
+      letter-spacing: 0;
+    }
+
+    .add-tab {
+      display: grid;
+      width: 34px;
+      min-height: 34px;
+      place-items: center;
+      border-radius: 11px;
+      background: var(--panel);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 14px;
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .lens-anchor {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      display: grid;
+      width: 38px;
+      height: 38px;
+      place-items: center;
+      border-radius: 14px;
+      background: color-mix(in oklab, var(--panel) 92%, transparent);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+      box-shadow:
+        inset 0 0 0 1px var(--line),
+        0 12px 28px oklch(0.08 0.01 255 / 0.26);
+    }
+
+    .corner-peek {
+      position: absolute;
+      top: 58px;
+      right: 14px;
+      display: grid;
+      width: min(340px, calc(100% - 28px));
+      gap: 8px;
+      padding: 10px;
+      border-radius: 18px;
+      background: color-mix(in oklab, var(--panel) 94%, transparent);
+      box-shadow:
+        inset 0 0 0 1px var(--line),
+        0 18px 42px oklch(0.08 0.01 255 / 0.34);
+    }
+
+    .peek-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 0 2px 4px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .peek-head strong {
+      overflow: hidden;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .peek-head span {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .peek-row {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      min-height: 24px;
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .peek-row strong {
+      overflow: hidden;
+      color: var(--ink);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .peek-tabs {
+      display: flex;
+      min-width: 0;
+      gap: 5px;
+      overflow: hidden;
+    }
+
+    .mini-tab {
+      min-width: 34px;
+      height: 18px;
+      border-radius: 6px;
+      background: var(--panel-2);
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .mini-tab.active {
+      background: var(--accent);
+    }
+
+    .mini-tab.warn {
+      background: var(--danger);
+    }
+
+    .work-area {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      min-height: 0;
+      padding-top: 4px;
+    }
+
+    .work-card,
+    .terminal-card,
+    .scratch-card,
+    .callout,
+    .card,
+    .rule-card,
+    .next-card,
+    .decision-panel {
+      border-radius: var(--radius-panel);
+      background: var(--panel);
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .work-card {
+      display: grid;
+      gap: 10px;
+      padding: 16px;
+      min-height: 154px;
+    }
+
+    .line {
+      height: 7px;
+      border-radius: 4px;
+      background: var(--line);
+    }
+
+    .line.short { width: 42%; }
+    .line.mid { width: 68%; }
+    .line.long { width: 88%; }
+    .line.accent { background: var(--accent); }
+    .line.warn { background: var(--warn); }
+    .line.dim { background: color-mix(in oklab, var(--line) 58%, transparent); }
+
+    .split-work {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(190px, 0.46fr);
+      gap: 10px;
+    }
+
+    .terminal-card,
+    .scratch-card {
+      display: grid;
+      gap: 8px;
+      align-content: start;
+      min-height: 120px;
+      padding: 14px;
+    }
+
+    .terminal-card {
+      background:
+        repeating-linear-gradient(
+          to bottom,
+          color-mix(in oklab, var(--panel) 92%, black),
+          color-mix(in oklab, var(--panel) 92%, black) 18px,
+          color-mix(in oklab, var(--panel-2) 82%, black) 19px
+        );
+    }
+
+    .state-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10.5px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      min-height: 24px;
+      align-items: center;
+      gap: 6px;
+      padding: 0 8px;
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .status-pill.ok {
+      background: color-mix(in oklab, var(--ok) 14%, var(--panel-2));
+      color: var(--ok);
+    }
+
+    .status-pill.warn {
+      background: color-mix(in oklab, var(--warn) 14%, var(--panel-2));
+      color: var(--warn);
+    }
+
+    .zone-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .card,
+    .rule-card {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+      padding: 16px;
+    }
+
+    .card h3,
+    .rule-card h3 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .card h3 span,
+    .rule-card h3 span {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      font-weight: 600;
+    }
+
+    .rule-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .rule-row {
+      display: grid;
+      grid-template-columns: 156px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding: 12px;
+      border-radius: 14px;
+      background: var(--panel);
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .rule-row strong {
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .rule-row p {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .sequence {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .step {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      padding: 14px;
+      border-radius: var(--radius-panel);
+      background: var(--panel);
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .step-number {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border-radius: 9px;
+      background: color-mix(in oklab, var(--accent) 14%, var(--panel-2));
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 800;
+      box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 45%, var(--line));
+    }
+
+    .step p {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .callout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: center;
+      padding: 18px;
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 18px;
+    }
+
+    .next-pill {
+      display: inline-flex;
+      min-height: 34px;
+      align-items: center;
+      padding: 0 11px;
+      border-radius: 10px;
+      background: color-mix(in oklab, var(--accent) 15%, var(--panel-2));
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
+      box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 44%, var(--line));
+    }
+
+    .next-board {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .next-card {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+      padding: 14px;
+    }
+
+    .next-card h3 {
+      display: grid;
+      gap: 5px;
+      color: var(--ink);
+      font-size: 15px;
+    }
+
+    .next-card h3 span {
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .next-card p {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .decision-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .decision-panel {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      padding: 16px;
+    }
+
+    .decision-panel h3 {
+      font-size: 17px;
+    }
+
+    .decision-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .decision-row {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding-top: 9px;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .decision-row strong {
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .decision-row p {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .surface-mock {
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
+      padding: 14px;
+      border-radius: 24px;
+      background: var(--paper-2);
+      box-shadow:
+        inset 0 0 0 1px var(--line),
+        0 18px 44px oklch(0.08 0.01 255 / 0.26);
+    }
+
+    .mock-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .mock-header > div {
+      display: grid;
+      gap: 4px;
+    }
+
+    .mock-header strong {
+      display: block;
+      font-size: 18px;
+      line-height: 1.15;
+    }
+
+    .mock-header span,
+    .mock-meta,
+    .mock-label {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10.5px;
+    }
+
+    .mock-add-grid {
+      display: grid;
+      grid-template-columns: minmax(120px, 0.72fr) minmax(180px, 1fr) minmax(90px, 0.42fr) auto;
+      gap: 8px;
+    }
+
+    .mock-input,
+    .mock-button,
+    .mock-icon {
+      display: grid;
+      min-height: 36px;
+      align-items: center;
+      border-radius: 10px;
+      background: var(--panel);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .mock-input {
+      padding: 0 10px;
+    }
+
+    .mock-button {
+      justify-content: center;
+      min-width: 84px;
+      border: 1px solid color-mix(in oklab, var(--accent) 42%, var(--line));
+      color: var(--ink);
+      background: color-mix(in oklab, var(--accent) 15%, var(--panel));
+    }
+
+    .mock-list,
+    .mock-shelf,
+    .settings-grid,
+    .settings-panels,
+    .settings-index {
+      display: grid;
+      gap: 8px;
+    }
+
+    .mock-section-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .project-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 54px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: var(--panel);
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .project-row strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+
+    .project-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .mock-icon {
+      width: 34px;
+      min-height: 34px;
+      place-items: center;
+    }
+
+    .mock-shelf {
+      padding-top: 4px;
+    }
+
+    .project-row.hidden {
+      min-height: 46px;
+      opacity: 0.72;
+    }
+
+    .settings-grid {
+      grid-template-columns: minmax(190px, 0.32fr) minmax(0, 1fr);
+    }
+
+    .settings-index {
+      align-content: start;
+      padding: 12px;
+      border-radius: 18px;
+      background: color-mix(in oklab, var(--panel) 76%, transparent);
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .index-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      min-height: 38px;
+      align-items: center;
+      padding: 0 10px;
+      border-radius: 11px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10.5px;
+    }
+
+    .index-item.active {
+      background: var(--panel);
+      color: var(--ink);
+      box-shadow: inset 0 0 0 1px var(--line);
+    }
+
+    .settings-panel {
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+      border-radius: 18px;
+      background: var(--panel);
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .settings-panel h3 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 16px;
+    }
+
+    .swatch-row,
+    .shortcut-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .swatch {
+      width: 76px;
+      height: 42px;
+      border-radius: 12px;
+      background:
+        linear-gradient(135deg, var(--accent), transparent 42%),
+        var(--panel-2);
+      box-shadow: inset 0 0 0 1px var(--line);
+    }
+
+    .swatch:nth-child(2) {
+      background:
+        linear-gradient(135deg, var(--warn), transparent 42%),
+        color-mix(in oklab, var(--panel-2) 88%, var(--accent-2));
+    }
+
+    .swatch:nth-child(3) {
+      background:
+        linear-gradient(135deg, oklch(0.68 0.14 255), transparent 42%),
+        color-mix(in oklab, var(--panel-2) 90%, oklch(0.48 0.1 284));
+    }
+
+    .shortcut-pill {
+      display: inline-flex;
+      min-height: 28px;
+      align-items: center;
+      padding: 0 9px;
+      border-radius: 9px;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      box-shadow: inset 0 0 0 1px var(--line-soft);
+    }
+
+    .footer-note {
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 1020px) {
+      main {
+        width: min(760px, calc(100vw - 32px));
+      }
+
+      .hero,
+      .zone-grid,
+      .sequence,
+      .split-work,
+      .next-board,
+      .decision-grid,
+      .mock-add-grid,
+      .settings-grid {
+        grid-template-columns: 1fr;
+      }
+
+      h1 {
+        font-size: 44px;
+      }
+
+      .section-head,
+      .callout,
+      .rule-row,
+      .decision-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 680px) {
+      .topbar {
+        align-items: start;
+        flex-direction: column;
+        padding: 12px 16px;
+      }
+
+      main {
+        width: min(100%, calc(100vw - 24px));
+        padding-top: 34px;
+      }
+
+      h1 {
+        font-size: 36px;
+      }
+
+      .canvas {
+        min-height: 560px;
+      }
+
+      .tab {
+        min-width: 104px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      .button {
+        transition-duration: 0ms;
+      }
+
+      .button:active {
+        transform: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="Kiri zoned design home">
+        <span class="brand-mark">k</span>
+        <span>Corner Peek design</span>
+      </a>
+      <nav class="nav" aria-label="Page sections">
+        <a href="#shape">Shape</a>
+        <a href="#rules">Rules</a>
+        <a href="#zones">Zones</a>
+        <a href="#flows">Flows</a>
+        <a href="#next">Next</a>
+        <a href="#projects">Projects</a>
+        <a href="#settings">Settings</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="kicker">Selected direction</p>
+          <h1 id="hero-title">Corner Peek with resource tabs.</h1>
+          <p class="lede">
+            No sidebar. The active project owns the canvas. Agents, terminals, and scratchpad
+            are movable tabs. The top-right corner peek reveals project lanes and tab state
+            only when the user asks for orientation.
+          </p>
+          <div class="button-row">
+            <a class="button primary" href="#shape">View shell</a>
+            <a class="button" href="#rules">Lock rules</a>
+            <a class="button" href="#next">Next zone</a>
+          </div>
+        </div>
+
+        <div class="shell-mock" aria-label="Corner Peek resource tab mockup">
+          <div class="window-bar">
+            <span class="traffic"><span></span><span></span><span></span></span>
+            <span class="crumb">kiri / dump / codex plan</span>
+          </div>
+          <div class="canvas">
+            <div class="resource-tabs">
+              <div class="tab-strip" aria-label="Resource tabs">
+                <span class="tab active"><span class="dot"></span><strong>codex plan</strong><span class="tab-handle">↔</span></span>
+                <span class="tab"><span class="dot"></span><strong>reviewer</strong><span class="tab-handle">↔</span></span>
+                <span class="tab" data-kind="terminal"><span class="dot"></span><strong>build term</strong><span class="tab-handle">↔</span></span>
+                <span class="tab" data-kind="terminal"><span class="dot"></span><strong>server</strong><span class="tab-handle">↔</span></span>
+                <span class="tab" data-kind="scratch"><span class="dot"></span><strong>scratchpad</strong><span class="tab-handle">↔</span></span>
+              </div>
+              <span class="add-tab">+</span>
+            </div>
+
+            <div class="lens-anchor">3</div>
+            <div class="corner-peek" aria-label="Corner Peek project lens">
+              <div class="peek-head">
+                <strong>projects</strong>
+                <span>cmd holds map</span>
+              </div>
+              <div class="peek-row">
+                <strong>dump</strong>
+                <div class="peek-tabs">
+                  <span class="mini-tab active"></span>
+                  <span class="mini-tab"></span>
+                  <span class="mini-tab terminal"></span>
+                  <span class="mini-tab terminal"></span>
+                  <span class="mini-tab scratch"></span>
+                </div>
+              </div>
+              <div class="peek-row">
+                <strong>kiri</strong>
+                <div class="peek-tabs">
+                  <span class="mini-tab"></span>
+                  <span class="mini-tab terminal"></span>
+                  <span class="mini-tab scratch"></span>
+                </div>
+              </div>
+              <div class="peek-row">
+                <strong>hidden</strong>
+                <div class="peek-tabs">
+                  <span class="mini-tab warn"></span>
+                  <span class="mini-tab"></span>
+                  <span class="mini-tab scratch"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="work-area">
+              <div class="state-row">
+                <span>codex · gpt-5.5 · terminal interface</span>
+                <span class="status-pill ok">running</span>
+              </div>
+              <div class="work-card">
+                <div class="line accent short"></div>
+                <div class="line long"></div>
+                <div class="line mid"></div>
+                <div class="line long"></div>
+                <div class="line short"></div>
+              </div>
+              <div class="split-work">
+                <div class="terminal-card">
+                  <div class="state-row"><span>build term</span><span class="status-pill warn">movable</span></div>
+                  <div class="line warn short"></div>
+                  <div class="line long"></div>
+                  <div class="line mid"></div>
+                </div>
+                <div class="scratch-card">
+                  <div class="state-row"><span>scratchpad</span><span class="status-pill">movable</span></div>
+                  <div class="line mid"></div>
+                  <div class="line long"></div>
+                  <div class="line short"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="shape" aria-labelledby="shape-title">
+        <div class="section-head">
+          <div>
+            <p class="kicker">Shape</p>
+            <h2 id="shape-title">The chosen UI structure.</h2>
+          </div>
+          <p>
+            This page collapses the previous options into one concrete direction: Corner Peek,
+            visible movable resource tabs, scratchpad defaulting to the end, one movement model.
+          </p>
+        </div>
+        <div class="zone-grid">
+          <article class="card">
+            <h3>Canvas <span>primary</span></h3>
+            <p>
+              The selected resource gets the full app stage. This is where chat, diffs,
+              terminal, and scratchpad content render.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Resource Tabs <span>project-local</span></h3>
+            <p>
+              Agent sessions, terminals, and scratchpad are peers. Tabs are scoped to the
+              selected project and all share the same move/reorder primitive.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Corner Peek <span>orientation</span></h3>
+            <p>
+              The top-right chip is the replacement for the sidebar. It expands on arrow,
+              hover/click, or holding Cmd.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="rules" aria-labelledby="rules-title">
+        <div class="section-head">
+          <div>
+            <p class="kicker">Rules</p>
+            <h2 id="rules-title">Primitive rules to plan against.</h2>
+          </div>
+          <p>
+            These are the design contracts I would turn into implementation tasks once we move
+            from UI shaping into planning.
+          </p>
+        </div>
+        <div class="rule-list">
+          <div class="rule-row">
+            <strong>New agent</strong>
+            <p>Creates a movable tab before the scratchpad by default. It never creates a sidebar card.</p>
+          </div>
+          <div class="rule-row">
+            <strong>Scratchpad</strong>
+            <p>Defaults to the final project tab, but participates in the same move/reorder model. It is shared project/workspace context, not owned by one session.</p>
+          </div>
+          <div class="rule-row">
+            <strong>All resources</strong>
+            <p>Agents, terminals, and scratchpad are all movable. Reorder, detach, and alignment use one primitive instead of special-cased surfaces.</p>
+          </div>
+          <div class="rule-row">
+            <strong>Terminal</strong>
+            <p>Movable tab. A terminal may be attached to an agent, detached into the project tab strip, or moved between terminal layouts.</p>
+          </div>
+          <div class="rule-row">
+            <strong>Corner Peek</strong>
+            <p>Up/down moves projects. Left/right moves resource tabs. Holding Cmd pins the map and shows alignment before selection.</p>
+          </div>
+          <div class="rule-row">
+            <strong>Hidden projects</strong>
+            <p>Hidden projects belong to the Projects page. Corner Peek can show count/status, but management stays in the full-screen register.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="zones" aria-labelledby="zones-title">
+        <div class="section-head">
+          <div>
+            <p class="kicker">Zones</p>
+            <h2 id="zones-title">What is settled versus deferred.</h2>
+          </div>
+          <p>
+            This keeps us from blending primitives with project-management UI too early.
+          </p>
+        </div>
+        <div class="zone-grid">
+          <article class="rule-card">
+            <h3>Settled now <span>close in</span></h3>
+            <p>
+              Corner Peek, movable resource tabs, scratchpad default-last, full-canvas selected
+              resource.
+            </p>
+          </article>
+          <article class="rule-card">
+            <h3>Lock now <span>projects</span></h3>
+            <p>
+              Add, reorder, hide/unhide, delete, and hidden management move into one
+              full-screen Project Register.
+            </p>
+          </article>
+          <article class="rule-card">
+            <h3>Lock now <span>settings</span></h3>
+            <p>
+              Settings stays a full-screen Control Surface with palette, chat,
+              connect, keyboard, and future shell preferences.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="flows" aria-labelledby="flows-title">
+        <div class="section-head">
+          <div>
+            <p class="kicker">Flows</p>
+            <h2 id="flows-title">First-pass interaction flow.</h2>
+          </div>
+          <p>
+            This is the smallest coherent behavior set for the prototype.
+          </p>
+        </div>
+        <div class="sequence">
+          <article class="step">
+            <span class="step-number">1</span>
+            <h3>Start agent</h3>
+            <p>New agent appears as a movable project tab before the scratchpad by default.</p>
+          </article>
+          <article class="step">
+            <span class="step-number">2</span>
+            <h3>Move resource</h3>
+            <p>Reorder an agent, detach a terminal, or pull scratchpad forward using the same tab motion.</p>
+          </article>
+          <article class="step">
+            <span class="step-number">3</span>
+            <h3>Open scratchpad</h3>
+            <p>Scratchpad opens from the default final position, then can move like any other resource.</p>
+          </article>
+          <article class="step">
+            <span class="step-number">4</span>
+            <h3>Peek projects</h3>
+            <p>Corner Peek shows lanes and compact tab state without a sidebar.</p>
+          </article>
+          <article class="step">
+            <span class="step-number">5</span>
+            <h3>Switch fast</h3>
+            <p>Up/down changes project. Left/right changes tab inside project.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="next" aria-labelledby="next-title">
+        <div class="section-head">
+          <div>
+            <p class="kicker">Next</p>
+            <h2 id="next-title">Plan the primitive layer next.</h2>
+          </div>
+          <p>
+            The next pass should convert the chosen shell into contracts: resource identity,
+            ordering, movement, persistence, Corner Peek behavior, and the two app-level
+            management pages.
+          </p>
+        </div>
+        <div class="callout">
+          <div>
+            <strong>Recommended next step: prototype the tab model, then wire the app-level pages.</strong>
+            <p>
+              Treat agent sessions, terminals, and scratchpad as one ordered resource list.
+              Projects and Settings stay outside that list: they open as full-screen
+              app surfaces from Corner Peek, command actions, and existing triggers.
+            </p>
+          </div>
+          <span class="next-pill">next: shell + pages</span>
+        </div>
+        <div class="next-board" aria-label="Next planning sequence">
+          <article class="next-card">
+            <h3><span>P0</span> Resource contract</h3>
+            <p>
+              Define a project-local ordered list: agent, terminal, scratchpad. One active
+              resource, one move command, one default insertion rule.
+            </p>
+          </article>
+          <article class="next-card">
+            <h3><span>P1</span> Shell prototype</h3>
+            <p>
+              Render the full-canvas stage, movable tab strip, add button, and top-right
+              Corner Peek anchor without changing project contracts.
+            </p>
+          </article>
+          <article class="next-card">
+            <h3><span>P2</span> Movement semantics</h3>
+            <p>
+              Wire reorder, detach, and keyboard alignment. Cmd holds the map; arrows preview
+              project and resource movement before committing.
+            </p>
+          </article>
+          <article class="next-card">
+            <h3><span>P3</span> Project lens</h3>
+            <p>
+              Add project rows to Corner Peek with compact resource state. Project
+              management itself opens the full-screen register.
+            </p>
+          </article>
+          <article class="next-card">
+            <h3><span>P4</span> Restart memory</h3>
+            <p>
+              Rehydrate selected project, active resource, tab order, moved scratchpad,
+              and terminal tabs from frontend shell storage.
+            </p>
+          </article>
+          <article class="next-card">
+            <h3><span>P5</span> App pages</h3>
+            <p>
+              Projects and Settings keep their own full-screen routes/surfaces. They
+              never join the project-local resource tab strip.
+            </p>
+          </article>
+        </div>
+        <div class="decision-grid">
+          <article class="decision-panel">
+            <h3>Decision gates</h3>
+            <div class="decision-list">
+              <div class="decision-row">
+                <strong>identity</strong>
+                <p>Stable tab ids for agents, terminals, and scratchpad so reorder survives reloads.</p>
+              </div>
+              <div class="decision-row">
+                <strong>ownership</strong>
+                <p>Project owns resource order. Agent owns session state. Scratchpad owns shared project context.</p>
+              </div>
+              <div class="decision-row">
+                <strong>movement</strong>
+                <p>Drag, keyboard, and Corner Peek all call the same move primitive.</p>
+              </div>
+              <div class="decision-row">
+                <strong>persistence</strong>
+                <p>Remember active resource, tab order, terminal tabs, and scratchpad position as frontend shell state.</p>
+              </div>
+              <div class="decision-row">
+                <strong>restart</strong>
+                <p>Reload restores where everything was without changing SQLite, MCP, CLI, or runtime contracts.</p>
+              </div>
+            </div>
+          </article>
+          <article class="decision-panel">
+            <h3>App-level page locks</h3>
+            <div class="decision-list">
+              <div class="decision-row">
+                <strong>projects</strong>
+                <p>Full-screen Project Register. It owns add, choose directory, reorder, hide/unhide, delete, and hidden shelf management.</p>
+              </div>
+              <div class="decision-row">
+                <strong>hidden</strong>
+                <p>Hidden projects sit at the bottom of the register. Corner Peek shows a compact count/status only.</p>
+              </div>
+              <div class="decision-row">
+                <strong>settings</strong>
+                <p>Full-screen Control Surface. Keep the existing palette, chat, connect, and keyboard grouping.</p>
+              </div>
+              <div class="decision-row">
+                <strong>actions</strong>
+                <p>Project action runs can later create terminal tabs for servers, tests, and typecheck.</p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="projects" aria-labelledby="projects-title">
+        <div class="section-head">
+          <div>
+            <p class="kicker">Projects</p>
+            <h2 id="projects-title">Project Register, not a sidebar.</h2>
+          </div>
+          <p>
+            Projects is an app-level management page. The board stays free of permanent
+            navigation chrome, while the register keeps all existing project operations in
+            one precise place.
+          </p>
+        </div>
+        <div class="callout">
+          <div>
+            <strong>Locked shape: full-screen register with visible rows and hidden shelf.</strong>
+            <p>
+              Open it from Corner Peek, command actions, or the current Projects trigger.
+              Return closes back to the same board project/resource.
+            </p>
+          </div>
+          <span class="next-pill">page: projects</span>
+        </div>
+        <div class="surface-mock" aria-label="Project Register page blueprint">
+          <div class="mock-header">
+            <div>
+              <span>kiri / projects</span>
+              <strong>Project Register</strong>
+            </div>
+            <span>board return restores current resource</span>
+          </div>
+          <div class="mock-add-grid" aria-label="Add project command row">
+            <span class="mock-input">Project name</span>
+            <span class="mock-input">/absolute/path</span>
+            <span class="mock-input">optional id</span>
+            <span class="mock-button">Add</span>
+          </div>
+          <div class="mock-list">
+            <div class="mock-section-label"><span>visible</span><span>ordered on board</span></div>
+            <div class="project-row">
+              <div>
+                <strong>kiri</strong>
+                <span class="mock-meta">/Users/yesh/code/personal/kiri · 4 resources · 1 running</span>
+              </div>
+              <div class="project-actions" aria-label="Project row actions">
+                <span class="mock-icon">↑</span>
+                <span class="mock-icon">↓</span>
+                <span class="mock-icon">hide</span>
+                <span class="mock-icon">del</span>
+              </div>
+            </div>
+            <div class="project-row">
+              <div>
+                <strong>merlin</strong>
+                <span class="mock-meta">/Users/yesh/code/personal/merlin · scratchpad only</span>
+              </div>
+              <div class="project-actions" aria-label="Project row actions">
+                <span class="mock-icon">↑</span>
+                <span class="mock-icon">↓</span>
+                <span class="mock-icon">hide</span>
+                <span class="mock-icon">del</span>
+              </div>
+            </div>
+          </div>
+          <div class="mock-shelf">
+            <div class="mock-section-label"><span>hidden shelf</span><span>managed here, not on the board</span></div>
+            <div class="project-row hidden">
+              <div>
+                <strong>devlog</strong>
+                <span class="mock-meta">hidden · 1 session</span>
+              </div>
+              <div class="project-actions" aria-label="Hidden project row actions">
+                <span class="mock-icon">show</span>
+                <span class="mock-icon">del</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="decision-grid">
+          <article class="decision-panel">
+            <h3>Surface contract</h3>
+            <div class="decision-list">
+              <div class="decision-row">
+                <strong>entry</strong>
+                <p>Corner Peek footer/action, command palette, and existing project button all open the same page.</p>
+              </div>
+              <div class="decision-row">
+                <strong>add row</strong>
+                <p>Name, directory, optional id, Choose, Add. Compact command row; it should not dominate the page.</p>
+              </div>
+              <div class="decision-row">
+                <strong>visible</strong>
+                <p>Ordered rows with name, path, session/resource summary, running status, reorder, hide, delete.</p>
+              </div>
+              <div class="decision-row">
+                <strong>hidden</strong>
+                <p>Bottom shelf inside the page. Hidden projects can unhide or delete; they do not appear as board chrome.</p>
+              </div>
+            </div>
+          </article>
+          <article class="decision-panel">
+            <h3>Behavior lock</h3>
+            <div class="decision-list">
+              <div class="decision-row">
+                <strong>persist</strong>
+                <p>Use existing project order and hidden metadata. Do not add a schema or app-core concept.</p>
+              </div>
+              <div class="decision-row">
+                <strong>delete</strong>
+                <p>Keep confirmation. Delete only Kiri metadata; never delete the repo directory.</p>
+              </div>
+              <div class="decision-row">
+                <strong>reorder</strong>
+                <p>Visible-only order. Hidden project order can wait unless current persistence already supports it cleanly.</p>
+              </div>
+              <div class="decision-row">
+                <strong>peek</strong>
+                <p>Corner Peek shows visible projects plus a hidden count/action. The shelf itself lives here.</p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="settings" aria-labelledby="settings-title">
+        <div class="section-head">
+          <div>
+            <p class="kicker">Settings</p>
+            <h2 id="settings-title">Control Surface stays full-screen.</h2>
+          </div>
+          <p>
+            Settings is where global preferences live. It should feel like a Mac app
+            control panel: dense, calm, keyboard-friendly, and separate from project
+            resource movement.
+          </p>
+        </div>
+        <div class="callout">
+          <div>
+            <strong>Locked shape: keep the full-screen page with left index and grouped panels.</strong>
+            <p>
+              The current direction is already close. Polish the page around the new shell
+              language instead of folding it into Corner Peek or the tab strip.
+            </p>
+          </div>
+          <span class="next-pill">page: settings</span>
+        </div>
+        <div class="surface-mock" aria-label="Settings Control Surface page blueprint">
+          <div class="mock-header">
+            <div>
+              <span>kiri / settings</span>
+              <strong>Control Surface</strong>
+            </div>
+            <span>global preferences only</span>
+          </div>
+          <div class="settings-grid">
+            <div class="settings-index" aria-label="Settings section index">
+              <span class="index-item active"><span>Palette</span><span>7</span></span>
+              <span class="index-item"><span>Chat</span><span>10</span></span>
+              <span class="index-item"><span>Connect</span><span>QR</span></span>
+              <span class="index-item"><span>Keyboard</span><span>12</span></span>
+              <span class="index-item"><span>Shell</span><span>later</span></span>
+            </div>
+            <div class="settings-panels">
+              <article class="settings-panel">
+                <h3>Palette <span class="mock-label">mode follows theme</span></h3>
+                <div class="swatch-row" aria-label="Theme swatches">
+                  <span class="swatch"></span>
+                  <span class="swatch"></span>
+                  <span class="swatch"></span>
+                </div>
+              </article>
+              <article class="settings-panel">
+                <h3>Keyboard <span class="mock-label">resource navigation</span></h3>
+                <div class="shortcut-row" aria-label="Keyboard shortcut examples">
+                  <span class="shortcut-pill">cmd + up · project previous</span>
+                  <span class="shortcut-pill">cmd + down · project next</span>
+                  <span class="shortcut-pill">cmd + left · resource previous</span>
+                  <span class="shortcut-pill">cmd + right · resource next</span>
+                </div>
+              </article>
+            </div>
+          </div>
+        </div>
+        <div class="decision-grid">
+          <article class="decision-panel">
+            <h3>Surface contract</h3>
+            <div class="decision-list">
+              <div class="decision-row">
+                <strong>entry</strong>
+                <p>Corner Peek app action, command palette, and current Settings trigger open the same page.</p>
+              </div>
+              <div class="decision-row">
+                <strong>layout</strong>
+                <p>Top bar with board return, breadcrumb, sticky left index, main cards. No sidebar and no modal.</p>
+              </div>
+              <div class="decision-row">
+                <strong>sections</strong>
+                <p>Palette, Chat typography, Connect phone board, Keyboard. Add Shell only when layout reset/preferences are real.</p>
+              </div>
+              <div class="decision-row">
+                <strong>return</strong>
+                <p>Back to board restores the selected project and selected resource exactly as the shell left them.</p>
+              </div>
+            </div>
+          </article>
+          <article class="decision-panel">
+            <h3>Behavior lock</h3>
+            <div class="decision-list">
+              <div class="decision-row">
+                <strong>scope</strong>
+                <p>Settings changes global UI preferences, not project-local resource order.</p>
+              </div>
+              <div class="decision-row">
+                <strong>keyboard</strong>
+                <p>Rename visible labels from agent left/right to resource left/right. Keep stored action ids if needed for compatibility.</p>
+              </div>
+              <div class="decision-row">
+                <strong>shell</strong>
+                <p>A future Shell panel may reset remembered layout or Corner Peek preference, but it should not appear before the feature exists.</p>
+              </div>
+              <div class="decision-row">
+                <strong>contracts</strong>
+                <p>No SQLite, MCP, CLI, runtime, or settings persistence change unless a specific preference already exists.</p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <p class="footer-note">
+        Source: selected direction from the Kiri UI options deck. App code untouched.
+      </p>
+    </main>
+  </div>
+</body>
+</html>
