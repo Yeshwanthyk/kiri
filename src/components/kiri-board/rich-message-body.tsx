@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import * as React from 'react'
 import { highlightCode, highlightCodeSync } from '../../lib/code-highlighter'
 
-export function RichMessageBody({
+export const RichMessageBody = React.memo(function RichMessageBody({
   text,
   compact = false,
 }: {
@@ -14,12 +14,12 @@ export function RichMessageBody({
 }) {
   return (
     <div className={compact ? 'rich-message-body compact' : 'rich-message-body'}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={markdownComponents}>
         {text}
       </ReactMarkdown>
     </div>
   )
-}
+})
 
 function extractCodeText(node: React.ReactNode): string {
   if (node === null || node === undefined || node === false) return ''
@@ -94,3 +94,5 @@ const markdownComponents = {
     return <HighlightedPre code={code} lang={lang} fallback={children} />
   },
 } satisfies Components
+
+const remarkPlugins = [remarkGfm]

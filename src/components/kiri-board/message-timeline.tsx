@@ -35,6 +35,8 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   olderHistoryPending: boolean
   onLoadOlderHistory: () => Promise<void>
 }) {
+  const hideTimestampByRowId = React.useMemo(() => computeHiddenTimestamps(rows), [rows])
+
   if (rows.length === 0) {
     return (
       <div className="message-list" ref={listRef}>
@@ -48,8 +50,6 @@ export const MessageTimeline = React.memo(function MessageTimeline({
       </div>
     )
   }
-
-  const hideTimestampByRowId = computeHiddenTimestamps(rows)
 
   return (
     <div className="message-list" ref={listRef}>
@@ -252,7 +252,8 @@ const WorkEntryRow = React.memo(function WorkEntryRow({
 }) {
   const preview = formatWorkPreview(entry)
   const previewText = preview?.text ?? null
-  const stats = entry.diff ? diffLineStats(entry.diff.patch) : null
+  const patch = entry.diff?.patch
+  const stats = React.useMemo(() => (patch ? diffLineStats(patch) : null), [patch])
   const displayText = previewText ? `${entry.label} - ${previewText}` : entry.label
   const fullText = entry.detail?.trim() || displayText
   const visibleText = truncateWorkEntryDetail(fullText)

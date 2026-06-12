@@ -352,6 +352,16 @@ export function ChatPanel({
     }
   }
 
+  const handleLoadOlderHistory = React.useCallback(async () => {
+    if (!onLoadOlderHistory) return
+    setError(null)
+    try {
+      await onLoadOlderHistory()
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }, [onLoadOlderHistory])
+
   return (
     <div className="chat-panel" data-testid="chat-panel">
       <div className="message-list-wrap">
@@ -363,15 +373,7 @@ export function ChatPanel({
           selectedMessageId={selectedMessageId}
           hasOlderHistory={hasOlderHistory}
           olderHistoryPending={olderHistoryPending}
-          onLoadOlderHistory={async () => {
-            if (!onLoadOlderHistory) return
-            setError(null)
-            try {
-              await onLoadOlderHistory()
-            } catch (cause) {
-              setError(errorMessage(cause))
-            }
-          }}
+          onLoadOlderHistory={handleLoadOlderHistory}
         />
         {hasNewContent ? (
           <button
