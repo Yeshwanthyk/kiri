@@ -10,6 +10,9 @@ import type {
   AgentEvent,
   DiffArtifact,
   DeleteSessionInput,
+  KnowledgeAddInput,
+  KnowledgeMarkSeenInput,
+  KnowledgeSearchInput,
   RestoreSessionInput,
   ScratchpadBlock,
   StartSessionInput,
@@ -45,6 +48,11 @@ import {
   listScratchpadBlocks as listScratchpadBlocksFromDb,
   markScratchpadBlockTriggered as markScratchpadBlockTriggeredInDb,
 } from './db/scratchpad'
+import {
+  addKnowledgeEntry as addKnowledgeEntryInDb,
+  markKnowledgeEntrySeen as markKnowledgeEntrySeenInDb,
+  searchKnowledgeEntries as searchKnowledgeEntriesFromDb,
+} from './db/knowledge'
 import {
   completeScratchpadWorkflowItem as completeScratchpadWorkflowItemInDb,
   getWorkflowItem as getWorkflowItemFromDb,
@@ -478,6 +486,18 @@ export function markScratchpadBlockTriggered(blockId: string, agentId: string) {
 
 export function getScratchpadBlock(id: string) {
   return getScratchpadBlockFromDb(getDb(), id)
+}
+
+export function searchKnowledgeEntries(input: KnowledgeSearchInput & { readonly projectId: string }) {
+  return searchKnowledgeEntriesFromDb(getDb(), input)
+}
+
+export function addKnowledgeEntry(input: KnowledgeAddInput & { readonly projectId: string }) {
+  return addKnowledgeEntryInDb(getDb(), input)
+}
+
+export function markKnowledgeEntrySeen(input: KnowledgeMarkSeenInput) {
+  return markKnowledgeEntrySeenInDb(getDb(), input)
 }
 
 export function listWorkflowRuns(input: {

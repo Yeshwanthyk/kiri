@@ -2,6 +2,7 @@ import { Effect } from 'effect'
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import type {
+  KnowledgeEntry,
   KiriSettings,
   ScratchpadBlock,
   WorkspaceSnapshot,
@@ -29,6 +30,19 @@ const scratchpadBlock: ScratchpadBlock = {
   createdAt: '2026-01-01T00:00:00.000Z',
   triggeredAt: null,
   triggeredAgentId: null,
+}
+
+const knowledgeEntry: KnowledgeEntry = {
+  id: 'knowledge-1',
+  projectId: 'project-1',
+  title: 'Cached build fix',
+  problem: 'Build cache points at a stale bundle.',
+  answer: 'Clear the stale bundle and rerun the build.',
+  tags: ['build'],
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  lastSeenAt: null,
+  seenCount: 0,
 }
 
 const snapshot: WorkspaceSnapshot = {
@@ -179,6 +193,41 @@ describe('KiriControl service construction', () => {
       'create:1',
       'dispatch:workflow-1',
       'retrigger:item-1',
+    ])
+  })
+
+  it('routes knowledge operations through selected-project defaults', async () => {
+    const calls: string[] = []
+    const control = makeKiriControl(testDependencies({
+      searchKnowledgeEntries: (input) => {
+        calls.push(`search:${input.projectId}:${input.query}`)
+        return [knowledgeEntry]
+      },
+      addKnowledgeEntry: (input) => {
+        calls.push(`add:${input.projectId}:${input.title}`)
+        return { ...knowledgeEntry, title: input.title }
+      },
+      markKnowledgeEntrySeen: (input) => {
+        calls.push(`seen:${input.id}`)
+        return { ...knowledgeEntry, id: input.id, seenCount: 1 }
+      },
+    }))
+
+    await expect(Effect.runPromise(control.searchKnowledge({ query: 'cache', limit: 10 })))
+      .resolves.toEqual([knowledgeEntry])
+    await expect(Effect.runPromise(control.addKnowledge({
+      title: 'New fix',
+      problem: 'Problem',
+      answer: 'Answer',
+      tags: [],
+    }))).resolves.toMatchObject({ title: 'New fix' })
+    await expect(Effect.runPromise(control.markKnowledgeSeen({ id: 'knowledge-1' })))
+      .resolves.toMatchObject({ seenCount: 1 })
+
+    expect(calls).toEqual([
+      'search:project-1:cache',
+      'add:project-1:New fix',
+      'seen:knowledge-1',
     ])
   })
 
@@ -425,6 +474,9 @@ function testDependencies(
     terminalControlRequest: () => Promise.resolve({}),
     callerAgentId: () => null,
     listScratchpadBlocks: () => [scratchpadBlock],
+    searchKnowledgeEntries: () => [knowledgeEntry],
+    addKnowledgeEntry: (input) => ({ ...knowledgeEntry, projectId: input.projectId, title: input.title }),
+    markKnowledgeEntrySeen: (input) => ({ ...knowledgeEntry, id: input.id, seenCount: 1 }),
     addScratchpadBlockSummary: (input) => ({ ...scratchpadBlock, body: input.body }),
     deleteScratchpadBlockSummary: (id) => ({ ...scratchpadBlock, id }),
     triggerScratchpadSession: () => Promise.resolve({

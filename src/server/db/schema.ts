@@ -130,6 +130,19 @@ export const scratchpadBlockDbRowSchema = z.object({
   triggeredAgentId: z.string().nullable(),
 })
 
+export const knowledgeEntryDbRowSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  title: z.string(),
+  problem: z.string(),
+  answer: z.string(),
+  tagsJson: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lastSeenAt: z.string().nullable(),
+  seenCount: z.number().int().nonnegative(),
+})
+
 export const workflowRunSummaryDbRowSchema = z.object({
   id: z.string(),
   projectId: z.string(),

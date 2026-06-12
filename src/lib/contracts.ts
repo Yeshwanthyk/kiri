@@ -285,6 +285,20 @@ const scratchpadBlockSchema = z.object({
 })
 export type ScratchpadBlock = z.infer<typeof scratchpadBlockSchema>
 
+export const knowledgeEntrySchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  title: z.string(),
+  problem: z.string(),
+  answer: z.string(),
+  tags: z.array(z.string()),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lastSeenAt: z.string().nullable(),
+  seenCount: z.number().int().nonnegative(),
+})
+export type KnowledgeEntry = z.infer<typeof knowledgeEntrySchema>
+
 export const workspaceSnapshotSchema = z.object({
   settings: kiriSettingsSchema,
   preferences: uiPreferencesSchema,
@@ -582,6 +596,29 @@ export const triggerScratchpadBlockInputSchema = z.object({
 })
 type TriggerScratchpadBlockInput = z.infer<typeof triggerScratchpadBlockInputSchema>
 
+const knowledgeStringArraySchema = z.array(z.string().trim().min(1).max(2_000)).max(20)
+
+export const knowledgeSearchInputSchema = z.object({
+  projectId: z.string().trim().min(1).optional(),
+  query: z.string().trim().min(1).max(4_000),
+  limit: z.number().int().positive().max(50).default(10),
+})
+export type KnowledgeSearchInput = z.infer<typeof knowledgeSearchInputSchema>
+
+export const knowledgeAddInputSchema = z.object({
+  projectId: z.string().trim().min(1).optional(),
+  title: z.string().trim().min(1).max(240),
+  problem: z.string().trim().min(1).max(8_000),
+  answer: z.string().trim().min(1).max(8_000),
+  tags: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
+})
+export type KnowledgeAddInput = z.infer<typeof knowledgeAddInputSchema>
+
+export const knowledgeMarkSeenInputSchema = z.object({
+  id: z.string().trim().min(1),
+})
+export type KnowledgeMarkSeenInput = z.infer<typeof knowledgeMarkSeenInputSchema>
+
 export const kiriReadOperations = [
   'operations.list',
   'context.show',
@@ -590,6 +627,7 @@ export const kiriReadOperations = [
   'session.list',
   'agent.detail',
   'agent.events.list',
+  'knowledge.search',
   'scratchpad.list',
   'terminal.read',
   'terminal.list',
@@ -615,6 +653,8 @@ export const kiriWriteOperations = [
   'terminal.wait-for',
   'terminal.spawn',
   'terminal.kill',
+  'knowledge.add',
+  'knowledge.markSeen',
   'scratchpad.add',
   'scratchpad.delete',
   'scratchpad.trigger',

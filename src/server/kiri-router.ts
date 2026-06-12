@@ -14,6 +14,9 @@ import {
   kiriOperationRequestSchema,
   kiriReadOperations,
   kiriWriteOperations,
+  knowledgeAddInputSchema,
+  knowledgeMarkSeenInputSchema,
+  knowledgeSearchInputSchema,
   listWorkflowRunsInputSchema,
   renameSessionInputSchema,
   restoreSessionInputSchema,
@@ -271,6 +274,8 @@ async function dispatchReadOperation(
       return shapeResult(await run(control.agentDetail(parseParams(agentDetailInputSchema, params))), options)
     case 'agent.events.list':
       return shapeResult(await run(control.listAgentEvents(parseParams(listAgentEventsInputSchema, params))), options)
+    case 'knowledge.search':
+      return shapeResult(await run(control.searchKnowledge(parseParams(knowledgeSearchInputSchema, params))), options)
     case 'scratchpad.list': {
       const input = parseParams(listScratchpadParamsSchema, params)
       return shapeResult(await run(control.listScratchpad({ projectId: input.projectId })), options)
@@ -342,6 +347,12 @@ async function dispatchWriteOperation(
       break
     case 'terminal.kill':
       result = await run(control.terminalKill(parseParams(terminalTargetSchema, params)))
+      break
+    case 'knowledge.add':
+      result = await run(control.addKnowledge(parseParams(knowledgeAddInputSchema, params)))
+      break
+    case 'knowledge.markSeen':
+      result = await run(control.markKnowledgeSeen(parseParams(knowledgeMarkSeenInputSchema, params)))
       break
     case 'scratchpad.add':
       result = await run(control.addScratchpad(parseParams(addScratchpadBlockInputSchema, params)))

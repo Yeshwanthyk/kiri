@@ -8,6 +8,10 @@ import type {
   AgentPromptInput,
   CreateWorkflowRunInput,
   KiriSettings,
+  KnowledgeAddInput,
+  KnowledgeEntry,
+  KnowledgeMarkSeenInput,
+  KnowledgeSearchInput,
   ListAgentEventsInput,
   ListWorkflowRunsInput,
   ScratchpadBlock,
@@ -35,6 +39,8 @@ import {
   getWorkspaceSnapshot,
   hideProjectSummary,
   listAgentEvents,
+  addKnowledgeEntry,
+  markKnowledgeEntrySeen,
   listScratchpadBlocks,
   listProjectSummaries,
   listSessionSummaries,
@@ -43,6 +49,7 @@ import {
   startSessionSummary,
   unhideProjectSummary,
   queueAgentTerminalInput,
+  searchKnowledgeEntries,
   getAgentLaunchConfig,
 } from './db'
 import { promptAgent, steerAgent } from './runtime'
@@ -200,6 +207,9 @@ export type KiriControlApi = {
   readonly listScratchpad: (input?: {
     readonly projectId?: string
   }) => ControlEffect<readonly ScratchpadBlock[]>
+  readonly searchKnowledge: (input: KnowledgeSearchInput) => ControlEffect<readonly KnowledgeEntry[]>
+  readonly addKnowledge: (input: KnowledgeAddInput) => ControlEffect<KnowledgeEntry>
+  readonly markKnowledgeSeen: (input: KnowledgeMarkSeenInput) => ControlEffect<KnowledgeEntry>
   readonly addScratchpad: (input: AddScratchpadBlockInput) => ControlEffect<ScratchpadBlock>
   readonly deleteScratchpad: (id: string) => ControlEffect<ScratchpadBlock>
   readonly triggerScratchpad: (input: TriggerScratchpadInput) => ControlEffect<TriggerScratchpadResult>
@@ -259,6 +269,9 @@ export type KiriControlDependencies = {
   readonly listScratchpadBlocks: (input?: {
     readonly projectId?: string
   }) => readonly ScratchpadBlock[]
+  readonly searchKnowledgeEntries: (input: KnowledgeSearchInput & { readonly projectId: string }) => readonly KnowledgeEntry[]
+  readonly addKnowledgeEntry: (input: KnowledgeAddInput & { readonly projectId: string }) => KnowledgeEntry
+  readonly markKnowledgeEntrySeen: (input: KnowledgeMarkSeenInput) => KnowledgeEntry
   readonly addScratchpadBlockSummary: (input: AddScratchpadBlockInput) => ScratchpadBlock
   readonly deleteScratchpadBlockSummary: (id: string) => ScratchpadBlock
   readonly triggerScratchpadSession: (input: TriggerScratchpadInput) => Promise<TriggerScratchpadResult>
@@ -297,6 +310,9 @@ const liveKiriControlDependencies: KiriControlDependencies = {
   terminalControlRequest,
   callerAgentId: () => process.env.KIRI_AGENT_ID?.trim() || null,
   listScratchpadBlocks,
+  searchKnowledgeEntries,
+  addKnowledgeEntry,
+  markKnowledgeEntrySeen,
   addScratchpadBlockSummary,
   deleteScratchpadBlockSummary,
   triggerScratchpadSession,
@@ -628,6 +644,32 @@ export function makeKiriControl(
     },
   )
 
+  const searchKnowledge = Effect.fn('KiriControl.searchKnowledge')(
+    function* (input: KnowledgeSearchInput) {
+      return yield* fromSync(() =>
+        dependencies.searchKnowledgeEntries({
+          ...input,
+          projectId: resolveProjectId(input.projectId, dependencies),
+        }))
+    },
+  )
+
+  const addKnowledge = Effect.fn('KiriControl.addKnowledge')(
+    function* (input: KnowledgeAddInput) {
+      return yield* fromSync(() =>
+        dependencies.addKnowledgeEntry({
+          ...input,
+          projectId: resolveProjectId(input.projectId, dependencies),
+        }))
+    },
+  )
+
+  const markKnowledgeSeen = Effect.fn('KiriControl.markKnowledgeSeen')(
+    function* (input: KnowledgeMarkSeenInput) {
+      return yield* fromSync(() => dependencies.markKnowledgeEntrySeen(input))
+    },
+  )
+
   const addScratchpad = Effect.fn('KiriControl.addScratchpad')(function* (input: AddScratchpadBlockInput) {
     return yield* fromSync(() => dependencies.addScratchpadBlockSummary(input))
   })
@@ -730,6 +772,9 @@ export function makeKiriControl(
     terminalKill: terminalKillEffect,
     workflowAwait: workflowAwaitEffect,
     listScratchpad,
+    searchKnowledge,
+    addKnowledge,
+    markKnowledgeSeen,
     addScratchpad,
     deleteScratchpad,
     triggerScratchpad,
@@ -787,6 +832,17 @@ function contextFromSnapshot(snapshot: WorkspaceSnapshot): ControlContext {
     sessions,
     scratchpadCount: snapshot.scratchpadBlocks.length,
   }
+}
+
+function resolveProjectId(projectId: string | undefined, dependencies: KiriControlDependencies) {
+  const explicit = projectId?.trim()
+  if (explicit) return explicit
+  const snapshot = dependencies.getWorkspaceSnapshot()
+  const selectedProject =
+    snapshot.projects.find((project) => project.id === snapshot.selected.projectId) ??
+    snapshot.projects[0]
+  if (!selectedProject) throw new Error('Project id is required')
+  return selectedProject.id
 }
 
 function sessionSummaryFromAgent(

@@ -80,6 +80,9 @@ function dependencies(handle: KiritermDaemonHandle): KiriControlDependencies {
       return payload
     },
     listScratchpadBlocks: () => notUsed('listScratchpadBlocks'),
+    searchKnowledgeEntries: () => notUsed('searchKnowledgeEntries'),
+    addKnowledgeEntry: () => notUsed('addKnowledgeEntry'),
+    markKnowledgeEntrySeen: () => notUsed('markKnowledgeEntrySeen'),
     addScratchpadBlockSummary: () => notUsed('addScratchpadBlockSummary'),
     deleteScratchpadBlockSummary: () => notUsed('deleteScratchpadBlockSummary'),
     triggerScratchpadSession: () => notUsed('triggerScratchpadSession'),

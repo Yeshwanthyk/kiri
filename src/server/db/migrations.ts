@@ -123,6 +123,25 @@ export function migrate(database: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS scratchpad_blocks_created_at
       ON scratchpad_blocks(created_at);
 
+    CREATE TABLE IF NOT EXISTS knowledge_entries (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      problem TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      tags_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_seen_at TEXT,
+      seen_count INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS knowledge_entries_project_updated
+      ON knowledge_entries(project_id, updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS knowledge_entries_project_seen
+      ON knowledge_entries(project_id, last_seen_at DESC);
+
     CREATE TABLE IF NOT EXISTS workflow_runs (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -194,6 +213,7 @@ export function migrate(database: DatabaseSync) {
   addAgentArchivedAtColumn(database)
   addAgentInterfaceModeColumn(database)
   addAgentEventsTable(database)
+  addKnowledgeIndexTables(database)
   addReadModelEntriesTable(database)
   widenReadModelKindCheck(database)
   normalizeTerminalOnlyInterfaceMode(database)
@@ -312,6 +332,29 @@ function addAgentEventsTable(database: DatabaseSync) {
 
     CREATE INDEX IF NOT EXISTS agent_events_agent_sequence
       ON agent_events(agent_id, sequence);
+  `)
+}
+
+function addKnowledgeIndexTables(database: DatabaseSync) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS knowledge_entries (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      problem TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      tags_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_seen_at TEXT,
+      seen_count INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS knowledge_entries_project_updated
+      ON knowledge_entries(project_id, updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS knowledge_entries_project_seen
+      ON knowledge_entries(project_id, last_seen_at DESC);
   `)
 }
 
