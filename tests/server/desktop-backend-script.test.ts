@@ -46,8 +46,14 @@ describe('desktop backend script', () => {
 
     const shell = await fetch(new URL('/index.html', ready.url))
     expect(shell.status).toBe(200)
+    expect(shell.headers.get('cache-control')).toBe('no-store')
     expect(await shell.text()).toContain('desktop shell')
     expect(existsSync(fixture.importMarker)).toBe(false)
+
+    const asset = await fetch(new URL('/assets/app-test.js', ready.url))
+    expect(asset.status).toBe(200)
+    expect(asset.headers.get('cache-control')).toBe('no-store')
+    expect(await asset.text()).toContain('desktop asset')
 
     const controlInfo = JSON.parse(readFileSync(join(fixture.stateDir, 'backend-control.json'), 'utf8')) as {
       readonly token: string
@@ -76,17 +82,64 @@ describe('desktop backend script', () => {
     child.kill()
     rmSync(fixture.root, { recursive: true, force: true })
   }, 15_000)
+
+  it('reconciles missing packaged runtime settings before readiness', async () => {
+    const fixture = createDesktopBackendFixture({
+      userSettings: {
+        runtimes: {
+          pi: { models: ['pi-model'], defaultModel: 'pi-model' },
+          codex: { models: ['codex-model'], defaultModel: 'codex-model' },
+          claude: { models: ['claude-model'], defaultModel: 'claude-model' },
+        },
+      },
+    })
+    const child = spawn(process.execPath, ['scripts/kiri-desktop-backend.mjs'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        FORCE_COLOR: '0',
+        KIRI_ROOT_DIR: fixture.root,
+        KIRI_STATE_DIR: fixture.stateDir,
+        KIRI_SETTINGS_PATH: fixture.settingsPath,
+        KIRI_BACKEND_HOST: '127.0.0.1',
+        KIRI_BACKEND_PORT: '0',
+        KIRI_BACKEND_BROWSER_HOST: '127.0.0.1',
+        KIRI_IMPORT_MARKER: fixture.importMarker,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    children.push(child)
+
+    await waitForReady(child)
+
+    const settings = JSON.parse(readFileSync(fixture.settingsPath, 'utf8')) as {
+      readonly runtimes?: Record<string, unknown>
+    }
+    expect(settings.runtimes?.opencode).toEqual({
+      models: ['opencode-model'],
+      defaultModel: 'opencode-model',
+    })
+
+    child.kill()
+    rmSync(fixture.root, { recursive: true, force: true })
+  }, 15_000)
 })
 
-function createDesktopBackendFixture() {
+function createDesktopBackendFixture(options: {
+  readonly userSettings?: unknown
+  readonly packagedSettings?: unknown
+} = {}) {
   const root = mkdtempSync(join(tmpdir(), 'kiri-desktop-backend-'))
   const stateDir = join(root, 'state')
   const importMarker = join(root, 'server-imported')
-  const settingsPath = join(root, 'settings.json')
+  const settingsPath = join(stateDir, 'settings.json')
   mkdirSync(join(root, 'dist', 'client'), { recursive: true })
+  mkdirSync(join(root, 'dist', 'client', 'assets'), { recursive: true })
   mkdirSync(join(root, 'dist', 'server'), { recursive: true })
   mkdirSync(join(root, 'dist', 'cli'), { recursive: true })
+  mkdirSync(stateDir, { recursive: true })
   writeFileSync(join(root, 'dist', 'client', 'index.html'), '<main>desktop shell</main>')
+  writeFileSync(join(root, 'dist', 'client', 'assets', 'app-test.js'), 'console.log("desktop asset")')
   writeFileSync(join(root, 'dist', 'server', 'server.js'), `
     import { writeFileSync } from 'node:fs'
     writeFileSync(process.env.KIRI_IMPORT_MARKER, 'imported')
@@ -103,13 +156,16 @@ function createDesktopBackendFixture() {
       }
     }
   `)
-  writeFileSync(settingsPath, JSON.stringify({
+  const packagedSettings = options.packagedSettings ?? {
     runtimes: {
       pi: { models: ['pi-model'], defaultModel: 'pi-model' },
       codex: { models: ['codex-model'], defaultModel: 'codex-model' },
       claude: { models: ['claude-model'], defaultModel: 'claude-model' },
+      opencode: { models: ['opencode-model'], defaultModel: 'opencode-model' },
     },
-  }))
+  }
+  writeFileSync(join(root, 'settings.json'), JSON.stringify(packagedSettings))
+  writeFileSync(settingsPath, JSON.stringify(options.userSettings ?? packagedSettings))
   return { root, stateDir, importMarker, settingsPath }
 }
 

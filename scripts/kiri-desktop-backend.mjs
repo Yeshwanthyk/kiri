@@ -17,6 +17,7 @@ const rootDir = resolve(process.env.KIRI_ROOT_DIR ?? process.cwd())
 const kiriHome = resolve(process.env.KIRI_HOME ?? join(homedir(), '.kiri'))
 const stateDir = resolve(process.env.KIRI_STATE_DIR ?? join(kiriHome, 'userdata'))
 const settingsPath = resolve(process.env.KIRI_SETTINGS_PATH ?? join(rootDir, 'settings.json'))
+const packagedSettingsPath = resolve(join(rootDir, 'settings.json'))
 const dbPath = resolve(process.env.KIRI_DB_PATH ?? join(stateDir, 'kiri.sqlite'))
 const host = process.env.KIRI_BACKEND_HOST ?? '127.0.0.1'
 const port = Number(process.env.KIRI_BACKEND_PORT ?? 0)
@@ -52,11 +53,13 @@ if (!existsSync(staticDir)) throw new Error(`Built client directory not found: $
 process.env.KIRI_WORKFLOW_SPAWN_TERMINALS = '1'
 process.env.KIRI_TERMINAL_HOST ??= host
 
+const serveDesktopStatic = serveStatic({ dir: staticDir })
+
 const server = serve({
   hostname: host,
   port: Number.isInteger(port) && port >= 0 ? port : 0,
   silent: true,
-  middleware: [serveStatic({ dir: staticDir })],
+  middleware: [desktopStaticMiddleware],
   fetch: async (request) => {
     const url = new URL(request.url)
     if (url.pathname === environmentPath) {
@@ -105,6 +108,21 @@ const server = serve({
   },
 })
 
+async function desktopStaticMiddleware(request, next) {
+  return noStoreStaticResponse(await serveDesktopStatic(request, next))
+}
+
+function noStoreStaticResponse(response) {
+  if (!response) return response
+  const headers = new Headers(response.headers)
+  headers.set('cache-control', 'no-store')
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
 await server.ready()
 const browserUrl = new URL(server.url)
 browserUrl.hostname = browserHost
@@ -139,17 +157,44 @@ async function loadAppFetch() {
 
 async function checkReadiness() {
   if (!existsSync(settingsPath)) throw new Error(`settings.json not found: ${settingsPath}`)
-  validateSettings(JSON.parse(readFileSync(settingsPath, 'utf8')))
+  validateSettings(readSettingsWithPackagedDefaults())
   mkdirSync(dirname(dbPath), { recursive: true })
   const db = new DatabaseSync(dbPath)
   db.exec('PRAGMA journal_mode = WAL')
   db.close()
 }
 
+function readSettingsWithPackagedDefaults() {
+  const settings = JSON.parse(readFileSync(settingsPath, 'utf8'))
+  if (settingsPath === packagedSettingsPath || !existsSync(packagedSettingsPath)) return settings
+
+  const packagedSettings = JSON.parse(readFileSync(packagedSettingsPath, 'utf8'))
+  const reconciled = reconcileMissingRuntimeDefaults(settings, packagedSettings)
+  if (reconciled !== settings) {
+    writeFileSync(settingsPath, `${JSON.stringify(reconciled, null, 2)}\n`)
+  }
+  return reconciled
+}
+
+function reconcileMissingRuntimeDefaults(settings, packagedSettings) {
+  const runtimes = settings?.runtimes
+  const packagedRuntimes = packagedSettings?.runtimes
+  if (!runtimes || typeof runtimes !== 'object') return settings
+  if (!packagedRuntimes || typeof packagedRuntimes !== 'object') return settings
+
+  let nextRuntimes = runtimes
+  for (const [runtime, config] of Object.entries(packagedRuntimes)) {
+    if (runtime in runtimes) continue
+    if (nextRuntimes === runtimes) nextRuntimes = { ...runtimes }
+    nextRuntimes[runtime] = config
+  }
+  return nextRuntimes === runtimes ? settings : { ...settings, runtimes: nextRuntimes }
+}
+
 function validateSettings(settings) {
   const runtimes = settings?.runtimes
   if (!runtimes || typeof runtimes !== 'object') throw new Error('settings.json missing runtimes')
-  for (const runtime of ['pi', 'codex', 'claude']) {
+  for (const runtime of ['pi', 'codex', 'claude', 'opencode']) {
     const config = runtimes[runtime]
     if (!config || !Array.isArray(config.models) || config.models.length === 0) {
       throw new Error(`settings.json ${runtime}.models must be a non-empty array`)
