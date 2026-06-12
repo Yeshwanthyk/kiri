@@ -535,6 +535,15 @@ export const startSessionInputSchema = z.object({
 })
 export type StartSessionInput = z.input<typeof startSessionInputSchema>
 
+export const spawnSessionInputSchema = startSessionInputSchema.extend({
+  text: z.string().trim().min(1).max(40_000),
+  images: z.array(sendMessageImageSchema).max(4).default([]),
+  mode: z.enum(['prompt', 'steer']).default('prompt'),
+  terminalSubmit: z.boolean().default(true),
+  terminalSpawn: z.boolean().default(true),
+})
+export type SpawnSessionInput = z.input<typeof spawnSessionInputSchema>
+
 export const deleteSessionInputSchema = z.object({
   agentId: z.string().trim().min(1),
 })
@@ -596,6 +605,7 @@ export const kiriWriteOperations = [
   'project.unhide',
   'project.delete',
   'session.create',
+  'session.spawn',
   'session.rename',
   'session.archive',
   'session.restore',

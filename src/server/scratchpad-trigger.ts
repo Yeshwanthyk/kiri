@@ -14,6 +14,10 @@ import {
 } from './db'
 import { deleteSessionSummaryWithRuntimeCleanup } from './runtime-cleanup'
 import { promptAgent } from './runtime'
+import {
+  defaultRuntimeTurnAcceptanceWindowMs,
+  detachAfterAcceptance,
+} from './runtime-acceptance'
 import { defaultRuntime, getSettings, normalizeConfiguredInterfaceMode } from './settings'
 import { pasteAgentRuntimeTerminal } from './terminal-server'
 
@@ -192,14 +196,20 @@ async function triggerScratchpadSessionWithDeps(
       })
     }
   } else {
-    void dependencies.promptAgent({ agentId, text: block.body, images: [] }).catch((error) => {
+    try {
+      await detachAfterAcceptance(
+        dependencies.promptAgent({ agentId, text: block.body, images: [] }),
+        defaultRuntimeTurnAcceptanceWindowMs,
+      )
+    } catch (error) {
       try {
         dependencies.deleteSessionSummary({ agentId })
       } catch {
         // The prompt failure is the primary signal; cleanup is best effort.
       }
       dependencies.reportPromptFailure(error)
-    })
+      throw error
+    }
   }
 
   const session = dependencies.listSessionSummaries({ includeArchived: true })

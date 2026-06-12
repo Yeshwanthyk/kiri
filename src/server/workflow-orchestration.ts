@@ -24,6 +24,11 @@ import {
   setWorkflowItemTracking,
   startSessionSummary,
 } from './db'
+import { promptAgent } from './runtime'
+import {
+  defaultRuntimeTurnAcceptanceWindowMs,
+  detachAfterAcceptance,
+} from './runtime-acceptance'
 import { defaultRuntime, getSettings, normalizeConfiguredInterfaceMode } from './settings'
 import { pasteAgentRuntimeTerminal } from './terminal-server'
 
@@ -39,6 +44,29 @@ type NormalizedWorkflowItem = {
   readonly terminalPaste: WorkflowTerminalPaste | null
   readonly attachScratchpad: boolean
   readonly tracked: boolean
+}
+
+type WorkflowRunForDispatch = ReturnType<typeof getWorkflowRun>
+
+export type WorkflowDispatchDependencies = {
+  readonly getWorkflowRun: (id: string) => WorkflowRunForDispatch
+  readonly completeScratchpadWorkflowItem: typeof completeScratchpadWorkflowItem
+  readonly startSessionSummary: typeof startSessionSummary
+  readonly queueAgentTerminalInput: typeof queueAgentTerminalInput
+  readonly pasteAgentRuntimeTerminal: typeof pasteAgentRuntimeTerminal
+  readonly promptAgent: typeof promptAgent
+  readonly recordWorkflowItemAttempt: typeof recordWorkflowItemAttempt
+  readonly promptAcceptanceWindowMs?: number
+}
+
+const liveWorkflowDispatchDependencies: WorkflowDispatchDependencies = {
+  getWorkflowRun,
+  completeScratchpadWorkflowItem,
+  startSessionSummary,
+  queueAgentTerminalInput,
+  pasteAgentRuntimeTerminal,
+  promptAgent,
+  recordWorkflowItemAttempt,
 }
 
 export function validateWorkflow(input: CreateWorkflowRunInput) {
@@ -86,15 +114,18 @@ export function createWorkflowRun(input: CreateWorkflowRunInput) {
   })
 }
 
-export async function dispatchWorkflowRun(input: { readonly id: string }) {
-  const run = getWorkflowRun(input.id)
+export async function dispatchWorkflowRun(
+  input: { readonly id: string },
+  dependencies: WorkflowDispatchDependencies = liveWorkflowDispatchDependencies,
+) {
+  const run = dependencies.getWorkflowRun(input.id)
   assertRunMutable(run)
   const results = await Promise.all(run.items.map(async (item) => {
     if (!item.tracked) {
       return { itemId: item.id, status: 'skipped', reason: 'untracked' }
     }
     if (item.action === 'scratchpad') {
-      const completed = completeScratchpadWorkflowItem(item.id)
+      const completed = dependencies.completeScratchpadWorkflowItem(item.id)
       return {
         itemId: item.id,
         status: 'scratchpad_only',
@@ -104,9 +135,9 @@ export async function dispatchWorkflowRun(input: { readonly id: string }) {
     if (item.activeAgentId) {
       return { itemId: item.id, status: 'skipped', reason: 'already_launched', agentId: item.activeAgentId }
     }
-    return launchWorkflowItem(item)
+    return launchWorkflowItem(item, dependencies)
   }))
-  const refreshed = getWorkflowRun(run.id)
+  const refreshed = dependencies.getWorkflowRun(run.id)
   return {
     id: refreshed.id,
     status: refreshed.status,
@@ -138,7 +169,7 @@ export async function retriggerWorkflowItem(input: {
     model: input.model ?? item.model,
     thinkingLevel: input.thinkingLevel ?? item.thinkingLevel,
     terminalPaste: input.terminalPaste ?? item.terminalPaste,
-  })
+  }, liveWorkflowDispatchDependencies)
 }
 
 export function trackWorkflowItem(input: { readonly itemId: string }) {
@@ -170,12 +201,12 @@ async function launchWorkflowItem(item: {
   readonly model: string | null
   readonly thinkingLevel: string | null
   readonly terminalPaste?: WorkflowTerminalPaste | null
-}) {
-  const run = getWorkflowRun(item.runId)
+}, dependencies: WorkflowDispatchDependencies) {
+  const run = dependencies.getWorkflowRun(item.runId)
   try {
     const settings = getSettings()
     const runtime = item.runtime ?? defaultRuntime(settings)
-    const session = startSessionSummary({
+    const session = dependencies.startSessionSummary({
       projectId: run.projectId,
       runtime,
       interfaceMode: normalizeConfiguredInterfaceMode(runtime, item.interfaceMode ?? undefined, settings),
@@ -183,17 +214,12 @@ async function launchWorkflowItem(item: {
       title: item.title,
       thinkingLevel: parseThinkingLevel(item.thinkingLevel),
     })
-    const terminalPaste = session.interfaceMode === 'terminal'
-      ? queueTerminalPaste({
-        agentId: session.id,
-        text: item.body,
-        submit: item.terminalPaste?.submit ?? true,
-      })
-      : null
-    const terminalSpawn = terminalPaste && process.env.KIRI_WORKFLOW_SPAWN_TERMINALS === '1'
-      ? await pasteAgentRuntimeTerminal({ agentId: session.id })
-      : null
-    const attempt = recordWorkflowItemAttempt({
+    const delivery = await deliverWorkflowPrompt({
+      item,
+      session,
+      dependencies,
+    })
+    const attempt = dependencies.recordWorkflowItemAttempt({
       itemId: item.id,
       agentId: session.id,
       status: 'launched',
@@ -203,11 +229,10 @@ async function launchWorkflowItem(item: {
       status: 'launched',
       agentId: session.id,
       attemptId: attempt?.id ?? null,
-      terminalPaste,
-      terminalSpawn,
+      ...delivery,
     }
   } catch (error) {
-    const attempt = recordWorkflowItemAttempt({
+    const attempt = dependencies.recordWorkflowItemAttempt({
       itemId: item.id,
       status: 'failed',
       error: error instanceof Error ? error.message : String(error),
@@ -221,12 +246,64 @@ async function launchWorkflowItem(item: {
   }
 }
 
+async function deliverWorkflowPrompt(input: {
+  readonly item: {
+    readonly body: string
+    readonly terminalPaste?: WorkflowTerminalPaste | null
+  }
+  readonly session: {
+    readonly id: string
+    readonly interfaceMode: SessionInterfaceMode
+  }
+  readonly dependencies: WorkflowDispatchDependencies
+}) {
+  if (input.session.interfaceMode === 'terminal') {
+    const terminalPaste = queueTerminalPaste({
+      agentId: input.session.id,
+      text: input.item.body,
+      submit: input.item.terminalPaste?.submit ?? true,
+      queueAgentTerminalInput: input.dependencies.queueAgentTerminalInput,
+    })
+    const terminalSpawn = process.env.KIRI_WORKFLOW_SPAWN_TERMINALS === '1'
+      ? await input.dependencies.pasteAgentRuntimeTerminal({ agentId: input.session.id })
+      : null
+    return {
+      terminalPaste,
+      terminalSpawn,
+      prompt: null,
+    }
+  }
+
+  await detachAfterAcceptance(
+    input.dependencies.promptAgent({
+      agentId: input.session.id,
+      text: input.item.body,
+      images: [],
+    }),
+    input.dependencies.promptAcceptanceWindowMs ?? defaultRuntimeTurnAcceptanceWindowMs,
+  )
+  return {
+    terminalPaste: null,
+    terminalSpawn: null,
+    prompt: {
+      accepted: true as const,
+      agentId: input.session.id,
+      mode: 'prompt' as const,
+    },
+  }
+}
+
 function queueTerminalPaste(input: {
   readonly agentId: string
   readonly text: string
   readonly submit: boolean
+  readonly queueAgentTerminalInput: typeof queueAgentTerminalInput
 }) {
-  queueAgentTerminalInput(input)
+  input.queueAgentTerminalInput({
+    agentId: input.agentId,
+    text: input.text,
+    submit: input.submit,
+  })
   return {
     queued: true,
     submitted: input.submit,

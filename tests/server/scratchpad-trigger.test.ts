@@ -6,6 +6,7 @@ const harnessOutputSchema = z.object({
   ok: z.literal(true),
   terminalPromptCalls: z.literal(0),
   failedPromptCalls: z.literal(1),
+  failedRejected: z.literal(true),
   terminalTriggered: z.literal(true),
   failedSessionArchived: z.literal(true),
   failedRuntimeStateCleaned: z.literal(true),

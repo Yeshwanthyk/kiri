@@ -9,6 +9,7 @@ const outputSchema = z.object({
   ok: z.literal(true),
   terminalPromptCalls: z.number(),
   failedPromptCalls: z.number(),
+  failedRejected: z.boolean(),
   terminalTriggered: z.boolean(),
   failedSessionArchived: z.boolean(),
   failedRuntimeStateCleaned: z.boolean(),
@@ -71,31 +72,39 @@ try {
   __unsafeClearCodexRuntimeStateForTest()
   const originalError = console.error
   console.error = () => undefined
-  const failed = await triggerScratchpadSession({
-    id: failedBlock.id,
-    projectId: 'scratch',
-    runtime: 'codex',
-    interfaceMode: 'gui',
-    model: 'gpt-5.5',
-  }, ({ agentId }) => {
-    failedPromptCalls += 1
-    __unsafeRetainCodexRuntimeStateForTest({
-      agentId,
-      threadId: `thread-${agentId}`,
-      turnId: `turn-${agentId}`,
+  let failedAgentId: string | null = null
+  let failedRejected = false
+  try {
+    await triggerScratchpadSession({
+      id: failedBlock.id,
+      projectId: 'scratch',
+      runtime: 'codex',
+      interfaceMode: 'gui',
+      model: 'gpt-5.5',
+    }, ({ agentId }) => {
+      failedPromptCalls += 1
+      failedAgentId = agentId
+      __unsafeRetainCodexRuntimeStateForTest({
+        agentId,
+        threadId: `thread-${agentId}`,
+        turnId: `turn-${agentId}`,
+      })
+      return Promise.reject(new Error('prompt failed'))
     })
-    return Promise.reject(new Error('prompt failed'))
-  })
+  } catch (error) {
+    failedRejected = error instanceof Error && error.message === 'prompt failed'
+  }
   await new Promise((resolve) => setImmediate(resolve))
   console.error = originalError
 
   const failedSession = listSessionSummaries({ includeArchived: true })
-    .find((session) => session.id === failed.agentId)
+    .find((session) => session.id === failedAgentId)
   const failedRuntimeStats = codexRuntimeRetainedStateStats()
   const output = outputSchema.parse({
     ok: true,
     terminalPromptCalls,
     failedPromptCalls,
+    failedRejected,
     terminalTriggered: getScratchpadBlock(terminalBlock.id)?.triggeredAgentId !== null,
     failedSessionArchived: failedSession !== undefined && failedSession.archivedAt !== null,
     failedRuntimeStateCleaned:

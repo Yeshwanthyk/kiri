@@ -57,6 +57,24 @@ const scratchpadBlockSchema = z.object({
   triggeredAt: z.string().nullable(),
   triggeredAgentId: z.string().nullable(),
 })
+const spawnResultSchema = z.object({
+  session: sessionSummarySchema,
+  delivery: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('agentPrompt'),
+      accepted: z.literal(true),
+      agentId: z.string(),
+      mode: z.string(),
+    }),
+    z.object({
+      kind: z.literal('terminal'),
+      accepted: z.literal(true),
+      agentId: z.string(),
+      queued: z.literal(true),
+      spawned: z.boolean(),
+    }),
+  ]),
+})
 
 describe('kiri MCP server', () => {
   afterEach(async () => {
@@ -75,11 +93,36 @@ describe('kiri MCP server', () => {
     const operations = z.object({
       read: z.array(z.string()),
       write: z.array(z.string()),
+      recipes: z.object({
+        decisionTree: z.object({
+          intents: z.array(z.object({
+            intent: z.string(),
+            operation: z.string().optional(),
+            operations: z.array(z.string()).optional(),
+          })),
+          never: z.array(z.string()),
+        }),
+        startTask: z.object({
+          operation: z.literal('session.spawn'),
+        }),
+        workflow: z.object({
+          operations: z.array(z.string()),
+        }),
+      }),
     }).parse(await callResult(client, 'kiri_get', {
       operation: 'operations.list',
     }))
     expect(operations.read).toContain('model.list')
     expect(operations.write).toContain('session.create')
+    expect(operations.write).toContain('session.spawn')
+    expect(operations.recipes.decisionTree.intents).toContainEqual(expect.objectContaining({
+      intent: 'start one new worker with a prompt',
+      operation: 'session.spawn',
+    }))
+    expect(operations.recipes.decisionTree.never).toContain(
+      'Do not use workflow for a single new worker; use session.spawn.',
+    )
+    expect(operations.recipes.workflow.operations).toContain('workflow.dispatch')
 
     const primary = projectSummarySchema.parse(await callResult(client, 'kiri_do', {
       operation: 'project.add',
@@ -119,6 +162,31 @@ describe('kiri MCP server', () => {
       },
     }))
     expect(session.title).toBe('MCP Session')
+
+    const spawned = spawnResultSchema.parse(await callResult(client, 'kiri_do', {
+      operation: 'session.spawn',
+      params: {
+        projectId: primary.id,
+        runtime: 'pi',
+        model: 'openai-codex/gpt-5.5',
+        title: 'MCP Spawn',
+        text: 'queued from MCP',
+        terminalSpawn: false,
+      },
+    }))
+    expect(spawned).toMatchObject({
+      session: {
+        projectId: primary.id,
+        title: 'MCP Spawn',
+        runtime: 'pi',
+      },
+      delivery: {
+        kind: 'terminal',
+        accepted: true,
+        queued: true,
+        spawned: false,
+      },
+    })
 
     const renamed = sessionSummarySchema.parse(await callResult(client, 'kiri_do', {
       operation: 'session.rename',

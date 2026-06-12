@@ -14,6 +14,7 @@ import type {
   RestoreSessionInput,
   RuntimeKind,
   SessionInterfaceMode,
+  SpawnSessionInput,
   StartSessionInput,
   TerminalInput,
   TerminalKeysInput,
@@ -45,6 +46,10 @@ import {
   getAgentLaunchConfig,
 } from './db'
 import { promptAgent, steerAgent } from './runtime'
+import {
+  defaultRuntimeTurnAcceptanceWindowMs,
+  detachAfterAcceptance,
+} from './runtime-acceptance'
 import { triggerScratchpadSession } from './scratchpad-trigger'
 import { getSettings } from './settings'
 import { pasteAgentRuntimeTerminal, terminalControlRequest } from './terminal-server'
@@ -149,6 +154,23 @@ export type KiriControlApi = {
   readonly agentDetail: (input: { readonly agentId: string; readonly limit?: number; readonly offset?: number }) => ControlEffect<AgentDetail>
   readonly listAgentEvents: (input: ListAgentEventsInput) => ControlEffect<readonly AgentEvent[]>
   readonly startSession: (input: StartSessionInput) => ControlEffect<SessionSummary>
+  readonly spawnSession: (input: SpawnSessionInput) => ControlEffect<{
+    readonly session: SessionSummary
+    readonly delivery:
+      | {
+        readonly kind: 'agentPrompt'
+        readonly accepted: true
+        readonly agentId: string
+        readonly mode: 'prompt' | 'steer'
+      }
+      | {
+        readonly kind: 'terminal'
+        readonly accepted: true
+        readonly agentId: string
+        readonly queued: true
+        readonly spawned: boolean
+      }
+  }>
   readonly renameSession: (input: {
     readonly agentId: string
     readonly title: string
@@ -381,7 +403,7 @@ export function makeKiriControl(
       yield* Effect.tryPromise({
         try: () => detachAfterAcceptance(
           input.mode === 'steer' ? dependencies.steerAgent(input) : dependencies.promptAgent(input),
-          dependencies.agentPromptAcceptanceWindowMs ?? agentPromptAcceptanceWindowMs,
+          dependencies.agentPromptAcceptanceWindowMs ?? defaultRuntimeTurnAcceptanceWindowMs,
         ),
         catch: normalizeError,
       })
@@ -389,6 +411,41 @@ export function makeKiriControl(
         accepted: true as const,
         agentId: input.agentId,
         mode: input.mode,
+      }
+    },
+  )
+
+  const spawnSessionEffect = Effect.fn('KiriControl.spawnSession')(
+    function* (input: SpawnSessionInput) {
+      const session = yield* startSessionEffect(input)
+      if (session.interfaceMode === 'terminal') {
+        const delivery = yield* terminalInputEffect({
+          agentId: session.id,
+          text: input.text,
+          submit: input.terminalSubmit ?? true,
+          spawn: input.terminalSpawn ?? true,
+        })
+        return {
+          session,
+          delivery: {
+            kind: 'terminal' as const,
+            ...delivery,
+          },
+        }
+      }
+
+      const delivery = yield* agentPromptEffect({
+        agentId: session.id,
+        text: input.text,
+        images: input.images ?? [],
+        mode: input.mode ?? 'prompt',
+      })
+      return {
+        session,
+        delivery: {
+          kind: 'agentPrompt' as const,
+          ...delivery,
+        },
       }
     },
   )
@@ -659,6 +716,7 @@ export function makeKiriControl(
     agentDetail: agentDetailEffect,
     listAgentEvents: listAgentEventsEffect,
     startSession: startSessionEffect,
+    spawnSession: spawnSessionEffect,
     renameSession: renameSessionEffect,
     deleteSession: deleteSessionEffect,
     restoreSession: restoreSessionEffect,
@@ -770,29 +828,6 @@ function normalizeError(error: unknown) {
   return new KiriControlError({
     message: error instanceof Error ? error.message : String(error),
     cause: error,
-  })
-}
-
-const agentPromptAcceptanceWindowMs = 500
-
-// Rejections inside the window (unknown agent, unsupported runtime) surface to
-// the caller; failures after detaching land in the agent timeline instead.
-function detachAfterAcceptance(turn: Promise<unknown>, windowMs: number) {
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      turn.catch(() => {})
-      resolve()
-    }, windowMs)
-    turn.then(
-      () => {
-        clearTimeout(timer)
-        resolve()
-      },
-      (error: unknown) => {
-        clearTimeout(timer)
-        reject(error)
-      },
-    )
   })
 }
 

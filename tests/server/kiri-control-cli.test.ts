@@ -62,6 +62,24 @@ const scratchpadBlockSchema = z.object({
   triggeredAt: z.string().nullable(),
   triggeredAgentId: z.string().nullable(),
 })
+const spawnResultSchema = z.object({
+  session: sessionSummarySchema,
+  delivery: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('agentPrompt'),
+      accepted: z.literal(true),
+      agentId: z.string(),
+      mode: z.string(),
+    }),
+    z.object({
+      kind: z.literal('terminal'),
+      accepted: z.literal(true),
+      agentId: z.string(),
+      queued: z.literal(true),
+      spawned: z.boolean(),
+    }),
+  ]),
+})
 const workflowItemSchema = z.object({
   id: z.string(),
   runId: z.string(),
@@ -460,6 +478,30 @@ describe('kirictl call', () => {
       title: 'CLI Session',
       runtime: 'pi',
       archivedAt: null,
+    })
+
+    expect(spawnResultSchema.parse(callResult(env, {
+      operation: 'session.spawn',
+      params: {
+        projectId: project.id,
+        runtime: 'pi',
+        model: 'openai-codex/gpt-5.5',
+        title: 'CLI Spawn',
+        text: 'spawn from cli',
+        terminalSpawn: false,
+      },
+    }))).toMatchObject({
+      session: {
+        projectId: project.id,
+        title: 'CLI Spawn',
+        runtime: 'pi',
+      },
+      delivery: {
+        kind: 'terminal',
+        accepted: true,
+        queued: true,
+        spawned: false,
+      },
     })
 
     const renamed = sessionSummarySchema.parse(callResult(env, {

@@ -1,4 +1,5 @@
 import { Effect } from 'effect'
+import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import type {
   KiriSettings,
@@ -258,6 +259,50 @@ describe('KiriControl service construction', () => {
       .resolves.toEqual({ agentId: 'agent-9', mode: 'runtime' })
   })
 
+  it('preserves direct terminal input invariants across submit and spawn flags', async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.record({
+        text: fc.array(fc.constantFrom('a', 'b', ' ', '-', '_'), { minLength: 1, maxLength: 24 })
+          .map((chars) => chars.join('').trim() || 'x'),
+        submit: fc.boolean(),
+        spawn: fc.boolean(),
+        spawnFails: fc.boolean(),
+      }),
+      async (shape) => {
+        const calls: string[] = []
+        const control = makeKiriControl(testDependencies({
+          queueAgentTerminalInput: (input) => {
+            calls.push(`queue:${input.agentId}:${input.text}:${input.submit}`)
+          },
+          pasteAgentRuntimeTerminal: (input) => {
+            calls.push(`spawn:${input.agentId}`)
+            return shape.spawnFails
+              ? Promise.reject(new Error('spawn failed'))
+              : Promise.resolve({ agentId: input.agentId, mode: 'runtime' as const })
+          },
+        }))
+
+        const result = await Effect.runPromise(control.terminalInput({
+          agentId: 'agent-1',
+          text: shape.text,
+          submit: shape.submit,
+          spawn: shape.spawn,
+        }))
+
+        expect(result).toEqual({
+          accepted: true,
+          agentId: 'agent-1',
+          queued: true,
+          spawned: shape.spawn && !shape.spawnFails,
+        })
+        expect(calls).toEqual([
+          `queue:agent-1:${shape.text}:${shape.submit}`,
+          ...(shape.spawn ? ['spawn:agent-1'] : []),
+        ])
+      },
+    ), { numRuns: 40 })
+  })
+
   it('acknowledges agent.prompt without waiting for the turn to finish', async () => {
     const control = makeKiriControl(testDependencies({
       agentPromptAcceptanceWindowMs: 20,
@@ -270,6 +315,68 @@ describe('KiriControl service construction', () => {
     )
     expect(result).toEqual({ accepted: true, agentId: 'agent-1', mode: 'prompt' })
   }, 1_000)
+
+  it('spawns sessions and delivers the first turn through the selected interface', async () => {
+    const calls: string[] = []
+    const control = makeKiriControl(testDependencies({
+      startSessionSummary: (input) => ({
+        ...sessionSummary(input.interfaceMode === 'terminal' ? 'agent-terminal' : 'agent-gui'),
+        title: input.title ?? 'Session',
+        interfaceMode: input.interfaceMode ?? 'gui',
+      }),
+      promptAgent: (input) => {
+        calls.push(`prompt:${input.agentId}:${input.text}`)
+        return Promise.resolve({})
+      },
+      queueAgentTerminalInput: (input) => {
+        calls.push(`queue:${input.agentId}:${input.text}:${input.submit}`)
+      },
+      pasteAgentRuntimeTerminal: (input) => {
+        calls.push(`spawn:${input.agentId}`)
+        return Promise.resolve({ agentId: input.agentId, mode: 'runtime' as const })
+      },
+    }))
+
+    await expect(Effect.runPromise(control.spawnSession({
+      projectId: 'project-1',
+      runtime: 'codex',
+      interfaceMode: 'gui',
+      title: 'GUI Spawn',
+      text: 'first gui turn',
+    }))).resolves.toMatchObject({
+      session: { id: 'agent-gui', title: 'GUI Spawn' },
+      delivery: {
+        kind: 'agentPrompt',
+        accepted: true,
+        agentId: 'agent-gui',
+        mode: 'prompt',
+      },
+    })
+
+    await expect(Effect.runPromise(control.spawnSession({
+      projectId: 'project-1',
+      runtime: 'codex',
+      interfaceMode: 'terminal',
+      title: 'Terminal Spawn',
+      text: 'first terminal turn',
+      terminalSubmit: false,
+    }))).resolves.toMatchObject({
+      session: { id: 'agent-terminal', title: 'Terminal Spawn' },
+      delivery: {
+        kind: 'terminal',
+        accepted: true,
+        agentId: 'agent-terminal',
+        queued: true,
+        spawned: true,
+      },
+    })
+
+    expect(calls).toEqual([
+      'prompt:agent-gui:first gui turn',
+      'queue:agent-terminal:first terminal turn:false',
+      'spawn:agent-terminal',
+    ])
+  })
 
   it('surfaces prompt validation failures that reject inside the acceptance window', async () => {
     const control = makeKiriControl(testDependencies({

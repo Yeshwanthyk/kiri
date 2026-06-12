@@ -59,6 +59,24 @@ const sessionSchema = z.object({
   archivedAt: z.string().nullable(),
 })
 const sessionRowsSchema = z.array(sessionSchema)
+const spawnResultSchema = z.object({
+  session: sessionSchema,
+  delivery: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('agentPrompt'),
+      accepted: z.literal(true),
+      agentId: z.string(),
+      mode: z.string(),
+    }),
+    z.object({
+      kind: z.literal('terminal'),
+      accepted: z.literal(true),
+      agentId: z.string(),
+      queued: z.literal(true),
+      spawned: z.boolean(),
+    }),
+  ]),
+})
 const scratchpadSchema = z.object({
   id: z.string(),
   projectId: z.string().nullable(),
@@ -165,6 +183,25 @@ try {
   }))
   if (session.projectId !== primary.id || session.archivedAt !== null) {
     throw new Error('Session was not created as an active primary-project session')
+  }
+
+  const spawned = spawnResultSchema.parse(runCall('kiri:ctl', {
+    operation: 'session.spawn',
+    params: {
+      projectId: primary.id,
+      runtime: defaultPiModel.runtime,
+      model: defaultPiModel.model,
+      title: 'Agent Harness Spawn',
+      text: 'Spawn from harness',
+      terminalSpawn: false,
+    },
+  }))
+  if (
+    spawned.session.projectId !== primary.id ||
+    spawned.delivery.kind !== 'terminal' ||
+    spawned.delivery.spawned !== false
+  ) {
+    throw new Error('Session spawn did not create and queue a terminal session')
   }
 
   const renamed = sessionSchema.parse(runCall('kiri:ctl', {
@@ -349,6 +386,7 @@ try {
       'project.unhide',
       'project.delete',
       'session.create',
+      'session.spawn',
       'session.rename',
       'session.archive',
       'session.restore',
@@ -365,6 +403,7 @@ try {
     ],
     projectId: primary.id,
     sessionId: session.id,
+    spawnedSessionId: spawned.session.id,
   }, null, 2))
   process.stdout.write('\n')
 } finally {
@@ -378,9 +417,14 @@ function assertSkillTeachesAgents() {
     'kiri_do',
     'pnpm kiri:ctl call',
     'operations.list',
+    'Deterministic Flow',
+    'Choose the first matching row',
     'model.list',
     'project.add',
     'session.create',
+    'session.spawn',
+    'agent.prompt',
+    'terminal.input',
     'session.rename',
     'session.archive',
     'session.restore',
@@ -393,6 +437,9 @@ function assertSkillTeachesAgents() {
     'workflow.list',
     'workflow.archive',
     'workflow.restore',
+    'Do not use workflows for a single new worker',
+    'Do not use `session.create` + `agent.prompt` for new prompted work',
+    'terminalSpawn:false',
     'pnpm kiricli mcp',
   ]
   for (const phrase of required) {

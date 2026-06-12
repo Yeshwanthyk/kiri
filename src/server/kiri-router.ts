@@ -18,6 +18,7 @@ import {
   renameSessionInputSchema,
   restoreSessionInputSchema,
   runtimeKindSchema,
+  spawnSessionInputSchema,
   startSessionInputSchema,
   terminalInputSchema,
   terminalKeysInputSchema,
@@ -56,6 +57,136 @@ const idParamsSchema = z.object({
 const agentIdParamsSchema = z.object({
   agentId: z.string().trim().min(1),
 })
+
+const operationRecipes = {
+  decisionTree: {
+    rule: 'Choose the first matching intent; do not compose lower-level operations when a higher-level operation matches.',
+    preflight: [
+      'Call operations.list when unsure which operation exists or what recipe to follow.',
+      'Call model.list for the selected runtime before passing model; otherwise omit model.',
+      'Use session.id/agentId returned by Kiri responses; do not invent ids.',
+    ],
+    intents: [
+      { intent: 'start one new worker with a prompt', operation: 'session.spawn' },
+      { intent: 'create an empty session only', operation: 'session.create' },
+      { intent: 'continue an existing GUI session', operation: 'agent.prompt' },
+      { intent: 'drive an existing terminal session', operation: 'terminal.input' },
+      { intent: 'start from a saved scratchpad block', operation: 'scratchpad.trigger' },
+      { intent: 'launch multiple tracked workers', operations: ['workflow.create', 'workflow.dispatch'] },
+      { intent: 'wait for workflow check-ins', operation: 'workflow.await' },
+    ],
+    successChecks: [
+      'session.spawn requires delivery.accepted === true.',
+      'agent.prompt requires accepted === true.',
+      'terminal.input requires queued === true; spawned may be false in CI or when spawn:false.',
+      'workflow.dispatch launch results require prompt.accepted === true or terminalPaste.queued === true.',
+      'scratchpad.trigger success means Kiri created the session, delivered or queued the block, and marked the block triggered.',
+    ],
+    never: [
+      'Do not use workflow for a single new worker; use session.spawn.',
+      'Do not use session.create plus agent.prompt for new prompted work; use session.spawn.',
+      'Do not pass a model id from one runtime to another runtime.',
+    ],
+  },
+  startTask: {
+    use: 'Create a Kiri session and immediately deliver the first prompt.',
+    operation: 'session.spawn',
+    params: {
+      projectId: 'project-id',
+      runtime: 'codex',
+      model: 'gpt-5.5',
+      title: 'Short action title',
+      text: 'Task prompt',
+    },
+    notes: [
+      'Prefer this over session.create plus agent.prompt for new work.',
+      'Omit model when unsure; model ids are runtime-local.',
+      'For terminal sessions, set interfaceMode:"terminal"; text is queued and terminalSpawn defaults true.',
+    ],
+  },
+  createOnly: {
+    use: 'Create a blank session without starting work.',
+    operation: 'session.create',
+    params: {
+      projectId: 'project-id',
+      runtime: 'codex',
+      title: 'Short title',
+    },
+  },
+  promptExisting: {
+    use: 'Send or steer an existing GUI-capable session.',
+    operation: 'agent.prompt',
+    params: {
+      agentId: 'session-id',
+      text: 'Prompt text',
+      mode: 'prompt',
+    },
+  },
+  driveTerminal: {
+    use: 'Type into an existing terminal interface session.',
+    operation: 'terminal.input',
+    params: {
+      agentId: 'session-id',
+      text: 'Terminal input',
+      submit: true,
+      spawn: true,
+    },
+  },
+  triggerScratchpad: {
+    use: 'Start a session from a saved scratchpad block.',
+    operation: 'scratchpad.trigger',
+    params: {
+      id: 'block-id',
+      projectId: 'project-id',
+      runtime: 'codex',
+      title: 'Short title',
+    },
+  },
+  workflow: {
+    use: 'Launch multiple tracked tasks or scratchpad-only notes as one durable run.',
+    operations: ['workflow.create', 'workflow.dispatch', 'workflow.await', 'workflow.show'],
+    createParams: {
+      projectId: 'project-id',
+      title: 'Workflow title',
+      defaults: {
+        runtime: 'codex',
+        model: 'gpt-5.5',
+        attachScratchpad: true,
+      },
+      items: [{
+        id: 'impl',
+        action: 'launch',
+        title: 'Implement',
+        body: 'Task prompt',
+        tracked: true,
+      }],
+    },
+    notes: [
+      'workflow.dispatch delivers GUI item bodies through agent.prompt.',
+      'Terminal item bodies are queued and then delivered through the Kiri terminal flow.',
+      'Use workflow.await for tracked worker check-ins instead of polling each session.',
+    ],
+  },
+  renameCurrentSession: {
+    use: 'Keep the Kiri title accurate when a session title is generic or stale.',
+    operation: 'session.rename',
+    params: {
+      agentId: 'current-session-id',
+      title: 'Short accurate title',
+    },
+  },
+  modelRule: {
+    use: 'Avoid runtime/model mismatch.',
+    operation: 'model.list',
+    params: {
+      runtime: 'codex',
+    },
+    notes: [
+      'Model ids are scoped to the selected runtime.',
+      'Example: codex uses gpt-5.5; pi may use openai-codex/gpt-5.5.',
+    ],
+  },
+} as const
 
 export async function runKiriOperation(
   control: KiriControlApi,
@@ -117,6 +248,7 @@ async function dispatchReadOperation(
       return shapeResult({
         read: kiriReadOperations,
         write: kiriWriteOperations,
+        recipes: operationRecipes,
       }, options)
     case 'context.show':
       return shapeResult(await run(control.getContext()), options)
@@ -180,6 +312,9 @@ async function dispatchWriteOperation(
       break
     case 'session.create':
       result = await run(control.startSession(parseParams(startSessionInputSchema, params)))
+      break
+    case 'session.spawn':
+      result = await run(control.spawnSession(parseParams(spawnSessionInputSchema, params)))
       break
     case 'session.rename':
       result = await run(control.renameSession(parseParams(renameSessionInputSchema, params)))
