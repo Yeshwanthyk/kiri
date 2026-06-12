@@ -47,6 +47,7 @@ export function TerminalWorkspace({
   typography: ChatTypographySettings
   visible: boolean
 }) {
+  const focusExitButtonRef = React.useRef<HTMLButtonElement | null>(null)
   const [layout, setLayout] = React.useState<TerminalLayout>(() =>
     parseTerminalLayout(
       typeof window === 'undefined' ? null : window.localStorage.getItem(layoutStorageKey(project.id)),
@@ -54,6 +55,9 @@ export function TerminalWorkspace({
     ))
   const [paneStatus, setPaneStatus] = React.useState<Record<string, string>>({})
   const [blurRequest, setBlurRequest] = React.useState(0)
+  const focusExitButton = React.useCallback(() => {
+    focusExitButtonRef.current?.focus()
+  }, [])
 
   React.useEffect(() => {
     setLayout(parseTerminalLayout(
@@ -136,6 +140,7 @@ export function TerminalWorkspace({
         </div>
         <div className="terminal-header-actions">
           <button
+            ref={focusExitButtonRef}
             type="button"
             aria-label={`Toggle terminal focus (Shift+${formatTerminalKey(toggleFocusKey)})`}
             title={`Toggle terminal focus (Shift+${formatTerminalKey(toggleFocusKey)})`}
@@ -190,6 +195,7 @@ export function TerminalWorkspace({
               toggleFocusKey={toggleFocusKey}
               focusRequest={focusRequest}
               blurRequest={blurRequest}
+              onKeyboardFocusExit={focusExitButton}
               onPaneStatus={(paneId, status) => {
                 setPaneStatus((current) =>
                   current[paneId] === status ? current : { ...current, [paneId]: status })
@@ -213,6 +219,7 @@ function WorkspaceNode({
   toggleFocusKey,
   focusRequest,
   blurRequest,
+  onKeyboardFocusExit,
   onPaneStatus,
 }: {
   node: PaneNode
@@ -226,6 +233,7 @@ function WorkspaceNode({
   toggleFocusKey: string
   focusRequest: number
   blurRequest: number
+  onKeyboardFocusExit: () => void
   onPaneStatus: (paneId: string, status: string) => void
 }) {
   if (node.kind === 'leaf') {
@@ -251,6 +259,7 @@ function WorkspaceNode({
           themeMode={themeMode}
           visible={tabVisible}
           embedded
+          onKeyboardFocusExit={onKeyboardFocusExit}
           onStatusChange={(status) => {
             onPaneStatus(node.id, status)
           }}
@@ -278,6 +287,7 @@ function WorkspaceNode({
         toggleFocusKey={toggleFocusKey}
         focusRequest={focusRequest}
         blurRequest={blurRequest}
+        onKeyboardFocusExit={onKeyboardFocusExit}
         onPaneStatus={onPaneStatus}
       />
       <SplitDivider node={node} setLayout={setLayout} />
@@ -293,6 +303,7 @@ function WorkspaceNode({
         toggleFocusKey={toggleFocusKey}
         focusRequest={focusRequest}
         blurRequest={blurRequest}
+        onKeyboardFocusExit={onKeyboardFocusExit}
         onPaneStatus={onPaneStatus}
       />
     </div>

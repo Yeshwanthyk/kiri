@@ -792,6 +792,28 @@ test('terminal interface sessions render the agent runtime in chat and shell in 
   await expect(page.getByTestId('terminal-transcript')).toContainText(projectRoot)
 })
 
+test('terminal focus key toggles out and back into a terminal chat session', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop terminal focus flow')
+  const title = `Terminal Chat Focus ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title, 'codex', 'low', 'terminal')
+
+  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  const terminalInput = page
+    .getByTestId('terminal-panel')
+    .getByRole('textbox', { name: 'Terminal input' })
+    .first()
+  await terminalInput.click()
+  await expect(terminalInput).toBeFocused()
+
+  await page.keyboard.press('Shift+Tab')
+  await expect(terminalInput).not.toBeFocused()
+
+  await page.keyboard.press('Shift+Tab')
+  await expect(terminalInput).toBeFocused()
+})
+
 test('codex terminal interface resumes after the PTY exits and keeps diffs available', async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, 'desktop terminal interface flow')
   const title = `Codex Terminal Resume ${testInfo.project.name}`

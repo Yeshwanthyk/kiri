@@ -24,7 +24,6 @@ import { terminalThemeForHost } from './terminal-theme'
 type XTermTerminalInstance = InstanceType<(typeof import('@xterm/xterm'))['Terminal']>
 type XTermFitAddonInstance = InstanceType<(typeof import('@xterm/addon-fit'))['FitAddon']>
 type TerminalDisposable = { dispose: () => void }
-const wheelDeltaPixel = 0
 const wheelDeltaLine = 1
 const wheelDeltaPage = 2
 const terminalScrollbackRows = 10_000
@@ -53,6 +52,7 @@ export function TerminalPanel({
   visible,
   embedded = false,
   blurRequest = 0,
+  onKeyboardFocusExit,
   onStatusChange,
 }: {
   agent: AgentCell
@@ -68,9 +68,12 @@ export function TerminalPanel({
   // workspace itself; embedded panes only show the terminal surface.
   embedded?: boolean
   blurRequest?: number
+  onKeyboardFocusExit?: () => void
   onStatusChange?: (status: string) => void
 }) {
   const getTerminalConfig = useServerFn(terminalConfigQuery)
+  const focusExitTargetRef = React.useRef<HTMLButtonElement | null>(null)
+  const onKeyboardFocusExitRef = React.useRef(onKeyboardFocusExit)
   const getTerminalConfigRef = React.useRef(getTerminalConfig)
   const hostRef = React.useRef<HTMLDivElement | null>(null)
   const terminalRef = React.useRef<XTermTerminalInstance | null>(null)
@@ -96,6 +99,10 @@ export function TerminalPanel({
   React.useEffect(() => {
     getTerminalConfigRef.current = getTerminalConfig
   }, [getTerminalConfig])
+
+  React.useEffect(() => {
+    onKeyboardFocusExitRef.current = onKeyboardFocusExit
+  }, [onKeyboardFocusExit])
 
   React.useEffect(() => {
     themeModeRef.current = themeMode
@@ -128,7 +135,21 @@ export function TerminalPanel({
 
   React.useEffect(() => {
     if (focusRequest === 0 || !visible) return
-    terminalRef.current?.focus()
+    const term = terminalRef.current
+    const host = hostRef.current
+    focusTerminalInput(term, host)
+    let timeout: number | null = null
+    const frame = window.requestAnimationFrame(() => {
+      timeout = window.setTimeout(() => {
+        if (terminalRef.current === term && hostRef.current === host) {
+          focusTerminalInput(terminalRef.current, hostRef.current)
+        }
+      }, 0)
+    })
+    return () => {
+      window.cancelAnimationFrame(frame)
+      if (timeout !== null) window.clearTimeout(timeout)
+    }
   }, [focusRequest, visible])
 
   React.useEffect(() => {
@@ -294,7 +315,15 @@ export function TerminalPanel({
         })
         term.attachCustomKeyEventHandler((event) => {
           if (isTerminalToggleFocusEvent(event, toggleFocusKey)) {
+            event.preventDefault()
+            event.stopPropagation()
             term?.blur()
+            const focusExitTarget = onKeyboardFocusExitRef.current
+            if (focusExitTarget) {
+              focusExitTarget()
+            } else {
+              focusExitTargetRef.current?.focus()
+            }
             return false
           }
           return true
@@ -428,6 +457,7 @@ export function TerminalPanel({
           </div>
           <div className="terminal-header-actions">
             <button
+              ref={focusExitTargetRef}
               type="button"
               aria-label={toggleFocusLabel}
               title={toggleFocusLabel}
@@ -468,6 +498,16 @@ function applyTerminalTypography(
   const options = terminalTypographyOptions(settings)
   term.options.fontSize = options.fontSize
   term.options.fontFamily = options.fontFamily
+}
+
+function focusTerminalInput(
+  term: XTermTerminalInstance | null,
+  host: HTMLElement | null,
+) {
+  term?.focus()
+  const input = term?.textarea ??
+    host?.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')
+  input?.focus({ preventScroll: true })
 }
 
 export function terminalWheelScrollLines(event: Pick<WheelEvent, 'deltaMode' | 'deltaY'>) {
