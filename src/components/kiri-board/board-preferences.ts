@@ -153,9 +153,13 @@ export function useBoardPreferenceEffects({
     }
 
     const storedAgentByProject = readStoredAgentByProject(snapshot)
-    if (shouldUseStoredAgentByProject(snapshot.preferences.agentByProject, storedAgentByProject)) {
-      setAgentByProject(storedAgentByProject)
-      void persistAgentByProject({ data: storedAgentByProject }).catch((error) => {
+    const mergedAgentByProject = mergeMissingStoredAgentByProject(
+      snapshot.preferences.agentByProject,
+      storedAgentByProject,
+    )
+    if (!sameJson(mergedAgentByProject, snapshot.preferences.agentByProject)) {
+      setAgentByProject(mergedAgentByProject)
+      void persistAgentByProject({ data: mergedAgentByProject }).catch((error) => {
         console.error('Failed to migrate selected session preference', error)
       })
     }
@@ -193,7 +197,18 @@ export function shouldUseStoredAgentByProject(
   serverValue: Record<string, string>,
   storedValue: Record<string, string>,
 ): boolean {
-  return Object.keys(serverValue).length === 0 && Object.keys(storedValue).length > 0
+  return !sameJson(mergeMissingStoredAgentByProject(serverValue, storedValue), serverValue)
+}
+
+export function mergeMissingStoredAgentByProject(
+  serverValue: Record<string, string>,
+  storedValue: Record<string, string>,
+): Record<string, string> {
+  const next = { ...serverValue }
+  for (const [projectId, agentId] of Object.entries(storedValue)) {
+    next[projectId] ??= agentId
+  }
+  return next
 }
 
 function sameJson(left: unknown, right: unknown): boolean {

@@ -299,6 +299,37 @@ export function makeWorkspaceService(
         Effect.mapError((error) => workspaceServiceError(label, error)),
       )
     })
+  const persistSelectedSession = (
+    label: string,
+    next: WorkspaceSnapshot,
+    agentId: string | undefined,
+  ) =>
+    Effect.gen(function* () {
+      if (!agentId) return next
+      const project = next.projects.find((item) =>
+        item.agents.some((agent) => agent.id === agentId),
+      )
+      if (!project) return next
+      const agent = project.agents.find((item) => item.id === agentId)
+      if (!agent) return next
+      const agentByProject = {
+        ...next.preferences.agentByProject,
+        [project.id]: agent.id,
+      }
+      if (next.preferences.agentByProject[project.id] === agent.id) return next
+      yield* dependencies.setAgentByProjectPreference(agentByProject).pipe(
+        Effect.mapError((error) => workspaceServiceError(`${label}.preference`, error)),
+      )
+      return yield* syncCall(`${label}.snapshot`, dependencies.getWorkspaceSnapshot)
+    })
+  const startedSessionId = (next: WorkspaceSnapshot, input: StartSessionInput) => {
+    const project = next.projects.find((item) => item.id === input.projectId)
+    return (
+      input.title
+        ? project?.agents.find((item) => item.title === input.title)?.id
+        : undefined
+    ) ?? project?.agents.at(-1)?.id
+  }
 
   return {
     snapshot,
@@ -315,7 +346,14 @@ export function makeWorkspaceService(
       return yield* syncCall('WorkspaceService.chooseProjectDirectory', dependencies.chooseProjectDirectory)
     }),
     deleteSession: syncSnapshotMethod('WorkspaceService.deleteSession', dependencies.deleteSession),
-    restoreSession: syncSnapshotMethod('WorkspaceService.restoreSession', dependencies.restoreSession),
+    restoreSession: Effect.fn('WorkspaceService.restoreSession')(function* (input) {
+      const next = yield* syncCall(
+        'WorkspaceService.restoreSession',
+        () => dependencies.restoreSession(input),
+      )
+      yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
+      return yield* persistSelectedSession('WorkspaceService.restoreSession', next, input.agentId)
+    }),
     renameSession: syncSnapshotMethod('WorkspaceService.renameSession', dependencies.renameSession),
     sendMessage: snapshotAfterPromiseMethod('WorkspaceService.sendMessage', dependencies.promptAgent),
     steerMessage: snapshotAfterPromiseMethod('WorkspaceService.steerMessage', dependencies.steerAgent),
@@ -342,7 +380,12 @@ export function makeWorkspaceService(
         'WorkspaceService.forkSession.snapshot',
         dependencies.getWorkspaceSnapshot,
       )
-      return { agentId, snapshot: forkSnapshot }
+      const selectedSnapshot = yield* persistSelectedSession(
+        'WorkspaceService.forkSession',
+        forkSnapshot,
+        agentId,
+      )
+      return { agentId, snapshot: selectedSnapshot }
     }),
     reviewSession: snapshotAfterPromiseMethod('WorkspaceService.reviewSession', dependencies.reviewAgentSession),
     answerQuestion: snapshotAfterPromiseMethod('WorkspaceService.answerQuestion', dependencies.answerAgentQuestion),
@@ -372,7 +415,18 @@ export function makeWorkspaceService(
       'WorkspaceService.refreshTerminalDiffs',
       (input: RefreshTerminalDiffsInput) => dependencies.refreshTerminalSessionDiffs(input.agentId),
     ),
-    startSession: syncSnapshotMethod('WorkspaceService.startSession', dependencies.startSession),
+    startSession: Effect.fn('WorkspaceService.startSession')(function* (input) {
+      const next = yield* syncCall(
+        'WorkspaceService.startSession',
+        () => dependencies.startSession(input),
+      )
+      yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
+      return yield* persistSelectedSession(
+        'WorkspaceService.startSession',
+        next,
+        startedSessionId(next, input),
+      )
+    }),
     addScratchpadBlock: syncSnapshotMethod('WorkspaceService.addScratchpadBlock', dependencies.addScratchpadBlock),
     deleteScratchpadBlock: syncSnapshotIdMethod(
       'WorkspaceService.deleteScratchpadBlock',
@@ -388,7 +442,12 @@ export function makeWorkspaceService(
         'WorkspaceService.triggerScratchpadBlock.snapshot',
         dependencies.getWorkspaceSnapshot,
       )
-      return { agentId, snapshot: triggerSnapshot }
+      const selectedSnapshot = yield* persistSelectedSession(
+        'WorkspaceService.triggerScratchpadBlock',
+        triggerSnapshot,
+        agentId,
+      )
+      return { agentId, snapshot: selectedSnapshot }
     }),
   }
 }

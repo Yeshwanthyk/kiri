@@ -156,6 +156,38 @@ describe('WorkspaceService', () => {
     expect(calls).toEqual(['add:Project', 'read-models'])
   })
 
+  it('persists newly started sessions as the selected session before returning', async () => {
+    const calls: string[] = []
+    const startedSnapshot = snapshotWithSelectedAgent({})
+    const selectedSnapshot = snapshotWithSelectedAgent({ project: 'agent-1' })
+    const service = makeWorkspaceService(testDependencies({
+      startSession: (input) => {
+        calls.push(`start:${input.projectId}:${input.runtime}`)
+        return startedSnapshot
+      },
+      refreshReadModels: () => {
+        calls.push('read-models')
+        return []
+      },
+      setAgentByProjectPreference: (agentByProject) => Effect.sync(() => {
+        calls.push(`preference:${agentByProject['project']}`)
+        return { ...defaultUiPreferences, agentByProject }
+      }),
+      getWorkspaceSnapshot: () => {
+        calls.push('snapshot')
+        return selectedSnapshot
+      },
+    }))
+
+    await expect(Effect.runPromise(service.startSession({
+      projectId: 'project',
+      runtime: 'codex',
+      interfaceMode: 'terminal',
+    }))).resolves.toBe(selectedSnapshot)
+
+    expect(calls).toEqual(['start:project:codex', 'read-models', 'preference:agent-1', 'snapshot'])
+  })
+
   it('returns forked agent id with the post-fork snapshot', async () => {
     const calls: string[] = []
     const service = makeWorkspaceService(testDependencies({
@@ -364,5 +396,21 @@ function testDependencies(
     deleteScratchpadBlock: () => snapshot,
     triggerScratchpadSession: () => Promise.resolve({ agentId: 'agent-1' }),
     ...overrides,
+  }
+}
+
+function snapshotWithSelectedAgent(agentByProject: Record<string, string>): WorkspaceSnapshot {
+  return {
+    ...snapshot,
+    preferences: { ...defaultUiPreferences, agentByProject },
+    projects: [{
+      id: 'project',
+      name: 'Project',
+      cwd: '/tmp/project',
+      position: 0,
+      hiddenAt: null,
+      agents: [{ ...agentDetail, id: 'agent-1', projectId: 'project' }],
+    }],
+    selected: { projectId: 'project', agentId: 'agent-1' },
   }
 }

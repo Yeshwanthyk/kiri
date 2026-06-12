@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  mergeMissingStoredAgentByProject,
   shouldUseStoredAgentByProject,
   shouldUseStoredPreference,
 } from '~/components/kiri-board/board-preferences'
@@ -15,9 +16,14 @@ describe('board preference migration decisions', () => {
     expect(shouldUseStoredPreference(defaultValue, defaultValue, defaultValue)).toBe(false)
   })
 
-  it('uses stored selected sessions only when the server has no selection', () => {
+  it('merges stored selected sessions for projects missing on the server', () => {
     expect(shouldUseStoredAgentByProject({}, { project: 'agent' })).toBe(true)
     expect(shouldUseStoredAgentByProject({ project: 'agent' }, { project: 'other' })).toBe(false)
+    expect(shouldUseStoredAgentByProject({ kiri: 'session-1' }, { merlin: 'session-2' })).toBe(true)
     expect(shouldUseStoredAgentByProject({}, {})).toBe(false)
+    expect(mergeMissingStoredAgentByProject(
+      { kiri: 'session-1' },
+      { kiri: 'stale', merlin: 'session-2' },
+    )).toEqual({ kiri: 'session-1', merlin: 'session-2' })
   })
 })
