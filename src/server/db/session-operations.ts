@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  statSync,
 } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
@@ -22,6 +23,18 @@ import {
   replaceAgentTasksForThread,
 } from './timeline-writes'
 import { withTransaction } from './transaction'
+
+type PiHydrationStamp = {
+  readonly sessionFile: string
+  readonly mtimeMs: number
+  readonly size: number
+}
+
+const piHydrationStamps = new Map<string, PiHydrationStamp>()
+
+export function clearPiHydrationStamps() {
+  piHydrationStamps.clear()
+}
 
 export function resetSessionRows(database: DatabaseSync, agentId: string) {
   const id = agentId.trim()
@@ -43,6 +56,7 @@ export function resetSessionRows(database: DatabaseSync, agentId: string) {
     database
       .prepare("UPDATE agent_slots SET status = 'idle', session_file = NULL WHERE id = ?")
       .run(id)
+    piHydrationStamps.delete(id)
   })
 }
 
@@ -195,6 +209,14 @@ export function hydratePersistedPiSessionRows(
         ? persistedSessionDbRowSchema.parse(existing)
         : undefined
       const sessionFile = activePiSessionFile(sessionDir, existingAgent?.sessionFile)
+      const stamp = sessionFile ? statSessionFile(sessionFile) : undefined
+      if (
+        existingAgent &&
+        stamp &&
+        sameHydrationStamp(piHydrationStamps.get(id), stamp)
+      ) {
+        continue
+      }
       const projection = sessionFile ? safeProjectPiSessionFile(sessionFile) : undefined
       const agent = existingAgent ??
         createPersistedSessionAgent(database, {
@@ -230,8 +252,28 @@ export function hydratePersistedPiSessionRows(
           updatedAt: projection.updatedAt,
         })
       }
+      if (stamp && projection) piHydrationStamps.set(id, stamp)
     }
   }
+}
+
+function statSessionFile(path: string): PiHydrationStamp | undefined {
+  try {
+    const stats = statSync(path)
+    return { sessionFile: path, mtimeMs: stats.mtimeMs, size: stats.size }
+  } catch {
+    return undefined
+  }
+}
+
+function sameHydrationStamp(
+  previous: PiHydrationStamp | undefined,
+  next: PiHydrationStamp,
+) {
+  return previous !== undefined &&
+    previous.sessionFile === next.sessionFile &&
+    previous.mtimeMs === next.mtimeMs &&
+    previous.size === next.size
 }
 
 function activePiSessionFile(sessionDir: string, storedSessionFile: string | null | undefined) {
