@@ -20,7 +20,7 @@ packaging gate repeatedly.
 |---|---|---|---|---|---|---|
 | [001](001-gate-action-poll-and-slim-revision.md) | Gate the action-window poll behind the revision check; slim the revision hash | P1 | S | LOW | — | DONE — revision-gated action polling; full gates pass |
 | [002](002-pi-jsonl-hydration-cache.md) | Skip Pi JSONL re-hydration when session files are unchanged | P1 | M | MED | — | DONE — mtime/size stamp cache; full gates pass |
-| [003](003-read-models-off-read-path.md) | Remove read-model refresh from snapshot/agentDetail read paths | P1 | S | LOW | — | TODO |
+| [003](003-read-models-off-read-path.md) | Remove read-model refresh from snapshot/agentDetail read paths | P1 | S | LOW | — | DONE — refresh stays on mutations only; full gates pass |
 | [004](004-daemon-terminal-memory.md) | Stop per-30s scrollback serialization; bound daemon maps | P1 | M | LOW | — | TODO |
 | [005](005-unmount-hidden-terminal-tabs.md) | Unmount hidden terminal tabs in the renderer | P2 | M | MED | — | TODO |
 | [006](006-lazy-heavy-panels-and-fonts.md) | Code-split diff/settings panels; latin-only font subsets | P2 | M | LOW | — | TODO |

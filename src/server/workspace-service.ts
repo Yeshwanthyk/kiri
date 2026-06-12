@@ -252,7 +252,6 @@ export function makeWorkspaceService(
   dependencies: WorkspaceServiceDependencies,
 ): WorkspaceServiceApi {
   const snapshot = Effect.fn('WorkspaceService.snapshot')(function* () {
-    yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
     return yield* syncCall('WorkspaceService.snapshot', dependencies.getWorkspaceSnapshot)
   })
   const revision = Effect.fn('WorkspaceService.revision')(function* () {
@@ -305,7 +304,6 @@ export function makeWorkspaceService(
     snapshot,
     revision,
     agentDetail: Effect.fn('WorkspaceService.agentDetail')(function* (input: AgentDetailInput) {
-      yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
       return yield* syncCall('WorkspaceService.agentDetail', () => dependencies.getAgentDetail(input))
     }),
     addProject: syncSnapshotMethod('WorkspaceService.addProject', dependencies.addProject),
