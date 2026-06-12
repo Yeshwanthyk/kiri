@@ -225,6 +225,7 @@ function parseRequest(input: string) {
 async function tryRunBackendOperation(request: unknown) {
   const info = readBackendControlInfo()
   if (!info) return { kind: 'none' as const }
+  const timeoutMs = backendControlTimeoutMs()
   try {
     const response = await fetch(new URL('/.well-known/kiri/control', info.url), {
       method: 'POST',
@@ -233,7 +234,7 @@ async function tryRunBackendOperation(request: unknown) {
         authorization: `Bearer ${info.token}`,
       },
       body: JSON.stringify(request),
-      signal: AbortSignal.timeout(backendControlTimeoutMs()),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     if (response.ok) {
       return {
@@ -246,6 +247,19 @@ async function tryRunBackendOperation(request: unknown) {
       response: await backendErrorResponse(response, request),
     }
   } catch (error) {
+    if (isTimeoutAbort(error)) {
+      return {
+        kind: 'handled' as const,
+        response: {
+          ok: false,
+          operation: operationName(request),
+          error: {
+            code: 'BACKEND_CONTROL_TIMEOUT',
+            message: `Kiri backend did not respond within ${timeoutMs}ms; the operation may still be running (set KIRI_BACKEND_CONTROL_TIMEOUT_MS to wait longer)`,
+          },
+        },
+      }
+    }
     return {
       kind: 'handled' as const,
       response: {
@@ -260,6 +274,11 @@ async function tryRunBackendOperation(request: unknown) {
       },
     }
   }
+}
+
+function isTimeoutAbort(error: unknown) {
+  if (!error || typeof error !== 'object') return false
+  return 'name' in error && error.name === 'TimeoutError'
 }
 
 function backendControlTimeoutMs() {

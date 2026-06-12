@@ -224,6 +224,9 @@ export type KiriControlDependencies = {
   readonly restoreSessionSummary: (input: RestoreSessionInput) => SessionSummary
   readonly promptAgent: typeof promptAgent
   readonly steerAgent: typeof steerAgent
+  // How long agent.prompt waits for validation rejections before detaching
+  // from the turn; the turn itself keeps running in the background.
+  readonly agentPromptAcceptanceWindowMs?: number
   readonly queueAgentTerminalInput: typeof queueAgentTerminalInput
   readonly pasteAgentRuntimeTerminal: typeof pasteAgentRuntimeTerminal
   readonly getAgentLaunchConfig: typeof getAgentLaunchConfig
@@ -372,8 +375,14 @@ export function makeKiriControl(
 
   const agentPromptEffect = Effect.fn('KiriControl.agentPrompt')(
     function* (input: AgentPromptInput) {
+      // promptAgent resolves only when the full model turn completes, but this
+      // surface promises acceptance — holding the response open for the whole
+      // turn makes control clients time out on every real prompt.
       yield* Effect.tryPromise({
-        try: () => input.mode === 'steer' ? dependencies.steerAgent(input) : dependencies.promptAgent(input),
+        try: () => detachAfterAcceptance(
+          input.mode === 'steer' ? dependencies.steerAgent(input) : dependencies.promptAgent(input),
+          dependencies.agentPromptAcceptanceWindowMs ?? agentPromptAcceptanceWindowMs,
+        ),
         catch: normalizeError,
       })
       return {
@@ -761,6 +770,29 @@ function normalizeError(error: unknown) {
   return new KiriControlError({
     message: error instanceof Error ? error.message : String(error),
     cause: error,
+  })
+}
+
+const agentPromptAcceptanceWindowMs = 500
+
+// Rejections inside the window (unknown agent, unsupported runtime) surface to
+// the caller; failures after detaching land in the agent timeline instead.
+function detachAfterAcceptance(turn: Promise<unknown>, windowMs: number) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      turn.catch(() => {})
+      resolve()
+    }, windowMs)
+    turn.then(
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
   })
 }
 

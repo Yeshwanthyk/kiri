@@ -257,6 +257,28 @@ describe('KiriControl service construction', () => {
     await expect(Effect.runPromise(control.terminalSpawn({ agentId: 'agent-9' })))
       .resolves.toEqual({ agentId: 'agent-9', mode: 'runtime' })
   })
+
+  it('acknowledges agent.prompt without waiting for the turn to finish', async () => {
+    const control = makeKiriControl(testDependencies({
+      agentPromptAcceptanceWindowMs: 20,
+      // Resolves long after the acceptance window; the control surface must
+      // not hold the response open for the turn.
+      promptAgent: () => new Promise((resolve) => setTimeout(resolve, 5_000)),
+    }))
+    const result = await Effect.runPromise(
+      control.agentPrompt({ agentId: 'agent-1', text: 'hello', images: [], mode: 'prompt' }),
+    )
+    expect(result).toEqual({ accepted: true, agentId: 'agent-1', mode: 'prompt' })
+  }, 1_000)
+
+  it('surfaces prompt validation failures that reject inside the acceptance window', async () => {
+    const control = makeKiriControl(testDependencies({
+      promptAgent: () => Promise.reject(new Error('unknown agent agent-404')),
+    }))
+    await expect(Effect.runPromise(
+      control.agentPrompt({ agentId: 'agent-404', text: 'hello', images: [], mode: 'prompt' }),
+    )).rejects.toThrow('unknown agent agent-404')
+  })
 })
 
 function testDependencies(

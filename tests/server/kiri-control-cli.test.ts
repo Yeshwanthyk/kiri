@@ -268,6 +268,50 @@ describe('kirictl call', () => {
     })
   })
 
+  it('reports a timeout instead of unreachable when backend control is slow', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kirictl-proxy-timeout-'))
+    tempRoots.push(root)
+    const server = createServer(() => {
+      // Never respond; the client must abort via its own timeout.
+    })
+    const port = await listen(server)
+    try {
+      writeFileSync(join(root, 'backend-control.json'), JSON.stringify({
+        url: `http://127.0.0.1:${port}/`,
+        token: 'slow-backend',
+      }))
+      const previousEnv = snapshotEnv([
+        'KIRI_DISABLE_BACKEND_PROXY',
+        'KIRI_BACKEND_CONTROL_PATH',
+        'KIRI_BACKEND_CONTROL_TIMEOUT_MS',
+      ])
+      process.env.KIRI_DISABLE_BACKEND_PROXY = '0'
+      process.env.KIRI_BACKEND_CONTROL_PATH = join(root, 'backend-control.json')
+      process.env.KIRI_BACKEND_CONTROL_TIMEOUT_MS = '100'
+      const response = responseSchema.parse(
+        await runKiriOperationWithBackendFallback({} as never, {
+          operation: 'agent.prompt',
+          params: { agentId: 'agent-1', text: 'hello' },
+        }).finally(() => {
+          restoreEnvSnapshot(previousEnv)
+        }),
+      )
+      expect(response).toMatchObject({
+        ok: false,
+        operation: 'agent.prompt',
+        error: {
+          code: 'BACKEND_CONTROL_TIMEOUT',
+        },
+      })
+      if (!response.ok) {
+        expect(response.error.message).toContain('may still be running')
+      }
+    } finally {
+      server.closeAllConnections?.()
+      await close(server)
+    }
+  })
+
   it('spawns and pastes terminal workflow input through a real PTY when backend-owned spawning is enabled', async () => {
     const root = mkdtempSync(join(tmpdir(), 'kirictl-terminal-spawn-'))
     tempRoots.push(root)
