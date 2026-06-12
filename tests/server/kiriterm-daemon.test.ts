@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
@@ -27,6 +27,15 @@ function tempStateDir() {
 
 async function startDaemon(stateDir: string) {
   const handle = await startKiritermDaemon({ stateDir, version: 'test' })
+  cleanups.push(() => handle.close())
+  return handle
+}
+
+async function startDaemonWithOptions(
+  stateDir: string,
+  options: { readonly dumpIntervalMs?: number },
+) {
+  const handle = await startKiritermDaemon({ stateDir, version: 'test', ...options })
   cleanups.push(() => handle.close())
   return handle
 }
@@ -204,6 +213,36 @@ describe('kiriterm daemon', () => {
     expect(snapshot.data).toContain('restored scrollback from previous session')
   }, 30_000)
 
+  it('does not rewrite persisted shell dumps when output is unchanged', async () => {
+    const stateDir = tempStateDir()
+    const handle = await startDaemonWithOptions(stateDir, { dumpIntervalMs: 50 })
+    await apiJson(handle, 'agents/upsert', { config: launchConfig(stateDir) })
+
+    const attached = await attachShell(handle, 'agent-t1')
+    await attached.nextFrame((frame) => frame.type === 'snapshot')
+    attached.socket.send(JSON.stringify({ type: 'input', data: "printf 'dump-%s\\n' once\r" }))
+    await apiJson(handle, 'sessions/wait-for', {
+      key: 'proj-t1:shell',
+      pattern: 'dump-once',
+      timeoutMs: 10_000,
+    })
+
+    const persistedPath = join(stateDir, 'sessions', `${encodeURIComponent('proj-t1:shell')}.json`)
+    await until(() => existsSync(persistedPath))
+    const first = await stableSavedAt(persistedPath)
+
+    attached.socket.send(JSON.stringify({ type: 'input', data: "printf 'dump-%s\\n' twice\r" }))
+    await apiJson(handle, 'sessions/wait-for', {
+      key: 'proj-t1:shell',
+      pattern: 'dump-twice',
+      timeoutMs: 10_000,
+    })
+    await until(() => {
+      const next = JSON.parse(readFileSync(persistedPath, 'utf8')) as { savedAt: string; snapshot: string }
+      return next.savedAt !== first && next.snapshot.includes('dump-twice')
+    })
+  }, 30_000)
+
   it('delivers wake subscriptions into a runtime session over the control api', async () => {
     const stateDir = tempStateDir()
     const previousBin = process.env.KIRI_CODEX_BIN
@@ -271,3 +310,14 @@ describe('kiriterm daemon', () => {
     await expect(checkKiritermDaemonHealth(handle.record)).resolves.toBe(false)
   }, 30_000)
 })
+
+async function stableSavedAt(path: string) {
+  let previous = JSON.parse(readFileSync(path, 'utf8')) as { savedAt: string }
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 90))
+    const next = JSON.parse(readFileSync(path, 'utf8')) as { savedAt: string }
+    if (next.savedAt === previous.savedAt) return next.savedAt
+    previous = next
+  }
+  throw new Error('persisted dump did not stabilize')
+}
