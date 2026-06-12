@@ -175,31 +175,28 @@ export function TerminalWorkspace({
           </span>
         </div>
       </div>
-      {layout.tabs.map((tab) => (
-        <div
-          key={tab.id}
-          className="terminal-workspace-surface"
-          hidden={tab.id !== layout.activeTabId}
-        >
-          <WorkspaceNode
-            node={tab.root}
-            layout={layout}
-            setLayout={setLayout}
-            tabVisible={visible && tab.id === layout.activeTabId}
-            agent={agent}
-            project={project}
-            themeMode={themeMode}
-            typography={typography}
-            toggleFocusKey={toggleFocusKey}
-            focusRequest={focusRequest}
-            blurRequest={blurRequest}
-            onPaneStatus={(paneId, status) => {
-              setPaneStatus((current) =>
-                current[paneId] === status ? current : { ...current, [paneId]: status })
-            }}
-          />
-        </div>
-      ))}
+      {layout.tabs.map((tab) =>
+        tab.id === layout.activeTabId ? (
+          <div key={tab.id} className="terminal-workspace-surface">
+            <WorkspaceNode
+              node={tab.root}
+              layout={layout}
+              setLayout={setLayout}
+              tabVisible={visible}
+              agent={agent}
+              project={project}
+              themeMode={themeMode}
+              typography={typography}
+              toggleFocusKey={toggleFocusKey}
+              focusRequest={focusRequest}
+              blurRequest={blurRequest}
+              onPaneStatus={(paneId, status) => {
+                setPaneStatus((current) =>
+                  current[paneId] === status ? current : { ...current, [paneId]: status })
+              }}
+            />
+          </div>
+        ) : null)}
     </section>
   )
 }
