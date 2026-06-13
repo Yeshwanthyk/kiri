@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { execFile as execFileCallback } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { connect as connectSocket } from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -29,6 +30,8 @@ const pairingTokenPath = '/.well-known/kiri/connect/pairing-token'
 const authBootstrapPath = '/.well-known/kiri/auth/bootstrap'
 const tailscaleServePath = '/.well-known/kiri/connect/tailscale-serve'
 const pairPath = '/pair'
+const terminalProxyPath = process.env.KIRI_TERMINAL_PROXY_PATH ?? '/terminal'
+const terminalProxyPortParam = 'kiri_terminal_port'
 const controlToken = process.env.KIRI_BACKEND_CONTROL_TOKEN ?? randomBytes(32).toString('base64url')
 const controlInfoPath = resolve(process.env.KIRI_BACKEND_CONTROL_PATH ?? join(stateDir, 'backend-control.json'))
 const tailscalePath = resolve(process.env.KIRI_TAILSCALE_PATH ?? '/Applications/Tailscale.app/Contents/MacOS/Tailscale')
@@ -52,6 +55,7 @@ if (!existsSync(staticDir)) throw new Error(`Built client directory not found: $
 
 process.env.KIRI_WORKFLOW_SPAWN_TERMINALS = '1'
 process.env.KIRI_TERMINAL_HOST ??= host
+process.env.KIRI_TERMINAL_PROXY_PATH ??= terminalProxyPath
 
 const serveDesktopStatic = serveStatic({ dir: staticDir })
 
@@ -107,6 +111,7 @@ const server = serve({
     return appResponseWithOwnerCookie(request, await appFetch(request))
   },
 })
+server.node?.server?.on('upgrade', handleTerminalProxyUpgrade)
 
 async function desktopStaticMiddleware(request, next) {
   return noStoreStaticResponse(await serveDesktopStatic(request, next))
@@ -348,6 +353,118 @@ function canManageConnect(request) {
 
 function isTrustedRequest(request) {
   return hasOwnerAccess(request) || Boolean(readValidSession(request))
+}
+
+function handleTerminalProxyUpgrade(request, socket, head) {
+  const url = requestUrl(request)
+  if (url.pathname !== terminalProxyPath) {
+    closeUpgrade(socket, 404, 'Not Found')
+    return
+  }
+  if (!isTrustedUpgradeRequest(request, url)) {
+    closeUpgrade(socket, 401, 'Unauthorized')
+    return
+  }
+
+  const targetPort = Number(url.searchParams.get(terminalProxyPortParam))
+  const terminalToken = url.searchParams.get('token')
+  if (!Number.isInteger(targetPort) || targetPort <= 0 || targetPort > 65535) {
+    closeUpgrade(socket, 400, 'Bad Request')
+    return
+  }
+  if (!terminalToken) {
+    closeUpgrade(socket, 400, 'Bad Request')
+    return
+  }
+
+  url.searchParams.delete(terminalProxyPortParam)
+  url.searchParams.delete(ownerTokenParam)
+  const targetHost = terminalProxyTargetHost()
+  void proxyTerminalUpgrade({ request, socket, head, url, targetHost, targetPort, terminalToken })
+    .catch(() => closeUpgrade(socket, 502, 'Bad Gateway'))
+}
+
+async function proxyTerminalUpgrade({ request, socket, head, url, targetHost, targetPort, terminalToken }) {
+  const authorized = await isTerminalProxyTarget(targetHost, targetPort, terminalToken)
+  if (!authorized) {
+    closeUpgrade(socket, 502, 'Bad Gateway')
+    return
+  }
+  const target = connectSocket({ host: targetHost, port: targetPort })
+  let forwarded = false
+
+  target.once('connect', () => {
+    forwarded = true
+    target.write(upgradeRequestHead(request, url, targetHost, targetPort))
+    if (head.length > 0) target.write(head)
+    socket.pipe(target)
+    target.pipe(socket)
+  })
+  target.on('error', () => {
+    if (!forwarded) {
+      closeUpgrade(socket, 502, 'Bad Gateway')
+      return
+    }
+    socket.destroy()
+  })
+  target.on('close', () => socket.destroy())
+  socket.on('error', () => target.destroy())
+  socket.on('close', () => target.destroy())
+}
+
+async function isTerminalProxyTarget(host, port, token) {
+  try {
+    const response = await fetch(`http://${host}:${port}/api/health`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(3_000),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+function requestUrl(request) {
+  return new URL(request.url ?? '/', 'http://127.0.0.1')
+}
+
+function isTrustedUpgradeRequest(request, url) {
+  return url.searchParams.get(ownerTokenParam) === ownerToken ||
+    request.headers[ownerTokenHeader] === ownerToken ||
+    readCookie(request.headers.cookie ?? '', ownerCookieName) === ownerToken ||
+    Boolean(readValidSession({ headers: { get: (name) => name === 'cookie' ? request.headers.cookie ?? '' : null } }))
+}
+
+function terminalProxyTargetHost() {
+  const value = process.env.KIRI_TERMINAL_PROXY_TARGET_HOST ?? process.env.KIRI_TERMINAL_HOST ?? '127.0.0.1'
+  if (value === '0.0.0.0') return '127.0.0.1'
+  if (value === '::' || value === '[::]') return '::1'
+  return value
+}
+
+function upgradeRequestHead(request, url, targetHost, targetPort) {
+  const lines = [`${request.method ?? 'GET'} ${url.pathname}${url.search} HTTP/${request.httpVersion}`]
+  let hasHost = false
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    const name = request.rawHeaders[index]
+    const value = request.rawHeaders[index + 1]
+    if (!name || value === undefined) continue
+    if (name.toLowerCase() === 'host') {
+      hasHost = true
+      lines.push(`Host: ${targetHost}:${targetPort}`)
+      continue
+    }
+    lines.push(`${name}: ${value}`)
+  }
+  if (!hasHost) lines.push(`Host: ${targetHost}:${targetPort}`)
+  return `${lines.join('\r\n')}\r\n\r\n`
+}
+
+function closeUpgrade(socket, status, message) {
+  if (!socket.destroyed) {
+    socket.write(`HTTP/1.1 ${status} ${message}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+  }
+  socket.destroy()
 }
 
 function hasOwnerAccess(request) {

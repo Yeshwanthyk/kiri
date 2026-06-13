@@ -505,6 +505,7 @@ const terminalConfigSchema = z.object({
   host: z.string(),
   port: z.number().int().nonnegative(),
   path: z.string(),
+  proxyPath: z.string().optional(),
   token: z.string(),
   mode: terminalModeSchema,
   runtime: runtimeKindSchema,

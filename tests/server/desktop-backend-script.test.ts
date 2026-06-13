@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { createServer, type Server } from 'node:http'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { WebSocket, WebSocketServer, type RawData } from 'ws'
 
 const children: ChildProcess[] = []
 
@@ -123,6 +125,70 @@ describe('desktop backend script', () => {
     child.kill()
     rmSync(fixture.root, { recursive: true, force: true })
   }, 15_000)
+
+  it('proxies same-origin terminal websocket upgrades to the private terminal port', async () => {
+    const targetServer = createServer((request, response) => {
+      if (
+        request.url === '/api/health' &&
+        request.headers.authorization === 'Bearer terminal-token'
+      ) {
+        response.end(JSON.stringify({ ok: true }))
+        return
+      }
+      response.writeHead(404)
+      response.end()
+    })
+    const targetWs = new WebSocketServer({ server: targetServer, path: '/terminal' })
+    targetWs.on('connection', (socket) => {
+      socket.on('message', (message) => {
+        socket.send(`target:${webSocketDataText(message)}`)
+      })
+    })
+    const targetPort = await listen(targetServer)
+    const fixture = createDesktopBackendFixture()
+    const child = spawn(process.execPath, ['scripts/kiri-desktop-backend.mjs'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        FORCE_COLOR: '0',
+        KIRI_ROOT_DIR: fixture.root,
+        KIRI_STATE_DIR: fixture.stateDir,
+        KIRI_SETTINGS_PATH: fixture.settingsPath,
+        KIRI_BACKEND_HOST: '127.0.0.1',
+        KIRI_BACKEND_PORT: '0',
+        KIRI_BACKEND_BROWSER_HOST: '127.0.0.1',
+        KIRI_IMPORT_MARKER: fixture.importMarker,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    children.push(child)
+
+    try {
+      const ready = await waitForReady(child)
+      const url = new URL('/terminal', ready.url)
+      url.protocol = 'ws:'
+      url.searchParams.set('kiri_terminal_port', String(targetPort))
+      url.searchParams.set('token', 'terminal-token')
+      url.searchParams.set('kiri_owner_token', new URL(ready.url).searchParams.get('kiri_owner_token') ?? '')
+
+      const socket = await openSocket(url.toString())
+      try {
+        const message = await new Promise<string>((resolve, reject) => {
+          socket.once('message', (data) => resolve(webSocketDataText(data)))
+          socket.once('error', reject)
+          socket.send('ping')
+        })
+        expect(message).toBe('target:ping')
+      } finally {
+        socket.close()
+      }
+    } finally {
+      child.kill()
+      await close(targetServer)
+      targetWs.close()
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  }, 15_000)
 })
 
 function createDesktopBackendFixture(options: {
@@ -203,6 +269,46 @@ function ownerUrl(pathname: string, readyUrl: string) {
   const url = new URL(readyUrl)
   url.pathname = pathname
   return url
+}
+
+function webSocketDataText(data: RawData) {
+  if (typeof data === 'string') return data
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString('utf8')
+  if (Array.isArray(data)) return Buffer.concat(data).toString('utf8')
+  return data.toString('utf8')
+}
+
+function openSocket(url: string) {
+  return new Promise<WebSocket>((resolve, reject) => {
+    const socket = new WebSocket(url)
+    socket.once('open', () => resolve(socket))
+    socket.once('error', reject)
+  })
+}
+
+function listen(server: Server) {
+  return new Promise<number>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject)
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('Server did not listen on a TCP port'))
+        return
+      }
+      resolve(address.port)
+    })
+  })
+}
+
+function close(server: Server) {
+  if (!server.listening) return Promise.resolve()
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error)
+      else resolve()
+    })
+  })
 }
 
 function isReadyMessage(value: unknown): value is { readonly url: string } {

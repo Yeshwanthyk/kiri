@@ -51,6 +51,7 @@ export function TerminalPanel({
   typography,
   visible,
   embedded = false,
+  exposeTestIdWhenEmbedded = false,
   blurRequest = 0,
   onKeyboardFocusExit,
   onStatusChange,
@@ -67,6 +68,7 @@ export function TerminalPanel({
   // Inside the terminal workspace the chrome (header) is rendered by the
   // workspace itself; embedded panes only show the terminal surface.
   embedded?: boolean
+  exposeTestIdWhenEmbedded?: boolean
   blurRequest?: number
   onKeyboardFocusExit?: () => void
   onStatusChange?: (status: string) => void
@@ -94,6 +96,7 @@ export function TerminalPanel({
   const [status, setStatus] = React.useState('Connecting')
   const [transcript, setTranscript] = React.useState<string | null>(null)
   const [connectionGeneration, setConnectionGeneration] = React.useState(0)
+  const [terminalBufferType, setTerminalBufferType] = React.useState<'normal' | 'alternate'>('normal')
   const [debugSnapshot, setDebugSnapshot] = React.useState<TerminalDebugSnapshot | null>(null)
 
   React.useEffect(() => {
@@ -275,6 +278,7 @@ export function TerminalPanel({
         alternateEnter: 0,
         alternateExit: 0,
       }
+      setTerminalBufferType('normal')
       setDebugSnapshot(null)
       setTranscript(transcriptEnabledRef.current ? '' : null)
       setStatus('Loading')
@@ -301,6 +305,7 @@ export function TerminalPanel({
         fitAddonRef.current = fitAddon
         term.loadAddon(fitAddon)
         term.open(host)
+        setTerminalBufferType(term.buffer.active.type)
         void loadTerminalEnhancements(term, terminalDisposables, () => disposed)
         themeObserver = new MutationObserver(() => {
           const currentTerm = terminalRef.current
@@ -389,6 +394,9 @@ export function TerminalPanel({
           term.onScroll(() => {
             scheduleDebugSnapshot()
           }),
+          term.buffer.onBufferChange((buffer) => {
+            setTerminalBufferType(buffer.type)
+          }),
           term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
             if (socket?.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify({ type: 'resize', cols, rows }))
@@ -436,8 +444,8 @@ export function TerminalPanel({
       data-terminal-mode={mode}
       data-terminal-id={termId}
       data-terminal-status={embedded ? status : undefined}
-      data-testid={visible && !embedded ? 'terminal-panel' : undefined}
-      data-terminal-buffer-type={debugSnapshot?.bufferType}
+      data-testid={visible && (!embedded || exposeTestIdWhenEmbedded) ? 'terminal-panel' : undefined}
+      data-terminal-buffer-type={terminalBufferType}
       data-terminal-base-y={debugSnapshot?.baseY}
       data-terminal-viewport-y={debugSnapshot?.viewportY}
       data-terminal-buffer-length={debugSnapshot?.length}
@@ -572,7 +580,7 @@ function appendTerminalTranscript(
   setTranscript((current) => `${current ?? ''}${data}`.slice(-8_000))
 }
 
-function terminalWebSocketUrl(
+export function terminalWebSocketUrl(
   config: TerminalConfig,
   agentId: string,
   cols: number,
@@ -580,6 +588,11 @@ function terminalWebSocketUrl(
   termId: string,
 ) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  if (config.proxyPath) {
+    const url = new URL(`${protocol}//${window.location.host}${config.proxyPath}`)
+    url.searchParams.set('kiri_terminal_port', String(config.port))
+    return terminalWebSocketUrlWithParams(url, config, agentId, cols, rows, termId)
+  }
   const pageHost = window.location.hostname
   const isLocalPage = pageHost === 'localhost' || pageHost === '127.0.0.1' || pageHost === '::1'
   const host =
@@ -587,6 +600,17 @@ function terminalWebSocketUrl(
       ? pageHost
       : config.host
   const url = new URL(`${protocol}//${host}:${config.port}${config.path}`)
+  return terminalWebSocketUrlWithParams(url, config, agentId, cols, rows, termId)
+}
+
+function terminalWebSocketUrlWithParams(
+  url: URL,
+  config: TerminalConfig,
+  agentId: string,
+  cols: number,
+  rows: number,
+  termId: string,
+) {
   url.searchParams.set('agentId', agentId)
   url.searchParams.set('mode', config.mode)
   url.searchParams.set('cols', String(cols))

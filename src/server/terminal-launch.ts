@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { Context, Data, Effect, Either, Layer } from 'effect'
 import {
   RuntimeBinariesService,
+  type RuntimeBinaryError,
   type RuntimeBinariesApi,
 } from './runtime-binaries'
 export { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
@@ -72,6 +73,12 @@ type TerminalLaunchContext = {
   readonly execPath: string
   readonly resourcesPath?: string
   readonly runtimeBinaries: RuntimeBinariesApi
+}
+
+type KiriMcpServerConfig = {
+  readonly type: 'stdio'
+  readonly command: string
+  readonly args?: readonly string[]
 }
 
 export function makeTerminalLaunchService(input: {
@@ -219,7 +226,7 @@ function buildKiriMcpConfigJson(context: TerminalLaunchContext) {
   })
 }
 
-function buildKiriMcpServerConfig(context: TerminalLaunchContext) {
+function buildKiriMcpServerConfig(context: TerminalLaunchContext): Effect.Effect<KiriMcpServerConfig, RuntimeBinaryError> {
   return Effect.gen(function* () {
   const override = context.env.KIRI_MCP_BIN?.trim()
   if (override) return { type: 'stdio', command: override }
@@ -271,8 +278,10 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
     ?? stringValue(state.codexSessionId)
     ?? readCodexTerminalSessionId(config.sessionDir)
   const args = resume
-    ? ['resume', '--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen']
-    : ['--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen']
+    ? ['resume']
+    : []
+  args.push(...codexKiriConfigArgs(config.id, yield* buildKiriMcpServerConfig(context)))
+  args.push('--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen')
   if (config.model) args.push('--model', config.model)
   if (resume) args.push(resume)
   if (!resume && initialTerminalInput) args.push(initialTerminalInput.text)
@@ -290,6 +299,39 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
     initialTerminalInput: resume ? null : initialTerminalInput,
   }
   })
+}
+
+function codexKiriConfigArgs(agentId: string, config: KiriMcpServerConfig) {
+  const args = [
+    '--config',
+    `developer_instructions=${tomlString(codexKiriTerminalPrompt(agentId))}`,
+    '--config',
+    `mcp_servers.kiri.command=${tomlString(config.command)}`,
+  ]
+  if (config.args?.length) {
+    args.push(
+      '--config',
+      `mcp_servers.kiri.args=${tomlStringArray(config.args)}`,
+    )
+  }
+  return args
+}
+
+function codexKiriTerminalPrompt(agentId: string) {
+  return [
+    'Kiri integration:',
+    `- This terminal Codex session is Kiri session ${agentId}.`,
+    `- Keep the Kiri session title accurate. When the title is generic, stale, or the current work changes, call kiri_do with operation "session.rename" and params {"agentId":"${agentId}","title":"Short action title"}.`,
+    '- Use Kiri MCP operations through kiri_get and kiri_do; there are no separate kiri_rename_session, kiri_list_projects, or kiri_list_sessions tools.',
+  ].join('\n')
+}
+
+function tomlString(value: string) {
+  return JSON.stringify(value)
+}
+
+function tomlStringArray(values: readonly string[]) {
+  return `[${values.map(tomlString).join(', ')}]`
 }
 
 function piLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {

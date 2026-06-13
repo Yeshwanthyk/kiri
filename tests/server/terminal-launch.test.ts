@@ -14,6 +14,21 @@ import {
 import { writeCodexTerminalSessionId } from '~/server/codex-terminal-session'
 
 const shell = { command: '/bin/zsh', args: ['-l', '-i'] }
+const codexKiriPrompt = [
+  'Kiri integration:',
+  '- This terminal Codex session is Kiri session agent-1.',
+  '- Keep the Kiri session title accurate. When the title is generic, stale, or the current work changes, call kiri_do with operation "session.rename" and params {"agentId":"agent-1","title":"Short action title"}.',
+  '- Use Kiri MCP operations through kiri_get and kiri_do; there are no separate kiri_rename_session, kiri_list_projects, or kiri_list_sessions tools.',
+].join('\n')
+
+function codexKiriArgs(kiriMcpBin = '/tmp/bin/kiri-mcp') {
+  return [
+    '--config',
+    `developer_instructions=${JSON.stringify(codexKiriPrompt)}`,
+    '--config',
+    `mcp_servers.kiri.command=${JSON.stringify(kiriMcpBin)}`,
+  ]
+}
 
 function launchConfig(runtime: TerminalAgentLaunchConfig['runtime']): TerminalAgentLaunchConfig {
   return {
@@ -25,6 +40,11 @@ function launchConfig(runtime: TerminalAgentLaunchConfig['runtime']): TerminalAg
     model: 'test-model',
     cwd: '/tmp/project',
   }
+}
+
+function stubCodexTerminalEnv() {
+  vi.stubEnv('KIRI_CODEX_BIN', '/tmp/bin/codex')
+  vi.stubEnv('KIRI_MCP_BIN', '/tmp/bin/kiri-mcp')
 }
 
 describe('buildTerminalProcessLaunch', () => {
@@ -154,13 +174,14 @@ describe('buildTerminalProcessLaunch', () => {
   })
 
   it('launches Codex in yolo mode with isolated Codex home when configured', () => {
-    vi.stubEnv('KIRI_CODEX_BIN', '/tmp/bin/codex')
+    stubCodexTerminalEnv()
     vi.stubEnv('KIRI_CODEX_HOME', '/tmp/codex-home')
 
     const launch = buildTerminalProcessLaunch(launchConfig('codex'), 'runtime', shell)
 
     expect(launch.command).toBe('/tmp/bin/codex')
     expect(launch.args).toEqual([
+      ...codexKiriArgs(),
       '--dangerously-bypass-approvals-and-sandbox',
       '--no-alt-screen',
       '--model',
@@ -171,7 +192,7 @@ describe('buildTerminalProcessLaunch', () => {
   })
 
   it('passes queued terminal input to new Codex sessions as the initial prompt', () => {
-    vi.stubEnv('KIRI_CODEX_BIN', '/tmp/bin/codex')
+    stubCodexTerminalEnv()
 
     const launch = buildTerminalProcessLaunch({
       ...launchConfig('codex'),
@@ -186,6 +207,7 @@ describe('buildTerminalProcessLaunch', () => {
 
     expect(launch.command).toBe('/tmp/bin/codex')
     expect(launch.args).toEqual([
+      ...codexKiriArgs(),
       '--dangerously-bypass-approvals-and-sandbox',
       '--no-alt-screen',
       '--model',
@@ -200,7 +222,7 @@ describe('buildTerminalProcessLaunch', () => {
   })
 
   it('resumes Codex when runtime state carries a Codex session id', () => {
-    vi.stubEnv('KIRI_CODEX_BIN', '/tmp/bin/codex')
+    stubCodexTerminalEnv()
 
     const launch = buildTerminalProcessLaunch({
       ...launchConfig('codex'),
@@ -210,6 +232,7 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.command).toBe('/tmp/bin/codex')
     expect(launch.args).toEqual([
       'resume',
+      ...codexKiriArgs(),
       '--dangerously-bypass-approvals-and-sandbox',
       '--no-alt-screen',
       '--model',
@@ -220,7 +243,7 @@ describe('buildTerminalProcessLaunch', () => {
   })
 
   it('resumes Codex from the Kiri session directory when runtime state is missing', () => {
-    vi.stubEnv('KIRI_CODEX_BIN', '/tmp/bin/codex')
+    stubCodexTerminalEnv()
     const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-session-'))
     writeCodexTerminalSessionId(sessionDir, 'sidecar-codex-session')
 
@@ -232,6 +255,7 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.command).toBe('/tmp/bin/codex')
     expect(launch.args).toEqual([
       'resume',
+      ...codexKiriArgs(),
       '--dangerously-bypass-approvals-and-sandbox',
       '--no-alt-screen',
       '--model',
@@ -242,6 +266,8 @@ describe('buildTerminalProcessLaunch', () => {
   })
 
   it('prefers an explicit Codex resume state over the discovered session id', () => {
+    vi.stubEnv('KIRI_MCP_BIN', '/tmp/bin/kiri-mcp')
+
     const launch = buildTerminalProcessLaunch({
       ...launchConfig('codex'),
       runtimeStateJson: JSON.stringify({
@@ -252,6 +278,7 @@ describe('buildTerminalProcessLaunch', () => {
 
     expect(launch.args).toEqual([
       'resume',
+      ...codexKiriArgs(),
       '--dangerously-bypass-approvals-and-sandbox',
       '--no-alt-screen',
       '--model',
@@ -426,6 +453,7 @@ describe('buildTerminalProcessLaunch', () => {
       PATH: '/bin',
       KIRI_CODEX_BIN: '/injected/codex',
       KIRI_CODEX_HOME: '/injected/codex-home',
+      KIRI_MCP_BIN: '/injected/kiri-mcp',
       KIRI_PI_BIN: '/injected/pi',
     }
     const service = makeTerminalLaunchService({
@@ -460,6 +488,7 @@ describe('buildTerminalProcessLaunch', () => {
 
     expect(codex.command).toBe('/injected/codex')
     expect(codex.args).toEqual([
+      ...codexKiriArgs('/injected/kiri-mcp'),
       '--dangerously-bypass-approvals-and-sandbox',
       '--no-alt-screen',
       '--model',

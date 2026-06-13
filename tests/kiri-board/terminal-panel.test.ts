@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  terminalWebSocketUrl,
   terminalShouldCustomScrollWheel,
   terminalTypographyOptions,
   terminalWheelScrollLines,
@@ -37,3 +38,58 @@ describe('terminal wheel scrolling', () => {
       .toBe(false)
   })
 })
+
+describe('terminal websocket url', () => {
+  it('uses same-origin proxy path when the server provides one', () => {
+    withLocation('https://pro.tail6bc56d.ts.net/session', () => {
+      expect(terminalWebSocketUrl({
+        host: '127.0.0.1',
+        port: 49152,
+        path: '/terminal',
+        proxyPath: '/terminal',
+        token: 'secret',
+        mode: 'runtime',
+        runtime: 'codex',
+        model: 'gpt-5.5',
+      }, 'agent-1', 80, 24, 'main')).toBe(
+        'wss://pro.tail6bc56d.ts.net/terminal?kiri_terminal_port=49152&agentId=agent-1&mode=runtime&cols=80&rows=24&token=secret',
+      )
+    })
+  })
+
+  it('falls back to direct terminal port without a proxy path', () => {
+    withLocation('https://pro.tail6bc56d.ts.net/session', () => {
+      expect(terminalWebSocketUrl({
+        host: '127.0.0.1',
+        port: 49152,
+        path: '/terminal',
+        token: 'secret',
+        mode: 'shell',
+        runtime: 'codex',
+        model: 'gpt-5.5',
+      }, 'agent-1', 80, 24, 'main')).toBe(
+        'wss://pro.tail6bc56d.ts.net:49152/terminal?agentId=agent-1&mode=shell&cols=80&rows=24&token=secret',
+      )
+    })
+  })
+})
+
+function withLocation(url: string, run: () => void) {
+  const previousWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { location: new URL(url) },
+  })
+  try {
+    run()
+  } finally {
+    if (previousWindow === undefined) {
+      delete (globalThis as { window?: Window }).window
+    } else {
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        value: previousWindow,
+      })
+    }
+  }
+}
