@@ -45,7 +45,6 @@ export const keymapGroups: {
     label: 'Focus',
     rows: [
       { action: 'focusChat', label: 'Focus chat', hint: 'Jump cursor to composer' },
-      { action: 'openDiffs', label: 'Open diffs', hint: 'Switch sidebar to diffs' },
       { action: 'openTerminal', label: 'Open terminal', hint: 'Switch sidebar to terminal' },
       { action: 'openScratchpad', label: 'Open scratchpad', hint: 'Switch sidebar to scratchpad' },
       { action: 'toggleTerminalFocus', label: 'Toggle terminal focus', hint: 'Jump into or out of the visible terminal' },

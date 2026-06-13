@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 import type { ThinkingLevel } from '~/lib/contracts'
 
-export type SidebarTab = 'chat' | 'diffs' | 'terminal' | 'scratchpad'
+export type SidebarTab = 'chat' | 'terminal' | 'scratchpad'
 
 export type RefreshAgentDetail = () => Promise<void>
 

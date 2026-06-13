@@ -62,7 +62,6 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "@pierre/diffs": "1.1.21",
-    "@pierre/trees": "^1.0.0-beta.3",
     "@tanstack/react-query": "^5.90.0",
     "@tanstack/react-router": "^1.169.2",
     "@tanstack/react-router-ssr-query": "^1.166.12",
@@ -104,10 +103,6 @@
       {
         "from": "resources/bin/kiri-mcp",
         "to": "bin/kiri-mcp"
-      },
-      {
-        "from": "dist/bin/kiri-git-diff-collector",
-        "to": "bin/kiri-git-diff-collector"
       },
       {
         "from": "dist/bin/kiri-read-model-indexer",

@@ -13,7 +13,6 @@ const testDbPath = resolve(process.env.KIRI_DB_PATH ?? '.kiri/kiri.e2e.sqlite')
 const appRoot = process.cwd()
 const projectRoot = resolve(tmpdir(), 'kiri-pican-e2e-worktree')
 const userSettingsPath = resolve(appRoot, '.kiri', 'settings.json')
-const fileOperationFixturePath = resolve(projectRoot, 'src/kiri-file-operation-e2e.tmp')
 const detailFixturePath = resolve(projectRoot, 'src/detail.ts')
 let fakeCodexServer: Awaited<ReturnType<typeof startFakeCodexAppServer>>
 
@@ -74,7 +73,6 @@ function resetE2eDatabase(database: DatabaseSync) {
 
   const tables = [
     'agent_context_usage',
-    'diff_artifacts',
     'timeline_events',
     'messages',
     'threads',
@@ -180,7 +178,6 @@ test('keymap settings remap navigation', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Settings' }).click()
   await expect(page.getByTestId('keymap-focusChat')).toBeVisible()
-  await expect(page.getByTestId('keymap-openDiffs')).toBeVisible()
   await page.getByTestId('keymap-projectNext').selectOption('arrowdown')
   await page.getByRole('button', { name: 'Back to board' }).click()
 
@@ -516,11 +513,9 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
   await expect(page.getByLabel('Runtime activity').last()).toBeVisible({
     timeout: 30_000,
   })
-  await expect.poll(() => diffPathsForSessionTitle(title), {
-    timeout: 30_000,
-  }).toContain('src/kiri-file-operation-e2e.tmp')
   await showLatestActivity(page)
-  await expect(page.getByTestId('chat-panel')).toContainText('Edited')
+  await expect(page.getByTestId('chat-panel')).toContainText('Changed file')
+  await expect(page.getByTestId('chat-panel')).toContainText('src/kiri-file-operation-e2e.tmp')
 
   const requests = fakeCodexServer.requests as CodexHarnessRequest[]
   expect(requests.some((request) => request.method === 'initialize')).toBe(true)
@@ -631,15 +626,12 @@ test('codex runtime replaces a missing rollout thread on first prompt', async ({
   expect(turnStartIndex).toBeGreaterThan(newThreadStartIndex)
 })
 
-test('sidebar switches between chat, diffs, and terminal', async ({ page, isMobile }, testInfo) => {
+test('sidebar switches between chat and terminal', async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, 'desktop sidebar tabs only')
   const title = `Sidebar Session ${testInfo.project.name}`
 
   await page.goto('/')
   await createSession(page, title)
-
-  await page.getByTestId('tab-diffs').click()
-  await expect(page.getByTestId('diff-panel')).toContainText('No diffs')
 
   await page.getByTestId('tab-terminal').click()
   await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
@@ -814,7 +806,7 @@ test('terminal focus key toggles out and back into a terminal chat session', asy
   await expect(terminalInput).toBeFocused()
 })
 
-test('codex terminal interface resumes after the PTY exits and keeps diffs available', async ({ page, isMobile }, testInfo) => {
+test('codex terminal interface resumes after the PTY exits', async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, 'desktop terminal interface flow')
   const title = `Codex Terminal Resume ${testInfo.project.name}`
 
@@ -858,16 +850,9 @@ test('codex terminal interface resumes after the PTY exits and keeps diffs avail
   await page.keyboard.type('state')
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('terminal-transcript')).toContainText(`state:alpha:session:${sessionId}:mode:resume`)
-
-  writeFileSync(fileOperationFixturePath, 'codex terminal diff\n')
-  await page.getByTestId('tab-diffs').click()
-  await expect
-    .poll(async () => diffPathsForSessionTitle(title).includes('src/kiri-file-operation-e2e.tmp'))
-    .toBe(true)
-  await expect(page.getByTestId('diff-panel')).toContainText('Changed files')
 })
 
-test('selected agent detail loads chat, diffs, and local drafts', async ({ page, isMobile }) => {
+test('selected agent detail loads chat and local drafts', async ({ page, isMobile }) => {
   test.skip(isMobile, 'desktop selected-agent detail flow')
   const detailAgentId = 'agent-detail-e2e'
   const otherAgentId = 'agent-detail-other'
@@ -890,11 +875,6 @@ test('selected agent detail loads chat, diffs, and local drafts', async ({ page,
   await expect(page.getByTestId('selected-agent')).toHaveText('Detail Session')
   await expect(page.getByTestId('chat-panel')).toContainText('seeded detail assistant tail')
 
-  await page.getByTestId('tab-diffs').click()
-  await expect(page.getByTestId('diff-panel')).toContainText('1 file')
-  await expect(page.getByTestId('diff-panel')).toContainText('src/detail.ts')
-  await expect.poll(() => renderedDiffBodyLineCount(page)).toBeGreaterThanOrEqual(2)
-
   await page.getByTestId('tab-chat').click()
   await page.getByTestId('chat-input').fill('local unsent draft')
   await page.getByRole('button', { name: 'Other Session' }).click()
@@ -903,38 +883,6 @@ test('selected agent detail loads chat, diffs, and local drafts', async ({ page,
   await expect(page.getByTestId('chat-input')).toHaveValue('local unsent draft')
   await expect(page.evaluate(() => sessionStorage.getItem('kiri:chat-drafts:v1')))
     .resolves.toContain(detailAgentId)
-})
-
-test('large chat and diff render within browser budget', async ({ page, isMobile }, testInfo) => {
-  test.skip(isMobile, 'desktop render budget only')
-  test.setTimeout(60_000)
-  const title = `Perf Session ${testInfo.project.name}`
-  seedLargeSessionWithDetail({
-    agentId: 'agent-browser-perf',
-    slot: 'session-browser-perf',
-    title,
-    messageCount: 1_200,
-    diffCount: 60,
-    patchLinePairs: 72,
-  })
-
-  const chatStart = Date.now()
-  await page.goto('/')
-  await expect(page.getByTestId('selected-agent')).toHaveText(title)
-  await expect(page.getByTestId('chat-panel')).toContainText('browser perf message 1199')
-  const chatMs = Date.now() - chatStart
-  expect(chatMs).toBeLessThan(8_000)
-  await expect(page.getByTestId('chat-panel').locator('.timeline-row')).toHaveCount(500)
-
-  const diffStart = Date.now()
-  await page.getByTestId('tab-diffs').click()
-  await expect(page.getByTestId('diff-panel')).toContainText('50 files')
-  expect(readSelectedDiffPatchLineCount(title)).toBeGreaterThanOrEqual(140)
-  await expect
-    .poll(async () => renderedDiffBodyLineCount(page))
-    .toBeGreaterThanOrEqual(12)
-  const diffMs = Date.now() - diffStart
-  expect(diffMs).toBeLessThan(6_000)
 })
 
 test('escape leaves chat composer so board keymaps work', async ({ page, isMobile }, testInfo) => {
@@ -971,9 +919,9 @@ test('escape leaves scratchpad input so sidebar keymaps work', async ({ page, is
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('scratchpad-input')).not.toBeFocused()
   await page.keyboard.down('Shift')
-  await page.keyboard.press('KeyD')
+  await page.keyboard.press('KeyC')
   await page.keyboard.up('Shift')
-  await expect(page.getByTestId('diff-panel')).toContainText('No diffs')
+  await expect(page.getByTestId('chat-input')).toBeFocused()
 })
 
 test('scratchpad trigger can start codex in terminal mode', async ({ page, isMobile }, testInfo) => {
@@ -1387,16 +1335,6 @@ function seedSessionWithDetail(input: {
   const timestamp = new Date().toISOString()
   const threadId = `${input.agentId}-thread`
   writeFileSync(detailFixturePath, 'export const detail = true\n')
-  const patch = [
-    'diff --git a/src/detail.ts b/src/detail.ts',
-    'index 0000000..1111111 100644',
-    '--- a/src/detail.ts',
-    '+++ b/src/detail.ts',
-    '@@ -1 +1 @@',
-    '-export const detail = false',
-    '+export const detail = true',
-    '',
-  ].join('\n').replaceAll("'", "''")
   const database = new DatabaseSync(testDbPath)
   database.exec(`
     PRAGMA foreign_keys = ON;
@@ -1419,11 +1357,6 @@ function seedSessionWithDetail(input: {
     VALUES (
       '${input.agentId}-event', '${threadId}', 'tool_use', 'tool',
       'Read', 'src/detail.ts', '${timestamp}', '{}'
-    );
-    INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
-    VALUES (
-      '${input.agentId}-diff', '${input.agentId}', 'src/detail.ts',
-      'src/detail.ts', '${patch}', '${timestamp}'
     );
   `)
   database.close()
@@ -1477,128 +1410,6 @@ function seedChatTimelineSession(input: {
   } catch (error) {
     database.exec('ROLLBACK')
     throw error
-  } finally {
-    database.close()
-  }
-}
-
-function seedLargeSessionWithDetail(input: {
-  agentId: string
-  slot: string
-  title: string
-  messageCount: number
-  diffCount: number
-  patchLinePairs: number
-}) {
-  const database = new DatabaseSync(testDbPath)
-  const threadId = `${input.agentId}-thread`
-  const timestamp = new Date().toISOString()
-  const insertAgent = database.prepare(`
-    INSERT INTO agent_slots (
-      id, project_id, slot, title, runtime, model, status,
-      session_dir, session_file, position
-    )
-    VALUES (?, 'e2e-kiri', ?, ?, 'pi', 'openai-codex/gpt-5.5', 'idle', ?, NULL, 0)
-  `)
-  const insertThread = database.prepare(`
-    INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
-    VALUES (?, ?, 1, ?, ?, ?)
-  `)
-  const insertMessage = database.prepare(`
-    INSERT INTO messages (id, thread_id, role, text, timestamp)
-    VALUES (?, ?, ?, ?, ?)
-  `)
-  const insertDiff = database.prepare(`
-    INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `)
-
-  try {
-    database.exec('BEGIN')
-    insertAgent.run(input.agentId, input.slot, input.title, projectRoot)
-    insertThread.run(
-      threadId,
-      input.agentId,
-      `browser perf message ${input.messageCount - 1}`,
-      input.messageCount,
-      timestamp,
-    )
-    for (let index = 0; index < input.messageCount; index += 1) {
-      insertMessage.run(
-        `${input.agentId}-message-${index}`,
-        threadId,
-        index % 2 === 0 ? 'user' : 'assistant',
-        `browser perf message ${index} ${'x'.repeat(80)}`,
-        new Date(Date.UTC(2026, 4, 12, 12, 0, 0) + index * 1_000).toISOString(),
-      )
-    }
-    for (let index = 0; index < input.diffCount; index += 1) {
-      const path = `src/browser-perf-${index}.ts`
-      insertDiff.run(
-        `${input.agentId}-diff-${index}`,
-        input.agentId,
-        path,
-        path,
-        makeBrowserPerfPatch(index, input.patchLinePairs),
-        timestamp,
-      )
-    }
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  } finally {
-    database.close()
-  }
-}
-
-function makeBrowserPerfPatch(index: number, linePairs: number) {
-  const lines = [
-    `diff --git a/src/browser-perf-${index}.ts b/src/browser-perf-${index}.ts`,
-    'index 1111111..2222222 100644',
-    `--- a/src/browser-perf-${index}.ts`,
-    `+++ b/src/browser-perf-${index}.ts`,
-    '@@ -1,3 +1,3 @@',
-  ]
-  for (let line = 0; line < linePairs; line += 1) {
-    lines.push(`-old ${line} ${'a'.repeat(80)}`)
-    lines.push(`+new ${line} ${'b'.repeat(80)}`)
-  }
-  return lines.join('\n')
-}
-
-function diffPathsForSessionTitle(title: string) {
-  const database = new DatabaseSync(testDbPath)
-  try {
-    return database
-      .prepare(`
-        SELECT d.path
-        FROM diff_artifacts d
-        JOIN agent_slots a ON a.id = d.agent_id
-        WHERE a.title = ?
-        ORDER BY d.path ASC
-      `)
-      .all(title)
-      .map((row) => (row as { path: string }).path)
-  } finally {
-    database.close()
-  }
-}
-
-function readSelectedDiffPatchLineCount(title: string) {
-  const database = new DatabaseSync(testDbPath)
-  try {
-    const row = database
-      .prepare(`
-        SELECT d.patch
-        FROM diff_artifacts d
-        JOIN agent_slots a ON a.id = d.agent_id
-        WHERE a.title = ?
-        ORDER BY d.updated_at DESC, d.id ASC
-        LIMIT 1
-      `)
-      .get(title) as { patch: string } | undefined
-    return row?.patch.split('\n').length ?? 0
   } finally {
     database.close()
   }
@@ -1667,18 +1478,6 @@ async function showLatestActivity(page: import('@playwright/test').Page) {
   if (await collapsedActivityRows.count()) {
     await collapsedActivityRows.last().click()
   }
-}
-
-async function renderedDiffBodyLineCount(page: import('@playwright/test').Page) {
-  return page.getByTestId('diff-panel').evaluate((panel) => {
-    const hosts = panel.querySelectorAll('diffs-container')
-    return Array.from(hosts).reduce((count, host) => {
-      const rows = host.shadowRoot?.querySelectorAll(
-        '[data-line-type="change-deletion"], [data-line-type="change-addition"]',
-      )
-      return count + (rows?.length ?? 0)
-    }, 0)
-  })
 }
 
 async function expectActiveElementInside(page: import('@playwright/test').Page, selector: string) {

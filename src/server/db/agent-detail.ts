@@ -9,7 +9,6 @@ import {
   agentDetailDbRowSchema,
   agentTaskDbRowSchema,
   contextUsageDbRowSchema,
-  diffDbRowSchema,
   idDbRowSchema,
   messageDbRowSchema,
   timelineEventDbRowSchema,
@@ -20,7 +19,6 @@ type ReadAgentDetailInput = {
   readonly agentId: string
   readonly limit: number
   readonly offset: number
-  readonly diffLimit: number
 }
 
 export function readAgentDetail(database: DatabaseSync, input: ReadAgentDetailInput) {
@@ -45,12 +43,7 @@ export function readAgentDetail(database: DatabaseSync, input: ReadAgentDetailIn
           t.id AS threadId,
           t.preview,
           t.message_count AS messageCount,
-          t.updated_at AS updatedAt,
-          (
-            SELECT COUNT(*)
-            FROM diff_artifacts d
-            WHERE d.agent_id = a.id
-          ) AS diffCount
+          t.updated_at AS updatedAt
         FROM agent_slots a
         INNER JOIN projects p ON p.id = a.project_id
         LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
@@ -165,24 +158,8 @@ export function readAgentDetail(database: DatabaseSync, input: ReadAgentDetailIn
       total: totalTimelineRows,
       hasMore: input.offset + timeline.length < totalTimelineRows,
     },
-    diffs: readDiffs(database, agentId, input.diffLimit),
     tasks: readAgentTasks(database, agentId),
   }
-}
-
-function readDiffs(database: DatabaseSync, agentId: string, limit?: number) {
-  return database
-    .prepare(
-      `
-        SELECT id, agent_id AS agentId, title, path, patch, updated_at AS updatedAt
-        FROM diff_artifacts
-        WHERE agent_id = ?
-        ORDER BY updated_at DESC
-        ${limit === undefined ? '' : 'LIMIT ?'}
-      `,
-    )
-    .all(...(limit === undefined ? [agentId] : [agentId, limit]))
-    .map((row) => diffDbRowSchema.parse(row))
 }
 
 function readAgentTasks(database: DatabaseSync, agentId: string) {

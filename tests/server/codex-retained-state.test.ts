@@ -31,7 +31,6 @@ describe('codex retained state', () => {
 
     state.rememberThread('agent-1', 'thread-old')
     state.rememberTurn('thread-old', 'turn-old')
-    state.rememberRepoDiffRefreshedTurn(codexRetainedTurnKey('thread-old', 'turn-old'))
     state.rememberTurnStartProjection(codexRetainedTurnKey('thread-old', 'turn-old'))
 
     state.rememberThread('agent-1', 'thread-new')
@@ -39,12 +38,10 @@ describe('codex retained state', () => {
     expect(state.threadForAgent('agent-1')).toBe('thread-new')
     expect(state.agentForThread('thread-old')).toBeUndefined()
     expect(state.turnForThread('thread-old')).toBeUndefined()
-    expect(state.hasRepoDiffRefreshedTurn(codexRetainedTurnKey('thread-old', 'turn-old'))).toBe(false)
     expect(state.stats()).toMatchObject({
       threadAgents: 1,
       agentThreads: 1,
       threadTurns: 0,
-      repoDiffRefreshedTurns: 0,
       turnStartProjections: 0,
     })
   })
@@ -68,7 +65,6 @@ describe('codex retained state', () => {
     state.rememberTurn('thread-2', 'turn-2')
     state.queues.set('agent-1', Promise.resolve())
     state.bumpGeneration('agent-1')
-    state.rememberRepoDiffRefreshedTurn(codexRetainedTurnKey('thread-2', 'turn-2'))
     state.rememberTurnStartProjection(codexRetainedTurnKey('thread-2', 'turn-2'))
 
     state.forgetAgent('agent-1')
@@ -79,7 +75,6 @@ describe('codex retained state', () => {
       threadTurns: 0,
       queues: 0,
       sessionGenerations: 0,
-      repoDiffRefreshedTurns: 0,
       turnStartProjections: 0,
     })
   })
@@ -99,19 +94,6 @@ describe('codex retained state', () => {
       queues: 0,
       sessionGenerations: 1,
     })
-  })
-
-  it('bounds diff refresh guards and evicts oldest turn keys', () => {
-    const state = makeCodexRetainedState({ maxRepoDiffRefreshedTurns: 2 })
-
-    state.rememberRepoDiffRefreshedTurn(codexRetainedTurnKey('thread-1', 'turn-1'))
-    state.rememberRepoDiffRefreshedTurn(codexRetainedTurnKey('thread-2', 'turn-2'))
-    state.rememberRepoDiffRefreshedTurn(codexRetainedTurnKey('thread-3', 'turn-3'))
-
-    expect(state.hasRepoDiffRefreshedTurn(codexRetainedTurnKey('thread-1', 'turn-1'))).toBe(false)
-    expect(state.hasRepoDiffRefreshedTurn(codexRetainedTurnKey('thread-2', 'turn-2'))).toBe(true)
-    expect(state.hasRepoDiffRefreshedTurn(codexRetainedTurnKey('thread-3', 'turn-3'))).toBe(true)
-    expect(state.stats().repoDiffRefreshedTurns).toBe(2)
   })
 
   it('dedupes turn-start projection guards and evicts oldest turn keys', () => {
@@ -144,7 +126,6 @@ describe('codex retained state', () => {
       threadAgents: 0,
       agentThreads: 0,
       threadTurns: 0,
-      repoDiffRefreshedTurns: 0,
       turnStartProjections: 0,
     })
   })

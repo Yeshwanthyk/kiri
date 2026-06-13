@@ -95,7 +95,6 @@ export function collectReadModelCandidates(database: DatabaseSync): ReadModelCan
   return [
     collectWorkspaceSummaryCandidate(database),
     ...collectAgentTimelineCandidates(database),
-    ...collectDiffSummaryCandidates(database),
   ]
 }
 
@@ -158,7 +157,6 @@ function collectWorkspaceSummaryCandidate(database: DatabaseSync): ReadModelCand
     archivedAgentCount: z.number(),
     scratchpadBlockCount: z.number(),
     totalMessages: z.number(),
-    totalDiffs: z.number(),
     updatedAt: z.string(),
   }).parse(database.prepare(`
     SELECT
@@ -168,7 +166,6 @@ function collectWorkspaceSummaryCandidate(database: DatabaseSync): ReadModelCand
       (SELECT COUNT(*) FROM agent_slots WHERE archived_at IS NOT NULL) AS archivedAgentCount,
       (SELECT COUNT(*) FROM scratchpad_blocks) AS scratchpadBlockCount,
       (SELECT COALESCE(SUM(message_count), 0) FROM threads WHERE active = 1) AS totalMessages,
-      (SELECT COUNT(*) FROM diff_artifacts) AS totalDiffs,
       COALESCE(MAX(updated_at), '') AS updatedAt
     FROM threads
   `).get())
@@ -183,7 +180,6 @@ function collectWorkspaceSummaryCandidate(database: DatabaseSync): ReadModelCand
       archivedAgentCount: row.archivedAgentCount,
       scratchpadBlockCount: row.scratchpadBlockCount,
       totalMessages: row.totalMessages,
-      totalDiffs: row.totalDiffs,
     },
     updatedAt: row.updatedAt || new Date(0).toISOString(),
   }
@@ -202,11 +198,6 @@ function collectAgentTimelineCandidates(database: DatabaseSync): ReadModelCandid
         FROM agent_tasks
         GROUP BY thread_id
       ),
-      diff_counts AS (
-        SELECT agent_id, COUNT(*) AS diff_count
-        FROM diff_artifacts
-        GROUP BY agent_id
-      ),
       message_latest AS (
         SELECT thread_id, MAX(timestamp) AS message_updated_at
         FROM messages
@@ -220,7 +211,6 @@ function collectAgentTimelineCandidates(database: DatabaseSync): ReadModelCandid
       t.updated_at AS updatedAt,
       COALESCE(event_counts.event_count, 0) AS eventCount,
       COALESCE(task_counts.task_count, 0) AS taskCount,
-      COALESCE(diff_counts.diff_count, 0) AS diffCount,
       MAX(
         COALESCE(message_latest.message_updated_at, ''),
         COALESCE(event_counts.event_updated_at, ''),
@@ -230,7 +220,6 @@ function collectAgentTimelineCandidates(database: DatabaseSync): ReadModelCandid
     INNER JOIN threads t ON t.agent_id = a.id AND t.active = 1
     LEFT JOIN event_counts ON event_counts.thread_id = t.id
     LEFT JOIN task_counts ON task_counts.thread_id = t.id
-    LEFT JOIN diff_counts ON diff_counts.agent_id = a.id
     LEFT JOIN message_latest ON message_latest.thread_id = t.id
     ORDER BY a.position ASC, a.id ASC
   `).all().map((row) => {
@@ -242,7 +231,6 @@ function collectAgentTimelineCandidates(database: DatabaseSync): ReadModelCandid
       updatedAt: z.string(),
       eventCount: z.number(),
       taskCount: z.number(),
-      diffCount: z.number(),
       latestTimelineAt: z.string(),
     }).parse(row)
     return {
@@ -255,40 +243,7 @@ function collectAgentTimelineCandidates(database: DatabaseSync): ReadModelCandid
         messageCount: parsed.messageCount,
         eventCount: parsed.eventCount,
         taskCount: parsed.taskCount,
-        diffCount: parsed.diffCount,
         latestTimelineAt: parsed.latestTimelineAt,
-      },
-      updatedAt: parsed.updatedAt,
-    }
-  })
-}
-
-function collectDiffSummaryCandidates(database: DatabaseSync): ReadModelCandidate[] {
-  return database.prepare(`
-    SELECT
-      id,
-      agent_id AS agentId,
-      title,
-      path,
-      updated_at AS updatedAt
-    FROM diff_artifacts
-    ORDER BY updated_at DESC, id ASC
-  `).all().map((row) => {
-    const parsed = z.object({
-      id: z.string(),
-      agentId: z.string(),
-      title: z.string(),
-      path: z.string(),
-      updatedAt: z.string(),
-    }).parse(row)
-    return {
-      kind: 'diff.summary' as const,
-      entityId: parsed.id,
-      payload: {
-        id: parsed.id,
-        agentId: parsed.agentId,
-        title: parsed.title,
-        path: parsed.path,
       },
       updatedAt: parsed.updatedAt,
     }

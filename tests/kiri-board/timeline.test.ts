@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentCell, BoardMessage, DiffArtifact } from '~/lib/contracts'
+import type { AgentCell, BoardMessage } from '~/lib/contracts'
 import {
   compactWorkEntries,
   deriveAgentTimelineRows,
   diffLineStats,
   normalizeTimelinePath,
   summarizeWorkEntries,
+  type TimelinePatch,
 } from '~/components/kiri-board/timeline'
 
 const now = '2026-05-11T12:00:00.000Z'
@@ -28,7 +29,6 @@ function agent(overrides: Partial<AgentCell>): AgentCell {
     sessionFile: null,
     preview: '',
     messageCount: 0,
-    diffCount: 0,
     contextUsage: null,
     pendingQuestion: null,
     updatedAt: now,
@@ -36,13 +36,12 @@ function agent(overrides: Partial<AgentCell>): AgentCell {
     messages: [],
     timelineEvents: [],
     timeline: [],
-    diffs: [],
     tasks: [],
     ...overrides,
   }
 }
 
-function diff(path: string): DiffArtifact {
+function diff(path: string): TimelinePatch {
   return {
     id: `diff:${path}`,
     title: path,
@@ -68,7 +67,7 @@ describe('deriveAgentTimelineRows', () => {
     expect(rows[0]).toMatchObject({ id: 'message:u1' })
   })
 
-  it('groups runtime work before the next chat message and attaches matching diffs', () => {
+  it('groups changed-file runtime work before the next chat message', () => {
     const rows = deriveAgentTimelineRows(
       agent({
         timeline: [
@@ -99,7 +98,6 @@ describe('deriveAgentTimelineRows', () => {
             message: message('a1', 'assistant', 'done'),
           },
         ],
-        diffs: [diff('src/app.ts')],
       }),
       '/repo',
     )
@@ -107,7 +105,7 @@ describe('deriveAgentTimelineRows', () => {
     expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
     expect(rows[1]).toMatchObject({
       kind: 'work',
-      entries: [{ label: 'Edited', path: 'src/app.ts', diff: { id: 'diff:src/app.ts' } }],
+      entries: [{ label: 'Changed file', path: 'src/app.ts' }],
     })
   })
 
@@ -170,7 +168,7 @@ describe('deriveAgentTimelineRows', () => {
     expect(rows[2]).toMatchObject({ kind: 'message', message: { text: 'done' } })
   })
 
-  it('surfaces edited-file diffs inside grouped runtime work', () => {
+  it('surfaces edited-file events inside grouped runtime work', () => {
     const rows = deriveAgentTimelineRows(
       agent({
         runtime: 'pi',
@@ -202,7 +200,6 @@ describe('deriveAgentTimelineRows', () => {
             message: message('a1', 'assistant', 'done'),
           },
         ],
-        diffs: [diff('src/app.ts')],
       }),
       '/repo',
     )
@@ -210,52 +207,7 @@ describe('deriveAgentTimelineRows', () => {
     expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
     expect(rows[1]).toMatchObject({
       kind: 'work',
-      entries: [{ label: 'Edited', path: 'src/app.ts', diff: { id: 'diff:src/app.ts' } }],
-    })
-  })
-
-  it('adds persisted diffs to the latest work row when no tool event names the file', () => {
-    const rows = deriveAgentTimelineRows(
-      agent({
-        timeline: [
-          {
-            type: 'message',
-            id: 'message:u1',
-            timestamp: now,
-            message: message('u1', 'user', 'change it'),
-          },
-          {
-            type: 'event',
-            id: 'event:e1',
-            timestamp: now,
-            event: {
-              id: 'e1',
-              kind: 'tool_execution_start',
-              tone: 'tool',
-              label: 'Bash',
-              detail: "Bash: git status --short",
-              timestamp: now,
-            },
-          },
-          {
-            type: 'message',
-            id: 'message:a1',
-            timestamp: now,
-            message: message('a1', 'assistant', 'done'),
-          },
-        ],
-        diffs: [diff('src/app.ts')],
-      }),
-      '/repo',
-    )
-
-    expect(rows.map((row) => row.kind)).toEqual(['message', 'work', 'message'])
-    expect(rows[1]).toMatchObject({
-      kind: 'work',
-      entries: [
-        { kind: 'tool_execution_start', label: 'Ran command' },
-        { kind: 'diff.artifact', label: 'Edited', path: 'src/app.ts', diff: { id: 'diff:src/app.ts' } },
-      ],
+      entries: [{ label: 'Changed file', path: 'src/app.ts' }],
     })
   })
 

@@ -16,7 +16,7 @@ import {
 } from '~/server/read-model-indexer'
 
 describe('read-model indexer', () => {
-  it('materializes workspace, agent timeline, and diff summary rows', () => {
+  it('materializes workspace and agent timeline summary rows', () => {
     const root = mkdtempSync(join(tmpdir(), 'kiri-read-model-db-'))
     const cwd = join(root, 'project')
     mkdirSync(cwd)
@@ -43,15 +43,6 @@ describe('read-model indexer', () => {
       database
         .prepare('UPDATE threads SET preview = ?, message_count = ?, updated_at = ? WHERE id = ?')
         .run('Hello', 1, '2026-01-01T00:00:01.000Z', thread.id)
-      database
-        .prepare(
-          `
-            INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
-            VALUES ('diff-1', ?, 'Diff', 'src/app.ts', 'patch text', '2026-01-01T00:00:02.000Z')
-          `,
-        )
-        .run(agentId)
-
       const entries = refreshReadModelEntries(database, {
         env: { KIRI_READ_MODEL_INDEXER: 'typescript' },
       })
@@ -59,19 +50,16 @@ describe('read-model indexer', () => {
       expect(entries.map((entry) => entry.kind)).toEqual([
         'workspace.summary',
         'agent.timeline.summary',
-        'diff.summary',
       ])
       expect(listReadModelEntries(database).map((entry) => [entry.kind, entry.entityId]))
         .toEqual([
           ['agent.timeline.summary', agentId],
-          ['diff.summary', 'diff-1'],
           ['workspace.summary', 'workspace'],
         ])
       expect(entries.find((entry) => entry.kind === 'agent.timeline.summary')?.payload)
         .toMatchObject({
           agentId,
           messageCount: 1,
-          diffCount: 1,
         })
     } finally {
       database.close()
@@ -130,7 +118,6 @@ describe('read-model indexer', () => {
         messageCount: 2,
         eventCount: 1,
         taskCount: 0,
-        diffCount: 3,
         latestTimelineAt: '2026-01-01T00:00:02.000Z',
       },
       updatedAt: '2026-01-01T00:00:02.000Z',
@@ -138,7 +125,7 @@ describe('read-model indexer', () => {
 
     const entries = indexReadModelCandidatesWithTypeScript(candidates)
 
-    expect(entries[0]?.revision).toBe('52c7bdc4091c3ecc')
+    expect(entries[0]?.revision).toBe('9dde7623837b160b')
   })
 
   it('passes stdin contract to the Rust indexer process path', () => {
@@ -185,6 +172,5 @@ function workspacePayload() {
     archivedAgentCount: 0,
     scratchpadBlockCount: 0,
     totalMessages: 0,
-    totalDiffs: 0,
   }
 }

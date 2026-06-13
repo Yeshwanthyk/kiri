@@ -121,7 +121,6 @@ function buildSnapshot(overrides: {
         agentPrev: 'h',
         agentNext: 'l',
         focusChat: 'i',
-        openDiffs: 'd',
         openTerminal: 't',
         openScratchpad: 's',
         startSession: 'n',
@@ -184,7 +183,6 @@ function agent(
     sessionFile: null,
     preview: '',
     messageCount: 0,
-    diffCount: 0,
     contextUsage: null,
     pendingQuestion: null,
     updatedAt: override.updatedAt,
@@ -192,7 +190,6 @@ function agent(
     messages: [],
     timelineEvents: [],
     timeline: [],
-    diffs: [],
     tasks: [],
   }
 }

@@ -8,7 +8,6 @@ import type {
   AgentTask,
   AgentDetail,
   AgentEvent,
-  DiffArtifact,
   DeleteSessionInput,
   KnowledgeAddInput,
   KnowledgeMarkSeenInput,
@@ -96,7 +95,6 @@ import {
   recordPiTimelineEventRow,
   recordRuntimeMessageRow,
   recordRuntimeTimelineEventRow,
-  replaceAgentDiffArtifactsRows,
   replaceAgentTasksRows,
 } from './db/timeline-writes'
 import { readWorkspaceRevision, readWorkspaceSnapshot } from './db/workspace-snapshot'
@@ -223,8 +221,6 @@ function readModelRefreshDisabled(env: NodeJS.ProcessEnv) {
   return value === '0' || value === 'false' || value === 'off'
 }
 
-const agentDetailDiffLimit = 50
-
 export function getAgentDetail(input: { agentId: string; limit?: number; offset?: number }): AgentDetail {
   const database = getDb()
   hydratePersistedPiSessions(database)
@@ -239,7 +235,6 @@ export function getAgentDetail(input: { agentId: string; limit?: number; offset?
     agentId,
     limit,
     offset,
-    diffLimit: agentDetailDiffLimit,
   })
   const parsedAgent = detail.agent
 
@@ -256,7 +251,6 @@ export function getAgentDetail(input: { agentId: string; limit?: number; offset?
     sessionFile: parsedAgent.sessionFile,
     preview: parsedAgent.preview ?? 'No messages yet',
     messageCount: parsedAgent.messageCount ?? 0,
-    diffCount: detail.diffs.length,
     contextUsage: readContextUsage(
       parsedAgent,
       settings,
@@ -269,13 +263,6 @@ export function getAgentDetail(input: { agentId: string; limit?: number; offset?
     timelineEvents: detail.timeline.flatMap((item) => item.type === 'event' ? [item.event] : []),
     timeline: detail.timeline,
     timelinePage: detail.timelinePage,
-    diffs: detail.diffs.map((diff) => ({
-      id: diff.id,
-      title: diff.title,
-      path: diff.path,
-      patch: diff.patch,
-      updatedAt: diff.updatedAt,
-    })),
     tasks: detail.tasks,
   })
 }
@@ -678,13 +665,6 @@ export function recordAgentInfoEvent(input: {
 
 export function getAgentThinkingLevel(agentId: string) {
   return getAgentThinkingLevelFromDb(getDb(), agentId)
-}
-
-export function replaceAgentDiffArtifacts(input: {
-  agentId: string
-  diffs: Array<Pick<DiffArtifact, 'title' | 'path' | 'patch'>>
-}) {
-  replaceAgentDiffArtifactsRows(getDb(), input)
 }
 
 function runtimeSessionDir(runtime: string, projectId: string, slot: string) {

@@ -8,7 +8,6 @@ export type CodexRetainedStateStats = {
   threadTurns: number
   queues: number
   sessionGenerations: number
-  repoDiffRefreshedTurns: number
   turnStartProjections: number
 }
 
@@ -19,10 +18,8 @@ export type CodexRetainedStateTestInput = {
 }
 
 export function makeCodexRetainedState(input: {
-  readonly maxRepoDiffRefreshedTurns?: number
   readonly maxTurnStartProjections?: number
 } = {}) {
-  const maxRepoDiffRefreshedTurns = input.maxRepoDiffRefreshedTurns ?? 1_000
   const maxTurnStartProjections = input.maxTurnStartProjections ?? 1_000
   const adapters = new Map<string, CodexAppServerAdapter>()
   const adapterListeners = new Set<string>()
@@ -31,7 +28,6 @@ export function makeCodexRetainedState(input: {
   const threadTurns = new Map<string, string>()
   const queues = new Map<string, Promise<void>>()
   const sessionGenerations = new Map<string, number>()
-  const repoDiffRefreshedTurns = new Set<string>()
   const turnStartProjections = new Set<string>()
 
   function pruneTurnKeysForThread(turnKeys: Set<string>, threadId: string) {
@@ -42,7 +38,6 @@ export function makeCodexRetainedState(input: {
   }
 
   function pruneThreadTurnKeys(threadId: string) {
-    pruneTurnKeysForThread(repoDiffRefreshedTurns, threadId)
     pruneTurnKeysForThread(turnStartProjections, threadId)
   }
 
@@ -56,10 +51,6 @@ export function makeCodexRetainedState(input: {
       turnKeys.delete(oldest)
     }
     return true
-  }
-
-  function rememberRepoDiffRefreshedTurn(turnKey: string) {
-    rememberBoundedTurnKey(repoDiffRefreshedTurns, turnKey, maxRepoDiffRefreshedTurns)
   }
 
   function rememberTurnStartProjection(turnKey: string) {
@@ -107,7 +98,6 @@ export function makeCodexRetainedState(input: {
     rememberThread(testInput.agentId, testInput.threadId)
     if (testInput.turnId) {
       threadTurns.set(testInput.threadId, testInput.turnId)
-      rememberRepoDiffRefreshedTurn(codexRetainedTurnKey(testInput.threadId, testInput.turnId))
     }
   }
 
@@ -117,7 +107,6 @@ export function makeCodexRetainedState(input: {
     threadTurns.clear()
     queues.clear()
     sessionGenerations.clear()
-    repoDiffRefreshedTurns.clear()
     turnStartProjections.clear()
   }
 
@@ -130,7 +119,6 @@ export function makeCodexRetainedState(input: {
       threadTurns: threadTurns.size,
       queues: queues.size,
       sessionGenerations: sessionGenerations.size,
-      repoDiffRefreshedTurns: repoDiffRefreshedTurns.size,
       turnStartProjections: turnStartProjections.size,
     }
   }
@@ -162,8 +150,6 @@ export function makeCodexRetainedState(input: {
     forgetThread,
     forgetAgent,
     rememberThread,
-    hasRepoDiffRefreshedTurn: (turnKey: string) => repoDiffRefreshedTurns.has(turnKey),
-    rememberRepoDiffRefreshedTurn,
     rememberTurnStartProjection,
     stats,
     retainForTest,

@@ -2,7 +2,6 @@
   "$schema": "https://unpkg.com/knip@6.14.0/schema.json",
   "entry": [
     "src/desktop/preload.cjs",
-    "tests/harness/diff-refresh-public-harness.ts",
     "tests/harness/task-progress-db-harness.ts",
     "tests/harness/effect-layers.ts",
     "tests/harness/fake-codex-terminal.mjs",
@@ -10,7 +9,6 @@
     "tests/harness/kiri-agent-detail-history-harness.ts",
     "tests/harness/runtime-command-public-harness.ts",
     "tests/harness/scratchpad-trigger-harness.ts",
-    "tests/perf/run-client-render-perf.tsx",
     "tests/perf/run-perf.ts",
     "tests/types/db-transaction-types.ts",
     "tests/types/runtime-kind-exhaustive.ts"

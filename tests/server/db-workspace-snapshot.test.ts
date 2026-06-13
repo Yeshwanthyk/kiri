@@ -40,7 +40,7 @@ const settings: KiriSettings = {
 }
 
 describe('workspace snapshot projection', () => {
-  it('projects visible, hidden, archived, context, pending question, diffs, and selection state', () => {
+  it('projects visible, hidden, archived, context, pending question, and selection state', () => {
     const root = mkdtempSync(join(tmpdir(), 'kiri-db-workspace-snapshot-'))
     const cwd = join(root, 'project')
     const hiddenCwd = join(root, 'hidden-project')
@@ -85,14 +85,6 @@ describe('workspace snapshot projection', () => {
       database
         .prepare('UPDATE threads SET preview = ?, message_count = ?, updated_at = ? WHERE id = ?')
         .run('Latest answer', 3, '2026-01-02T00:00:00.000Z', thread.id)
-      database
-        .prepare(
-          `
-            INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
-            VALUES ('diff-1', ?, 'Diff', 'src/file.ts', 'patch', '2026-01-02T00:00:00.000Z')
-          `,
-        )
-        .run(agentId)
       upsertAgentContextUsage(database, {
         agentId,
         usedTokens: 50,
@@ -142,7 +134,6 @@ describe('workspace snapshot projection', () => {
         title: 'Active Session',
         preview: 'Latest answer',
         messageCount: 3,
-        diffCount: 1,
         contextUsage: {
           usedTokens: 50,
           remainingTokens: 150,
@@ -209,18 +200,6 @@ describe('workspace snapshot projection', () => {
         settings,
         preferences: defaultUiPreferences,
       })
-      database
-        .prepare(
-          `
-            INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
-            VALUES ('diff-1', ?, 'Diff', 'src/file.ts', 'patch', '2026-01-02T00:00:00.000Z')
-          `,
-        )
-        .run(agentId)
-      const afterDiff = readWorkspaceRevision(database, {
-        settings,
-        preferences: defaultUiPreferences,
-      })
       upsertAgentContextUsage(database, {
         agentId,
         usedTokens: 25,
@@ -261,8 +240,7 @@ describe('workspace snapshot projection', () => {
       expect(afterSession.revision).not.toBe(before.revision)
       expect(afterRuntimeState.revision).not.toBe(afterSession.revision)
       expect(afterThread.revision).not.toBe(afterRuntimeState.revision)
-      expect(afterDiff.revision).not.toBe(afterThread.revision)
-      expect(afterContext.revision).not.toBe(afterDiff.revision)
+      expect(afterContext.revision).not.toBe(afterThread.revision)
       expect(afterScratchpad.revision).not.toBe(afterContext.revision)
       expect(afterScratchpadTriggered.revision).not.toBe(afterScratchpad.revision)
       expect(afterScratchpadDelete.revision).not.toBe(afterScratchpadTriggered.revision)

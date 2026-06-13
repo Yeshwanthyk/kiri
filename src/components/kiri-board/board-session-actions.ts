@@ -23,7 +23,6 @@ type BoardSessionMutations = {
     text: string
     images: SendMessageImage[]
   }, WorkspaceSnapshot>
-  readonly refreshTerminalDiffs: Mutation<{ agentId: string }, WorkspaceSnapshot>
   readonly steerMessage: Mutation<{
     agentId: string
     text: string
@@ -141,17 +140,6 @@ export function useBoardSessionActions({
     await onDetailRefresh?.()
   }, [applyWorkspace, mutations, withWorkspacePolling])
 
-  const handleRefreshTerminalDiffs = React.useCallback(async (
-    agentId: string,
-    onDetailRefresh?: RefreshAgentDetail,
-  ) => {
-    await runWorkspaceMutation(
-      () => mutations.refreshTerminalDiffs({ data: { agentId } }),
-      applyWorkspace,
-    )
-    await onDetailRefresh?.()
-  }, [applyWorkspace, mutations, runWorkspaceMutation])
-
   const handleSteerMessage = React.useCallback(async (
     agentId: string,
     text: string,
@@ -252,7 +240,6 @@ export function useBoardSessionActions({
     handleRenameSession,
     handleDeleteSession,
     handleSendMessage,
-    handleRefreshTerminalDiffs,
     handleSteerMessage,
     handleInterruptMessage,
     handleThinkingCommand,

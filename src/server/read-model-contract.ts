@@ -3,7 +3,6 @@ import { z } from 'zod'
 export const readModelKinds = [
   'workspace.summary',
   'agent.timeline.summary',
-  'diff.summary',
 ] as const
 export const readModelKindSchema = z.enum(readModelKinds)
 export type ReadModelKind = z.infer<typeof readModelKindSchema>
@@ -23,7 +22,6 @@ export const workspaceSummaryPayloadSchema = z.object({
   archivedAgentCount: z.number().int().nonnegative(),
   scratchpadBlockCount: z.number().int().nonnegative(),
   totalMessages: z.number().int().nonnegative(),
-  totalDiffs: z.number().int().nonnegative(),
 })
 
 export const agentTimelineSummaryPayloadSchema = z.object({
@@ -33,15 +31,7 @@ export const agentTimelineSummaryPayloadSchema = z.object({
   messageCount: z.number().int().nonnegative(),
   eventCount: z.number().int().nonnegative(),
   taskCount: z.number().int().nonnegative(),
-  diffCount: z.number().int().nonnegative(),
   latestTimelineAt: z.string(),
-})
-
-export const diffSummaryPayloadSchema = z.object({
-  id: z.string().trim().min(1),
-  agentId: z.string().trim().min(1),
-  title: z.string(),
-  path: z.string(),
 })
 
 export const readModelEntrySchema = z.discriminatedUnion('kind', [
@@ -54,11 +44,6 @@ export const readModelEntrySchema = z.discriminatedUnion('kind', [
     ...readModelBaseEntrySchema,
     kind: z.literal('agent.timeline.summary'),
     payload: agentTimelineSummaryPayloadSchema,
-  }),
-  z.object({
-    ...readModelBaseEntrySchema,
-    kind: z.literal('diff.summary'),
-    payload: diffSummaryPayloadSchema,
   }),
 ])
 export type ReadModelEntry = z.infer<typeof readModelEntrySchema>

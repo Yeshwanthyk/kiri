@@ -144,9 +144,6 @@ export const ProjectLane = React.memo(function ProjectLane({
                 </div>
                 <p>{agent.preview}</p>
                 <div className="agent-cell-meta">
-                  {agent.diffCount > 0 ? (
-                    <span className="diff-token">+{agent.diffCount}</span>
-                  ) : null}
                   <span>{agent.messageCount} msg</span>
                   <span className="agent-cell-runtime">{agent.runtime}</span>
                 </div>

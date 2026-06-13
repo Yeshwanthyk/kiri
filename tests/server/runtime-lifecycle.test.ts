@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from '@effect/vitest'
 import { Effect, Exit, Layer } from 'effect'
 import type { AgentStatus } from '../../src/lib/contracts'
 import {
-  captureRuntimeDiffs,
   enqueueAgentTurn,
   inMemoryRuntimeProjectorLayer,
   nextThinkingLevel,
@@ -25,7 +24,6 @@ function projection() {
       if (event.type === 'status') calls.push({ type: 'status', value: event })
       else if (event.type === 'userMessage') calls.push({ type: 'message', value: event })
       else if (event.type === 'timelineEvent') calls.push({ type: 'timeline', value: event.value })
-      else if (event.type === 'diffsUpdated') calls.push({ type: 'diffs', value: event })
       else if (event.type === 'runtimeState') calls.push({ type: 'state', value: event })
       else calls.push({ type: event.type, value: event })
       return Effect.void
@@ -299,27 +297,11 @@ describe('runtime lifecycle', () => {
         status: 'completed',
         path: 'src/file.ts',
       }, fake)
-      yield* captureRuntimeDiffs('agent-1', () => [{
-        title: 'file.ts',
-        path: 'src/file.ts',
-        patch: 'diff --git a/src/file.ts b/src/file.ts',
-      }], fake)
 
       expect(calls.map((call) => call.type)).toEqual([
         'fileOperationStarted',
         'fileOperationCompleted',
-        'diffs',
       ])
-      expect(calls.at(-1)).toMatchObject({
-        type: 'diffs',
-        value: {
-          type: 'diffsUpdated',
-          agentId: 'agent-1',
-          diffs: [{
-            path: 'src/file.ts',
-          }],
-        },
-      })
     }))
 
   it('cycles thinking levels in contract order', () => {
@@ -328,30 +310,6 @@ describe('runtime lifecycle', () => {
     expect(nextThinkingLevel('xhigh')).toBe('off')
   })
 
-  it.effect('swallows diff capture projection failures', () =>
-    Effect.gen(function* () {
-    const { fake } = projection()
-    fake.project = vi.fn(() => {
-      throw new Error('db unavailable')
-    })
-
-    yield* captureRuntimeDiffs('agent-1', () => [{
-      title: 'file.ts',
-      path: 'file.ts',
-      patch: 'diff --git a/file.ts b/file.ts',
-    }], fake)
-  }))
-
-  it.effect('preserves existing diffs when diff collection fails', () =>
-    Effect.gen(function* () {
-      const { fake } = projection()
-
-      yield* captureRuntimeDiffs('agent-1', () => {
-        throw new Error('git unavailable')
-      }, fake)
-
-      expect(fake.project).not.toHaveBeenCalled()
-    }))
 })
 
 function statuses(calls: Array<{ type: string; value: unknown }>) {

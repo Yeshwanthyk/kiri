@@ -82,8 +82,12 @@ try {
 
   const rows = deriveAgentTimelineRows(detail, repoRoot)
   const workEntries = rows.flatMap((row) => row.kind === 'work' ? row.entries : [])
-  if (!workEntries.some((entry) => entry.id === 'diff:history-diff')) {
-    throw new Error('Expected unmatched persisted diff to appear in the chat work timeline')
+  if (!workEntries.some((entry) => (
+    entry.id === 'event-619-2'
+    && entry.label === 'Ran command'
+    && entry.detail === 'echo 619-2'
+  ))) {
+    throw new Error('Expected latest runtime event to appear in the chat work timeline')
   }
 
   const output = harnessOutputSchema.parse({
@@ -94,7 +98,7 @@ try {
       'agent-detail-keeps-events-inside-returned-page',
       'agent-detail-derives-message-arrays-from-page',
       'agent-detail-supports-older-offset-page',
-      'unmatched-diff-appears-in-work-row',
+      'runtime-event-appears-in-work-row',
     ],
     requestedLimit,
     messages: detail.messages.length,
@@ -188,27 +192,6 @@ function seedHistory(database: ReturnType<typeof import('../../src/server/db')['
         )
       }
     }
-
-    database
-      .prepare(
-        'INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      )
-      .run(
-        'history-diff',
-        agentId,
-        'src/history.ts',
-        'src/history.ts',
-        [
-          'diff --git a/src/history.ts b/src/history.ts',
-          'index 1111111..2222222 100644',
-          '--- a/src/history.ts',
-          '+++ b/src/history.ts',
-          '@@ -1 +1 @@',
-          '-old',
-          '+new',
-        ].join('\n'),
-        timestampFor(totalRows - 1, 2),
-      )
 
     database.exec('COMMIT')
   } catch (error) {

@@ -314,7 +314,6 @@
 .sidebar-title-row,
 .sidebar-stats,
 .sidebar-tabs,
-.diff-header,
 .composer {
   display: flex;
   align-items: center;
@@ -381,11 +380,6 @@
   font-family: var(--font-mono);
   font-size: 9.5px;
   font-variant-numeric: tabular-nums;
-}
-
-.diff-token {
-  color: var(--ink);
-  font-weight: 700;
 }
 
 .agent-cell-runtime {
@@ -780,7 +774,6 @@
 }
 
 .chat-panel,
-.diff-panel,
 .terminal-panel {
   display: flex;
   min-height: 0;
@@ -1973,152 +1966,6 @@
   background: oklch(0.54 0.21 25);
 }
 
-.diff-header {
-  justify-content: space-between;
-  gap: 14px;
-  min-height: 62px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in oklab, var(--panel) 86%, var(--paper));
-}
-
-.diff-header > div:first-child {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.diff-header strong,
-.diff-header span,
-.diff-header time {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.diff-header strong {
-  font-size: 15px;
-  letter-spacing: -0.01em;
-}
-
-.diff-header span,
-.diff-index {
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-
-.diff-index {
-  min-width: 32px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-
-.diff-toolbar,
-.diff-view-toggle {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-}
-
-.diff-toolbar {
-  align-self: center;
-  padding: 3px;
-  border: 1px solid var(--line-subtle);
-  border-radius: 10px;
-  background: var(--panel);
-}
-
-.diff-toolbar button {
-  display: inline-flex;
-  width: 28px;
-  min-height: 28px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  transition:
-    background-color 120ms ease,
-    color 120ms ease,
-    transform 120ms ease;
-}
-
-.diff-toolbar button:hover {
-  background: var(--accent-soft);
-  color: var(--ink);
-}
-
-.diff-toolbar button:active {
-  transform: scale(0.96);
-}
-
-.diff-view-toggle {
-  margin: 0 2px;
-  padding: 2px;
-  border-left: 1px solid var(--line-subtle);
-  border-right: 1px solid var(--line-subtle);
-  border-radius: 8px;
-  background: var(--panel-2);
-}
-
-.diff-view-toggle button.active {
-  background: var(--paper);
-  color: var(--ink);
-  box-shadow: 0 1px 2px oklch(0.3 0.02 166 / 0.12);
-}
-
-.diff-body {
-  display: grid;
-  grid-template-columns: minmax(250px, 310px) minmax(0, 1fr);
-  min-height: 0;
-  flex: 1;
-}
-
-.diff-tree-pane {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  border-right: 1px solid var(--line);
-  background: color-mix(in oklab, var(--panel-2) 86%, var(--panel));
-}
-
-.diff-tree-header {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 8px 10px 6px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 750;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.pierre-host {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 12px;
-  scrollbar-width: thin;
-  scrollbar-color: gray transparent;
-  --diffs-font-family: var(--font-mono);
-  --diffs-header-font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --diffs-light-bg: var(--panel);
-  --diffs-dark-bg: var(--panel);
-  --diffs-light: var(--ink);
-  --diffs-dark: var(--ink);
-  --diffs-addition-color: var(--success);
-  --diffs-deletion-color: var(--danger);
-  --diffs-modified-color: var(--accent);
-  --diffs-bg-selection-override: var(--accent-soft);
-}
-
 .terminal-header {
   display: flex;
   flex: 0 0 auto;
@@ -2305,28 +2152,6 @@
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
   white-space: pre-wrap;
-}
-
-.diff-panel.fullscreen {
-  position: fixed;
-  z-index: 40;
-  inset: 10px;
-  display: flex;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  box-shadow:
-    0 18px 60px color-mix(in oklab, var(--ink) 22%, transparent),
-    0 0 0 9999px color-mix(in oklab, var(--ink) 24%, transparent);
-}
-
-.diff-panel.fullscreen .diff-header {
-  padding: 10px 12px;
-}
-
-.diff-panel.fullscreen .pierre-host {
-  padding: 10px;
 }
 
 .empty-panel,

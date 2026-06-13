@@ -7,6 +7,7 @@ import {
   keyOptions,
   monoFonts,
   normalizeChatTypography,
+  normalizeKeymapSettings,
   type ChatFontSize,
   type ChatTypographySettings,
   type KeymapSettings,
@@ -41,8 +42,8 @@ export function readStoredKeymap(storage?: StorageLike): KeymapSettings {
     const store = storage ?? window.localStorage
     const stored = store.getItem(keymapStorageKey)
     if (!stored) return defaultKeymap
-    const parsed = JSON.parse(stored) as Partial<KeymapSettings>
-    const next = { ...defaultKeymap, ...parsed }
+    const parsed = JSON.parse(stored) as Record<string, unknown>
+    const next = normalizeKeymapSettings({ ...defaultKeymap, ...parsed })
     const values = Object.values(next)
     if (
       values.length !== new Set(values).size ||
@@ -50,7 +51,7 @@ export function readStoredKeymap(storage?: StorageLike): KeymapSettings {
     ) {
       return defaultKeymap
     }
-    return next
+    return normalizeKeymapSettings(next)
   } catch {
     return defaultKeymap
   }

@@ -62,12 +62,7 @@ function readClaudeAgent(database: DatabaseSync, agentId: string) {
           t.id AS threadId,
           t.preview,
           t.message_count AS messageCount,
-          t.updated_at AS updatedAt,
-          (
-            SELECT COUNT(*)
-            FROM diff_artifacts d
-            WHERE d.agent_id = a.id
-          ) AS diffCount
+          t.updated_at AS updatedAt
         FROM agent_slots a
         INNER JOIN projects p ON p.id = a.project_id
         LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1

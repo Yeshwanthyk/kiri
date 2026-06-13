@@ -22,7 +22,6 @@ export {
   ItemCompletedParamsSchema,
   ThreadCompactedParamsSchema,
   ThreadTokenUsageUpdatedParamsSchema,
-  TurnDiffUpdatedParamsSchema,
   TurnPlanUpdatedParamsSchema,
   TurnStartedParamsSchema,
   decodeServerParams,

@@ -33,8 +33,9 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/codex-app-protocol.ts` | pure | Codex app-server JSON-RPC schemas and parsers | explicit-non-migration | not-required | Pure protocol/schema module extracted from adapter. |
 | `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | migrating | required | Protocol parsing extracted; scoped lifecycle and process adapter split remain. |
 | `src/server/codex-cli-sessions.ts` | runtime-adapter | Codex CLI session discovery and terminal resume persistence boundary | migrating | required | Added after Codex terminal resume support; review/verification pending. |
+| `src/server/codex-terminal-session.ts` | process-adapter | Codex terminal session id file persistence boundary | migrating | required | Added after Codex terminal resume support; filesystem service seam pending. |
 | `src/server/codex-item-recording.ts` | pure | Codex completed-item to timeline/message write payload helper | explicit-non-migration | not-required | Pure item formatting extracted from Codex runtime; keep DB writes in the runtime/projection boundary. |
-| `src/server/codex-retained-state.ts` | runtime-adapter | Codex retained-state registry for adapters, listeners, threads, turns, queues, generations, and diff-turn guards | migrating | required | Extracted from `codex-runtime.ts`; review/verification pending. |
+| `src/server/codex-retained-state.ts` | runtime-adapter | Codex retained-state registry for adapters, listeners, threads, turns, queues, generations, and turn-start projection guards | migrating | required | Extracted from `codex-runtime.ts`; review/verification pending. |
 | `src/server/codex-review.ts` | pure | Codex review display text helper | explicit-non-migration | not-required | Pure review prompt formatting extracted from Codex runtime. |
 | `src/server/codex-runtime.ts` | runtime-adapter | `runtime/codex/{runtime-service,retained-state,projection,attachments}.ts` | migrating | required | Retained-state maps extracted; runtime service/projection/attachment splits remain. |
 | `src/server/codex-runtime-state.ts` | pure | Codex runtime-state parser/defaults helper | explicit-non-migration | not-required | Pure runtime-state normalization extracted from Codex runtime; keep Effect-free unless IO dependencies are added. |
@@ -46,7 +47,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/claude-projection.ts` | projection | DB-backed Claude JSONL hydrator for agent detail | migrating | required | Added to hydrate Claude terminal output into timeline rows before `agent.detail`; review passed, final DB/filesystem service injection remains. |
 | `src/server/claude-session-path.ts` | pure | Claude project key and deterministic session id helpers | explicit-non-migration | not-required | Pure helper split out so JSONL hydration does not depend on terminal launch services. |
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | migrating | required | Compatibility facade now uses explicit `KiriDbService` cache/close seam over extracted repositories. |
-| `src/server/db/agent-detail.ts` | repository | Paged agent detail reader for timeline, diffs, tasks, and context usage | migrating | required | Extracted from `db.ts`; review/verification pending. |
+| `src/server/db/agent-detail.ts` | repository | Paged agent detail reader for timeline, tasks, and context usage | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/agent-events.ts` | repository | Agent event append/list repository over DB connection | migrating | required | Extracted from timeline write paths; review/verification pending. |
 | `src/server/db/bootstrap.ts` | repository | Startup DB data repair and seed cleanup boundary | migrating | required | Extracted from `db.ts`; direct bootstrap tests added and review passed; final status waits for DB/settings service boundary. |
 | `src/server/db/connection.ts` | repository | DB open/configure/migrate boundary | migrating | required | Owns SQLite handle creation; review/verification pending. |
@@ -59,13 +60,11 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/sessions.ts` | repository | Session summary and lifecycle repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
 | `src/server/db/timeline-format.ts` | pure | Timeline event id/tone/display derivation helpers | explicit-non-migration | not-required | Pure formatting/normalization module shared by readers and writers. |
-| `src/server/db/timeline-writes.ts` | repository | Timeline/message/task/diff write repository over DB connection | migrating | required | Extracted from `db.ts`; direct live/projection/diff persistence tests added and review passed; final status waits for DB service boundary. |
+| `src/server/db/timeline-writes.ts` | repository | Timeline/message/task write repository over DB connection | migrating | required | Extracted from `db.ts`; direct live/projection tests added and review passed; final status waits for DB service boundary. |
 | `src/server/db/transaction.ts` | repository | DB transaction helper boundary | migrating | required | Introduced for staged replacement of direct BEGIN/COMMIT/ROLLBACK blocks. |
 | `src/server/db/workflows.ts` | repository | Workflow run/item/attempt repository over DB connection | migrating | required | Added with durable workflow runs; final status waits for workflow persistence behind the DB service boundary. |
 | `src/server/db/workspace-snapshot.ts` | projection | Workspace snapshot projection over DB connection and provided settings/preferences | migrating | required | Extracted from `db.ts`; direct snapshot test added and review passed; final status waits for workspace service boundary. |
 | `src/server/directory-picker.ts` | process-adapter | typed directory picker service over osascript | migrating | required | Extracted from `workspace.ts`; review/verification pending. |
-| `src/server/diff-refresh.ts` | use-case | terminal diff refresh service command | migrating | required | Typed injectable diff refresh service added; review/verification pending. |
-| `src/server/git-diff.ts` | process-adapter | `integrations/git-diff.ts` service with process adapter and budgets | migrating | required | Typed injectable git diff service added; review/verification pending. |
 | `src/server/kiri-config.ts` | config | `config/kiri-config.ts` Effect config layer | migrating | required | Typed injectable config service added; review/verification pending. |
 | `src/server/kiri-control.ts` | use-case | `control/kiri-control.ts` over shared services | migrating | required | Effect facade now has injectable dependencies and shared cleanup/trigger seams; final leaf service composition remains. |
 | `src/server/kiri-mcp-runtime.ts` | use-case | MCP runtime glue for Effect execution and context selection | migrating | required | Extracted from `kiri-mcp.ts`; review/verification pending. |
@@ -174,10 +173,10 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Status: migrating; final status waits for DB/runtime/preference/terminal dependencies to be injected as Effect services instead of compatibility function dependencies, and for `workspace.ts` to move into a transport directory.
 - Target seam: `WorkspaceService` owns UI-facing workspace use-cases while `workspace.ts` handles TanStack server function schemas and response wiring.
 - Behavior preserved: exported server functions, query options, workspace snapshots after runtime actions, fork/trigger return shapes, preference mutation returns, terminal config merge shape, project/session/scratchpad mutation outputs, and agent detail query behavior remain unchanged.
-- Dependencies moved: direct DB/runtime/preference/directory-picker/diff-refresh/terminal/scratchpad-trigger imports moved out of `workspace.ts` into `workspace-service.ts` behind an injectable dependency record and Effect service tag.
+- Dependencies moved: direct DB/runtime/preference/directory-picker/terminal/scratchpad-trigger imports moved out of `workspace.ts` into `workspace-service.ts` behind an injectable dependency record and Effect service tag.
 - Baseline tests before migration: CLI/MCP tests, runtime command tests, scratchpad trigger tests, terminal config flow through component typecheck, and full server suite covered existing behavior.
 - Tests added/updated: `tests/server/workspace-service.test.ts` covers post-runtime snapshots, fork result shape, terminal config merge, scratchpad trigger result shape, and typed error wrapping with original cause preservation.
-- Post-migration parity tests: focused workspace service/runtime cleanup tests passed; CLI/MCP/scratchpad/diff-refresh parity tests passed.
+- Post-migration parity tests: focused workspace service/runtime cleanup tests passed; CLI/MCP/scratchpad parity tests passed.
 - Perf/memory impact: no payload/query changes; workspace handlers now have one orchestrator seam for future no-overlap polling, snapshot budgeting, and runtime cleanup assertions.
 - Verification commands and results:
   - `effect-solutions show services-and-layers testing basics error-handling` - reviewed before writing Effect service code
@@ -185,7 +184,7 @@ Copy this section under `## Migration Records` for each file or inseparable file
   - `pnpm exec vitest run tests/server/workspace-service.test.ts tests/server/runtime-cleanup.test.ts` - passed, 2 files / 12 tests
   - `pnpm exec eslint src/server/workspace-service.ts tests/server/workspace-service.test.ts --max-warnings=0` - passed
   - `pnpm effect:audit` - passed, 44 tracked/server files
-  - `pnpm exec vitest run tests/server/workspace-service.test.ts tests/server/kiri-control-cli.test.ts tests/server/kiri-mcp.test.ts tests/server/scratchpad-trigger.test.ts tests/server/diff-refresh.test.ts` - passed, 5 files / 13 tests
+  - `pnpm exec vitest run tests/server/workspace-service.test.ts tests/server/kiri-control-cli.test.ts tests/server/kiri-mcp.test.ts tests/server/scratchpad-trigger.test.ts` - passed, 4 files
   - `pnpm lint` - passed
   - `pnpm build` - passed with existing Vite chunk-size warning
   - `pnpm test -- --runInBand` - passed, 50 files / 213 tests including `tests/server/perf-gates.test.ts`
@@ -327,12 +326,12 @@ Copy this section under `## Migration Records` for each file or inseparable file
   - `pnpm exec eslint src/server/db.ts tests/server/db-service.test.ts tests/server/db-connection.test.ts tests/server/effect-layers.test.ts --max-warnings=0` - passed
   - `pnpm effect:audit` - passed, 47 tracked / 47 server files
   - `pnpm exec vitest run tests/server/db-service.test.ts tests/server/db-connection.test.ts tests/server/effect-layers.test.ts tests/server/db-session-operations.test.ts tests/server/perf-gates.test.ts` - passed, 5 files / 8 tests
-  - `pnpm exec vitest run tests/server/db-timeline-writes.test.ts tests/server/db-workspace-snapshot.test.ts tests/server/diff-refresh.test.ts` - passed, 3 files / 8 tests
+  - `pnpm exec vitest run tests/server/db-timeline-writes.test.ts tests/server/db-workspace-snapshot.test.ts` - passed, 2 files
   - `pnpm build` - passed, existing Vite large chunk warning only
   - `pnpm test -- --runInBand` - passed, 56 files / 233 tests
   - `git diff --check` - passed
-- Review subagent summary: no blockers; confirmed cache/bootstrap behavior, sync facade compatibility, explicit diff mapping, and `startSession` behavior. Noted expected residual caveat that `KiriDbService.layer` instances and the legacy facade can still open separate handles until app composition moves to a scoped shared layer.
-- Findings fixed: focused eslint surfaced old unused facade imports and locals once `db.ts` entered strict targeted lint; removed stale imports, avoided an unused session id in `startSession`, and mapped diff rows explicitly instead of destructuring away `agentId`.
+- Review subagent summary: no blockers; confirmed cache/bootstrap behavior, sync facade compatibility, and `startSession` behavior. Noted expected residual caveat that `KiriDbService.layer` instances and the legacy facade can still open separate handles until app composition moves to a scoped shared layer.
+- Findings fixed: focused eslint surfaced old unused facade imports and locals once `db.ts` entered strict targeted lint; removed stale imports and avoided an unused session id in `startSession`.
 - Residual risk: most facade exports still synchronously call `getDb()` for compatibility; final migration should push callers to repository/service layers and use `closeKiriDb()` from app shutdown/test harnesses.
 
 ### src/server/codex-app-server.ts and src/server/codex-app-protocol.ts
@@ -495,50 +494,6 @@ Copy this section under `## Migration Records` for each file or inseparable file
 - Review subagent summary: Bacon found no findings; verified focused tests, typecheck, adapter lint, build, and confirmed direct `workspace.ts` lint only reports pre-existing `require-await` handlers.
 - Findings fixed: none.
 - Residual risk: `workspace.ts` still hosts many transport/use-case handlers until the workspace service phase.
-
-### src/server/diff-refresh.ts
-
-- Status: migrating; final status waits for workspace transport to consume shared workspace services instead of compatibility sync exports.
-- Target seam: typed injectable `DiffRefreshService` orchestrating terminal-only validation, launch config lookup, `GitDiffService` capture, diff replacement, and workspace snapshot return.
-- Behavior preserved: `refreshTerminalSessionDiffs(agentId)` remains a synchronous compatibility export, still rejects non-terminal sessions with the same message, replaces the agent diff artifacts, and returns the latest workspace snapshot.
-- Dependencies moved: git diff capture is now injected through `GitDiffService`; detail/config/diff-write/snapshot operations can be injected in focused tests.
-- Baseline tests before migration: workspace mutation path and git diff/runtime lifecycle focused tests.
-- Tests added/updated: `tests/server/diff-refresh.test.ts` covers public sync export wiring through a real temp git repo harness, injected terminal refresh, non-terminal rejection before git work, and typed git failure wrapping with the requested agent id.
-- Post-migration parity tests: focused diff-refresh/git-diff/runtime-lifecycle tests passed.
-- Perf/memory impact: no retained state added; non-terminal sessions now prove they do not start git collection, and git collection remains bounded by `GitDiffService`.
-- Verification commands and results:
-  - `pnpm typecheck` - passed
-  - `pnpm exec vitest run tests/server/diff-refresh.test.ts tests/server/git-diff.test.ts tests/server/runtime-lifecycle.test.ts` - passed, 3 files / 25 tests
-  - `pnpm exec eslint src/server/diff-refresh.ts tests/server/diff-refresh.test.ts tests/harness/diff-refresh-public-harness.ts --max-warnings=0` - passed
-  - `pnpm effect:audit` - passed, 37 tracked/server files
-  - `pnpm lint` - passed
-  - `pnpm build` - passed with existing Vite chunk-size warning
-  - `git diff --check` - passed
-- Review subagent summary: Herschel found no blockers; first pass requested public sync export coverage, second pass confirmed it and suggested adding a child-process timeout to the harness test.
-- Findings fixed: typecheck caught readonly diff-array mismatch with the compatibility DB writer; narrowed the service dependency to a mutable array to match the public writer contract. Added public export harness coverage from review feedback, then added a 10s child-process timeout from second-pass review feedback.
-- Residual risk: DB reads/writes and workspace snapshot compatibility exports remain live dependencies until workspace and DB service phases complete.
-
-### src/server/git-diff.ts
-
-- Status: migrating; final status waits for runtime projection/diff refresh callers to consume the service instead of compatibility sync exports.
-- Target seam: typed injectable `GitDiffService` with git command runner and clock injection.
-- Behavior preserved: `collectGitDiffArtifacts` still returns an empty list outside git worktrees, captures tracked and untracked patches, skips runtime/build directories, preserves untracked total budget and per-command timeout, and keeps `diffArtifactsFromPatch` as a pure parser.
-- Dependencies moved: `git` subprocess calls and clock reads can now be injected in tests.
-- Baseline tests before migration: existing real-git worktree capture tests and runtime lifecycle diff projection tests.
-- Tests added/updated: `tests/server/git-diff.test.ts` now covers service-layer collection, injected untracked budget timeout reduction, skipped diff paths from injected git output, service parser parity, and typed runner-failure wrapping.
-- Post-migration parity tests: focused git-diff/runtime-lifecycle/runtime-binaries tests passed.
-- Perf/memory impact: no retained state added; budget behavior is now directly testable and still bounds untracked diff work.
-- Verification commands and results:
-  - `pnpm typecheck` - passed
-  - `pnpm exec vitest run tests/server/git-diff.test.ts tests/server/runtime-lifecycle.test.ts tests/server/runtime-binaries.test.ts` - passed, 3 files / 27 tests
-  - `pnpm exec eslint src/server/git-diff.ts tests/server/git-diff.test.ts --max-warnings=0` - passed
-  - `pnpm effect:audit` - passed, 37 tracked/server files
-  - `pnpm lint` - passed
-  - `pnpm build` - passed with existing Vite chunk-size warning
-  - `git diff --check` - passed
-- Review subagent summary: Planck found no code blockers; first pass requested service parser parity and typed failure wrapping coverage, second pass found no blockers.
-- Findings fixed: focused test initially only proved early untracked-budget stop; changed the fake clock to prove reduced remaining timeout on the second untracked diff. Added service parser parity and typed `GitDiffError` failure-path tests from review feedback.
-- Residual risk: callers still use compatibility sync exports until runtime projection and diff-refresh service phases.
 
 ### src/server/runtime-binaries.ts
 

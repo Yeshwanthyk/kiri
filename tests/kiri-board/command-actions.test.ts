@@ -93,6 +93,8 @@ function callbacks() {
     requestDeleteProject: vi.fn(),
     selectProject: vi.fn(),
     selectAgent: vi.fn(),
+    openTerminalResource: vi.fn(),
+    openScratchpadResource: vi.fn(),
     setTab: vi.fn(),
     closeCommandPalette: vi.fn(),
   }
@@ -119,7 +121,6 @@ function workspaceWithProjects(
         agentPrev: 'h',
         agentNext: 'l',
         focusChat: 'i',
-        openDiffs: 'd',
         openTerminal: 't',
         openScratchpad: 's',
         startSession: 'n',
@@ -178,7 +179,6 @@ function agent(id: string, projectId: string): AgentCell {
     sessionFile: null,
     preview: '',
     messageCount: 0,
-    diffCount: 0,
     contextUsage: null,
     pendingQuestion: null,
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -186,7 +186,6 @@ function agent(id: string, projectId: string): AgentCell {
     messages: [],
     timelineEvents: [],
     timeline: [],
-    diffs: [],
     tasks: [],
   }
 }

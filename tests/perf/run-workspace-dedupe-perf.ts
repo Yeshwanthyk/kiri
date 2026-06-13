@@ -27,7 +27,6 @@ function buildSnapshot(tick: number, churning: boolean): WorkspaceSnapshot {
         sessionFile: null,
         preview: 'No messages yet',
         messageCount: 12,
-        diffCount: 0,
         contextUsage: null,
         pendingQuestion: null,
         updatedAt,
@@ -35,7 +34,6 @@ function buildSnapshot(tick: number, churning: boolean): WorkspaceSnapshot {
         messages: [],
         timelineEvents: [],
         timeline: [],
-        diffs: [],
         tasks: [],
       })
     }
@@ -61,7 +59,7 @@ function buildSnapshot(tick: number, churning: boolean): WorkspaceSnapshot {
       theme: { mode: 'dark', name: 'kiri' },
       keymap: {
         projectPrev: 'k', projectNext: 'j', agentPrev: 'h', agentNext: 'l',
-        focusChat: 'i', openDiffs: 'd', openTerminal: 't', openScratchpad: 's',
+        focusChat: 'i', openTerminal: 't', openScratchpad: 's',
         startSession: 'n', deleteSession: 'backspace', toggleTerminalFocus: 'f',
       },
       chatTypography: { fontSize: 'comfortable', monoFont: 'fira' },

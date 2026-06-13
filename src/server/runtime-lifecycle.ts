@@ -5,7 +5,6 @@ import type {
   recordRuntimeMessage,
   recordRuntimeTimelineEvent,
 } from './db'
-import type { RuntimeDiffArtifact } from './git-diff'
 import { RuntimeProjector } from './runtime-projection'
 export { RuntimeProjector, runtimeStateWithoutUndefined } from './runtime-projection'
 
@@ -39,11 +38,6 @@ export type RuntimeProjectionEvent =
   | {
     type: 'clearContextUsage'
     agentId: string
-  }
-  | {
-    type: 'diffsUpdated'
-    agentId: string
-    diffs: RuntimeDiffArtifact[]
   }
   | {
     type: 'tasksUpdated'
@@ -191,31 +185,6 @@ function recordRuntimeError(
     },
   }
   return projection ? projectRuntimeEvent(projectionEvent, projection) : projectRuntimeEvent(projectionEvent)
-}
-
-export function captureRuntimeDiffs(
-  agentId: string,
-  collect: () => RuntimeDiffArtifact[],
-  projection: RuntimeLifecycleProjection,
-): Effect.Effect<void, never, never>
-export function captureRuntimeDiffs(
-  agentId: string,
-  collect: () => RuntimeDiffArtifact[],
-): Effect.Effect<void, never, RuntimeProjector>
-export function captureRuntimeDiffs(
-  agentId: string,
-  collect: () => RuntimeDiffArtifact[],
-  projection?: RuntimeLifecycleProjection,
-) {
-  return Effect.exit(Effect.sync(() => collect())).pipe(
-    Effect.flatMap((exit) => {
-      if (Exit.isFailure(exit)) return Effect.void
-      const diffs = exit.value
-      const event = { type: 'diffsUpdated' as const, agentId, diffs }
-      return Effect.exit(projection ? projectRuntimeEvent(event, projection) : projectRuntimeEvent(event))
-    }),
-    Effect.asVoid,
-  )
 }
 
 type RuntimeTurnLifecycleInput<T> = {

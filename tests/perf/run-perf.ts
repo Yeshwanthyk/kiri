@@ -13,7 +13,6 @@ const totalMessages = 1_500
 const eventsPerMessage = 3
 const totalTimelineRows = totalMessages * (eventsPerMessage + 1)
 const requestedLimit = 500
-const totalDiffs = 80
 
 const perfOutputSchema = z.object({
   ok: z.literal(true),
@@ -21,7 +20,6 @@ const perfOutputSchema = z.object({
   returnedTimelineRows: z.number(),
   returnedMessages: z.number(),
   returnedEvents: z.number(),
-  returnedDiffs: z.number(),
   detailJsonBytes: z.number(),
   snapshotJsonBytes: z.number(),
   snapshotMs: z.number(),
@@ -29,7 +27,6 @@ const perfOutputSchema = z.object({
   rssDeltaMb: z.number(),
   budgets: z.object({
     maxReturnedTimelineRows: z.number(),
-    maxReturnedDiffs: z.number(),
     maxDetailJsonBytes: z.number(),
     maxSnapshotMs: z.number(),
     maxDetailMs: z.number(),
@@ -39,7 +36,6 @@ const perfOutputSchema = z.object({
 
 const budgets = {
   maxReturnedTimelineRows: requestedLimit,
-  maxReturnedDiffs: 50,
   maxDetailJsonBytes: 1_800_000,
   maxSnapshotMs: 100,
   maxDetailMs: 350,
@@ -74,7 +70,6 @@ try {
     returnedTimelineRows: detail.timeline.length,
     returnedMessages: detail.messages.length,
     returnedEvents: detail.timelineEvents.length,
-    returnedDiffs: detail.diffs.length,
     detailJsonBytes: Buffer.byteLength(JSON.stringify(detail)),
     snapshotJsonBytes: Buffer.byteLength(JSON.stringify(snapshot)),
     snapshotMs: round(snapshotMs),
@@ -84,7 +79,6 @@ try {
   })
 
   assertBudget(output.returnedTimelineRows <= budgets.maxReturnedTimelineRows, 'timeline rows', output)
-  assertBudget(output.returnedDiffs <= budgets.maxReturnedDiffs, 'diff rows', output)
   assertBudget(output.detailJsonBytes <= budgets.maxDetailJsonBytes, 'detail payload bytes', output)
   assertBudget(output.snapshotMs <= budgets.maxSnapshotMs, 'snapshot latency', output)
   assertBudget(output.detailMs <= budgets.maxDetailMs, 'detail latency', output)
@@ -141,10 +135,6 @@ function seedPerfHistory(database: ReturnType<typeof import('../../src/server/db
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
-    const insertDiff = database.prepare(
-      'INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    )
-
     for (let index = 0; index < totalMessages; index += 1) {
       insertMessage.run(
         `message-${index}`,
@@ -171,38 +161,11 @@ function seedPerfHistory(database: ReturnType<typeof import('../../src/server/db
       }
     }
 
-    const patch = makePatch()
-    for (let index = 0; index < totalDiffs; index += 1) {
-      insertDiff.run(
-        `perf-diff-${index}`,
-        agentId,
-        `src/perf-${index}.ts`,
-        `src/perf-${index}.ts`,
-        patch,
-        timestampFor(totalMessages - 1, index),
-      )
-    }
-
     database.exec('COMMIT')
   } catch (error) {
     database.exec('ROLLBACK')
     throw error
   }
-}
-
-function makePatch() {
-  const lines = [
-    'diff --git a/src/perf.ts b/src/perf.ts',
-    'index 1111111..2222222 100644',
-    '--- a/src/perf.ts',
-    '+++ b/src/perf.ts',
-    '@@ -1,3 +1,3 @@',
-  ]
-  for (let index = 0; index < 96; index += 1) {
-    lines.push(`-old ${index} ${'a'.repeat(80)}`)
-    lines.push(`+new ${index} ${'b'.repeat(80)}`)
-  }
-  return lines.join('\n')
 }
 
 function timestampFor(index: number, offset: number) {

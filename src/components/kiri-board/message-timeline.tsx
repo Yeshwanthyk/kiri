@@ -3,7 +3,7 @@
 import { PatchDiff } from '@pierre/diffs/react'
 import { Check, Copy, FileText, GitPullRequest, MessageSquareText, PencilLine, Search, TerminalSquare } from 'lucide-react'
 import * as React from 'react'
-import type { BoardMessage, DiffArtifact } from '~/lib/contracts'
+import type { BoardMessage } from '~/lib/contracts'
 import type { ThemeMode } from '~/theme/kiri-themes'
 import { formatElapsed, formatTime } from './format'
 import { RichMessageBody } from './rich-message-body'
@@ -13,6 +13,7 @@ import {
   displayPath,
   isAssistantStatusEntry,
   isCommandEntry,
+  type TimelinePatch,
   type AgentTimelineRow,
   type TimelineWorkEntry,
   workCallLabel,
@@ -325,7 +326,7 @@ function InlineDiffPreview({
   diff,
   themeMode,
 }: {
-  diff: DiffArtifact
+  diff: TimelinePatch
   themeMode: ThemeMode
 }) {
   const stats = React.useMemo(() => diffLineStats(diff.patch), [diff.patch])

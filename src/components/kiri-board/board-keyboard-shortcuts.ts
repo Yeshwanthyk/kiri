@@ -123,11 +123,6 @@ export function useBoardKeyboardShortcuts({
         return
       }
 
-      if (action === 'openDiffs') {
-        setTab('diffs')
-        return
-      }
-
       if (action === 'openTerminal') {
         setTab('terminal')
         return

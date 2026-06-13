@@ -13,7 +13,6 @@ const keymapActions = [
   'startSession',
   'deleteSession',
   'focusChat',
-  'openDiffs',
   'openTerminal',
   'openScratchpad',
   'toggleTerminalFocus',
@@ -48,7 +47,6 @@ export const defaultKeymap: KeymapSettings = {
   startSession: 'n',
   deleteSession: 'x',
   focusChat: 'c',
-  openDiffs: 'd',
   openTerminal: 't',
   openScratchpad: 's',
   toggleTerminalFocus: 'tab',
@@ -149,7 +147,6 @@ export const keymapSettingsSchema = z.object({
   startSession: keyBindingSchema.default(defaultKeymap.startSession),
   deleteSession: keyBindingSchema.default(defaultKeymap.deleteSession),
   focusChat: keyBindingSchema.default(defaultKeymap.focusChat),
-  openDiffs: keyBindingSchema.default(defaultKeymap.openDiffs),
   openTerminal: keyBindingSchema.default(defaultKeymap.openTerminal),
   openScratchpad: keyBindingSchema.default(defaultKeymap.openScratchpad),
   toggleTerminalFocus: keyBindingSchema.default(defaultKeymap.toggleTerminalFocus),
@@ -187,6 +184,10 @@ export const uiPreferencesSchema = z.object({
 export type UiPreferences = z.infer<typeof uiPreferencesSchema>
 
 export const defaultUiPreferences: UiPreferences = uiPreferencesSchema.parse({})
+
+export function normalizeKeymapSettings(keymap: Record<string, unknown>): KeymapSettings {
+  return keymapSettingsSchema.parse(keymap)
+}
 
 export function normalizeChatTypography(value: Record<string, unknown>): ChatTypographySettings {
   const fontSize = typeof value.fontSize === 'string' && value.fontSize in chatFontSizes

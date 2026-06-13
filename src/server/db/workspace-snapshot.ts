@@ -70,12 +70,7 @@ export function readWorkspaceSnapshot(
           t.id AS threadId,
           t.preview,
           t.message_count AS messageCount,
-          t.updated_at AS updatedAt,
-          (
-            SELECT COUNT(*)
-            FROM diff_artifacts d
-            WHERE d.agent_id = a.id
-          ) AS diffCount
+          t.updated_at AS updatedAt
         FROM agent_slots a
         INNER JOIN projects p ON p.id = a.project_id
         LEFT JOIN threads t ON t.agent_id = a.id AND t.active = 1
@@ -124,7 +119,6 @@ export function readWorkspaceSnapshot(
         sessionFile: agent.sessionFile,
         preview: agent.preview ?? 'No messages yet',
         messageCount: agent.messageCount ?? 0,
-        diffCount: agent.diffCount,
         contextUsage: readContextUsage(
           agent,
           input.settings,
@@ -138,7 +132,6 @@ export function readWorkspaceSnapshot(
         messages: [],
         timelineEvents: [],
         timeline: [],
-        diffs: [],
         tasks: [],
       }
     }),
@@ -246,12 +239,6 @@ export function readWorkspaceRevision(
         COALESCE(MAX(updated_at), '') AS updatedAt
       FROM threads
       WHERE active = 1
-    `).get(),
-    diffs: database.prepare(`
-      SELECT
-        COUNT(*) AS rowCount,
-        COALESCE(MAX(updated_at), '') AS updatedAt
-      FROM diff_artifacts
     `).get(),
     contextUsage: database.prepare(`
       SELECT

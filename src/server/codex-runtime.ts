@@ -6,7 +6,6 @@ import {
   ItemCompletedParamsSchema,
   ThreadCompactedParamsSchema,
   ThreadTokenUsageUpdatedParamsSchema,
-  TurnDiffUpdatedParamsSchema,
   TurnPlanUpdatedParamsSchema,
   TurnStartedParamsSchema,
   type CodexServerMessage,
@@ -43,10 +42,8 @@ import {
   resetSession as resetStoredSession,
   setAgentStatus,
 } from './db'
-import { collectGitDiffArtifacts, diffArtifactsFromPatch } from './git-diff'
 import { fileOperationFromCodexItem } from './runtime-file-operations'
 import {
-  captureRuntimeDiffs,
   enqueueAgentTurn,
   nextThinkingLevel,
   projectRuntimeEvent,
@@ -298,11 +295,6 @@ async function reviewCodexSessionNow(
   }))
 }
 
-function captureCodexGitDiffArtifacts(config: ReturnType<typeof getAgentLaunchConfig>) {
-  runRuntimeLifecycleSync(captureRuntimeDiffs(config.id, () =>
-    collectGitDiffArtifacts(config.cwd)))
-}
-
 function startOrSteerCodexTurn(input: {
   adapter: CodexAppServerAdapter
   config: ReturnType<typeof getAgentLaunchConfig>
@@ -354,7 +346,6 @@ function startOrSteerCodexTurn(input: {
     if (!isCurrentCodexGeneration(input.config.id, input.generation)) return false
     yield* Effect.sync(() => {
       recordCodexTurn(input.config.id, completedTurn)
-      captureCodexGitDiffArtifacts(input.config)
       setCodexState(input.config.id, {
         ...input.state,
         threadId,
@@ -409,7 +400,6 @@ function startCodexReview(input: {
     if (!isCurrentCodexGeneration(input.config.id, input.generation)) return false
     yield* Effect.sync(() => {
       recordCodexTurn(input.config.id, completedTurn)
-      captureCodexGitDiffArtifacts(input.config)
       setCodexState(input.config.id, {
         ...input.state,
         threadId,
@@ -579,19 +569,6 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
       })
       return
     }
-    if (message.method === 'turn/diff/updated') {
-      const decoded = decodeServerParams(message, TurnDiffUpdatedParamsSchema)
-      if (!decoded) return
-      const diff = decoded.diff ?? ''
-      const turnKey = codexTurnKey(threadId, codexNotificationTurnId(params, threadId))
-      if (turnKey && retainedState.hasRepoDiffRefreshedTurn(turnKey)) return
-      yield* projectRuntimeEvent({
-        type: 'diffsUpdated',
-        agentId,
-        diffs: diffArtifactsFromPatch(diff),
-      })
-      return
-    }
     if (message.method === 'turn/plan/updated') {
       const decoded = decodeServerParams(message, TurnPlanUpdatedParamsSchema)
       if (!decoded) return
@@ -647,18 +624,18 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
           payload: message,
         },
       })
-      yield* projectCodexFileOperation(agentId, decoded.turn, 'fileOperationStarted', threadId, turnId)
+      yield* projectCodexFileOperation(agentId, decoded.turn, 'fileOperationStarted')
       return
     }
     if (message.method === 'item/started') {
-      yield* projectCodexFileOperation(agentId, objectValue(params).item, 'fileOperationStarted', threadId, codexNotificationTurnId(params, threadId))
+      yield* projectCodexFileOperation(agentId, objectValue(params).item, 'fileOperationStarted')
       return
     }
     if (message.method === 'item/completed') {
       const decoded = decodeServerParams(message, ItemCompletedParamsSchema)
       if (!decoded) return
       recordCodexItem(agentId, decoded.item, timestampFromMs(decoded.completedAtMs))
-      yield* projectCodexFileOperation(agentId, decoded.item, 'fileOperationCompleted', threadId, codexNotificationTurnId(params, threadId))
+      yield* projectCodexFileOperation(agentId, decoded.item, 'fileOperationCompleted')
     }
   })
 }
@@ -667,31 +644,17 @@ function projectCodexFileOperation(
   agentId: string,
   item: unknown,
   type: 'fileOperationStarted' | 'fileOperationCompleted',
-  threadId: string | undefined,
-  turnId: string | undefined,
 ) {
   const operation = fileOperationFromCodexItem(objectValue(item))
   if (!operation) return Effect.void
   const event = type === 'fileOperationStarted'
     ? { type, agentId, ...operation } as const
     : { type, agentId, status: 'completed' as const, ...operation }
-  return Effect.gen(function* () {
-    yield* projectRuntimeEvent(event)
-    if (type === 'fileOperationCompleted') {
-      const config = yield* Effect.sync(() => getAgentLaunchConfig(agentId))
-      yield* captureRuntimeDiffs(agentId, () => collectGitDiffArtifacts(config.cwd))
-      const turnKey = codexTurnKey(threadId, turnId)
-      if (turnKey) yield* Effect.sync(() => rememberRepoDiffRefreshedTurn(turnKey))
-    }
-  })
+  return projectRuntimeEvent(event)
 }
 
 function codexTurnKey(threadId: string | undefined, turnId: string | undefined) {
   return threadId && turnId ? `${threadId}:${turnId}` : null
-}
-
-function codexNotificationTurnId(params: Record<string, unknown>, threadId: string | undefined) {
-  return stringValue(params.turnId) ?? (threadId ? retainedState.turnForThread(threadId) : undefined)
 }
 
 async function steerCodexTurn(
@@ -815,10 +778,6 @@ export function forgetCodexRuntimeAgent(
 
 function rememberCodexThread(agentId: string, threadId: string) {
   retainedState.rememberThread(agentId, threadId)
-}
-
-function rememberRepoDiffRefreshedTurn(turnKey: string) {
-  retainedState.rememberRepoDiffRefreshedTurn(turnKey)
 }
 
 export function codexRuntimeRetainedStateStats() {

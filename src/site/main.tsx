@@ -8,7 +8,6 @@ import {
   Download,
   ExternalLink,
   FolderKanban,
-  GitPullRequest,
   Keyboard,
   NotebookPen,
   TerminalSquare,
@@ -73,9 +72,9 @@ const capabilities: ReadonlyArray<{
     body: 'Open the runtime terminal, paste the prompt, and keep the session alive in Kiri.',
   },
   {
-    icon: GitPullRequest,
-    title: 'Review surface',
-    body: 'Put diffs beside the conversation instead of burying review context in a transcript.',
+    icon: Check,
+    title: 'Timeline context',
+    body: 'Keep messages, tool activity, tasks, and session state in one selected-agent view.',
   },
   {
     icon: Command,
@@ -170,7 +169,7 @@ function LandingPage() {
           <h1>kiri is a keyboard-first control plane for local agent work.</h1>
           <p className="hero-lede">
             Start, watch, steer, review, and clean up AI coding sessions across
-            projects without losing terminals, diffs, scratchpad, shortcuts, or run state.
+            projects without losing terminals, scratchpad, shortcuts, timeline context, or run state.
           </p>
           <div className="runtime-badges" aria-label="Supported runtimes">
             {supportedRuntimes.map((runtime) => (

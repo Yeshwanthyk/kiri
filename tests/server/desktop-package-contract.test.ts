@@ -31,10 +31,6 @@ describe('desktop package contract', () => {
       to: 'bin/kiri-mcp',
     })
     expect(packageJson.build.extraResources).toContainEqual({
-      from: 'dist/bin/kiri-git-diff-collector',
-      to: 'bin/kiri-git-diff-collector',
-    })
-    expect(packageJson.build.extraResources).toContainEqual({
       from: 'dist/bin/kiri-read-model-indexer',
       to: 'bin/kiri-read-model-indexer',
     })
@@ -64,10 +60,6 @@ describe('desktop package contract', () => {
       expect(existsSync(appAsar), `${appRoot} has app.asar`).toBe(true)
       expect(isExecutable(join(resourcesRoot, 'bin/kiri-mcp')), `${appRoot} has executable kiri-mcp`)
         .toBe(true)
-      expect(
-        isExecutable(join(resourcesRoot, 'bin/kiri-git-diff-collector')),
-        `${appRoot} has executable kiri-git-diff-collector`,
-      ).toBe(true)
       expect(
         isExecutable(join(resourcesRoot, 'bin/kiri-read-model-indexer')),
         `${appRoot} has executable kiri-read-model-indexer`,

@@ -6,7 +6,6 @@ import {
   recordRuntimeMessage,
   recordRuntimeTimelineEvent,
   replaceAgentTasks,
-  replaceAgentDiffArtifacts,
   setAgentRuntimeState,
   setAgentStatus,
 } from './db'
@@ -56,13 +55,6 @@ function projectRuntimeEventToDb(event: RuntimeProjectionEvent) {
   }
   if (event.type === 'clearContextUsage') {
     clearRuntimeContextUsage(event.agentId)
-    return
-  }
-  if (event.type === 'diffsUpdated') {
-    replaceAgentDiffArtifacts({
-      agentId: event.agentId,
-      diffs: event.diffs,
-    })
     return
   }
   if (event.type === 'tasksUpdated') {

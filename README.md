@@ -4,7 +4,7 @@ Keyboard-first local agent control plane for Codex, Claude Code, Pi, and
 OpenCode.
 
 Kiri keeps local AI coding sessions organized by project, with persistent
-terminal panes, chat, diffs, scratchpad, workflow runs, and compact CLI/MCP
+terminal panes, chat timelines, scratchpad, workflow runs, and compact CLI/MCP
 controls.
 
 Website: https://kiri-8zk.pages.dev
@@ -21,7 +21,7 @@ https://github.com/Yeshwanthyk/kiri/releases
 - Keyboard-first navigation for switching projects, tabs, and sessions.
 - Runtime sessions for Codex, Claude Code, Pi, OpenCode, and shell terminals.
 - Persistent terminal panes backed by Kiri-owned PTYs.
-- Chat, terminal, diffs, and scratchpad views for each session.
+- Chat timeline, terminal, and scratchpad views for each session.
 - Durable workflow runs for splitting a plan into launchable items.
 - Agent-first CLI and MCP operations for automation.
 

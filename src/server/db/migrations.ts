@@ -91,18 +91,6 @@ export function migrate(database: DatabaseSync) {
       PRIMARY KEY (project_id, slot)
     );
 
-    CREATE TABLE IF NOT EXISTS diff_artifacts (
-      id TEXT PRIMARY KEY,
-      agent_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
-      title TEXT NOT NULL,
-      path TEXT NOT NULL,
-      patch TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS diff_artifacts_agent_updated
-      ON diff_artifacts(agent_id, updated_at DESC, id);
-
     CREATE TABLE IF NOT EXISTS agent_context_usage (
       agent_id TEXT PRIMARY KEY REFERENCES agent_slots(id) ON DELETE CASCADE,
       used_tokens INTEGER NOT NULL,
@@ -216,6 +204,7 @@ export function migrate(database: DatabaseSync) {
   addKnowledgeIndexTables(database)
   addReadModelEntriesTable(database)
   widenReadModelKindCheck(database)
+  dropDiffArtifacts(database)
   normalizeTerminalOnlyInterfaceMode(database)
   repairAgentSlotReferences(database)
   removeLegacyDefaultAgentSlots(database)
@@ -241,7 +230,10 @@ function widenReadModelKindCheck(database: DatabaseSync) {
   const row = database
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'read_model_entries'")
     .get() as { sql?: string } | undefined
-  if (!row?.sql || readModelKinds.every((kind) => row.sql?.includes(`'${kind}'`))) return
+  if (!row?.sql) return
+  const hasCurrentKinds = readModelKinds.every((kind) => row.sql?.includes(`'${kind}'`))
+  const hasRemovedDiffKind = row.sql.includes("'diff.summary'")
+  if (hasCurrentKinds && !hasRemovedDiffKind) return
 
   database.exec(`
     PRAGMA foreign_keys = OFF;
@@ -368,6 +360,23 @@ function removeLegacyDefaultAgentSlots(database: DatabaseSync) {
   database.prepare("DELETE FROM agent_slots WHERE slot NOT LIKE 'session-%'").run()
 }
 
+function dropDiffArtifacts(database: DatabaseSync) {
+  database.exec('DROP TABLE IF EXISTS diff_artifacts')
+  if (tableExists(database, 'agent_events')) {
+    database.prepare("DELETE FROM agent_events WHERE type = 'agent.diff.updated'").run()
+  }
+  if (tableExists(database, 'read_model_entries')) {
+    database.prepare("DELETE FROM read_model_entries WHERE kind = 'diff.summary'").run()
+  }
+}
+
+function tableExists(database: DatabaseSync, tableName: string) {
+  const row = database
+    .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName)
+  return Boolean(row)
+}
+
 function widenRuntimeCheck(database: DatabaseSync) {
   widenAgentSlotsRuntimeCheck(database)
   widenAgentTasksSourceCheck(database)
@@ -473,7 +482,7 @@ function repairAgentSlotReferences(database: DatabaseSync) {
         SELECT name, sql
         FROM sqlite_master
         WHERE type = 'table'
-          AND name IN ('threads', 'diff_artifacts')
+          AND name = 'threads'
       `,
     )
     .all() as Array<{ name: string; sql?: string }>
@@ -500,20 +509,6 @@ function repairAgentSlotReferences(database: DatabaseSync) {
     CREATE UNIQUE INDEX IF NOT EXISTS one_active_thread_per_agent
       ON threads(agent_id)
       WHERE active = 1;
-
-    ALTER TABLE diff_artifacts RENAME TO diff_artifacts_old;
-    CREATE TABLE diff_artifacts (
-      id TEXT PRIMARY KEY,
-      agent_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
-      title TEXT NOT NULL,
-      path TEXT NOT NULL,
-      patch TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
-    SELECT id, agent_id, title, path, patch, updated_at
-    FROM diff_artifacts_old;
-    DROP TABLE diff_artifacts_old;
 
     PRAGMA legacy_alter_table = OFF;
     PRAGMA foreign_keys = ON;

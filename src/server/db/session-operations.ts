@@ -48,7 +48,6 @@ export function resetSessionRows(database: DatabaseSync, agentId: string) {
     database.prepare('DELETE FROM messages WHERE thread_id = ?').run(thread.id)
     database.prepare('DELETE FROM timeline_events WHERE thread_id = ?').run(thread.id)
     database.prepare('DELETE FROM agent_tasks WHERE thread_id = ?').run(thread.id)
-    database.prepare('DELETE FROM diff_artifacts WHERE agent_id = ?').run(id)
     clearAgentContextUsage(database, id)
     database
       .prepare("UPDATE threads SET preview = 'Ready.', message_count = 0, updated_at = ? WHERE id = ?")

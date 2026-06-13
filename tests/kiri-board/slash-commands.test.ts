@@ -20,7 +20,6 @@ function agent(runtime: AgentCell['runtime']): AgentCell {
     sessionFile: null,
     preview: '',
     messageCount: 0,
-    diffCount: 0,
     contextUsage: null,
     pendingQuestion: null,
     updatedAt: '2026-05-11T12:00:00.000Z',
@@ -28,7 +27,6 @@ function agent(runtime: AgentCell['runtime']): AgentCell {
     messages: [],
     timelineEvents: [],
     timeline: [],
-    diffs: [],
     tasks: [],
   }
 }

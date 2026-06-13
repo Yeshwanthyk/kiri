@@ -143,7 +143,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     handleRenameSession,
     handleDeleteSession,
     handleSendMessage,
-    handleRefreshTerminalDiffs,
     handleSteerMessage,
     handleInterruptMessage,
     handleThinkingCommand,
@@ -439,7 +438,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onDeleteSession={handleDeleteSession}
         onRenameSession={handleRenameSession}
         onSend={handleSendMessage}
-        onRefreshTerminalDiffs={handleRefreshTerminalDiffs}
         onSteer={handleSteerMessage}
         onInterrupt={handleInterruptMessage}
         onThinkingCommand={handleThinkingCommand}

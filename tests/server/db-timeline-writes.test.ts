@@ -13,7 +13,6 @@ import {
   recordRuntimeMessages,
   recordPiLiveMessages,
   recordPiProjectionMessages,
-  replaceAgentDiffArtifactsRows,
 } from '../../src/server/db/timeline-writes'
 
 type DbFixture = {
@@ -201,83 +200,6 @@ describe('timeline write repository', () => {
           )
           .get(fixture.agentId),
       ).toEqual({ usedTokens: 123, sessionFile: '/tmp/pi-projected.jsonl' })
-    } finally {
-      closeFixture(fixture)
-    }
-  })
-
-  it('replaces diff artifacts instead of appending stale patches', () => {
-    const fixture = createFixture()
-    try {
-      replaceAgentDiffArtifactsRows(fixture.database, {
-        agentId: fixture.agentId,
-        diffs: [
-          { title: 'Old', path: 'src/old.ts', patch: 'old patch' },
-          { title: 'Also old', path: 'src/also-old.ts', patch: 'old patch 2' },
-        ],
-      })
-      replaceAgentDiffArtifactsRows(fixture.database, {
-        agentId: fixture.agentId,
-        diffs: [
-          { title: 'New', path: 'src/new.ts', patch: 'new patch' },
-        ],
-      })
-
-      expect(
-        fixture.database
-          .prepare(
-            `
-              SELECT title, path, patch
-              FROM diff_artifacts
-              WHERE agent_id = ?
-              ORDER BY path ASC
-            `,
-          )
-          .all(fixture.agentId),
-      ).toEqual([{ title: 'New', path: 'src/new.ts', patch: 'new patch' }])
-    } finally {
-      closeFixture(fixture)
-    }
-  })
-
-  it('rolls back diff replacement when a later insert fails', () => {
-    const fixture = createFixture()
-    try {
-      replaceAgentDiffArtifactsRows(fixture.database, {
-        agentId: fixture.agentId,
-        diffs: [
-          { title: 'Old', path: 'src/old.ts', patch: 'old patch' },
-        ],
-      })
-      fixture.database.exec(`
-        CREATE TEMP TRIGGER fail_diff_insert
-        BEFORE INSERT ON diff_artifacts
-        WHEN NEW.path = 'src/fail.ts'
-        BEGIN
-          SELECT RAISE(ABORT, 'forced diff insert failure');
-        END;
-      `)
-
-      expect(() => replaceAgentDiffArtifactsRows(fixture.database, {
-        agentId: fixture.agentId,
-        diffs: [
-          { title: 'New', path: 'src/new.ts', patch: 'new patch' },
-          { title: 'Fail', path: 'src/fail.ts', patch: 'fail patch' },
-        ],
-      })).toThrow('forced diff insert failure')
-
-      expect(
-        fixture.database
-          .prepare(
-            `
-              SELECT title, path, patch
-              FROM diff_artifacts
-              WHERE agent_id = ?
-              ORDER BY path ASC
-            `,
-          )
-          .all(fixture.agentId),
-      ).toEqual([{ title: 'Old', path: 'src/old.ts', patch: 'old patch' }])
     } finally {
       closeFixture(fixture)
     }

@@ -71,11 +71,6 @@ export const ThreadCompactedParamsSchema = Schema.Struct({
   turnId: Schema.optional(Schema.NullOr(Schema.String)),
 })
 
-export const TurnDiffUpdatedParamsSchema = Schema.Struct({
-  threadId: Schema.String,
-  diff: Schema.optional(Schema.String),
-})
-
 const CodexPlanStepSchema = Schema.Struct({
   step: Schema.String,
   status: Schema.optional(Schema.String),

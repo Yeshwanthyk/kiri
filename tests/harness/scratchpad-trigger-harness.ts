@@ -112,8 +112,7 @@ try {
       failedRuntimeStats.agentThreads === 0 &&
       failedRuntimeStats.threadTurns === 0 &&
       failedRuntimeStats.queues === 0 &&
-      failedRuntimeStats.sessionGenerations === 0 &&
-      failedRuntimeStats.repoDiffRefreshedTurns === 0,
+      failedRuntimeStats.sessionGenerations === 0,
   })
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)

@@ -10,7 +10,6 @@ This is the stable boundary for the Rust projection/indexer lane.
 - Supported kinds:
   - `workspace.summary`
   - `agent.timeline.summary`
-  - `diff.summary`
 - Row identity: `(kind, entityId)`.
 - Row payload: kind-specific JSON object validated at the TypeScript boundary.
 - Row revision: content hash of `kind`, `entityId`, and stable payload JSON.
@@ -26,7 +25,6 @@ It must not mutate:
 - `threads`
 - `messages`
 - `timeline_events`
-- `diff_artifacts`
 - `agent_tasks`
 - runtime state
 - scratchpad blocks
@@ -85,4 +83,4 @@ Desktop readiness must stay light:
 
 1. Add read APIs over `read_model_entries` once UI/server call sites need them.
 2. Move candidate collection into Rust only if SQLite access from Rust beats normalized TypeScript input.
-3. Package the Rust indexer only after a production read path starts consuming the table.
+3. Keep the packaged Rust indexer aligned with this contract before adding new read-model kinds.

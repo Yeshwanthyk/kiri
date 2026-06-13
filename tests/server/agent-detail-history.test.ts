@@ -47,7 +47,7 @@ describe('agent detail history harness', () => {
       'agent-detail-keeps-events-inside-returned-page',
       'agent-detail-derives-message-arrays-from-page',
       'agent-detail-supports-older-offset-page',
-      'unmatched-diff-appears-in-work-row',
+      'runtime-event-appears-in-work-row',
     ]))
   }, 20_000)
 })

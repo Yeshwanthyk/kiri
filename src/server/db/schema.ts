@@ -37,7 +37,6 @@ const agentDbRowSchema = z.object({
   preview: z.string().nullable(),
   messageCount: z.number().int().nonnegative().nullable(),
   updatedAt: z.string().nullable(),
-  diffCount: z.number().int().nonnegative(),
   threadId: z.string().nullable(),
   archivedAt: z.string().nullable(),
   runtimeStateJson: z.string().nullable().optional(),
@@ -101,15 +100,6 @@ export const agentTaskDbRowSchema = z.object({
   source: runtimeKindSchema,
   updatedAt: z.string(),
   position: z.number().int().nonnegative(),
-})
-
-export const diffDbRowSchema = z.object({
-  id: z.string(),
-  agentId: z.string(),
-  title: z.string(),
-  path: z.string(),
-  patch: z.string(),
-  updatedAt: z.string(),
 })
 
 export const contextUsageDbRowSchema = z.object({

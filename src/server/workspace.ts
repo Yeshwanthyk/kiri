@@ -9,7 +9,6 @@ import {
   deleteSessionInputSchema,
   deleteProjectInputSchema,
   renameSessionInputSchema,
-  refreshTerminalDiffsInputSchema,
   forkSessionInputSchema,
   hideProjectInputSchema,
   interruptMessageInputSchema,
@@ -131,10 +130,6 @@ export const answerQuestionMutation = createServerFn({ method: 'POST' })
 export const terminalConfigQuery = createServerFn({ method: 'GET' })
   .inputValidator(terminalConfigInputSchema)
   .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.terminalConfig(data)))
-
-export const refreshTerminalDiffsMutation = createServerFn({ method: 'POST' })
-  .inputValidator(refreshTerminalDiffsInputSchema)
-  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.refreshTerminalDiffs(data)))
 
 export const startSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(startSessionInputSchema)

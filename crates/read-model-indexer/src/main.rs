@@ -195,13 +195,12 @@ mod tests {
                 "messageCount": 2,
                 "eventCount": 1,
                 "taskCount": 0,
-                "diffCount": 3,
                 "latestTimelineAt": "2026-01-01T00:00:02.000Z"
             }),
             updated_at: "2026-01-01T00:00:02.000Z".to_string(),
         };
 
-        assert_eq!(revision_for_candidate(&candidate), "52c7bdc4091c3ecc");
+        assert_eq!(revision_for_candidate(&candidate), "9dde7623837b160b");
     }
 
     #[test]

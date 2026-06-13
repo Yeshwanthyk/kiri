@@ -12,7 +12,6 @@ export function mergeAgentDetail(
     timelineEvents: detail.timelineEvents,
     timeline: detail.timeline,
     timelinePage: detail.timelinePage,
-    diffs: detail.diffs,
     tasks: detail.tasks,
     contextUsage: detail.contextUsage,
     pendingQuestion: detail.pendingQuestion,

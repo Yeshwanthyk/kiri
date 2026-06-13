@@ -20,7 +20,6 @@ describe('runtime retained state', () => {
       threadAgents: 1,
       agentThreads: 1,
       threadTurns: 1,
-      repoDiffRefreshedTurns: 1,
     })
 
     forgetCodexRuntimeAgent('agent-1')
@@ -31,21 +30,7 @@ describe('runtime retained state', () => {
       threadTurns: 0,
       queues: 0,
       sessionGenerations: 0,
-      repoDiffRefreshedTurns: 0,
     })
-  })
-
-  it('bounds Codex diff-turn guards', () => {
-    __unsafeClearCodexRuntimeStateForTest()
-    for (let index = 0; index < 1_050; index += 1) {
-      __unsafeRetainCodexRuntimeStateForTest({
-        agentId: `agent-${index}`,
-        threadId: `thread-${index}`,
-        turnId: `turn-${index}`,
-      })
-    }
-
-    expect(codexRuntimeRetainedStateStats().repoDiffRefreshedTurns).toBeLessThanOrEqual(1_000)
   })
 
   it('exposes Pi cleanup as an idempotent retained-state operation', () => {

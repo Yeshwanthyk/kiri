@@ -1,6 +1,6 @@
 'use client'
 
-import { ChevronDown, FolderOpen, GitPullRequest, MessageSquareText, NotebookPen, Plus, Settings2, TerminalSquare } from 'lucide-react'
+import { ChevronDown, FolderOpen, MessageSquareText, NotebookPen, Plus, Settings2, TerminalSquare } from 'lucide-react'
 import type { AgentCell, ProjectRow } from '~/lib/contracts'
 import type { SidebarTab } from './board-types'
 import { RuntimeBadge } from './runtime-badge'
@@ -77,16 +77,6 @@ export function MobileTopBar({
         >
           <MessageSquareText size={15} />
           Chat
-        </button>
-        <button
-          type="button"
-          className={tab === 'diffs' ? 'active' : ''}
-          onClick={() => onTabChange('diffs')}
-          role="tab"
-          aria-selected={tab === 'diffs'}
-        >
-          <GitPullRequest size={15} />
-          Diffs
         </button>
         <button
           type="button"
@@ -188,7 +178,6 @@ export function AgentSwitcherSheet({
                     <span className="agent-switcher-meta">
                       <RuntimeBadge runtime={agent.runtime} />
                       <small>{agent.messageCount} msg</small>
-                      <small>{agent.diffCount} diff</small>
                     </span>
                   </button>
                 )

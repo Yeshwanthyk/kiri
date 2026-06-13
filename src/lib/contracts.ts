@@ -99,15 +99,6 @@ const boardTimelineItemSchema = z.discriminatedUnion('type', [
 ])
 type BoardTimelineItem = z.infer<typeof boardTimelineItemSchema>
 
-const diffArtifactSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  path: z.string(),
-  patch: z.string(),
-  updatedAt: z.string(),
-})
-export type DiffArtifact = z.infer<typeof diffArtifactSchema>
-
 const contextUsageSchema = z.object({
   usedTokens: z.number().int().nonnegative(),
   remainingTokens: z.number().int().nonnegative(),
@@ -165,7 +156,6 @@ const agentCellSchema = z.object({
   sessionFile: z.string().nullable(),
   preview: z.string(),
   messageCount: z.number().int().nonnegative(),
-  diffCount: z.number().int().nonnegative(),
   contextUsage: contextUsageSchema.nullable().default(null),
   pendingQuestion: pendingQuestionSchema.nullable().default(null),
   updatedAt: z.string(),
@@ -174,7 +164,6 @@ const agentCellSchema = z.object({
   timelineEvents: z.array(timelineEventSchema).default([]),
   timeline: z.array(boardTimelineItemSchema).default([]),
   timelinePage: agentDetailPageSchema.optional(),
-  diffs: z.array(diffArtifactSchema),
   tasks: z.array(agentTaskSchema).default([]),
 })
 export type AgentCell = z.infer<typeof agentCellSchema>
@@ -214,7 +203,6 @@ export const agentEventTypes = [
   'agent.message.updated',
   'agent.tool.started',
   'agent.tool.completed',
-  'agent.diff.updated',
   'agent.question.requested',
 ] as const
 export const agentEventTypeSchema = z.enum(agentEventTypes)
@@ -512,11 +500,6 @@ export const terminalConfigInputSchema = z.object({
   mode: terminalModeSchema.default('shell'),
 })
 type TerminalConfigInput = z.infer<typeof terminalConfigInputSchema>
-
-export const refreshTerminalDiffsInputSchema = z.object({
-  agentId: z.string().trim().min(1),
-})
-type RefreshTerminalDiffsInput = z.infer<typeof refreshTerminalDiffsInputSchema>
 
 const terminalConfigSchema = z.object({
   host: z.string(),

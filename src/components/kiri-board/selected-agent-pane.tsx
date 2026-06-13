@@ -1,7 +1,7 @@
 'use client'
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { GitPullRequest, MessageSquareText, NotebookPen, Plus, TerminalSquare } from 'lucide-react'
+import { MessageSquareText, NotebookPen, Plus, TerminalSquare } from 'lucide-react'
 import * as React from 'react'
 import type {
   AgentCell,
@@ -27,9 +27,6 @@ import type { RefreshAgentDetail, SidebarTab } from './board-types'
 import type { KeymapSettings } from './navigation'
 import type { ChatTypographySettings } from './storage'
 
-const DiffPanel = React.lazy(() =>
-  import('./diff-panel').then((module) => ({ default: module.DiffPanel })))
-
 type OlderDetailPage = {
   readonly agentId: string
   readonly revision: string
@@ -52,7 +49,6 @@ export function SelectedAgentPane({
   onDeleteSession,
   onRenameSession,
   onSend,
-  onRefreshTerminalDiffs,
   onSteer,
   onInterrupt,
   onThinkingCommand,
@@ -86,10 +82,6 @@ export function SelectedAgentPane({
     images?: SendMessageImage[],
     onDetailRefresh?: RefreshAgentDetail,
   ) => Promise<void>
-  onRefreshTerminalDiffs: (
-    agentId: string,
-    onDetailRefresh?: RefreshAgentDetail,
-  ) => Promise<void>
   onSteer: (agentId: string, text: string, images?: SendMessageImage[]) => Promise<void>
   onInterrupt: (agentId: string) => Promise<void>
   onThinkingCommand: (agentId: string, level?: ThinkingLevel) => Promise<void>
@@ -119,7 +111,7 @@ export function SelectedAgentPane({
   ) => Promise<void>
 }) {
   const revision = selectedAgent
-    ? `${selectedAgent.updatedAt}:${selectedAgent.messageCount}:${selectedAgent.diffCount}:${selectedAgent.status}`
+    ? `${selectedAgent.updatedAt}:${selectedAgent.messageCount}:${selectedAgent.status}`
     : ''
   const detailQuery = useQuery({
     ...agentDetailQueryOptions(selectedAgent?.id ?? '', 500, revision),
@@ -217,24 +209,6 @@ export function SelectedAgentPane({
       setOlderHistoryPending(false)
     }
   }, [agent, olderHistoryPending])
-  const previousDiffRefreshRef = React.useRef<{
-    tab: SidebarTab | null
-    agentId: string | null
-  }>({ tab: null, agentId: null })
-
-  React.useEffect(() => {
-    const previous = previousDiffRefreshRef.current
-    const agentId = agent?.id ?? null
-    previousDiffRefreshRef.current = { tab, agentId }
-    const shouldRefresh = tab === 'diffs'
-      && agent?.interfaceMode === 'terminal'
-      && (previous.tab !== 'diffs' || previous.agentId !== agent.id)
-    if (!shouldRefresh) return
-    void onRefreshTerminalDiffs(agent.id, refreshDetail).catch((error) => {
-      console.error('Failed to refresh terminal diffs', error)
-    })
-  }, [agent, onRefreshTerminalDiffs, refreshDetail, tab])
-
   const tabBar = (
     <div className="sidebar-tabs" role="tablist" aria-label="Selected agent view">
       <button
@@ -248,18 +222,6 @@ export function SelectedAgentPane({
       >
         <MessageSquareText size={15} />
         Chat
-      </button>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={tab === 'diffs'}
-        className={tab === 'diffs' ? 'active' : ''}
-        onClick={() => onTabChange('diffs')}
-        disabled={!agent}
-        data-testid="tab-diffs"
-      >
-        <GitPullRequest size={15} />
-        Diffs
       </button>
       <button
         type="button"
@@ -342,14 +304,6 @@ export function SelectedAgentPane({
           olderHistoryPending={olderHistoryPending}
           onLoadOlderHistory={loadOlderHistory}
         />
-      ) : agent && tab === 'diffs' ? (
-        <React.Suspense fallback={<div className="empty-panel">Loading diff view...</div>}>
-          <DiffPanel
-            key={agent.id}
-            agent={agent}
-            themeMode={themeMode}
-          />
-        </React.Suspense>
       ) : agent && (tab === 'terminal' || (tab === 'chat' && chatUsesTerminal)) ? null : !agent ? (
         <EmptySessionPanel
           project={selectedProject}

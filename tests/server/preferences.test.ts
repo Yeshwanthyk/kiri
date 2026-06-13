@@ -129,6 +129,19 @@ describe('ui preferences', () => {
     })
   })
 
+  it('strips legacy diff keymap actions when reading preferences', () => {
+    withPreferencesPath((path) => {
+      writeFileSync(path, JSON.stringify({
+        theme: defaultThemeSelection,
+        keymap: { ...defaultKeymap, openDiffs: 'd' },
+        chatTypography: defaultChatTypography,
+        agentByProject: {},
+      }))
+
+      expect(getUiPreferences(path).keymap).toEqual(defaultKeymap)
+    })
+  })
+
   it('rejects invalid preference values', () => {
     withPreferencesPath((path) => {
       expect(() =>

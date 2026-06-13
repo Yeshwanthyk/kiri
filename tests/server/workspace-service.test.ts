@@ -1,5 +1,5 @@
 import { Effect, Either, Layer } from 'effect'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentDetail, WorkspaceSnapshot } from '~/lib/contracts'
 import { defaultUiPreferences } from '~/lib/ui-preferences'
 import {
@@ -40,7 +40,6 @@ const agentDetail: AgentDetail = {
   sessionFile: null,
   preview: 'Ready.',
   messageCount: 0,
-  diffCount: 0,
   contextUsage: null,
   pendingQuestion: null,
   updatedAt: '2026-01-01T00:00:00.000Z',
@@ -48,11 +47,14 @@ const agentDetail: AgentDetail = {
   messages: [],
   timelineEvents: [],
   timeline: [],
-  diffs: [],
   tasks: [],
 }
 
 describe('WorkspaceService', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   it('returns a fresh snapshot after runtime commands complete', async () => {
     const calls: string[] = []
     const service = makeWorkspaceService(testDependencies({
@@ -242,6 +244,36 @@ describe('WorkspaceService', () => {
     })
   })
 
+  it('adds terminal proxy config when the desktop backend exposes one', async () => {
+    vi.stubEnv('KIRI_TERMINAL_PROXY_PATH', '/terminal')
+    const service = makeWorkspaceService(testDependencies({
+      getAgentLaunchConfig: (agentId) => ({
+        id: agentId,
+        projectId: 'project-1',
+        runtime: 'codex',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'gpt-5.3-codex',
+        runtimeStateJson: null,
+        cwd: '/tmp/project',
+      }),
+      ensureTerminalServer: () => Promise.resolve({
+        host: '127.0.0.1',
+        port: 12000,
+        path: '/term',
+        token: 'token',
+      }),
+      prepareTerminalAgent: () => Promise.resolve(),
+    }))
+
+    await expect(Effect.runPromise(service.terminalConfig({
+      agentId: 'agent-1',
+      mode: 'runtime',
+    }))).resolves.toMatchObject({
+      proxyPath: '/terminal',
+    })
+  })
+
   it('returns scratchpad trigger id with the post-trigger snapshot', async () => {
     const calls: string[] = []
     const service = makeWorkspaceService(testDependencies({
@@ -390,7 +422,6 @@ function testDependencies(
       token: 'token',
     }),
     prepareTerminalAgent: () => Promise.resolve(),
-    refreshTerminalSessionDiffs: () => snapshot,
     startSession: () => snapshot,
     addScratchpadBlock: () => snapshot,
     deleteScratchpadBlock: () => snapshot,

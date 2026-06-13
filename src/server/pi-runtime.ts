@@ -20,10 +20,8 @@ import {
   resetSession,
   setAgentStatus,
 } from './db'
-import { collectGitDiffArtifacts } from './git-diff'
 import { promptWithSavedImages } from './runtime-attachments'
 import {
-  captureRuntimeDiffs,
   enqueueAgentTurn,
   projectRuntimeEvent,
   RuntimeLifecycleError,
@@ -204,7 +202,7 @@ function promptPiAgentNowEffect(
         try {
           if (!retainedState.isCurrentGeneration(config.id, generation)) return
           recordPiTimelineEvent({ agentId: config.id, event })
-          recordPiFileOperationEvent(config.id, config.cwd, event)
+          recordPiFileOperationEvent(config.id, event)
         } catch {
           // Runtime events are observability data; the turn transcript remains authoritative.
         }
@@ -225,9 +223,6 @@ function promptPiAgentNowEffect(
           sessionFile: after.sessionFile ?? before.sessionFile,
         })
       })
-      if (retainedState.isCurrentGeneration(config.id, generation)) {
-        yield* captureRuntimeDiffs(config.id, () => collectGitDiffArtifacts(config.cwd))
-      }
     }).pipe(
       Effect.ensuring(Effect.sync(() => {
         stopRecordingEvents?.()
@@ -239,7 +234,7 @@ function promptPiAgentNowEffect(
   })
 }
 
-function recordPiFileOperationEvent(agentId: string, cwd: string, event: Record<string, unknown>) {
+function recordPiFileOperationEvent(agentId: string, event: Record<string, unknown>) {
   const operation = fileOperationFromPiEvent(event)
   if (!operation) return
   const completed = isFileOperationCompletionEvent(event)
@@ -255,9 +250,6 @@ function recordPiFileOperationEvent(agentId: string, cwd: string, event: Record<
         agentId,
         ...operation,
       }))
-  if (completed) {
-    runRuntimeLifecycleSync(captureRuntimeDiffs(agentId, () => collectGitDiffArtifacts(cwd)))
-  }
 }
 
 async function waitForLivePiAdapter(config: ReturnType<typeof getAgentLaunchConfig>) {

@@ -15,7 +15,6 @@ import {
 import {
   recordRuntimeMessageRow,
   recordRuntimeTimelineEventRow,
-  replaceAgentDiffArtifactsRows,
   replaceAgentTasksRows,
 } from '../../src/server/db/timeline-writes'
 import { upsertAgentContextUsage } from '../../src/server/db/runtime-state'
@@ -89,10 +88,6 @@ describe('session operations repository', () => {
           updatedAt: '2026-01-01T00:00:00.000Z',
         }],
       })
-      replaceAgentDiffArtifactsRows(database, {
-        agentId,
-        diffs: [{ title: 'Diff', path: 'src/file.ts', patch: 'patch' }],
-      })
       upsertAgentContextUsage(database, { agentId, usedTokens: 20 })
       database
         .prepare("UPDATE agent_slots SET status = 'running', session_file = ? WHERE id = ?")
@@ -109,9 +104,6 @@ describe('session operations repository', () => {
           database.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE thread_id = ?`).get(thread.id),
         ).toEqual({ count: 0 })
       }
-      expect(
-        database.prepare('SELECT COUNT(*) AS count FROM diff_artifacts WHERE agent_id = ?').get(agentId),
-      ).toEqual({ count: 0 })
       expect(
         database.prepare('SELECT COUNT(*) AS count FROM agent_context_usage WHERE agent_id = ?').get(agentId),
       ).toEqual({ count: 0 })

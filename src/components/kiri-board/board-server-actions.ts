@@ -16,7 +16,6 @@ import {
   hideProjectMutation,
   interruptMessageMutation,
   renameSessionMutation,
-  refreshTerminalDiffsMutation,
   reorderProjectsMutation,
   resetSessionMutation,
   restoreSessionMutation,
@@ -57,7 +56,6 @@ export function useBoardServerActions() {
   const steerMessage = useServerFn(steerMessageMutation)
   const interruptMessage = useServerFn(interruptMessageMutation)
   const renameSession = useServerFn(renameSessionMutation)
-  const refreshTerminalDiffs = useServerFn(refreshTerminalDiffsMutation)
   const reorderProjects = useServerFn(reorderProjectsMutation)
   const startSession = useServerFn(startSessionMutation)
   const triggerScratchpadBlock = useServerFn(triggerScratchpadBlockMutation)
@@ -87,7 +85,6 @@ export function useBoardServerActions() {
     renameSession,
     deleteSession,
     sendMessage,
-    refreshTerminalDiffs,
     steerMessage,
     interruptMessage,
     setThinkingLevel,
@@ -102,7 +99,6 @@ export function useBoardServerActions() {
     deleteSession,
     forkSession,
     interruptMessage,
-    refreshTerminalDiffs,
     renameSession,
     resetSession,
     restoreSession,

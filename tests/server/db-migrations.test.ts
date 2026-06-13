@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 
+import { listAgentEvents } from '../../src/server/db/agent-events'
 import { migrate } from '../../src/server/db/migrations'
 
 describe('DB migrations', () => {
@@ -48,6 +49,25 @@ describe('DB migrations', () => {
           updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE agent_events (
+          id TEXT PRIMARY KEY,
+          agent_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+          sequence INTEGER NOT NULL,
+          type TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(agent_id, sequence)
+        );
+
+        CREATE TABLE read_model_entries (
+          kind TEXT NOT NULL CHECK (kind IN ('workspace.summary', 'agent.timeline.summary', 'diff.summary')),
+          entity_id TEXT NOT NULL,
+          revision TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (kind, entity_id)
+        );
+
         CREATE TABLE agent_context_usage (
           agent_id TEXT PRIMARY KEY REFERENCES agent_slots(id) ON DELETE CASCADE,
           used_tokens INTEGER NOT NULL,
@@ -70,6 +90,16 @@ describe('DB migrations', () => {
 
         INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
         VALUES ('diff-1', 'agent-1', 'Diff', 'file.ts', 'patch', '2026-01-01T00:00:00.000Z');
+
+        INSERT INTO agent_events (id, agent_id, sequence, type, payload_json, created_at)
+        VALUES
+          ('event-1', 'agent-1', 1, 'agent.diff.updated', '{}', '2026-01-01T00:00:00.000Z'),
+          ('event-2', 'agent-1', 2, 'agent.status.changed', '{"status":"idle"}', '2026-01-01T00:00:01.000Z');
+
+        INSERT INTO read_model_entries (kind, entity_id, revision, payload_json, updated_at)
+        VALUES
+          ('diff.summary', 'diff-1', 'rev-diff', '{}', '2026-01-01T00:00:00.000Z'),
+          ('workspace.summary', 'workspace', 'rev-workspace', '{}', '2026-01-01T00:00:00.000Z');
       `)
 
       migrate(database)
@@ -88,7 +118,8 @@ describe('DB migrations', () => {
       const readModelSql = database
         .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'read_model_entries'")
         .get() as { sql?: string } | undefined
-      expect(readModelSql?.sql).toContain("kind IN ('workspace.summary', 'agent.timeline.summary', 'diff.summary')")
+      expect(readModelSql?.sql).toContain("kind IN ('workspace.summary', 'agent.timeline.summary')")
+      expect(readModelSql?.sql).not.toContain('diff.summary')
 
       database
         .prepare(
@@ -108,13 +139,8 @@ describe('DB migrations', () => {
       const threadForeignKeys = database
         .prepare('PRAGMA foreign_key_list(threads)')
         .all() as Array<{ table: string }>
-      const diffForeignKeys = database
-        .prepare('PRAGMA foreign_key_list(diff_artifacts)')
-        .all() as Array<{ table: string }>
       expect(threadForeignKeys.map((key) => key.table)).toContain('agent_slots')
-      expect(diffForeignKeys.map((key) => key.table)).toContain('agent_slots')
       expect(threadForeignKeys.map((key) => key.table)).not.toContain('agent_slots_old')
-      expect(diffForeignKeys.map((key) => key.table)).not.toContain('agent_slots_old')
 
       const threadIndexes = database
         .prepare('PRAGMA index_list(threads)')
@@ -130,15 +156,15 @@ describe('DB migrations', () => {
         message_count: 1,
       })
 
-      const migratedDiff = database
-        .prepare('SELECT agent_id, title, path, patch FROM diff_artifacts WHERE id = ?')
-        .get('diff-1')
-      expect(migratedDiff).toEqual({
-        agent_id: 'agent-1',
-        title: 'Diff',
-        path: 'file.ts',
-        patch: 'patch',
-      })
+      expect(tableExists(database, 'diff_artifacts')).toBe(false)
+      expect(listAgentEvents(database, { agentId: 'agent-1' })).toEqual([
+        expect.objectContaining({ id: 'event-2', type: 'agent.status.changed' }),
+      ])
+      expect(
+        database
+          .prepare("SELECT COUNT(*) AS count FROM read_model_entries WHERE kind = 'diff.summary'")
+          .get(),
+      ).toEqual({ count: 0 })
 
       const foreignKeyViolations = database.prepare('PRAGMA foreign_key_check').all()
       expect(foreignKeyViolations).toEqual([])
@@ -271,9 +297,7 @@ describe('DB migrations', () => {
       migrate(database)
 
       const messageIndexes = indexNames(database, 'messages')
-      const diffIndexes = indexNames(database, 'diff_artifacts')
       expect(messageIndexes).toContain('messages_thread_timestamp')
-      expect(diffIndexes).toContain('diff_artifacts_agent_updated')
 
       const messagePlan = queryPlan(database, `
         EXPLAIN QUERY PLAN
@@ -284,17 +308,6 @@ describe('DB migrations', () => {
         LIMIT 500
       `)
       expect(messagePlan).toContain('USING COVERING INDEX messages_thread_timestamp')
-
-      const diffPlan = queryPlan(database, `
-        EXPLAIN QUERY PLAN
-        SELECT id, agent_id, title, path, patch, updated_at
-        FROM diff_artifacts
-        WHERE agent_id = 'agent-1'
-        ORDER BY updated_at DESC
-        LIMIT 50
-      `)
-      expect(diffPlan).toContain('USING INDEX diff_artifacts_agent_updated')
-      expect(diffPlan).not.toContain('USE TEMP B-TREE')
     } finally {
       database.close()
     }
@@ -304,6 +317,12 @@ describe('DB migrations', () => {
 function indexNames(database: DatabaseSync, table: string) {
   return (database.prepare(`PRAGMA index_list(${table})`).all() as Array<{ name: string }>)
     .map((index) => index.name)
+}
+
+function tableExists(database: DatabaseSync, table: string) {
+  return Boolean(database
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(table))
 }
 
 function queryPlan(database: DatabaseSync, sql: string) {

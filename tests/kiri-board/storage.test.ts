@@ -40,6 +40,14 @@ describe('keymap storage', () => {
     expect(readStoredKeymap(storage)).toEqual(keymap)
   })
 
+  it('strips legacy diff keymap actions', () => {
+    const storage = memoryStorage({
+      'kiri:keymap:v1': JSON.stringify({ ...defaultKeymap, openDiffs: 'd' }),
+    })
+
+    expect(readStoredKeymap(storage)).toEqual(defaultKeymap)
+  })
+
   it('falls back to defaults for duplicate or unsupported bindings', () => {
     const duplicate = memoryStorage({
       'kiri:keymap:v1': JSON.stringify({ ...defaultKeymap, projectPrev: 'j' }),

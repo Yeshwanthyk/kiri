@@ -425,62 +425,6 @@ export function recordAgentInfoEventRow(
     )
 }
 
-export function replaceAgentDiffArtifactsRows(
-  database: DatabaseSync,
-  input: {
-    readonly agentId: string
-    readonly diffs: ReadonlyArray<{
-      readonly title: string
-      readonly path: string
-      readonly patch: string
-    }>
-  },
-) {
-  const row = database
-    .prepare(
-      `
-        SELECT a.id
-        FROM agent_slots a
-        WHERE a.id = ?
-      `,
-    )
-    .get(input.agentId)
-  if (!row) return
-  const updatedAt = new Date().toISOString()
-  withTransaction(database, () => {
-    database.prepare('DELETE FROM diff_artifacts WHERE agent_id = ?').run(input.agentId)
-    const insert = database.prepare(`
-      INSERT INTO diff_artifacts (id, agent_id, title, path, patch, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `)
-    for (const diff of input.diffs) {
-      const hash = createHash('sha256')
-        .update(`${input.agentId}\n${diff.path}\n${diff.patch}`)
-        .digest('hex')
-        .slice(0, 16)
-      const id = `diff-${input.agentId}-${hash}`
-      insert.run(
-        id,
-        input.agentId,
-        diff.title,
-        diff.path,
-        diff.patch,
-        updatedAt,
-      )
-      appendAgentEvent(database, {
-        agentId: input.agentId,
-        type: 'agent.diff.updated',
-        payload: {
-          diffId: id,
-          title: diff.title,
-          path: diff.path,
-        },
-        timestamp: updatedAt,
-      })
-    }
-  })
-}
-
 export function ensureThreadForAgent(
   database: DatabaseSync,
   agentId: string,

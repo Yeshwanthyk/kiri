@@ -1,9 +1,16 @@
 import type {
   AgentCell,
   BoardMessage,
-  DiffArtifact,
   TimelineEvent,
 } from '~/lib/contracts'
+
+export type TimelinePatch = {
+  id: string
+  title: string
+  path: string
+  patch: string
+  updatedAt: string
+}
 
 export type AgentTimelineRow =
   | {
@@ -30,7 +37,7 @@ export type TimelineWorkEntry = {
   label: string
   detail: string | null
   path?: string
-  diff?: DiffArtifact
+  diff?: TimelinePatch
   count?: number
   timestamp: string
 }
@@ -57,8 +64,6 @@ export function deriveAgentTimelineRows(
 ): AgentTimelineRow[] {
   const rows: AgentTimelineRow[] = []
   let workEntries: TimelineWorkEntry[] = []
-  const usedDiffIds = new Set<string>()
-  const diffByPath = createDiffPathMap(agent.diffs, cwd)
   const maxRows = options.maxRows
   const timeline = agent.timeline.length
     ? agent.timeline
@@ -90,12 +95,9 @@ export function deriveAgentTimelineRows(
 
   for (const item of timeline) {
     if (item.type === 'event') {
-      const entry = eventToWorkEntry(item.event, diffByPath, cwd)
+      const entry = eventToWorkEntry(item.event, cwd)
       if (entry) {
         const entries = inlinePatchDiffEntries(entry, cwd)
-        for (const item of entries) {
-          if (item.diff) usedDiffIds.add(item.diff.id)
-        }
         workEntries.push(...entries)
       }
       continue
@@ -107,12 +109,9 @@ export function deriveAgentTimelineRows(
     }
 
     if (item.message.role === 'tool') {
-      const entry = toolMessageToWorkEntry(item.message, diffByPath, cwd)
+      const entry = toolMessageToWorkEntry(item.message, cwd)
       if (entry) {
         const entries = inlinePatchDiffEntries(entry, cwd)
-        for (const item of entries) {
-          if (item.diff) usedDiffIds.add(item.diff.id)
-        }
         workEntries.push(...entries)
       }
       continue
@@ -127,7 +126,6 @@ export function deriveAgentTimelineRows(
   }
 
   flushWork()
-  appendUnmatchedDiffEntries(rows, agent.diffs, usedDiffIds, cwd, pushRow)
 
   if (agent.status === 'running') {
     const lastRow = rows[rows.length - 1]
@@ -139,47 +137,6 @@ export function deriveAgentTimelineRows(
   }
 
   return rows
-}
-
-function appendUnmatchedDiffEntries(
-  rows: AgentTimelineRow[],
-  diffs: DiffArtifact[],
-  usedDiffIds: Set<string>,
-  cwd: string,
-  pushRow: (row: AgentTimelineRow) => void,
-) {
-  const entries = diffs.flatMap((diff) =>
-    usedDiffIds.has(diff.id) ? [] : [diffArtifactToWorkEntry(diff, cwd)],
-  )
-  if (entries.length === 0) return
-
-  for (let index = rows.length - 1; index >= 0; index -= 1) {
-    const row = rows[index]
-    if (row?.kind !== 'work') continue
-    row.entries.push(...entries)
-    return
-  }
-
-  pushRow({
-    kind: 'work',
-    id: `work:${entries[0]?.id}`,
-    startedAt: entries[0]?.timestamp ?? new Date(0).toISOString(),
-    entries,
-  })
-}
-
-function diffArtifactToWorkEntry(diff: DiffArtifact, cwd: string): TimelineWorkEntry {
-  const path = normalizeTimelinePath(diff.path, cwd)
-  return {
-    id: `diff:${diff.id}`,
-    kind: 'diff.artifact',
-    tone: 'tool',
-    label: 'Edited',
-    detail: diff.title,
-    path,
-    diff,
-    timestamp: diff.updatedAt,
-  }
 }
 
 export function compactWorkEntries(entries: TimelineWorkEntry[]) {
@@ -289,36 +246,22 @@ export function normalizeTimelinePath(path: string, cwd: string | undefined) {
   return normalized
 }
 
-function createDiffPathMap(diffs: DiffArtifact[], cwd: string) {
-  const map = new Map<string, DiffArtifact>()
-  for (const diff of diffs) {
-    map.set(normalizeDiffPath(diff.path), diff)
-    map.set(normalizeTimelinePath(diff.path, cwd), diff)
-  }
-  return map
-}
-
 function eventToWorkEntry(
   event: TimelineEvent,
-  diffByPath: Map<string, DiffArtifact>,
   cwd?: string,
 ): TimelineWorkEntry | null {
   if (!shouldShowRuntimeEvent(event)) return null
   const path = event.path ? normalizeTimelinePath(event.path, cwd) : undefined
-  const diff = path && event.kind === 'fileOperationCompleted'
-    ? diffByPath.get(path)
-    : undefined
   if (isEmptyCommandEvent(event)) return null
-  if (isNoisyFileOperationEvent(event, path, diff)) return null
+  if (isNoisyFileOperationEvent(event, path)) return null
 
   return {
     id: event.id,
     kind: event.kind,
     tone: event.tone,
-    label: runtimeEventLabel(event, diff),
+    label: runtimeEventLabel(event),
     detail: event.detail,
     ...(path ? { path } : {}),
-    ...(diff ? { diff } : {}),
     timestamp: event.timestamp,
   }
 }
@@ -332,8 +275,7 @@ function shouldShowRuntimeEvent(event: TimelineEvent) {
   return event.label.toLowerCase() !== 'taskupdate'
 }
 
-function runtimeEventLabel(event: TimelineEvent, diff?: DiffArtifact) {
-  if (event.kind === 'fileOperationCompleted' && diff) return 'Edited'
+function runtimeEventLabel(event: TimelineEvent) {
   if (event.kind === 'fileOperationCompleted') return 'Changed file'
   if (event.kind === 'fileOperationStarted') return 'Editing'
   const label = event.label.trim()
@@ -344,7 +286,6 @@ function runtimeEventLabel(event: TimelineEvent, diff?: DiffArtifact) {
 
 function toolMessageToWorkEntry(
   message: BoardMessage,
-  diffByPath: Map<string, DiffArtifact>,
   cwd: string,
 ): TimelineWorkEntry | null {
   const [firstLine, ...rest] = message.text.split('\n')
@@ -352,16 +293,14 @@ function toolMessageToWorkEntry(
   const label = parsed?.label ?? firstLine?.trim() ?? 'Tool output'
   const detail = rest.join('\n').trim() || message.text
   const path = parsed?.path ? normalizeTimelinePath(parsed.path, cwd) : undefined
-  const diff = path ? diffByPath.get(path) : undefined
-  if (isNoisyToolMessage(label, detail) && !diff) return null
+  if (isNoisyToolMessage(label, detail)) return null
   return {
     id: message.id,
     kind: 'tool.message',
     tone: 'tool',
-    label: diff ? 'Edited' : label,
+    label,
     detail,
     ...(path ? { path } : {}),
-    ...(diff ? { diff } : {}),
     timestamp: message.timestamp,
   }
 }
@@ -476,6 +415,7 @@ function parseToolInvocation(line: string) {
 function isNoisyToolMessage(label: string, detail: string) {
   const normalizedLabel = normalizeWorkCallLabel(label)
   const normalizedDetail = detail.trim().toLowerCase()
+  if (normalizedDetail.includes('diff --git ')) return false
   if (!normalizedDetail || normalizedDetail === '{}' || normalizedDetail === '[]') return true
   if (normalizedDetail.includes('has been updated successfully') &&
     normalizedDetail.includes('no need to read it back')) {
@@ -508,11 +448,8 @@ function isEmptyCommandEvent(event: TimelineEvent) {
 function isNoisyFileOperationEvent(
   event: TimelineEvent,
   path: string | undefined,
-  diff: DiffArtifact | undefined,
 ) {
   if (event.kind !== 'fileOperationStarted' && event.kind !== 'fileOperationCompleted') return false
-  if (diff) return false
-  const detail = event.detail?.trim().toLowerCase()
   if (!path) return true
-  return detail === 'edit' || detail === 'write' || detail === 'multiedit' || detail === 'filechange'
+  return false
 }

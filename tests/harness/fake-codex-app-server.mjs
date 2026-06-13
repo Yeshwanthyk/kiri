@@ -338,10 +338,6 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
           },
         })
       }
-      send(socket, {
-        method: 'turn/diff/updated',
-        params: { threadId, diff: '' },
-      })
       if (thread) {
         const index = thread.turns.findIndex((entry) => entry.id === turnId)
         if (index >= 0) thread.turns[index] = { ...turn, items: [item] }
@@ -398,10 +394,6 @@ export function startFakeCodexAppServer({ port = 39111 } = {}) {
       send(socket, {
         method: 'item/completed',
         params: { threadId, turnId, item, completedAtMs: Date.now() },
-      })
-      send(socket, {
-        method: 'turn/diff/updated',
-        params: { threadId, turnId, diff: '' },
       })
       if (thread) {
         const index = thread.turns.findIndex((entry) => entry.id === turnId)

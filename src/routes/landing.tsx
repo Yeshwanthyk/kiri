@@ -3,7 +3,6 @@ import {
   Check,
   Command,
   FolderOpen,
-  GitPullRequest,
   MessageSquareText,
   NotebookPen,
   Plus,
@@ -80,7 +79,6 @@ const agentGroups = [
 
 const tabs: Array<{ icon: LucideIcon; label: string; active?: boolean; count?: string }> = [
   { icon: MessageSquareText, label: 'Chat', active: true },
-  { icon: GitPullRequest, label: 'Diffs' },
   { icon: TerminalSquare, label: 'Terminal' },
   { icon: NotebookPen, label: 'Scratchpad', count: '6' },
 ]
@@ -88,7 +86,7 @@ const tabs: Array<{ icon: LucideIcon; label: string; active?: boolean; count?: s
 const transcriptRows = [
   ['Prompt', 'ship the landing as the product surface, not a generic hero'],
   ['Task', 'Read cmux reference, inspect current kiri UI, rebuild preview'],
-  ['Diff', 'landing route and scoped CSS updated'],
+  ['Change', 'landing route and scoped CSS updated'],
   ['Terminal', 'pnpm build passed'],
 ]
 
@@ -109,9 +107,9 @@ const capabilities: Array<{ icon: LucideIcon; title: string; body: string }> = [
     body: 'Claude and shell sessions run in persistent panes that survive tab switches and expose their cwd.',
   },
   {
-    icon: GitPullRequest,
-    title: 'Review surface',
-    body: 'Diffs render beside the conversation, so review is a panel, not a pasted transcript.',
+    icon: Check,
+    title: 'Timeline context',
+    body: 'Messages, tool activity, tasks, and changed-file context stay with the selected session.',
   },
   {
     icon: NotebookPen,
@@ -127,7 +125,7 @@ const capabilities: Array<{ icon: LucideIcon; title: string; body: string }> = [
 
 const why = [
   'Raw terminal tabs lose agent state once enough work is running.',
-  'Chat-only tools hide tasks, diffs, terminals, and project targeting.',
+  'Chat-only tools hide tasks, terminals, scratchpad, and project targeting.',
   'A local engineer workflow needs primitives that fit existing repos.',
   'The board should tell you what is running and where to jump next.',
 ]
@@ -155,7 +153,7 @@ function Landing() {
         <p>
           It was made for engineers running several AI coding agents at once:
           left side for projects and sessions, right side for the selected
-          agent, with chat, diffs, terminal, and scratchpad in reach.
+          agent, with chat, timeline activity, terminal, and scratchpad in reach.
         </p>
       </section>
 
@@ -198,7 +196,7 @@ function Landing() {
         <div className="landing-media-grid">
           <MediaSlot title="Board navigation" body="Show project and agent movement from the left rail." />
           <MediaSlot title="Agent detail" body="Show chat, task strip, pending questions, and scratchpad." />
-          <MediaSlot title="Diff and terminal" body="Show review pane, terminal resume, and typecheck proof." />
+          <MediaSlot title="Terminal resume" body="Show terminal continuity, timeline context, and typecheck proof." />
         </div>
       </section>
     </main>
@@ -344,7 +342,7 @@ function AppPreview() {
               <p>
                 kiri borrows the useful part of terminal multiplexers: visible
                 running work. It adds the read model agents need: sessions,
-                tasks, diffs, scratchpad, and project targeting.
+                tasks, timeline context, scratchpad, and project targeting.
               </p>
             </div>
           </aside>

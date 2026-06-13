@@ -303,7 +303,6 @@
   }
 
   .chat-panel,
-  .diff-panel,
   .terminal-panel {
     min-height: 0;
     flex: 1 1 auto;
@@ -419,35 +418,6 @@
 
   .composer-attachments::-webkit-scrollbar {
     display: none;
-  }
-
-  .diff-header {
-    padding: 10px 12px;
-    background: var(--panel-2);
-  }
-
-  .diff-toolbar button {
-    width: 40px;
-    min-height: 40px;
-    border-radius: 12px;
-  }
-
-  .diff-view-toggle {
-    display: none;
-  }
-
-  .diff-body {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(130px, 28dvh) minmax(0, 1fr);
-  }
-
-  .diff-tree-pane {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .pierre-host {
-    padding: 8px 0 12px;
   }
 
   .agent-switcher-sheet {

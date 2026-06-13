@@ -8,6 +8,7 @@ import type {
 } from '~/lib/ui-preferences'
 import {
   defaultUiPreferences,
+  normalizeKeymapSettings,
   uiPreferencesSchema,
 } from '~/lib/ui-preferences'
 import type { ThemeSelection } from '~/theme/kiri-themes'
@@ -176,7 +177,11 @@ function updateUiPreferencesWithFs(
 function readUiPreferences(preferencesPath: string, fs: PreferencesFileSystem): UiPreferences {
   if (!fs.exists(preferencesPath)) return defaultUiPreferences
   const parsed = JSON.parse(fs.readTextFile(preferencesPath)) as unknown
-  return uiPreferencesSchema.parse(parsed)
+  const preferences = uiPreferencesSchema.parse(parsed)
+  return {
+    ...preferences,
+    keymap: normalizeKeymapSettings(preferences.keymap),
+  }
 }
 
 function writeUiPreferences(

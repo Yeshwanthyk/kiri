@@ -18,7 +18,6 @@ function agent(overrides: Partial<AgentCell> = {}): AgentCell {
     sessionFile: null,
     preview: '',
     messageCount: 0,
-    diffCount: 0,
     contextUsage: null,
     pendingQuestion: null,
     updatedAt: now,
@@ -26,7 +25,6 @@ function agent(overrides: Partial<AgentCell> = {}): AgentCell {
     messages: [],
     timelineEvents: [],
     timeline: [],
-    diffs: [],
     tasks: [],
     ...overrides,
   }

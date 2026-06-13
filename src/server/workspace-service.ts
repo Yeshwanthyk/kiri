@@ -20,7 +20,6 @@ import {
   forkSessionInputSchema,
   hideProjectInputSchema,
   interruptMessageInputSchema,
-  refreshTerminalDiffsInputSchema,
   renameSessionInputSchema,
   resetSessionInputSchema,
   reviewSessionInputSchema,
@@ -49,7 +48,6 @@ import {
   unhideProject,
 } from './db'
 import { chooseProjectDirectory } from './directory-picker'
-import { refreshTerminalSessionDiffs } from './diff-refresh'
 import {
   UiPreferencesService,
   type UiPreferencesApi,
@@ -83,7 +81,6 @@ type ResetSessionInput = z.infer<typeof resetSessionInputSchema>
 type ForkSessionInput = z.infer<typeof forkSessionInputSchema>
 type ReviewSessionInput = z.infer<typeof reviewSessionInputSchema>
 type TerminalConfigInput = z.infer<typeof terminalConfigInputSchema>
-type RefreshTerminalDiffsInput = z.infer<typeof refreshTerminalDiffsInputSchema>
 type RenameSessionInput = z.infer<typeof renameSessionInputSchema>
 type DeleteScratchpadBlockInput = z.infer<typeof deleteScratchpadBlockInputSchema>
 type TriggerScratchpadBlockInput = z.infer<typeof triggerScratchpadBlockInputSchema>
@@ -124,7 +121,6 @@ export type WorkspaceServiceApi = {
   readonly reviewSession: (input: ReviewSessionInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly answerQuestion: (input: AnswerQuestionInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly terminalConfig: (input: TerminalConfigInput) => Effect.Effect<TerminalConfig, WorkspaceServiceError>
-  readonly refreshTerminalDiffs: (input: RefreshTerminalDiffsInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly startSession: (input: StartSessionInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly addScratchpadBlock: (input: AddScratchpadBlockInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly deleteScratchpadBlock: (
@@ -196,7 +192,6 @@ export type WorkspaceServiceDependencies = {
   readonly getAgentLaunchConfig: (agentId: string) => AgentLaunchConfig
   readonly ensureTerminalServer: () => Promise<TerminalServerConfig>
   readonly prepareTerminalAgent: TerminalServerApi['prepareAgent']
-  readonly refreshTerminalSessionDiffs: (agentId: string) => WorkspaceSnapshot
   readonly startSession: (input: StartSessionInput) => WorkspaceSnapshot
   readonly addScratchpadBlock: (input: AddScratchpadBlockInput) => WorkspaceSnapshot
   readonly deleteScratchpadBlock: (id: string) => WorkspaceSnapshot
@@ -238,7 +233,6 @@ function liveWorkspaceServiceDependencies(
     getAgentLaunchConfig,
     ensureTerminalServer: input.terminalServer.ensure,
     prepareTerminalAgent: input.terminalServer.prepareAgent,
-    refreshTerminalSessionDiffs,
     startSession,
     addScratchpadBlock,
     deleteScratchpadBlock,
@@ -406,15 +400,12 @@ export function makeWorkspaceService(
       )
       return {
         ...server,
+        ...terminalProxyConfig(),
         mode: input.mode,
         runtime: config.runtime,
         model: config.model,
       }
     }),
-    refreshTerminalDiffs: syncSnapshotMethod(
-      'WorkspaceService.refreshTerminalDiffs',
-      (input: RefreshTerminalDiffsInput) => dependencies.refreshTerminalSessionDiffs(input.agentId),
-    ),
     startSession: Effect.fn('WorkspaceService.startSession')(function* (input) {
       const next = yield* syncCall(
         'WorkspaceService.startSession',
@@ -450,6 +441,11 @@ export function makeWorkspaceService(
       return { agentId, snapshot: selectedSnapshot }
     }),
   }
+}
+
+function terminalProxyConfig() {
+  const proxyPath = process.env.KIRI_TERMINAL_PROXY_PATH?.trim()
+  return proxyPath?.startsWith('/') ? { proxyPath } : {}
 }
 
 function runWorkspaceService<A>(
