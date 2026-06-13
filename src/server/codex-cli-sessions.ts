@@ -11,13 +11,16 @@ import { join, resolve } from 'node:path'
 import type { TerminalAgentLaunchConfig } from './terminal-launch'
 import { getAgentRuntimeState, setAgentRuntimeState } from './db'
 import {
+  type CodexHookSessionBinding,
   normalizeCodexSessionId,
+  readCodexHookSessionBinding,
+  readCodexTerminalSessionId,
   writeCodexTerminalSessionId,
 } from './codex-terminal-session'
 
 type CodexSessionCandidate = {
   readonly path: string
-  readonly mtimeMs: number
+  readonly createdMs: number
 }
 
 type CodexSessionDiscoveryInput = {
@@ -38,6 +41,7 @@ type RememberCodexTerminalSessionInput = {
   readonly launchedAtMs: number
   readonly launchToken: string
   readonly attempts?: number
+  readonly hookWaitMs?: number
   readonly intervalMs?: number
 }
 
@@ -56,8 +60,8 @@ export function findLatestCodexSessionForCwd(input: CodexSessionDiscoveryInput) 
 
   const cwd = normalizePath(input.cwd)
   const candidates = collectCodexSessionFiles(root)
-    .filter((candidate) => input.newerThanMs === undefined || candidate.mtimeMs >= input.newerThanMs)
-    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .filter((candidate) => input.newerThanMs === undefined || candidate.createdMs >= input.newerThanMs)
+    .sort((left, right) => right.createdMs - left.createdMs)
     .slice(0, input.limit ?? 200)
   const matchingSessions: Array<{ id: string; sortMs: number }> = []
 
@@ -70,6 +74,7 @@ export function findLatestCodexSessionForCwd(input: CodexSessionDiscoveryInput) 
       if (!event || typeof event !== 'object' || Array.isArray(event)) continue
       const payload = 'payload' in event ? event.payload : undefined
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) continue
+      if ('thread_source' in payload && payload.thread_source === 'subagent') continue
       const id = 'id' in payload && typeof payload.id === 'string' ? payload.id : undefined
       const sessionCwd = 'cwd' in payload && typeof payload.cwd === 'string'
         ? normalizePath(payload.cwd)
@@ -78,7 +83,7 @@ export function findLatestCodexSessionForCwd(input: CodexSessionDiscoveryInput) 
         const payloadTimestamp = 'timestamp' in payload && typeof payload.timestamp === 'string'
           ? Date.parse(payload.timestamp)
           : NaN
-        const sortMs = Number.isFinite(payloadTimestamp) ? payloadTimestamp : candidate.mtimeMs
+        const sortMs = Number.isFinite(payloadTimestamp) ? payloadTimestamp : candidate.createdMs
         matchingSessions.push({ id, sortMs })
       }
     } catch {
@@ -104,26 +109,53 @@ export async function rememberCodexTerminalSession(
 ) {
   if (config.runtime !== 'codex') return true
   latestLaunchTokenByAgentId.set(config.id, input.launchToken)
-  const initialResume = codexResumeIdFromState(getAgentRuntimeState(config.id))
+  const initialResume = codexResumeIdFromState(getAgentRuntimeState(config.id), config, input.launchedAtMs)
   if (initialResume) {
     writeCodexTerminalSessionId(config.sessionDir, initialResume)
     return true
   }
 
+  const attempts = input.attempts ?? defaultSessionDiscoveryAttempts
+  const intervalMs = input.intervalMs ?? defaultSessionDiscoveryIntervalMs
+  const totalWaitMs = attempts * intervalMs
+  const hookWaitMs = Math.min(input.hookWaitMs ?? 15_000, totalWaitMs)
+  const binding = await waitForCodexHookSessionBinding(config, {
+    launchedAtMs: input.launchedAtMs,
+    hookWaitMs,
+    intervalMs,
+  })
+  if (binding) {
+    if (latestLaunchTokenByAgentId.get(config.id) !== input.launchToken) return true
+    writeCodexTerminalSessionId(config.sessionDir, binding.sessionId)
+    setAgentRuntimeState(config.id, {
+      ...getAgentRuntimeState(config.id),
+      codexSessionId: binding.sessionId,
+    })
+    return true
+  }
+
+  const remainingAttempts = Math.max(0, Math.ceil((totalWaitMs - hookWaitMs) / intervalMs))
+  if (remainingAttempts <= 0) return false
   const sessionId = await waitForLatestCodexSessionForCwd({
     codexHome: env.CODEX_HOME,
     cwd: config.cwd,
     newerThanMs: input.launchedAtMs - 1000,
     closestToMs: input.launchedAtMs,
-    attempts: input.attempts,
-    intervalMs: input.intervalMs,
+    attempts: remainingAttempts,
+    intervalMs,
   })
   if (!sessionId) return false
   if (latestLaunchTokenByAgentId.get(config.id) !== input.launchToken) return true
 
   const currentState = getAgentRuntimeState(config.id)
   if (latestLaunchTokenByAgentId.get(config.id) !== input.launchToken) return true
-  const currentResume = codexResumeIdFromState(currentState)
+  const lateBinding = freshCodexHookSessionBinding(config, input.launchedAtMs)
+  if (lateBinding) {
+    writeCodexTerminalSessionId(config.sessionDir, lateBinding.sessionId)
+    setAgentRuntimeState(config.id, { ...currentState, codexSessionId: lateBinding.sessionId })
+    return true
+  }
+  const currentResume = codexResumeIdFromState(currentState, config, input.launchedAtMs)
   if (currentResume) {
     writeCodexTerminalSessionId(config.sessionDir, currentResume)
     return true
@@ -161,7 +193,8 @@ function walkCodexSessionFiles(dir: string, candidates: CodexSessionCandidate[],
     }
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
     try {
-      candidates.push({ path, mtimeMs: statSync(path).mtimeMs })
+      const stat = statSync(path)
+      candidates.push({ path, createdMs: codexSessionCreatedMs(stat.birthtimeMs, stat.mtimeMs) })
     } catch {
       continue
     }
@@ -183,8 +216,53 @@ function readFirstLine(path: string) {
   }
 }
 
-function codexResumeIdFromState(state: Record<string, unknown>) {
-  return normalizeCodexSessionId(state.resume) ?? normalizeCodexSessionId(state.codexSessionId)
+async function waitForCodexHookSessionBinding(
+  config: TerminalAgentLaunchConfig,
+  input: { readonly launchedAtMs: number; readonly hookWaitMs: number; readonly intervalMs: number },
+) {
+  if (input.hookWaitMs <= 0) return undefined
+  const deadline = Date.now() + input.hookWaitMs
+  while (Date.now() <= deadline) {
+    const binding = freshCodexHookSessionBinding(config, input.launchedAtMs)
+    if (binding) return binding
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) break
+    await delay(Math.min(input.intervalMs, remaining))
+  }
+  return undefined
+}
+
+function freshCodexHookSessionBinding(config: TerminalAgentLaunchConfig, launchedAtMs: number) {
+  const binding = readCodexHookSessionBinding(config.sessionDir)
+  if (!binding || binding.agentId !== config.id) return undefined
+  return binding.writtenAtMs >= launchedAtMs - 2_000 ? binding : undefined
+}
+
+function codexResumeIdFromState(
+  state: Record<string, unknown>,
+  config: TerminalAgentLaunchConfig,
+  launchedAtMs: number,
+) {
+  return normalizeCodexSessionId(state.resume)
+    ?? codexHookSessionIdForAgent(readCodexHookSessionBinding(config.sessionDir), config.id, launchedAtMs)
+    ?? readCodexTerminalSessionId(config.sessionDir)
+    ?? normalizeCodexSessionId(state.codexSessionId)
+}
+
+function codexHookSessionIdForAgent(
+  binding: CodexHookSessionBinding | undefined,
+  agentId: string,
+  launchedAtMs: number,
+) {
+  return binding?.agentId === agentId && binding.writtenAtMs >= launchedAtMs - 2_000
+    ? binding.sessionId
+    : undefined
+}
+
+function codexSessionCreatedMs(birthtimeMs: number, mtimeMs: number) {
+  if (!Number.isFinite(birthtimeMs) || birthtimeMs <= 0) return mtimeMs
+  if (!Number.isFinite(mtimeMs) || mtimeMs <= 0) return birthtimeMs
+  return Math.min(birthtimeMs, mtimeMs)
 }
 
 function normalizePath(path: string) {

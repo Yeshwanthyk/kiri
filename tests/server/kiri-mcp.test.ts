@@ -341,6 +341,7 @@ describe('kiri MCP server', () => {
     const helperPath = join(root, 'kiri.app', 'Contents', 'Resources', 'bin', 'kiri-mcp')
     const electronPath = join(root, 'kiri.app', 'Contents', 'MacOS', 'kiri')
     const capturePath = join(root, 'capture.txt')
+    const hookCapturePath = join(root, 'hook-capture.txt')
 
     mkdirSync(join(root, 'kiri.app', 'Contents', 'Resources', 'bin'), { recursive: true })
     mkdirSync(join(root, 'kiri.app', 'Contents', 'MacOS'), { recursive: true })
@@ -348,18 +349,27 @@ describe('kiri MCP server', () => {
     chmodSync(helperPath, 0o755)
     writeFileSync(electronPath, [
       '#!/bin/sh',
-      'printf "%s\\n%s\\n%s\\n" "$ELECTRON_RUN_AS_NODE" "$1" "$2" > "$KIRI_HELPER_CAPTURE"',
+      'printf "%s\\n" "$ELECTRON_RUN_AS_NODE" "$@" > "$KIRI_HELPER_CAPTURE"',
     ].join('\n'))
     chmodSync(electronPath, 0o755)
 
-    execFileSync(helperPath, ['--probe'], {
+    execFileSync(helperPath, [], {
       env: { ...process.env, KIRI_HELPER_CAPTURE: capturePath },
+    })
+    execFileSync(helperPath, ['codex-hook', 'session-start'], {
+      env: { ...process.env, KIRI_HELPER_CAPTURE: hookCapturePath },
     })
 
     expect(readFileSync(capturePath, 'utf8').trim().split('\n')).toEqual([
       '1',
       join(root, 'kiri.app', 'Contents', 'Resources', 'app.asar', 'dist', 'cli', 'kirictl.mjs'),
       'mcp',
+    ])
+    expect(readFileSync(hookCapturePath, 'utf8').trim().split('\n')).toEqual([
+      '1',
+      join(root, 'kiri.app', 'Contents', 'Resources', 'app.asar', 'dist', 'cli', 'kirictl.mjs'),
+      'codex-hook',
+      'session-start',
     ])
   })
 })

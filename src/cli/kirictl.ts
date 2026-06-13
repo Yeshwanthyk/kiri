@@ -16,6 +16,7 @@ import {
   readKiritermDaemonRecord,
   runKiritermDaemon,
 } from '~/server/kiriterm-daemon'
+import { handleCodexSessionStartHook } from '~/server/codex-hook-handler'
 
 const version = '0.1.0'
 
@@ -53,6 +54,23 @@ const mcpCommand = Command.make('mcp', {}, () =>
     ))
   }),
 ).pipe(Command.withDescription('Run the Kiri MCP server over stdio'))
+
+const codexHookSessionStartCommand = Command.make('session-start', {}, () =>
+  Effect.promise(async () => {
+    const result = await handleCodexSessionStartHook({
+      stdin: readFileSync(0, 'utf8'),
+      env: process.env,
+    })
+    if (!result.ok) {
+      console.error(`codex SessionStart hook failed: ${result.reason ?? 'unknown error'}`)
+    }
+  }),
+).pipe(Command.withDescription('Record a Codex SessionStart hook binding'))
+
+const codexHookCommand = Command.make('codex-hook', {}).pipe(
+  Command.withDescription('Internal Codex lifecycle hook handlers'),
+  Command.withSubcommands([codexHookSessionStartCommand]),
+)
 
 const termDaemonCommand = Command.make('daemon', {}, () =>
   Effect.promise(() => runKiritermDaemon()),
@@ -159,6 +177,7 @@ export const kirictlCommand = Command.make('kirictl', {}).pipe(
   Command.withDescription('Agent-first JSON control surface for Kiri'),
   Command.withSubcommands([
     callCommand,
+    codexHookCommand,
     mcpCommand,
     termCommand,
   ]),

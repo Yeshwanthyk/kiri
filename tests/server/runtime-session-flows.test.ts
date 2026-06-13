@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { readCodexHookSessionBinding } from '~/server/codex-terminal-session'
 
 // Guards the session lifecycle flows that were validated against real agents
 // (docs/kiriterm-flow-audit.md): new sessions for every runtime, conversation
@@ -27,6 +28,7 @@ const responseSchema = z.discriminatedUnion('ok', [
 
 const waitSchema = z.object({ matched: z.boolean(), match: z.string().optional() })
 const sessionSchema = z.object({ id: z.string(), runtime: z.string(), model: z.string() })
+const agentDetailSchema = z.object({ sessionDir: z.string() })
 
 afterEach(async () => {
   await Promise.allSettled(clients.splice(0).map((client) => client.close()))
@@ -47,6 +49,7 @@ async function startClient() {
       KIRI_SETTINGS_PATH: resolve(projectRoot, 'settings.json'),
       KIRI_CLAUDE_BIN: resolve(projectRoot, 'tests/harness/fake-claude-terminal.mjs'),
       KIRI_CODEX_BIN: resolve(projectRoot, 'tests/harness/fake-codex-terminal.mjs'),
+      KIRI_PREFER_SOURCE_CLI: '1',
       KIRI_PI_BIN: resolve(projectRoot, 'tests/harness/fake-pi-terminal.mjs'),
       KIRI_OPENCODE_BIN: resolve(projectRoot, 'tests/harness/fake-opencode-terminal.mjs'),
       KIRI_CLAUDE_HOME: join(root, 'claude-home'),
@@ -181,6 +184,15 @@ describe('runtime session flows over MCP', () => {
     // Give the async rollout discovery (rememberCodexTerminalSession) time to
     // record the session id in runtime state.
     await sleep(1_500)
+    const detail = agentDetailSchema.parse(await call(client, 'kiri_get', {
+      operation: 'agent.detail',
+      params: { agentId: session.id },
+    }))
+    expect(readCodexHookSessionBinding(detail.sessionDir)).toMatchObject({
+      agentId: session.id,
+      sessionId: `fake-session-${session.id}`,
+      source: 'startup',
+    })
 
     await call(client, 'kiri_do', {
       operation: 'terminal.kill',

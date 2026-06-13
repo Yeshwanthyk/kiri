@@ -1,4 +1,5 @@
 import type { RuntimeKind, TerminalMode } from '~/lib/contracts'
+import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -80,6 +81,13 @@ type KiriMcpServerConfig = {
   readonly command: string
   readonly args?: readonly string[]
 }
+
+type KirictlInvocation = {
+  readonly command: string
+  readonly args: readonly string[]
+}
+
+const codexHookSupportByCommand = new Map<string, boolean>()
 
 export function makeTerminalLaunchService(input: {
   readonly runtimeBinaries: RuntimeBinariesApi
@@ -228,21 +236,42 @@ function buildKiriMcpConfigJson(context: TerminalLaunchContext) {
 
 function buildKiriMcpServerConfig(context: TerminalLaunchContext): Effect.Effect<KiriMcpServerConfig, RuntimeBinaryError> {
   return Effect.gen(function* () {
+  const invocation = yield* resolveKirictlInvocation(context, ['mcp'])
+  return invocation.args.length > 0
+    ? { type: 'stdio', command: invocation.command, args: invocation.args }
+    : { type: 'stdio', command: invocation.command }
+  })
+}
+
+function resolveKirictlInvocation(
+  context: TerminalLaunchContext,
+  args: readonly string[],
+): Effect.Effect<KirictlInvocation, RuntimeBinaryError> {
+  return Effect.gen(function* () {
   const override = context.env.KIRI_MCP_BIN?.trim()
-  if (override) return { type: 'stdio', command: override }
+  if (override) {
+    return {
+      command: override,
+      args: args.length === 1 && args[0] === 'mcp' ? [] : [...args],
+    }
+  }
 
   const packagedBin = context.resourcesPath ? join(context.resourcesPath, 'bin', 'kiri-mcp') : undefined
-  if (packagedBin && context.exists(packagedBin)) return { type: 'stdio', command: packagedBin }
+  if (packagedBin && context.exists(packagedBin)) {
+    return {
+      command: packagedBin,
+      args: args.length === 1 && args[0] === 'mcp' ? [] : [...args],
+    }
+  }
 
   const builtCli = resolve(context.processCwd, 'dist/cli/kirictl.mjs')
-  if (context.exists(builtCli)) {
-    return { type: 'stdio', command: context.execPath, args: [builtCli, 'mcp'] }
+  if (!preferSourceKirictl(context) && context.exists(builtCli)) {
+    return { command: context.execPath, args: [builtCli, ...args] }
   }
 
   return {
-    type: 'stdio',
     command: yield* resolveExecutable(context, 'pnpm'),
-    args: ['exec', 'tsx', resolve(context.processCwd, 'src/cli/kirictl.ts'), 'mcp'],
+    args: ['--dir', context.processCwd, 'exec', 'tsx', resolve(context.processCwd, 'src/cli/kirictl.ts'), ...args],
   }
   })
 }
@@ -274,13 +303,17 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
   return Effect.gen(function* () {
   const state = yield* parseRuntimeState(config.runtimeStateJson)
   const initialTerminalInput = firstPendingTerminalInput(state)
+  const command = yield* resolveExecutable(context, 'codex', context.env.KIRI_CODEX_BIN)
   const resume = stringValue(state.resume)
-    ?? stringValue(state.codexSessionId)
     ?? readCodexTerminalSessionId(config.sessionDir)
+    ?? stringValue(state.codexSessionId)
   const args = resume
     ? ['resume']
     : []
   args.push(...codexKiriConfigArgs(config.id, yield* buildKiriMcpServerConfig(context)))
+  if (codexHooksSupported(command, context)) {
+    args.push(...codexSessionStartHookArgs(yield* resolveKirictlInvocation(context, ['codex-hook', 'session-start'])))
+  }
   args.push('--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen')
   if (config.model) args.push('--model', config.model)
   if (resume) args.push(resume)
@@ -291,7 +324,7 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
     context.env.KIRI_CODEX_HOME ? { CODEX_HOME: context.env.KIRI_CODEX_HOME } : undefined,
   )
   return {
-    command: yield* resolveExecutable(context, 'codex', context.env.KIRI_CODEX_BIN),
+    command,
     args,
     cwd: config.cwd,
     env,
@@ -299,6 +332,17 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
     initialTerminalInput: resume ? null : initialTerminalInput,
   }
   })
+}
+
+function codexSessionStartHookArgs(invocation: KirictlInvocation) {
+  const command = [invocation.command, ...invocation.args].map(shellQuote).join(' ')
+  return [
+    '--enable',
+    'hooks',
+    '--dangerously-bypass-hook-trust',
+    '--config',
+    `hooks.SessionStart=[{hooks=[{type="command",command=${tomlString(command)},timeout=10}]}]`,
+  ]
 }
 
 function codexKiriConfigArgs(agentId: string, config: KiriMcpServerConfig) {
@@ -332,6 +376,32 @@ function tomlString(value: string) {
 
 function tomlStringArray(values: readonly string[]) {
   return `[${values.map(tomlString).join(', ')}]`
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function preferSourceKirictl(context: TerminalLaunchContext) {
+  return context.env.KIRI_PREFER_SOURCE_CLI === '1' || context.env.NODE_ENV === 'test'
+}
+
+function codexHooksSupported(command: string, context: TerminalLaunchContext) {
+  if (context.env.KIRI_CODEX_HOOKS === '0') return false
+  if (context.env.KIRI_CODEX_HOOKS === '1') return true
+
+  const cached = codexHookSupportByCommand.get(command)
+  if (cached !== undefined) return cached
+
+  const result = spawnSync(command, ['--help'], {
+    encoding: 'utf8',
+    env: context.env,
+    timeout: 5_000,
+  })
+  const supported = result.status === 0
+    && `${result.stdout ?? ''}\n${result.stderr ?? ''}`.includes('dangerously-bypass-hook-trust')
+  codexHookSupportByCommand.set(command, supported)
+  return supported
 }
 
 function piLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {

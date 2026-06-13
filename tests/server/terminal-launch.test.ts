@@ -30,6 +30,16 @@ function codexKiriArgs(kiriMcpBin = '/tmp/bin/kiri-mcp') {
   ]
 }
 
+function codexHookArgs(kiriMcpBin = '/tmp/bin/kiri-mcp') {
+  return [
+    '--enable',
+    'hooks',
+    '--dangerously-bypass-hook-trust',
+    '--config',
+    `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(`'${kiriMcpBin}' 'codex-hook' 'session-start'`)},timeout=10}]}]`,
+  ]
+}
+
 function launchConfig(runtime: TerminalAgentLaunchConfig['runtime']): TerminalAgentLaunchConfig {
   return {
     id: 'agent-1',
@@ -191,6 +201,32 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.env.KIRI_MODEL).toBe('test-model')
   })
 
+  it('adds Codex SessionStart hook args when hook support is enabled', () => {
+    stubCodexTerminalEnv()
+    vi.stubEnv('KIRI_CODEX_HOOKS', '1')
+
+    const launch = buildTerminalProcessLaunch(launchConfig('codex'), 'runtime', shell)
+
+    expect(launch.args).toEqual([
+      ...codexKiriArgs(),
+      ...codexHookArgs(),
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--no-alt-screen',
+      '--model',
+      'test-model',
+    ])
+  })
+
+  it('omits Codex SessionStart hook args when hooks are disabled', () => {
+    stubCodexTerminalEnv()
+    vi.stubEnv('KIRI_CODEX_HOOKS', '0')
+
+    const launch = buildTerminalProcessLaunch(launchConfig('codex'), 'runtime', shell)
+
+    expect(launch.args).not.toContain('--dangerously-bypass-hook-trust')
+    expect(launch.args).not.toContain('--enable')
+  })
+
   it('passes queued terminal input to new Codex sessions as the initial prompt', () => {
     stubCodexTerminalEnv()
 
@@ -242,6 +278,27 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.initialTerminalInput).toBeNull()
   })
 
+  it('adds Codex SessionStart hook args when resuming', () => {
+    stubCodexTerminalEnv()
+    vi.stubEnv('KIRI_CODEX_HOOKS', '1')
+
+    const launch = buildTerminalProcessLaunch({
+      ...launchConfig('codex'),
+      runtimeStateJson: JSON.stringify({ codexSessionId: 'codex-session-id' }),
+    }, 'runtime', shell)
+
+    expect(launch.args).toEqual([
+      'resume',
+      ...codexKiriArgs(),
+      ...codexHookArgs(),
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--no-alt-screen',
+      '--model',
+      'test-model',
+      'codex-session-id',
+    ])
+  })
+
   it('resumes Codex from the Kiri session directory when runtime state is missing', () => {
     stubCodexTerminalEnv()
     const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-session-'))
@@ -265,8 +322,23 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.initialTerminalInput).toBeNull()
   })
 
+  it('prefers the Kiri session directory over stale Codex runtime state', () => {
+    stubCodexTerminalEnv()
+    const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-session-'))
+    writeCodexTerminalSessionId(sessionDir, 'sidecar-codex-session')
+
+    const launch = buildTerminalProcessLaunch({
+      ...launchConfig('codex'),
+      sessionDir,
+      runtimeStateJson: JSON.stringify({ codexSessionId: 'stale-db-session' }),
+    }, 'runtime', shell)
+
+    expect(launch.args.at(-1)).toBe('sidecar-codex-session')
+  })
+
   it('prefers an explicit Codex resume state over the discovered session id', () => {
     vi.stubEnv('KIRI_MCP_BIN', '/tmp/bin/kiri-mcp')
+    vi.stubEnv('KIRI_CODEX_HOOKS', '0')
 
     const launch = buildTerminalProcessLaunch({
       ...launchConfig('codex'),
@@ -285,6 +357,39 @@ describe('buildTerminalProcessLaunch', () => {
       'test-model',
       'explicit-codex-session',
     ])
+  })
+
+  it('uses the packaged helper wrapper for Codex hook commands', async () => {
+    const resourcesPath = '/app/Contents/Resources'
+    const packagedHelper = `${resourcesPath}/bin/kiri-mcp`
+    const service = makeTerminalLaunchService({
+      runtimeBinaries: makeRuntimeBinariesService({
+        getEnv: () => ({ PATH: '/bin', KIRI_CODEX_BIN: '/injected/codex' }),
+        getHomeDir: () => '/injected/home',
+        exists: () => false,
+      }),
+      getEnv: () => ({
+        PATH: '/bin',
+        KIRI_CODEX_BIN: '/injected/codex',
+        KIRI_CODEX_HOOKS: '1',
+      }),
+      getHomeDir: () => '/injected/home',
+      exists: (path) => path === packagedHelper,
+      getProcessCwd: () => '/repo',
+      getExecPath: () => '/node',
+      getResourcesPath: () => resourcesPath,
+    })
+
+    const launch = await Effect.runPromise(service.buildProcessLaunch({
+      config: launchConfig('codex'),
+      mode: 'runtime',
+      shell,
+    }))
+
+    expect(launch.args).toContain(`mcp_servers.kiri.command=${JSON.stringify(packagedHelper)}`)
+    expect(launch.args).toContain(
+      `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(`'${packagedHelper}' 'codex-hook' 'session-start'`)},timeout=10}]}]`,
+    )
   })
 
   it('surfaces corrupt runtime state json instead of launching fresh', () => {

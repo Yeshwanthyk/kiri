@@ -32,6 +32,7 @@ export default defineConfig({
       KIRI_CODEX_APP_SERVER_URL: 'ws://127.0.0.1:39111',
       KIRI_CODEX_BIN: fakeCodexTerminalPath,
       KIRI_CODEX_HOME: join(e2eStateDir, 'codex-home'),
+      KIRI_PREFER_SOURCE_CLI: '1',
     },
     url: 'http://localhost:3109/@vite/client',
     reuseExistingServer: false,

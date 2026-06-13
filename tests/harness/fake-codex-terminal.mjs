@@ -1,8 +1,20 @@
 #!/usr/bin/env node
+import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 const args = process.argv.slice(2)
+
+if (args.includes('--help') || args.includes('-h')) {
+  process.stdout.write([
+    'Fake Codex CLI',
+    '      --enable <FEATURE>',
+    '      --dangerously-bypass-hook-trust',
+    '',
+  ].join('\n'))
+  process.exit(0)
+}
+
 const resumeIndex = args.indexOf('resume')
 const resumeId = resumeIndex >= 0
   ? args.at(-1)
@@ -14,7 +26,8 @@ const sessionId = resumeId ?? `fake-session-${agentId}`
 const mode = resumeId ? 'resume' : 'fresh'
 const statePath = join(codexHome, 'fake-state', `${sessionId}.txt`)
 
-writeSessionMetadata()
+const transcriptPath = writeSessionMetadata()
+fireSessionStartHook(transcriptPath)
 process.stdout.write(`fake-codex-terminal mode:${mode} session:${sessionId} pid:${process.pid}\r\n`)
 process.stdout.write(`fake-codex-terminal args:${JSON.stringify(args)}\r\n`)
 
@@ -68,4 +81,45 @@ function writeSessionMetadata() {
       originator: 'codex_cli_rs',
     },
   })}\n`)
+  return path
+}
+
+function fireSessionStartHook(transcriptPath) {
+  const command = sessionStartHookCommand()
+  if (!command) return
+  const result = spawnSync(command, {
+    cwd,
+    env: process.env,
+    input: `${JSON.stringify({
+      session_id: sessionId,
+      hook_event_name: 'SessionStart',
+      source: resumeId ? 'resume' : 'startup',
+      cwd,
+      transcript_path: transcriptPath,
+      model: process.env.KIRI_MODEL ?? 'fake-model',
+      permission_mode: 'danger-full-access',
+    })}\n`,
+    encoding: 'utf8',
+    shell: true,
+    timeout: 10_000,
+  })
+  if (result.error || result.status !== 0) {
+    process.stderr.write(`fake-codex-terminal hook failed:${result.error?.message ?? result.stderr ?? result.status}\n`)
+  }
+}
+
+function sessionStartHookCommand() {
+  for (let index = 0; index < args.length - 1; index += 1) {
+    if (args[index] !== '--config' && args[index] !== '-c') continue
+    const value = args[index + 1]
+    if (!value.startsWith('hooks.SessionStart=')) continue
+    const match = value.match(/command=("(?:(?:\\.)|[^"\\])*")/)
+    if (!match?.[1]) continue
+    try {
+      return JSON.parse(match[1])
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
 }

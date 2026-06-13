@@ -107,6 +107,7 @@ async function startClient() {
       KIRI_SETTINGS_PATH: resolve(projectRoot, 'settings.json'),
       KIRI_CODEX_BIN: resolve(projectRoot, 'tests/harness/fake-codex-terminal.mjs'),
       KIRI_CODEX_HOME: join(root, 'codex-home'),
+      KIRI_PREFER_SOURCE_CLI: '1',
       // Dispatch spawns real PTYs for terminal-mode launch items.
       KIRI_WORKFLOW_SPAWN_TERMINALS: '1',
       KIRI_TERMINAL_CLEANUP_STALE_CLAUDE: '0',

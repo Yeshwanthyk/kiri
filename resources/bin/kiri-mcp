@@ -12,4 +12,8 @@ if [ ! -x "$ELECTRON" ]; then
   exit 1
 fi
 
-ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$CLI" mcp "$@"
+if [ "$#" -eq 0 ]; then
+  set -- mcp
+fi
+
+ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$CLI" "$@"
