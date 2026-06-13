@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import type { TerminalMode } from '~/lib/contracts'
 import { rememberCodexTerminalSession } from './codex-cli-sessions'
 import {
   getAgentLaunchConfig,
@@ -87,25 +86,24 @@ export function makeKiritermDaemonClient(
     return payload
   }
 
-  async function processCodexLaunches(config: TerminalAgentLaunchConfig, payload: unknown) {
+  function processCodexLaunches(config: TerminalAgentLaunchConfig, payload: unknown) {
     if (typeof payload !== 'object' || payload === null || !('codexLaunches' in payload)) return
     const launches = payload.codexLaunches
     if (!Array.isArray(launches)) return
-    const writes: Promise<void>[] = []
     for (const launch of launches) {
       if (!isCodexLaunch(launch)) continue
       const launchConfig = launch.agentId === config.id ? config : getAgentLaunchConfig(launch.agentId)
-      writes.push(rememberCodexTerminalSession(
+      void rememberCodexTerminalSession(
         launchConfig,
         launch.codexHome === null ? {} : { CODEX_HOME: launch.codexHome },
         { launchedAtMs: launch.launchedAtMs, launchToken: launch.launchToken },
-      ))
-    }
-    const results = await Promise.allSettled(writes)
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        console.error('kiriterm daemon Codex session memory failed', result.reason)
-      }
+      ).then((remembered) => {
+        if (!remembered) {
+          console.error('kiriterm daemon Codex session memory did not find session metadata')
+        }
+      }).catch((error) => {
+        console.error('kiriterm daemon Codex session memory failed', error)
+      })
     }
   }
 
@@ -128,7 +126,7 @@ export function makeKiritermDaemonClient(
       await upsertAgent(input.config)
       if (input.mode === 'runtime') {
         const payload = await request('agents/spawn', { agentId: input.config.id })
-        await processCodexLaunches(input.config, payload)
+        processCodexLaunches(input.config, payload)
       }
     },
     spawnAgentRuntime: async (input) => {
@@ -139,7 +137,7 @@ export function makeKiritermDaemonClient(
         ...(input.cols !== undefined ? { cols: input.cols } : {}),
         ...(input.rows !== undefined ? { rows: input.rows } : {}),
       })
-      await processCodexLaunches(config, payload)
+      processCodexLaunches(config, payload)
       return { agentId: input.agentId, mode: 'runtime' }
     },
     closeAgentRuntime: (agentId) => {

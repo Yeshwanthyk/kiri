@@ -71,6 +71,49 @@ describe('Codex terminal session memory', () => {
     expect(dbMock.state.get(config.id)).toEqual({ resume: 'explicit-session' })
   })
 
+  it('keeps watching for real Codex session metadata that appears after startup', async () => {
+    const { rememberCodexTerminalSession } = await import('~/server/codex-cli-sessions')
+    const codexHome = mkdtempSync(join(tmpdir(), 'kiri-codex-home-'))
+    const cwd = '/tmp/project'
+    const config = launchConfig({ id: 'agent-delayed', cwd })
+    const launchedAtMs = Date.now()
+
+    const remembered = rememberCodexTerminalSession(config, { CODEX_HOME: codexHome }, {
+      launchedAtMs,
+      launchToken: 'launch-token',
+    })
+
+    setTimeout(() => {
+      writeCodexSession(
+        codexHome,
+        '2026/05/15/rollout-delayed.jsonl',
+        'delayed-session',
+        cwd,
+        (launchedAtMs + 10_000) / 1000,
+      )
+    }, 2_200)
+
+    await expect(remembered).resolves.toBe(true)
+    expect(dbMock.state.get(config.id)).toEqual({ codexSessionId: 'delayed-session' })
+    expect(readCodexTerminalSessionId(config.sessionDir)).toBe('delayed-session')
+  }, 10_000)
+
+  it('reports when no Codex session metadata appears within the configured window', async () => {
+    const { rememberCodexTerminalSession } = await import('~/server/codex-cli-sessions')
+    const codexHome = mkdtempSync(join(tmpdir(), 'kiri-codex-home-'))
+    const config = launchConfig({ id: 'agent-missing', cwd: '/tmp/project' })
+
+    await expect(rememberCodexTerminalSession(config, { CODEX_HOME: codexHome }, {
+      launchedAtMs: Date.now(),
+      launchToken: 'launch-token',
+      attempts: 2,
+      intervalMs: 5,
+    })).resolves.toBe(false)
+
+    expect(dbMock.setAgentRuntimeState).not.toHaveBeenCalled()
+    expect(readCodexTerminalSessionId(config.sessionDir)).toBeUndefined()
+  })
+
   it('remembers the launch-local Codex session when later same-cwd sessions already exist', async () => {
     const { rememberCodexTerminalSession } = await import('~/server/codex-cli-sessions')
     const codexHome = mkdtempSync(join(tmpdir(), 'kiri-codex-home-'))

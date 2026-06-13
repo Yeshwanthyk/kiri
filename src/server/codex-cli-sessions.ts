@@ -37,7 +37,12 @@ type WaitForCodexSessionInput = CodexSessionDiscoveryInput & {
 type RememberCodexTerminalSessionInput = {
   readonly launchedAtMs: number
   readonly launchToken: string
+  readonly attempts?: number
+  readonly intervalMs?: number
 }
+
+const defaultSessionDiscoveryAttempts = 120
+const defaultSessionDiscoveryIntervalMs = 500
 
 const latestLaunchTokenByAgentId = new Map<string, string>()
 
@@ -97,12 +102,12 @@ export async function rememberCodexTerminalSession(
   env: NodeJS.ProcessEnv,
   input: RememberCodexTerminalSessionInput,
 ) {
-  if (config.runtime !== 'codex') return
+  if (config.runtime !== 'codex') return true
   latestLaunchTokenByAgentId.set(config.id, input.launchToken)
   const initialResume = codexResumeIdFromState(getAgentRuntimeState(config.id))
   if (initialResume) {
     writeCodexTerminalSessionId(config.sessionDir, initialResume)
-    return
+    return true
   }
 
   const sessionId = await waitForLatestCodexSessionForCwd({
@@ -110,24 +115,27 @@ export async function rememberCodexTerminalSession(
     cwd: config.cwd,
     newerThanMs: input.launchedAtMs - 1000,
     closestToMs: input.launchedAtMs,
+    attempts: input.attempts,
+    intervalMs: input.intervalMs,
   })
-  if (!sessionId) return
-  if (latestLaunchTokenByAgentId.get(config.id) !== input.launchToken) return
+  if (!sessionId) return false
+  if (latestLaunchTokenByAgentId.get(config.id) !== input.launchToken) return true
 
   const currentState = getAgentRuntimeState(config.id)
-  if (latestLaunchTokenByAgentId.get(config.id) !== input.launchToken) return
+  if (latestLaunchTokenByAgentId.get(config.id) !== input.launchToken) return true
   const currentResume = codexResumeIdFromState(currentState)
   if (currentResume) {
     writeCodexTerminalSessionId(config.sessionDir, currentResume)
-    return
+    return true
   }
   writeCodexTerminalSessionId(config.sessionDir, sessionId)
   setAgentRuntimeState(config.id, { ...currentState, codexSessionId: sessionId })
+  return true
 }
 
 export async function waitForLatestCodexSessionForCwd(input: WaitForCodexSessionInput) {
-  const attempts = input.attempts ?? 20
-  const intervalMs = input.intervalMs ?? 100
+  const attempts = input.attempts ?? defaultSessionDiscoveryAttempts
+  const intervalMs = input.intervalMs ?? defaultSessionDiscoveryIntervalMs
   for (let index = 0; index < attempts; index += 1) {
     const sessionId = findLatestCodexSessionForCwd(input)
     if (sessionId) return sessionId

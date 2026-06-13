@@ -208,7 +208,7 @@ export async function startKiritermDaemon(
           launchedAtMs: input.launchedAtMs,
           launchToken: input.launchToken,
         })
-        return Promise.resolve()
+        return Promise.resolve(true)
       },
     },
     {
@@ -428,7 +428,7 @@ export async function runKiritermDaemon(options: KiritermDaemonOptions = {}) {
 
 function loadPersistedSessions(sessionsDir: string) {
   const restored = new Map<string, PersistedSession>()
-  let entries: string[] = []
+  let entries: string[]
   try {
     entries = readdirSync(sessionsDir)
   } catch {
