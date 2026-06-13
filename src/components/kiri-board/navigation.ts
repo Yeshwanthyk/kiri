@@ -28,8 +28,8 @@ export const keymapGroups: {
     rows: [
       { action: 'projectPrev', label: 'Project up', hint: 'Previous project row' },
       { action: 'projectNext', label: 'Project down', hint: 'Next project row' },
-      { action: 'agentPrev', label: 'Agent left', hint: 'Previous session in row' },
-      { action: 'agentNext', label: 'Agent right', hint: 'Next session in row' },
+      { action: 'agentPrev', label: 'Resource left', hint: 'Previous resource tab' },
+      { action: 'agentNext', label: 'Resource right', hint: 'Next resource tab' },
     ],
   },
   {
@@ -45,8 +45,8 @@ export const keymapGroups: {
     label: 'Focus',
     rows: [
       { action: 'focusChat', label: 'Focus chat', hint: 'Jump cursor to composer' },
-      { action: 'openTerminal', label: 'Open terminal', hint: 'Switch sidebar to terminal' },
-      { action: 'openScratchpad', label: 'Open scratchpad', hint: 'Switch sidebar to scratchpad' },
+      { action: 'openTerminal', label: 'Open terminal', hint: 'Open terminal resource' },
+      { action: 'openScratchpad', label: 'Toggle scratchpad', hint: 'Open or close scratchpad' },
       { action: 'toggleTerminalFocus', label: 'Toggle terminal focus', hint: 'Jump into or out of the visible terminal' },
     ],
   },

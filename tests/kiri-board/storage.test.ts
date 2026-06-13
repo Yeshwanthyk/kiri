@@ -6,10 +6,12 @@ import {
   readStoredChatDrafts,
   readStoredChatTypography,
   readStoredAgentByProject,
+  readStoredResourceLayout,
   readStoredThemeSelection,
   readStoredKeymap,
   saveChatTypography,
   saveKeymap,
+  saveStoredResourceLayout,
   updateChatDraft,
   type StorageLike,
 } from '~/components/kiri-board/storage'
@@ -40,9 +42,15 @@ describe('keymap storage', () => {
     expect(readStoredKeymap(storage)).toEqual(keymap)
   })
 
-  it('strips legacy diff keymap actions', () => {
+  it('migrates the legacy default keymap', () => {
     const storage = memoryStorage({
-      'kiri:keymap:v1': JSON.stringify({ ...defaultKeymap, openDiffs: 'd' }),
+      'kiri:keymap:v1': JSON.stringify({
+        ...defaultKeymap,
+        projectPrev: 'k',
+        projectNext: 'j',
+        agentPrev: 'h',
+        agentNext: 'l',
+      }),
     })
 
     expect(readStoredKeymap(storage)).toEqual(defaultKeymap)
@@ -50,7 +58,7 @@ describe('keymap storage', () => {
 
   it('falls back to defaults for duplicate or unsupported bindings', () => {
     const duplicate = memoryStorage({
-      'kiri:keymap:v1': JSON.stringify({ ...defaultKeymap, projectPrev: 'j' }),
+      'kiri:keymap:v1': JSON.stringify({ ...defaultKeymap, projectPrev: 'l' }),
     })
     const unsupported = memoryStorage({
       'kiri:keymap:v1': JSON.stringify({ ...defaultKeymap, projectPrev: '?' }),
@@ -114,6 +122,82 @@ describe('chat draft storage', () => {
     })
 
     expect(readStoredChatDrafts(storage)).toEqual({ good: 'draft' })
+  })
+})
+
+describe('resource layout storage', () => {
+  it('falls back when window storage is unavailable', () => {
+    expect(readStoredResourceLayout()).toEqual({
+      activeProjectId: null,
+      projects: {},
+    })
+  })
+
+  it('reads and saves normalized resource layout', () => {
+    const storage = memoryStorage()
+    const layout = {
+      activeProjectId: 'alpha',
+      projects: {
+        alpha: {
+          activeResourceId: 'terminal:t1' as const,
+          activeTerminalResourceId: 'terminal:t1' as const,
+          order: ['agent:a1', 'terminal:t1'] as const,
+          terminals: [{
+            id: 'terminal:t1' as const,
+            kind: 'terminal' as const,
+            terminalId: 't1',
+            title: 'server',
+            purpose: { kind: 'manual' as const },
+          }],
+        },
+      },
+    }
+
+    saveStoredResourceLayout(layout, storage)
+
+    expect(readStoredResourceLayout(storage)).toEqual(layout)
+  })
+
+  it('drops malformed resource layout fields', () => {
+    const storage = memoryStorage({
+      'kiri:resource-layout:v1': JSON.stringify({
+        activeProjectId: 12,
+        projects: {
+          alpha: {
+            activeResourceId: 'agent:a1',
+            order: ['agent:a1', 'bad', 'scratchpad'],
+            terminals: [
+              {
+                id: 'terminal:t1',
+                kind: 'terminal',
+                terminalId: 't1',
+                title: '',
+                purpose: { kind: 'unknown' },
+              },
+              { id: 'agent:nope', terminalId: 'bad' },
+            ],
+          },
+          beta: 'bad',
+        },
+      }),
+    })
+
+    expect(readStoredResourceLayout(storage)).toEqual({
+      activeProjectId: null,
+      projects: {
+        alpha: {
+          activeResourceId: 'agent:a1',
+          order: ['agent:a1'],
+          terminals: [{
+            id: 'terminal:t1',
+            kind: 'terminal',
+            terminalId: 't1',
+            title: 'terminal',
+            purpose: { kind: 'manual' },
+          }],
+        },
+      },
+    })
   })
 })
 

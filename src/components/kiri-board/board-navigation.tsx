@@ -1,6 +1,6 @@
 'use client'
 
-import { ChevronDown, FolderOpen, MessageSquareText, NotebookPen, Plus, Settings2, TerminalSquare } from 'lucide-react'
+import { ChevronDown, FolderOpen, MessageSquareText, Plus, Settings2 } from 'lucide-react'
 import type { AgentCell, ProjectRow } from '~/lib/contracts'
 import type { SidebarTab } from './board-types'
 import { RuntimeBadge } from './runtime-badge'
@@ -42,7 +42,7 @@ export function MobileTopBar({
           </span>
         </button>
         <div className="mobile-actions">
-          <button type="button" onClick={onOpenProjects} aria-label="Projects">
+          <button type="button" onClick={onOpenProjects} aria-label="Open projects page">
             <FolderOpen size={18} />
           </button>
           <button type="button" onClick={onOpenSettings} aria-label="Open settings">
@@ -77,26 +77,6 @@ export function MobileTopBar({
         >
           <MessageSquareText size={15} />
           Chat
-        </button>
-        <button
-          type="button"
-          className={tab === 'terminal' ? 'active' : ''}
-          onClick={() => onTabChange('terminal')}
-          role="tab"
-          aria-selected={tab === 'terminal'}
-        >
-          <TerminalSquare size={15} />
-          Terminal
-        </button>
-        <button
-          type="button"
-          className={tab === 'scratchpad' ? 'active' : ''}
-          onClick={() => onTabChange('scratchpad')}
-          role="tab"
-          aria-selected={tab === 'scratchpad'}
-        >
-          <NotebookPen size={15} />
-          Scratch
         </button>
       </div>
     </header>

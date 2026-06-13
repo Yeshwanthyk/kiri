@@ -122,10 +122,6 @@ export function ScratchpadPanel({
   )
 
   React.useEffect(() => {
-    captureRef.current?.focus()
-  }, [])
-
-  React.useEffect(() => {
     if (!state.notice) return undefined
     const timeout = window.setTimeout(() => {
       dispatch({ type: 'noticeCleared' })

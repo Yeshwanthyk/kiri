@@ -160,14 +160,75 @@ test('keyboard navigation moves projects without default sessions', async ({ pag
   await expect(page.getByTestId('selected-project')).toContainText(/kiri/i)
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
   if (!isMobile) {
-    await expect(page.getByTestId('empty-project-sessions').first()).toBeVisible()
+    await expect(page.getByTestId('empty-session-panel')).toBeVisible()
   }
 
-  await pressShiftKey(page, 'KeyJ')
+  await pressShiftKey(page, 'KeyL')
   await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
 
-  await pressShiftKey(page, 'KeyK')
+  await pressShiftKey(page, 'KeyH')
+  await expect(page.getByTestId('selected-project')).toContainText(/kiri/i)
+
+  await pressMetaKey(page, 'ArrowDown')
+  await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
+
+  await pressMetaKey(page, 'ArrowUp')
+  await expect(page.getByTestId('selected-project')).toContainText(/kiri/i)
+})
+
+test('project arrows move through empty projects and focused scratchpad dialog', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop board keymaps only')
+  const title = `Scratchpad Nav ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+  await expect.poll(() => activeLayoutProjectId(page)).toBe('e2e-kiri')
+
+  await pressMetaKeyFromFocus(page, 'ArrowDown')
+  await expect.poll(() => activeLayoutProjectId(page)).toBe('test-reference')
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-active-resource-kind', 'empty')
+  await expect(page.getByTestId('empty-session-panel')).toBeVisible()
+  await expect(page.getByTestId('scratchpad-float')).toBeHidden()
+
+  await openScratchpadResource(page)
+  await page.getByTestId('scratchpad-input').focus()
+  await expect(page.getByTestId('scratchpad-input')).toBeFocused()
+  await pressMetaKeyFromFocus(page, 'ArrowUp')
+  await expect.poll(() => activeLayoutProjectId(page)).toBe('e2e-kiri')
+})
+
+test('scratchpad shortcut toggles floating panel', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'desktop board keymaps only')
+
+  await page.goto('/')
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  await expect(page.getByTestId('scratchpad-float')).toBeHidden()
+
+  await pressShiftKey(page, 'KeyS')
+  await expect(page.getByTestId('scratchpad-float')).toBeVisible()
+
+  await pressShiftKeyFromFocus(page, 'KeyS')
+  await expect(page.getByTestId('scratchpad-float')).toBeHidden()
+
+  await pressShiftKeyFromFocus(page, 'KeyS')
+  await expect(page.getByTestId('scratchpad-float')).toBeVisible()
+  await page.getByTestId('scratchpad-float-close').click()
+  await expect(page.getByTestId('scratchpad-float')).toBeHidden()
+})
+
+test('keyboard navigation jumps directly to projects by command number', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  await expect(page.getByTestId('selected-project')).toContainText(/kiri/i)
+
+  await pressMetaKey(page, 'Digit2')
+  await expect(page.getByTestId('selected-project')).toContainText('Test Reference')
+
+  await pressMetaKey(page, 'Digit1')
+  await expect(page.getByTestId('selected-project')).toContainText(/kiri/i)
+
+  await pressMetaKey(page, 'Digit9')
   await expect(page.getByTestId('selected-project')).toContainText(/kiri/i)
 })
 
@@ -176,7 +237,7 @@ test('keymap settings remap navigation', async ({ page }) => {
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
   const firstProject = await page.getByTestId('selected-project').textContent()
 
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await openSettingsPage(page)
   await expect(page.getByTestId('keymap-focusChat')).toBeVisible()
   await page.getByTestId('keymap-projectNext').selectOption('arrowdown')
   await page.getByRole('button', { name: 'Back to board' }).click()
@@ -219,6 +280,61 @@ test('start and remove session with keymaps', async ({ page }, testInfo) => {
 
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
   await expect(page.getByTestId('board-pane')).not.toContainText(title)
+})
+
+test('resource tabs reorder by keyboard and mouse drag', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop drag flow only')
+  const title = `Movable Resource ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+  await openTerminalResource(page)
+  await expect.poll(() => resourceTabOrder(page)).toEqual([title, 'terminal'])
+
+  await pressMetaShiftKey(page, 'ArrowLeft')
+  await expect.poll(() => resourceTabOrder(page)).toEqual(['terminal', title])
+
+  const terminalTab = page
+    .locator('.resource-tab-shell')
+    .filter({ has: page.getByRole('tab', { name: 'terminal' }) })
+  const agentTab = page
+    .locator('.resource-tab-shell')
+    .filter({ has: page.getByRole('tab', { name: title }) })
+  await terminalTab.dragTo(agentTab)
+  await expect.poll(() => resourceTabOrder(page)).toEqual([title, 'terminal'])
+})
+
+test('agent resource tabs expose a close control', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop resource tabs only')
+  const title = `Closable Resource ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+
+  await page.getByRole('button', { name: `Close ${title}` }).click()
+  await expect(page.getByTestId('confirm-dialog')).toContainText(title)
+  await page.getByTestId('confirm-dialog-confirm').click()
+
+  await expect(page.getByTestId('selected-agent')).toHaveText('No session')
+  await expect(page.getByTestId('board-pane')).not.toContainText(title)
+})
+
+test('agent resource tabs rename inline', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop resource tabs only')
+  const title = `Rename Resource ${testInfo.project.name}`
+  const nextTitle = `Renamed Resource ${testInfo.project.name}`
+
+  await page.goto('/')
+  await createSession(page, title)
+
+  await page.getByRole('tab', { name: title }).dblclick()
+  const titleInput = page.getByLabel(`Rename ${title}`)
+  await expect(titleInput).toBeFocused()
+  await titleInput.fill(nextTitle)
+  await page.keyboard.press('Enter')
+
+  await expect(page.getByTestId('selected-agent')).toHaveText(nextTitle)
+  await expect(page.getByRole('tab', { name: nextTitle })).toBeVisible()
 })
 
 test('session launcher selects provider by number and enter starts it', async ({ page }, testInfo) => {
@@ -292,9 +408,9 @@ test('shift delete removes the selected session, not the first session', async (
   await createSession(page, firstTitle)
   await createSession(page, secondTitle)
 
-  await page.getByTestId('agent-cell').filter({ hasText: firstTitle }).dispatchEvent('click')
+  await openAgentResource(page, firstTitle)
   await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
-  await page.getByTestId('agent-cell').filter({ hasText: secondTitle }).dispatchEvent('click')
+  await openAgentResource(page, secondTitle)
   await expect(page.getByTestId('selected-agent')).toHaveText(secondTitle)
 
   await pressShiftKey(page, 'KeyX')
@@ -371,20 +487,20 @@ test('command menu starts, switches, and ends sessions', async ({ page }) => {
   await expect(page.getByTestId('selected-agent')).toHaveText(secondTitle)
 })
 
-test('projects panel adds, hides, and unhides projects', async ({ page, isMobile }, testInfo) => {
+test('projects panel adds, hides, and unhides projects', async ({ page }, testInfo) => {
   const id = `e2e-${testInfo.project.name}`
   const name = `E2E ${testInfo.project.name}`
 
   await page.goto('/')
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
 
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await openProjectsPage(page)
   await page.getByTestId('project-name-input').fill(name)
   await page
     .getByTestId('project-cwd-input')
     .fill(projectRoot)
   await page.getByTestId('project-id-input').fill(id)
-  await page.getByRole('button', { name: 'Add' }).click()
+  await page.getByRole('button', { name: 'Add project' }).click()
 
   await expect(page.getByTestId('project-settings-list')).toContainText(name)
   await page.getByRole('button', { name: `Move ${name} up` }).click()
@@ -394,29 +510,19 @@ test('projects panel adds, hides, and unhides projects', async ({ page, isMobile
   await expect(page.getByTestId('board-pane')).toContainText(name)
   await page.reload()
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await openProjectsPage(page)
   await expect(page.locator('[data-testid="project-settings-list"] .project-settings-row').first()).toContainText(name)
 
   await page.getByTestId('project-settings-list').getByRole('button', { name: `Hide ${name}` }).click()
   await expect(page.getByTestId('project-settings-list')).not.toContainText(name)
   await expect(page.getByTestId('hidden-project-list')).toContainText(name)
   await page.getByRole('button', { name: 'Close projects' }).click()
-  await expect(page.getByTestId('board-grid')).not.toContainText(name)
+  await expect(page.getByTestId('board-pane')).not.toContainText(name)
 
-  if (isMobile) {
-    await page.keyboard.press('Control+K')
-    await page.getByTestId('command-search').fill(`unhide ${name}`)
-    await page.keyboard.press('Enter')
-  } else {
-    await expect(page.getByTestId('hidden-project-shelf')).toContainText(name)
-    await page.getByRole('button', { name: `Restore ${name}` }).click()
-    await expect(page.getByTestId('board-grid')).toContainText(name)
-
-    await page.getByTestId('board-pane').getByRole('button', { name: `Hide ${name}` }).click()
-    await expect(page.getByTestId('hidden-project-shelf')).toContainText(name)
-    await page.getByRole('button', { name: `Restore ${name}` }).click()
-  }
-  await expect(page.getByTestId('board-grid')).toContainText(name)
+  await page.keyboard.press('Control+K')
+  await page.getByTestId('command-search').fill(`unhide ${name}`)
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('board-pane')).toContainText(name)
 
   await page.keyboard.press('Control+K')
   await page.getByTestId('command-search').fill(`remove ${name}`)
@@ -429,7 +535,7 @@ test('projects panel adds, hides, and unhides projects', async ({ page, isMobile
   await page.getByTestId('confirm-dialog-cancel').click()
   await expect(page.getByTestId('board-pane')).toContainText(name)
 
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await openProjectsPage(page)
   await page.getByRole('button', { name: `Remove ${name}` }).click()
   await expect(page.getByTestId('confirm-dialog')).toContainText('project directory and files stay on disk')
   await page.getByTestId('confirm-dialog-confirm').click()
@@ -626,14 +732,14 @@ test('codex runtime replaces a missing rollout thread on first prompt', async ({
   expect(turnStartIndex).toBeGreaterThan(newThreadStartIndex)
 })
 
-test('sidebar switches between chat and terminal', async ({ page, isMobile }, testInfo) => {
-  test.skip(isMobile, 'desktop sidebar tabs only')
-  const title = `Sidebar Session ${testInfo.project.name}`
+test('resource tabs switch between agent and terminal', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop resource tabs only')
+  const title = `Resource Session ${testInfo.project.name}`
 
   await page.goto('/')
   await createSession(page, title)
 
-  await page.getByTestId('tab-terminal').click()
+  await openTerminalResource(page)
   await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
   await page
     .getByTestId('terminal-panel')
@@ -658,14 +764,14 @@ test('sidebar switches between chat and terminal', async ({ page, isMobile }, te
   await expect(page.getByTestId('chat-input')).toBeFocused()
 })
 
-test('terminal preserves running shell across sidebar tab switches', async ({ page, isMobile }, testInfo) => {
-  test.skip(isMobile, 'desktop sidebar tabs only')
+test('terminal preserves running shell across resource tab switches', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop resource tabs only')
   const title = `Terminal Persistence ${testInfo.project.name}`
 
   await page.goto('/')
   await createSession(page, title)
 
-  await page.getByTestId('tab-terminal').click()
+  await openTerminalResource(page)
   await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
   const terminalInput = page
     .getByTestId('terminal-panel')
@@ -697,11 +803,11 @@ test('terminal preserves running shell across sidebar tab switches', async ({ pa
     await shellPane.getAttribute('data-terminal-base-y') ?? 0,
   )
 
-  await page.getByTestId('tab-chat').click()
+  await openAgentResource(page, title)
   await expect(page.getByTestId('chat-panel')).toBeVisible()
   await expect.poll(async () => terminalInputElement.evaluate((element) => element.isConnected))
     .toBe(true)
-  await page.getByTestId('tab-terminal').click()
+  await openTerminalResource(page)
   await expect(page.getByTestId('terminal-panel')).toBeVisible()
   await expect.poll(async () =>
     terminalInputElement.evaluate((element) =>
@@ -729,7 +835,7 @@ test('terminal focus controls still work after a theme change', async ({ page, i
   await page.goto('/')
   await createSession(page, title)
 
-  await page.getByTestId('tab-terminal').click()
+  await openTerminalResource(page)
   await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
   let terminalInput = page
     .getByTestId('terminal-panel')
@@ -738,11 +844,11 @@ test('terminal focus controls still work after a theme change', async ({ page, i
   await terminalInput.click()
   await expect(terminalInput).toBeFocused()
 
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await openSettingsPage(page)
   await page.getByTestId('theme-mode-dark').click()
   await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark')
   await page.getByRole('button', { name: 'Back to board' }).click()
-  await page.getByTestId('tab-terminal').click()
+  await openTerminalResource(page)
   await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
 
   terminalInput = page
@@ -761,18 +867,19 @@ test('terminal focus controls still work after a theme change', async ({ page, i
   await expect(terminalInput).toBeFocused()
 })
 
-test('terminal interface sessions render the agent runtime in chat and shell in terminal tab', async ({ page, isMobile }, testInfo) => {
-  test.skip(isMobile, 'desktop sidebar tabs only')
+test('terminal interface sessions render the agent runtime in chat and shell in terminal resource', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop resource tabs only')
   const title = `Terminal Interface ${testInfo.project.name}`
 
   await page.goto('/')
   await createSession(page, title, 'claude', 'medium')
 
-  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
-  await expect(page.getByTestId('terminal-panel')).toContainText('Agent terminal')
+  await expect(page.getByTestId('terminal-panel')).toHaveAttribute('data-terminal-status', 'Connected', {
+    timeout: 10_000,
+  })
   await expect(page.getByTestId('terminal-transcript')).toContainText('kiri agent terminal')
 
-  await page.getByTestId('tab-terminal').click()
+  await openTerminalResource(page)
   await expect(page.getByTestId('terminal-panel')).toContainText('Shell terminal')
   await page
     .getByTestId('terminal-panel')
@@ -836,9 +943,9 @@ test('codex terminal interface resumes after the PTY exits', async ({ page, isMo
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('terminal-transcript')).toContainText('bye session:')
 
-  await page.getByTestId('tab-terminal').click()
+  await openTerminalResource(page)
   await expect(page.getByTestId('terminal-panel')).toContainText('Shell terminal')
-  await page.getByTestId('tab-chat').click()
+  await openAgentResource(page, title)
   await expect(page.getByTestId('terminal-transcript')).toContainText('mode:resume')
   await expect(page.getByTestId('terminal-transcript')).toContainText(`session:${sessionId}`)
 
@@ -875,7 +982,6 @@ test('selected agent detail loads chat and local drafts', async ({ page, isMobil
   await expect(page.getByTestId('selected-agent')).toHaveText('Detail Session')
   await expect(page.getByTestId('chat-panel')).toContainText('seeded detail assistant tail')
 
-  await page.getByTestId('tab-chat').click()
   await page.getByTestId('chat-input').fill('local unsent draft')
   await page.getByRole('button', { name: 'Other Session' }).click()
   await expect(page.getByTestId('chat-input')).toHaveValue('')
@@ -883,6 +989,26 @@ test('selected agent detail loads chat and local drafts', async ({ page, isMobil
   await expect(page.getByTestId('chat-input')).toHaveValue('local unsent draft')
   await expect(page.evaluate(() => sessionStorage.getItem('kiri:chat-drafts:v1')))
     .resolves.toContain(detailAgentId)
+})
+
+test('large chat renders within browser budget', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop render budget only')
+  test.setTimeout(60_000)
+  const title = `Perf Session ${testInfo.project.name}`
+  seedLargeSessionWithDetail({
+    agentId: 'agent-browser-perf',
+    slot: 'session-browser-perf',
+    title,
+    messageCount: 1_200,
+  })
+
+  const chatStart = Date.now()
+  await page.goto('/')
+  await expect(page.getByTestId('selected-agent')).toHaveText(title)
+  await expect(page.getByTestId('chat-panel')).toContainText('browser perf message 1199')
+  const chatMs = Date.now() - chatStart
+  expect(chatMs).toBeLessThan(8_000)
+  await expect(page.getByTestId('chat-panel').locator('.timeline-row')).toHaveCount(500)
 })
 
 test('escape leaves chat composer so board keymaps work', async ({ page, isMobile }, testInfo) => {
@@ -905,23 +1031,23 @@ test('escape leaves chat composer so board keymaps work', async ({ page, isMobil
   await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
 })
 
-test('escape leaves scratchpad input so sidebar keymaps work', async ({ page, isMobile }, testInfo) => {
-  test.skip(isMobile, 'desktop sidebar keymaps only')
+test('escape leaves scratchpad input so resource keymaps work', async ({ page, isMobile }, testInfo) => {
+  test.skip(isMobile, 'desktop resource keymaps only')
   const title = `Scratchpad Escape Session ${testInfo.project.name}`
 
   await page.goto('/')
   await createSession(page, title)
 
-  await page.getByTestId('tab-scratchpad').click()
+  await openScratchpadResource(page)
   await page.getByTestId('scratchpad-input').focus()
   await expect(page.getByTestId('scratchpad-input')).toBeFocused()
 
   await page.keyboard.press('Escape')
-  await expect(page.getByTestId('scratchpad-input')).not.toBeFocused()
+  await expect(page.getByTestId('scratchpad-float')).toBeHidden()
   await page.keyboard.down('Shift')
-  await page.keyboard.press('KeyC')
+  await page.keyboard.press('KeyT')
   await page.keyboard.up('Shift')
-  await expect(page.getByTestId('chat-input')).toBeFocused()
+  await expect(page.getByTestId('terminal-panel')).toBeVisible()
 })
 
 test('scratchpad trigger can start codex in terminal mode', async ({ page, isMobile }, testInfo) => {
@@ -932,7 +1058,7 @@ test('scratchpad trigger can start codex in terminal mode', async ({ page, isMob
   await page.goto('/')
   await createSession(page, title)
 
-  await page.getByTestId('tab-scratchpad').click()
+  await openScratchpadResource(page)
   await expect(page.getByText(/trigger as/i)).toBeVisible()
   await expect(page.getByTestId('scratchpad-panel').getByRole('radiogroup', { name: 'Trigger model' })).toHaveCount(0)
   await expect(page.getByTestId('scratchpad-panel').getByRole('radiogroup', { name: 'Trigger thinking level' })).toHaveCount(0)
@@ -945,7 +1071,9 @@ test('scratchpad trigger can start codex in terminal mode', async ({ page, isMob
 
   await page.getByTestId('scratchpad-block').getByRole('button', { name: 'Trigger' }).click()
 
-  await expect(page.getByTestId('terminal-panel')).toContainText('Agent terminal', { timeout: 10_000 })
+  await expect(page.getByTestId('terminal-panel')).toHaveAttribute('data-terminal-status', 'Connected', {
+    timeout: 10_000,
+  })
   await expect(page.getByTestId('terminal-transcript')).toContainText('fake-codex-terminal mode:fresh')
   await expect(page.getByTestId('terminal-transcript')).toContainText(body)
   await expect
@@ -969,20 +1097,20 @@ test('agent switching does not refocus chat after explicit chat focus', async ({
   await expect(page.getByTestId('chat-input')).not.toBeFocused()
 
   await page.keyboard.down('Shift')
-  await page.keyboard.press('KeyH')
+  await page.keyboard.press('ArrowLeft')
   await page.keyboard.up('Shift')
 
   await expect(page.getByTestId('selected-agent')).toHaveText(firstTitle)
   await expect(page.getByTestId('chat-input')).not.toBeFocused()
 })
 
-test('mobile layout keeps navigation and sidebar usable', async ({ page, isMobile }) => {
+test('mobile layout keeps navigation and resources usable', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'mobile project only')
 
   await page.goto('/')
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
-  await expect(page.getByTestId('board-pane')).not.toBeVisible()
-  await expect(page.getByTestId('sidebar-pane')).toBeVisible()
+  await expect(page.getByTestId('board-pane')).toBeVisible()
+  await expect(page.getByTestId('resource-stage')).toBeVisible()
   await expect(page.getByLabel('Mobile navigation')).toBeVisible()
   await expect(page.getByTestId('selected-agent')).toHaveText('No session')
 })
@@ -1003,7 +1131,7 @@ test('settings theme visual snapshot', async ({ page, isMobile }) => {
 
   await page.goto('/')
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await openSettingsPage(page)
   await page.getByTestId('theme-mode-dark').click()
   await page.getByTestId('theme-card-tokyonight').click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'tokyonight')
@@ -1021,8 +1149,13 @@ test('core controls expose accessible dialog, tab, and option semantics', async 
 
   const viewTabs = page.getByRole('tablist', { name: 'Selected agent view' })
   await expect(viewTabs.getByRole('tab', { name: /Chat/ })).toHaveAttribute('aria-selected', 'true')
-  await viewTabs.getByRole('tab', { name: /Scratchpad/ }).click()
-  await expect(viewTabs.getByRole('tab', { name: /Scratchpad/ })).toHaveAttribute('aria-selected', 'true')
+  await viewTabs.getByRole('tab', { name: /Diffs/ }).click()
+  await expect(viewTabs.getByRole('tab', { name: /Diffs/ })).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('button', { name: 'Open scratchpad' }).click()
+  await expect(page.getByTestId('scratchpad-float')).toBeVisible()
+  await page.getByRole('button', { name: 'Close scratchpad' }).last().click()
+  await expect(page.getByTestId('scratchpad-float')).toBeHidden()
+  await openAgentResource(page, title)
 
   await page.keyboard.press('Control+K')
   const commandMenu = page.getByRole('dialog', { name: 'Command menu' })
@@ -1041,7 +1174,8 @@ test('core controls expose accessible dialog, tab, and option semantics', async 
   await page.keyboard.press('Escape')
   await expect(commandMenu).toBeHidden()
 
-  const projectsButton = page.getByRole('button', { name: 'Projects' })
+  await page.getByTestId('corner-peek-anchor').click()
+  const projectsButton = page.getByTestId('corner-peek-projects-action')
   await projectsButton.click()
   await expect(page.getByRole('dialog', { name: 'Project manager' })).toBeVisible()
   const addProjectButton = page.getByLabel('Project manager').getByRole('button', { name: 'Add project' })
@@ -1055,7 +1189,7 @@ test('core controls expose accessible dialog, tab, and option semantics', async 
   await expect(page.getByRole('button', { name: 'Close projects' })).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog', { name: 'Project manager' })).toBeHidden()
-  await expect(projectsButton).toBeFocused()
+  await expect(page.getByTestId('corner-peek-anchor')).toBeFocused()
 })
 
 test('launcher, confirm, and settings controls expose accessible states', async ({ page, isMobile }, testInfo) => {
@@ -1107,7 +1241,7 @@ test('launcher, confirm, and settings controls expose accessible states', async 
     await expect(removeSessionButton).toBeFocused()
   }
 
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await openSettingsPage(page)
   const themeModeTabs = page.getByRole('tablist', { name: 'Theme mode' })
   await themeModeTabs.getByRole('tab', { name: 'light' }).click()
   await expect(themeModeTabs.getByRole('tab', { name: 'light' })).toHaveAttribute('aria-selected', 'true')
@@ -1145,6 +1279,36 @@ async function createSession(
   await expect(page.getByTestId('selected-agent')).toHaveText(title)
 }
 
+async function openTerminalResource(page: import('@playwright/test').Page) {
+  const existingTerminal = page.getByTestId('resource-tab-terminal').first()
+  if (await existingTerminal.isVisible().catch(() => false)) {
+    await existingTerminal.click()
+  } else {
+    await page.getByRole('button', { name: 'Open terminal resource' }).click()
+  }
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-active-resource-kind', 'terminal')
+}
+
+async function openProjectsPage(page: import('@playwright/test').Page) {
+  await page.getByTestId('corner-peek-anchor').click()
+  await page.getByTestId('corner-peek-projects-action').click()
+}
+
+async function openSettingsPage(page: import('@playwright/test').Page) {
+  await page.getByTestId('corner-peek-anchor').click()
+  await page.getByTestId('corner-peek-settings-action').click()
+}
+
+async function openScratchpadResource(page: import('@playwright/test').Page) {
+  await page.getByRole('button', { name: 'Open scratchpad' }).click()
+  await expect(page.getByTestId('scratchpad-float')).toBeVisible()
+}
+
+async function openAgentResource(page: import('@playwright/test').Page, title: string) {
+  await page.getByRole('tab', { name: new RegExp(escapeRegExp(title)) }).click()
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-active-resource-kind', 'agent')
+}
+
 async function startUntitledSession(page: import('@playwright/test').Page) {
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
   const existingSessionIds = await startedSessionIds()
@@ -1164,6 +1328,20 @@ async function selectedSessionTitle(page: import('@playwright/test').Page) {
   const title = (await selectedAgent.textContent())?.trim()
   if (!title) throw new Error('Selected session title was empty')
   return title
+}
+
+async function resourceTabOrder(page: import('@playwright/test').Page) {
+  const labels = await page.getByTestId('resource-tab-strip').getByRole('tab').allTextContents()
+  return labels.map((label) => label.trim()).filter(Boolean)
+}
+
+async function activeLayoutProjectId(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const raw = window.localStorage.getItem('kiri:resource-layout:v1')
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { activeProjectId?: unknown }
+    return typeof parsed.activeProjectId === 'string' ? parsed.activeProjectId : null
+  })
 }
 
 async function renameLatestSessionForTest(
@@ -1200,9 +1378,9 @@ async function updateSessionTitleForTest(agentId: string, title: string) {
 }
 
 async function selectSessionByTitleForTest(page: import('@playwright/test').Page, title: string) {
-  const boardCell = page.getByTestId('agent-cell').filter({ hasText: title }).first()
-  if (await boardCell.isVisible().catch(() => false)) {
-    await boardCell.click()
+  const resourceTab = page.getByRole('tab', { name: new RegExp(escapeRegExp(title)) }).first()
+  if (await resourceTab.isVisible().catch(() => false)) {
+    await resourceTab.click()
     return
   }
   const titleButton = page.getByRole('button', { name: new RegExp(escapeRegExp(title)) })
@@ -1415,6 +1593,58 @@ function seedChatTimelineSession(input: {
   }
 }
 
+function seedLargeSessionWithDetail(input: {
+  agentId: string
+  slot: string
+  title: string
+  messageCount: number
+}) {
+  const database = new DatabaseSync(testDbPath)
+  const threadId = `${input.agentId}-thread`
+  const timestamp = new Date().toISOString()
+  const insertAgent = database.prepare(`
+    INSERT INTO agent_slots (
+      id, project_id, slot, title, runtime, model, status,
+      session_dir, session_file, position
+    )
+    VALUES (?, 'e2e-kiri', ?, ?, 'pi', 'openai-codex/gpt-5.5', 'idle', ?, NULL, 0)
+  `)
+  const insertThread = database.prepare(`
+    INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
+    VALUES (?, ?, 1, ?, ?, ?)
+  `)
+  const insertMessage = database.prepare(`
+    INSERT INTO messages (id, thread_id, role, text, timestamp)
+    VALUES (?, ?, ?, ?, ?)
+  `)
+  try {
+    database.exec('BEGIN')
+    insertAgent.run(input.agentId, input.slot, input.title, projectRoot)
+    insertThread.run(
+      threadId,
+      input.agentId,
+      `browser perf message ${input.messageCount - 1}`,
+      input.messageCount,
+      timestamp,
+    )
+    for (let index = 0; index < input.messageCount; index += 1) {
+      insertMessage.run(
+        `${input.agentId}-message-${index}`,
+        threadId,
+        index % 2 === 0 ? 'user' : 'assistant',
+        `browser perf message ${index} ${'x'.repeat(80)}`,
+        new Date(Date.UTC(2026, 4, 12, 12, 0, 0) + index * 1_000).toISOString(),
+      )
+    }
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  } finally {
+    database.close()
+  }
+}
+
 function readAgentRuntimeState(title: string) {
   const database = new DatabaseSync(testDbPath)
   try {
@@ -1471,6 +1701,34 @@ async function pressShiftKey(page: import('@playwright/test').Page, key: string)
   await page.keyboard.down('Shift')
   await page.keyboard.press(key)
   await page.keyboard.up('Shift')
+}
+
+async function pressShiftKeyFromFocus(page: import('@playwright/test').Page, key: string) {
+  await page.keyboard.down('Shift')
+  await page.keyboard.press(key)
+  await page.keyboard.up('Shift')
+}
+
+async function pressMetaKey(page: import('@playwright/test').Page, key: string) {
+  await page.locator('body').click({ position: { x: 1, y: 1 } })
+  await page.keyboard.down('Meta')
+  await page.keyboard.press(key)
+  await page.keyboard.up('Meta')
+}
+
+async function pressMetaKeyFromFocus(page: import('@playwright/test').Page, key: string) {
+  await page.keyboard.down('Meta')
+  await page.keyboard.press(key)
+  await page.keyboard.up('Meta')
+}
+
+async function pressMetaShiftKey(page: import('@playwright/test').Page, key: string) {
+  await page.locator('body').click({ position: { x: 1, y: 1 } })
+  await page.keyboard.down('Meta')
+  await page.keyboard.down('Shift')
+  await page.keyboard.press(key)
+  await page.keyboard.up('Shift')
+  await page.keyboard.up('Meta')
 }
 
 async function showLatestActivity(page: import('@playwright/test').Page) {

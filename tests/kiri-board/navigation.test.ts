@@ -29,7 +29,6 @@ function project(id: string, agentIds: string[]): ProjectRow {
       sessionFile: null,
       preview: '',
       messageCount: 0,
-      diffCount: 0,
       contextUsage: null,
       pendingQuestion: null,
       updatedAt: '2026-05-11T12:00:00.000Z',
@@ -37,7 +36,6 @@ function project(id: string, agentIds: string[]): ProjectRow {
       messages: [],
       timelineEvents: [],
       timeline: [],
-      diffs: [],
       tasks: [],
     })),
   }
@@ -73,17 +71,17 @@ describe('board navigation', () => {
 
 describe('keymap helpers', () => {
   it('finds actions by key', () => {
-    expect(actionForKey(defaultKeymap, 'k')).toBe('projectPrev')
+    expect(actionForKey(defaultKeymap, 'h')).toBe('projectPrev')
     expect(actionForKey(defaultKeymap, 'tab')).toBe('toggleTerminalFocus')
     expect(actionForKey(defaultKeymap, '?')).toBeUndefined()
   })
 
   it('swaps displaced bindings when updating a key', () => {
-    const updated = updateKeymap(defaultKeymap, 'projectPrev', 'j')
+    const updated = updateKeymap(defaultKeymap, 'projectPrev', 'l')
 
-    expect(updated.projectPrev).toBe('j')
-    expect(updated.projectNext).toBe('k')
-    expect(defaultKeymap.projectPrev).toBe('k')
+    expect(updated.projectPrev).toBe('l')
+    expect(updated.projectNext).toBe('h')
+    expect(defaultKeymap.projectPrev).toBe('h')
   })
 
   it('formats display labels for regular and arrow keys', () => {

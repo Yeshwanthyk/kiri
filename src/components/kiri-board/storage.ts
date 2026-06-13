@@ -18,6 +18,11 @@ import {
   normalizeThemeSelection,
   type ThemeSelection,
 } from '~/theme/kiri-themes'
+import {
+  emptyResourceShellLayout,
+  normalizeResourceShellLayout,
+  type ResourceShellLayout,
+} from './resource-tabs'
 
 export {
   chatFontSizes,
@@ -36,6 +41,7 @@ const themeStorageKey = 'kiri:theme:v1'
 const chatTypographyStorageKey = 'kiri:chat-typography:v1'
 const chatDraftStorageKey = 'kiri:chat-drafts:v1'
 const agentByProjectStorageKey = 'kiri:agent-by-project:v1'
+const resourceLayoutStorageKey = 'kiri:resource-layout:v1'
 
 export function readStoredKeymap(storage?: StorageLike): KeymapSettings {
   try {
@@ -98,6 +104,29 @@ export function saveChatTypography(
   const store = storage ?? window.localStorage
   store.setItem(chatTypographyStorageKey, JSON.stringify(settings))
   return settings
+}
+
+export function readStoredResourceLayout(
+  storage?: StorageLike,
+): ResourceShellLayout {
+  try {
+    const store = storage ?? window.localStorage
+    const stored = store.getItem(resourceLayoutStorageKey)
+    if (!stored) return emptyResourceShellLayout
+    return normalizeResourceShellLayout(JSON.parse(stored))
+  } catch {
+    return emptyResourceShellLayout
+  }
+}
+
+export function saveStoredResourceLayout(
+  layout: ResourceShellLayout,
+  storage?: StorageLike,
+): ResourceShellLayout {
+  const normalized = normalizeResourceShellLayout(layout)
+  const store = storage ?? window.localStorage
+  store.setItem(resourceLayoutStorageKey, JSON.stringify(normalized))
+  return normalized
 }
 
 export function readStoredChatDraft(

@@ -11,7 +11,7 @@ import { useBoardKeyboardShortcuts } from './kiri-board/board-keyboard-shortcuts
 import { useBoardPreferences } from './kiri-board/board-preferences'
 import { useBoardProjectActions } from './kiri-board/board-project-actions'
 import { useBoardScratchpadActions } from './kiri-board/board-scratchpad-actions'
-import { useBoardSelection, useProjectSelectionScroll } from './kiri-board/board-selection'
+import { useBoardSelection } from './kiri-board/board-selection'
 import { useBoardServerActions } from './kiri-board/board-server-actions'
 import { useBoardSessionActions } from './kiri-board/board-session-actions'
 import { buildBoardCommandActions } from './kiri-board/command-actions'
@@ -20,19 +20,23 @@ import { CommandPalette } from './kiri-board/command-palette'
 import { ConfirmDialog } from './kiri-board/confirm-dialog'
 import { EmptyProjectState } from './kiri-board/empty-project-state'
 import { ProjectManagerDialog } from './kiri-board/project-manager-dialog'
-import { ProjectBoardPane } from './kiri-board/project-board-pane'
 import { InlineSessionLauncher } from './kiri-board/session-launcher'
-import { SelectedAgentPane } from './kiri-board/selected-agent-pane'
+import { CornerPeekShell } from './kiri-board/corner-peek-shell'
 import type { SidebarTab } from './kiri-board/board-types'
 import { useBoardSurfaces } from './kiri-board/board-surfaces'
 import { useBoardWorkspace } from './kiri-board/board-workspace'
+import { useProjectResources } from './kiri-board/use-project-resources'
+import { agentResourceId, selectAdjacentResource, type ResourceId } from './kiri-board/resource-tabs'
 
 const SettingsScreen = React.lazy(() =>
   import('./kiri-board/settings-screen').then((module) => ({ default: module.SettingsScreen })))
 
 export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
-  const boardScrollRef = React.useRef<HTMLDivElement | null>(null)
   const [tab, setTab] = React.useState<SidebarTab>('chat')
+  const [cornerPeekHeld, setCornerPeekHeld] = React.useState(false)
+  const [scratchpadOpen, setScratchpadOpen] = React.useState(false)
+  const projectManagerReturnFocusRef = React.useRef<HTMLElement | null>(null)
+  const previousProjectManagerOpenRef = React.useRef(false)
   const {
     settingsOpen,
     projectManagerOpen,
@@ -53,8 +57,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     openSessionLauncher: openSessionLauncherSurface,
     openSettings,
     openProjectManager,
-    toggleProjectManager,
-    toggleSettings,
   } = useBoardSurfaces()
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
   const [terminalFocusRequest, setTerminalFocusRequest] = React.useState(0)
@@ -116,20 +118,83 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     persistChatTypography: setChatTypographyPreference,
     persistAgentByProject: setAgentByProjectPreference,
   })
-  const visibleTerminalSelected = Boolean(
-    selectedAgent && (tab === 'terminal' || (tab === 'chat' && selectedAgent.interfaceMode === 'terminal')),
-  )
+  const projectResources = useProjectResources({
+    workspace,
+    activeProjectId: selection.projectId,
+  })
+
+  React.useEffect(() => {
+    const wasOpen = previousProjectManagerOpenRef.current
+    previousProjectManagerOpenRef.current = projectManagerOpen
+    if (!wasOpen || projectManagerOpen) return
+    window.requestAnimationFrame(() => {
+      const returnTarget = projectManagerReturnFocusRef.current?.isConnected
+        ? projectManagerReturnFocusRef.current
+        : document.querySelector<HTMLElement>('[data-testid="corner-peek-anchor"]')
+      returnTarget?.focus()
+      projectManagerReturnFocusRef.current = null
+    })
+  }, [projectManagerOpen])
+
+  const openProjectManagerWithReturnFocus = React.useCallback((element?: HTMLElement | null) => {
+    projectManagerReturnFocusRef.current = element ?? null
+    openProjectManager()
+  }, [openProjectManager])
 
   const selectAgent = React.useCallback((projectId: string, agentId: string) => {
     selectBoardAgent(projectId, agentId)
+    projectResources.insertAgent(projectId, agentId)
     setChatFocusRequest(0)
     closeAgentSwitcher()
-  }, [closeAgentSwitcher, selectBoardAgent])
+  }, [closeAgentSwitcher, projectResources, selectBoardAgent])
 
   const selectProject = React.useCallback((projectId: string) => {
     selectBoardProject(projectId)
     setChatFocusRequest(0)
   }, [selectBoardProject])
+
+  React.useEffect(() => {
+    const storedProjectId = projectResources.layout.activeProjectId
+    if (!projectResources.hydrated || !storedProjectId || storedProjectId === selection.projectId) return
+    if (!workspace.projects.some((project) => project.id === storedProjectId)) return
+    selectProject(storedProjectId)
+  }, [
+    projectResources.hydrated,
+    projectResources.layout.activeProjectId,
+    selectProject,
+    selection.projectId,
+    workspace.projects,
+  ])
+
+  const activeResourceId = projectResources.activeProjectResources?.activeResourceId ?? null
+  const activeResource = projectResources.activeProjectResources?.resources.find((resource) =>
+    resource.id === activeResourceId)
+  const visibleTerminalSelected = Boolean(
+    selectedAgent && (
+      activeResource?.kind === 'terminal' ||
+      (activeResource?.kind === 'agent' && tab === 'chat' && selectedAgent.interfaceMode === 'terminal')
+    ),
+  )
+
+  const selectResource = React.useCallback((projectId: string, resourceId: ResourceId) => {
+    const project = workspace.projects.find((item) => item.id === projectId)
+    const resource = projectResources.resourcesByProject[projectId]?.resources.find((item) =>
+      item.id === resourceId)
+    if (resource?.kind === 'agent') {
+      selectBoardAgent(projectId, resource.agentId)
+      setTab('chat')
+    } else if (project && project.id !== selection.projectId) {
+      selectBoardProject(project.id)
+    }
+    projectResources.selectResource(projectId, resourceId)
+    setChatFocusRequest(0)
+  }, [
+    projectResources,
+    selectBoardAgent,
+    selectBoardProject,
+    selection.projectId,
+    workspace.projects,
+  ])
 
   const resetChatFocus = React.useCallback(() => {
     setChatFocusRequest(0)
@@ -169,7 +234,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const {
     pendingProjectDelete,
     projectDeleteInFlight,
-    projectVisibilityPendingId,
     requestDeleteProject,
     cancelDeleteProject,
     confirmDeleteProject,
@@ -203,8 +267,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setTab,
   })
 
-  useProjectSelectionScroll(selection.projectId, boardScrollRef)
-
   useBoardKeyboardShortcuts({
     agentSwitcherOpen,
     commandPaletteOpen,
@@ -217,7 +279,37 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     onOpenSessionLauncher: openSessionLauncher,
     onDeleteSession: handleDeleteSession,
     onSelectProject: selectProject,
-    onSelectAgent: selectAgent,
+    onSelectAdjacentResource: (delta) => {
+      if (!selectedProject || !projectResources.activeProjectResources) return
+      const nextResourceId = selectAdjacentResource({
+        resources: projectResources.activeProjectResources.resources,
+        activeResourceId,
+        delta,
+      })
+      if (!nextResourceId) return
+      selectResource(selectedProject.id, nextResourceId)
+    },
+    onMoveActiveResource: (delta) => {
+      if (!selectedProject || !projectResources.activeProjectResources || !activeResourceId) return
+      const index = projectResources.activeProjectResources.resources.findIndex((resource) =>
+        resource.id === activeResourceId)
+      const nextIndex = index + delta
+      if (index < 0 || nextIndex < 0 || nextIndex >= projectResources.activeProjectResources.resources.length) return
+      projectResources.moveResource(selectedProject.id, activeResourceId, nextIndex)
+    },
+    onOpenAgentResource: () => {
+      const agent = selectedAgent ?? selectedProject?.agents[0]
+      if (!selectedProject || !agent) return
+      projectResources.selectResource(selectedProject.id, agentResourceId(agent.id))
+    },
+    onOpenTerminalResource: () => {
+      if (!selectedProject) return
+      projectResources.ensureTerminal(selectedProject.id)
+    },
+    onToggleScratchpad: () => {
+      setScratchpadOpen((open) => !open)
+    },
+    setCornerPeekHeld,
     setAgentSwitcherOpen,
     setChatFocusRequest,
     setCommandPaletteOpen,
@@ -246,23 +338,59 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       openSessionLauncher,
       requestDeleteSession: handleDeleteSession,
       openSettings,
-      openProjectManager,
+      openProjectManager: openProjectManagerWithReturnFocus,
       hideProject: (projectId) => void handleHideProject(projectId),
       unhideProject: (projectId) => void handleUnhideProject(projectId),
       requestDeleteProject,
       selectProject,
       selectAgent,
+      openTerminalResource: () => {
+        if (!selectedProject) return
+        projectResources.ensureTerminal(selectedProject.id)
+      },
+      openScratchpadResource: () => {
+        setScratchpadOpen(true)
+      },
       setTab,
       closeCommandPalette,
     }),
     [
+      closeCommandPalette,
+      handleDeleteSession,
+      handleHideProject,
+      handleUnhideProject,
+      openProjectManagerWithReturnFocus,
+      openSettings,
+      projectResources,
+      requestDeleteProject,
+      selectAgent,
+      selectProject,
+      selectResource,
       selectedAgent,
       selectedProject,
+      setTab,
       workspace,
     ],
   )
 
   useHostMenuActions(commandActions)
+  if (projectManagerOpen) {
+    return (
+      <ProjectManagerDialog
+        projects={workspace.projects}
+        hiddenProjects={workspace.hiddenProjects}
+        onAdd={handleAddProject}
+        onChooseDirectory={handleChooseProjectDirectory}
+        onDelete={handleDeleteProject}
+        onHide={handleHideProject}
+        onReorderProjects={handleReorderProjects}
+        onUnhide={handleUnhideProject}
+        onClose={closeProjectManager}
+        returnFocusElement={projectManagerReturnFocusRef.current}
+      />
+    )
+  }
+
   if (settingsOpen) {
     return (
       <React.Suspense fallback={<div className="empty-panel">Loading settings...</div>}>
@@ -316,7 +444,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           closeCommandPalette()
         }}
         onStartSession={() => openSessionLauncher()}
-        onOpenProjects={openProjectManager}
+        onOpenProjects={openProjectManagerWithReturnFocus}
         onOpenSettings={openSettings}
       />
 
@@ -350,20 +478,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
           onStartSession={handleStartSession}
           onResumeSession={handleResumeSession}
           onCancel={closeSessionLauncher}
-        />
-      ) : null}
-
-      {projectManagerOpen ? (
-        <ProjectManagerDialog
-          projects={workspace.projects}
-          hiddenProjects={workspace.hiddenProjects}
-          onAdd={handleAddProject}
-          onChooseDirectory={handleChooseProjectDirectory}
-          onDelete={handleDeleteProject}
-          onHide={handleHideProject}
-          onReorderProjects={handleReorderProjects}
-          onUnhide={handleUnhideProject}
-          onClose={closeProjectManager}
         />
       ) : null}
 
@@ -406,35 +520,36 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         />
       ) : null}
 
-      <ProjectBoardPane
+      <CornerPeekShell
         projects={workspace.projects}
         hiddenProjects={workspace.hiddenProjects}
-        hydrated={hydrated}
-        selection={selection}
-        startSessionKey={keymap.startSession}
-        projectManagerOpen={projectManagerOpen}
-        settingsOpen={settingsOpen}
-        projectVisibilityPendingId={projectVisibilityPendingId}
-        boardScrollRef={boardScrollRef}
-        onToggleProjects={toggleProjectManager}
-        onToggleSettings={toggleSettings}
-        onHideProject={(projectId) => void handleHideProject(projectId)}
-        onSelectAgent={selectAgent}
-        onUnhideProject={(projectId) => void handleUnhideProject(projectId)}
-      />
-
-      <SelectedAgentPane
         selectedProject={selectedProject}
         selectedAgent={selectedAgent}
-        tab={tab}
-        onTabChange={setTab}
+        resources={projectResources.activeProjectResources?.resources ?? []}
+        activeResourceId={activeResourceId}
+        scratchpadOpen={scratchpadOpen}
+        hydrated={hydrated}
+        resourcesByProject={projectResources.resourcesByProject}
+        cornerPeekHeld={cornerPeekHeld}
+        onAgentTabChange={setTab}
+        onSelectProject={selectProject}
+        onSelectAgent={selectAgent}
+        onSelectResource={selectResource}
+        onMoveResource={projectResources.moveResource}
+        onCloseAgent={handleDeleteSession}
+        onRenameAgent={handleRenameSession}
+        onEnsureTerminal={projectResources.ensureTerminal}
+        onOpenScratchpad={() => setScratchpadOpen(true)}
+        onCloseScratchpad={() => setScratchpadOpen(false)}
+        onStartSession={() => openSessionLauncher()}
+        onOpenProjects={openProjectManagerWithReturnFocus}
+        onOpenSettings={openSettings}
         chatFocusRequest={chatFocusRequest}
         terminalFocusRequest={terminalFocusRequest}
         themeMode={themeSelection.mode}
         keymap={keymap}
         chatTypography={chatTypography}
         startSessionKey={keymap.startSession}
-        onStartSession={() => openSessionLauncher()}
         onDeleteSession={handleDeleteSession}
         onRenameSession={handleRenameSession}
         onSend={handleSendMessage}
@@ -446,7 +561,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onReviewSession={handleReviewSession}
         onAnswerQuestion={handleAnswerQuestion}
         scratchpadBlocks={workspace.scratchpadBlocks}
-        projects={workspace.projects}
         settings={workspace.settings}
         onCaptureBlock={handleCaptureBlock}
         onDeleteBlock={handleDeleteBlock}

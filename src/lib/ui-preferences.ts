@@ -40,16 +40,24 @@ export const keyOptions = [
 ] as const
 
 export const defaultKeymap: KeymapSettings = {
-  projectPrev: 'k',
-  projectNext: 'j',
-  agentPrev: 'h',
-  agentNext: 'l',
+  projectPrev: 'h',
+  projectNext: 'l',
+  agentPrev: 'arrowleft',
+  agentNext: 'arrowright',
   startSession: 'n',
   deleteSession: 'x',
   focusChat: 'c',
   openTerminal: 't',
   openScratchpad: 's',
   toggleTerminalFocus: 'tab',
+}
+
+const legacyDefaultKeymap: KeymapSettings = {
+  ...defaultKeymap,
+  projectPrev: 'k',
+  projectNext: 'j',
+  agentPrev: 'h',
+  agentNext: 'l',
 }
 
 const chatFontSizeOptions = ['compact', 'comfortable', 'large', 'xlarge'] as const
@@ -186,7 +194,8 @@ export type UiPreferences = z.infer<typeof uiPreferencesSchema>
 export const defaultUiPreferences: UiPreferences = uiPreferencesSchema.parse({})
 
 export function normalizeKeymapSettings(keymap: Record<string, unknown>): KeymapSettings {
-  return keymapSettingsSchema.parse(keymap)
+  const parsed = keymapSettingsSchema.parse(keymap)
+  return sameJson(parsed, legacyDefaultKeymap) ? defaultKeymap : parsed
 }
 
 export function normalizeChatTypography(value: Record<string, unknown>): ChatTypographySettings {
@@ -197,4 +206,8 @@ export function normalizeChatTypography(value: Record<string, unknown>): ChatTyp
     ? value.monoFont as MonoFont
     : defaultChatTypography.monoFont
   return { fontSize, monoFont }
+}
+
+function sameJson(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right)
 }

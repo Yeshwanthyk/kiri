@@ -33,6 +33,34 @@
     box-shadow: 0 10px 26px color-mix(in oklab, var(--ink) 9%, transparent);
   }
 
+  .corner-peek-shell {
+    min-height: 0;
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .resource-tabs-bar {
+    grid-template-columns: 1fr;
+    padding-right: 46px;
+  }
+
+  .resource-tab-shell {
+    min-width: 128px;
+  }
+
+  .resource-add-actions {
+    display: none;
+  }
+
+  .corner-peek-wrap {
+    top: 10px;
+    right: 10px;
+  }
+
+  .resource-stage {
+    border-radius: 16px;
+  }
+
   .mobile-project-line {
     display: flex;
     min-width: 0;

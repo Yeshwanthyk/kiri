@@ -129,11 +129,17 @@ describe('ui preferences', () => {
     })
   })
 
-  it('strips legacy diff keymap actions when reading preferences', () => {
+  it('migrates the legacy default keymap when reading preferences', () => {
     withPreferencesPath((path) => {
       writeFileSync(path, JSON.stringify({
         theme: defaultThemeSelection,
-        keymap: { ...defaultKeymap, openDiffs: 'd' },
+        keymap: {
+          ...defaultKeymap,
+          projectPrev: 'k',
+          projectNext: 'j',
+          agentPrev: 'h',
+          agentNext: 'l',
+        },
         chatTypography: defaultChatTypography,
         agentByProject: {},
       }))

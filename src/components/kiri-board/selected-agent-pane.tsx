@@ -39,6 +39,7 @@ export function SelectedAgentPane({
   selectedAgent,
   tab,
   onTabChange,
+  chrome = 'sidebar',
   chatFocusRequest,
   terminalFocusRequest,
   themeMode,
@@ -67,6 +68,7 @@ export function SelectedAgentPane({
   selectedAgent: AgentCell | undefined
   tab: SidebarTab
   onTabChange: (tab: SidebarTab) => void
+  chrome?: 'sidebar' | 'stage'
   chatFocusRequest: number
   terminalFocusRequest: number
   themeMode: ThemeMode
@@ -209,6 +211,11 @@ export function SelectedAgentPane({
       setOlderHistoryPending(false)
     }
   }, [agent, olderHistoryPending])
+  const showSidebarResourceTabs = chrome === 'sidebar'
+  const showAgentViewTabs = Boolean(agent) && (
+    chrome === 'sidebar' ||
+    tab === 'chat'
+  )
   const tabBar = (
     <div className="sidebar-tabs" role="tablist" aria-label="Selected agent view">
       <button
@@ -223,6 +230,7 @@ export function SelectedAgentPane({
         <MessageSquareText size={15} />
         Chat
       </button>
+      {showSidebarResourceTabs ? (
       <button
         type="button"
         role="tab"
@@ -235,6 +243,8 @@ export function SelectedAgentPane({
         <TerminalSquare size={15} />
         Terminal
       </button>
+      ) : null}
+      {showSidebarResourceTabs ? (
       <button
         type="button"
         role="tab"
@@ -249,14 +259,15 @@ export function SelectedAgentPane({
           <span className="sidebar-tab-count">{scratchpadBlocks.length}</span>
         ) : null}
       </button>
+      ) : null}
     </div>
   )
 
   return (
     <aside
-      className="sidebar-pane"
-      aria-label="Selected chat"
-      data-testid="sidebar-pane"
+      className={chrome === 'stage' ? 'resource-stage' : 'sidebar-pane'}
+      aria-label={chrome === 'stage' ? 'Selected resource' : 'Selected chat'}
+      data-testid={chrome === 'stage' ? 'resource-stage' : 'sidebar-pane'}
     >
       {agent ? (
         <SidebarHeader
@@ -269,7 +280,7 @@ export function SelectedAgentPane({
         <ScratchpadHeader blockCount={scratchpadBlocks.length} />
       ) : null}
 
-      {tabBar}
+      {showAgentViewTabs ? tabBar : null}
 
       {tab === 'scratchpad' ? (
         <ScratchpadPanel
@@ -323,6 +334,8 @@ export function SelectedAgentPane({
           project={selectedProject}
           themeMode={themeMode}
           visible={visibleTerminalMode === 'runtime'}
+          embedded={chrome === 'stage'}
+          exposeTestIdWhenEmbedded={chrome === 'stage'}
         />
       ) : null}
       {agent && mountedTerminalModes.shell ? (

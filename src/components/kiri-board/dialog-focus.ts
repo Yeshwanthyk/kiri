@@ -1,15 +1,16 @@
 import * as React from 'react'
 
-export function useFocusReturn() {
+export function useFocusReturn(returnFocusElement?: HTMLElement | null) {
   const previousFocusRef = React.useRef<HTMLElement | null>(null)
   React.useEffect(() => {
-    previousFocusRef.current = document.activeElement instanceof HTMLElement
+    previousFocusRef.current = returnFocusElement ??
+      (document.activeElement instanceof HTMLElement
       ? document.activeElement
-      : null
+      : null)
     return () => {
       previousFocusRef.current?.focus()
     }
-  }, [])
+  }, [returnFocusElement])
 }
 
 export function trapTabFocus(event: React.KeyboardEvent, container: HTMLElement | null) {

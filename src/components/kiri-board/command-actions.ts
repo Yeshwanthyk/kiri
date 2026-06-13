@@ -30,6 +30,8 @@ type BoardCommandActionsInput = {
   requestDeleteProject: (project: ProjectRow) => void
   selectProject: (projectId: string) => void
   selectAgent: (projectId: string, agentId: string) => void
+  openTerminalResource: () => void
+  openScratchpadResource: () => void
   setTab: (tab: SidebarTab) => void
   closeCommandPalette: () => void
 }
@@ -48,6 +50,8 @@ export function buildBoardCommandActions(input: BoardCommandActionsInput): Comma
     requestDeleteProject,
     selectProject,
     selectAgent,
+    openTerminalResource,
+    openScratchpadResource,
     setTab,
     closeCommandPalette,
   } = input
@@ -89,7 +93,7 @@ export function buildBoardCommandActions(input: BoardCommandActionsInput): Comma
       disabled: !selectedAgent,
       run: () => {
         closeCommandPalette()
-        setTab('terminal')
+        openTerminalResource()
       },
     },
     {
@@ -103,7 +107,7 @@ export function buildBoardCommandActions(input: BoardCommandActionsInput): Comma
       disabled: false,
       run: () => {
         closeCommandPalette()
-        setTab('scratchpad')
+        openScratchpadResource()
       },
     },
     {

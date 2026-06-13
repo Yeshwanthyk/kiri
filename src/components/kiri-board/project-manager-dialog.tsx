@@ -25,6 +25,7 @@ export function ProjectManagerDialog({
   onReorderProjects,
   onUnhide,
   onClose,
+  returnFocusElement,
 }: {
   projects: ProjectRow[]
   hiddenProjects: ProjectRow[]
@@ -35,6 +36,7 @@ export function ProjectManagerDialog({
   onReorderProjects: (projectIds: string[]) => Promise<void>
   onUnhide: (projectId: string) => Promise<void>
   onClose: () => void
+  returnFocusElement?: HTMLElement | null
 }) {
   const dialogRef = React.useRef<HTMLDivElement | null>(null)
   const [id, setId] = React.useState('')
@@ -46,7 +48,7 @@ export function ProjectManagerDialog({
   const [error, setError] = React.useState<string | null>(null)
   const canDeleteVisibleProject = projects.length > 1
   const canDeleteHiddenProject = projects.length + hiddenProjects.length > 1
-  useFocusReturn()
+  useFocusReturn(returnFocusElement)
 
   React.useEffect(() => {
     if (hiddenProjects.length > 0) setShowHidden(true)
