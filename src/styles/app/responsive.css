@@ -194,47 +194,6 @@
     height: 7px;
   }
 
-  .mobile-view-tabs {
-    gap: 2px;
-    padding: 3px;
-    border: 1px solid color-mix(in oklab, var(--line) 68%, transparent);
-    border-radius: 13px;
-    background: color-mix(in oklab, var(--panel-2) 78%, transparent);
-  }
-
-  .mobile-view-tabs button {
-    display: inline-flex;
-    min-height: 31px;
-    flex: 1 1 0;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    border: 0;
-    border-radius: 10px;
-    background: transparent;
-    color: var(--muted);
-    font-size: 12px;
-    font-weight: 600;
-    transition-property: transform, background-color, color, box-shadow;
-    transition-duration: 150ms;
-    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
-  }
-
-  .mobile-view-tabs button svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  .mobile-view-tabs button.active {
-    background: var(--panel);
-    color: var(--ink);
-    box-shadow: 0 1px 3px color-mix(in oklab, var(--ink) 12%, transparent);
-  }
-
-  .mobile-view-tabs button:active {
-    transform: scale(0.96);
-  }
-
   .board-pane {
     display: none;
   }

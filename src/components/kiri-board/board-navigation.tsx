@@ -1,15 +1,12 @@
 'use client'
 
-import { ChevronDown, FolderOpen, MessageSquareText, Plus, Settings2 } from 'lucide-react'
+import { ChevronDown, FolderOpen, Plus, Settings2 } from 'lucide-react'
 import type { AgentCell, ProjectRow } from '~/lib/contracts'
-import type { SidebarTab } from './board-types'
 import { RuntimeBadge } from './runtime-badge'
 
 export function MobileTopBar({
   project,
   agent,
-  tab,
-  onTabChange,
   onOpenAgentSwitcher,
   onSelectAgent,
   onStartSession,
@@ -18,8 +15,6 @@ export function MobileTopBar({
 }: {
   project: ProjectRow
   agent: AgentCell | undefined
-  tab: SidebarTab
-  onTabChange: (tab: SidebarTab) => void
   onOpenAgentSwitcher: () => void
   onSelectAgent: (agentId: string) => void
   onStartSession: () => void
@@ -65,18 +60,6 @@ export function MobileTopBar({
         ))}
         <button type="button" className="new" onClick={onStartSession}>
           <Plus size={13} /> New
-        </button>
-      </div>
-      <div className="mobile-view-tabs" role="tablist" aria-label="Selected agent view">
-        <button
-          type="button"
-          className={tab === 'chat' ? 'active' : ''}
-          onClick={() => onTabChange('chat')}
-          role="tab"
-          aria-selected={tab === 'chat'}
-        >
-          <MessageSquareText size={15} />
-          Chat
         </button>
       </div>
     </header>

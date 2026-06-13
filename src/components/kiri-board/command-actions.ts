@@ -11,10 +11,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { AgentCell, ProjectRow, RuntimeKind, WorkspaceSnapshot } from '~/lib/contracts'
-import {
-  type CommandPaletteAction,
-  type SidebarTab,
-} from './board-types'
+import type { CommandPaletteAction } from './board-types'
 import { runtimeOptions } from './runtime-options'
 
 type BoardCommandActionsInput = {
@@ -32,7 +29,6 @@ type BoardCommandActionsInput = {
   selectAgent: (projectId: string, agentId: string) => void
   openTerminalResource: () => void
   openScratchpadResource: () => void
-  setTab: (tab: SidebarTab) => void
   closeCommandPalette: () => void
 }
 
@@ -52,7 +48,6 @@ export function buildBoardCommandActions(input: BoardCommandActionsInput): Comma
     selectAgent,
     openTerminalResource,
     openScratchpadResource,
-    setTab,
     closeCommandPalette,
   } = input
 

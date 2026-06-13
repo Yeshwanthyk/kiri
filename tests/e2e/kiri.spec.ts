@@ -1141,20 +1141,21 @@ test('settings theme visual snapshot', async ({ page, isMobile }) => {
   })
 })
 
-test('core controls expose accessible dialog, tab, and option semantics', async ({ page }, testInfo) => {
+test('core controls expose accessible dialog, tab, and option semantics', async ({ page, isMobile }, testInfo) => {
   const title = `A11y Session ${testInfo.project.name}`
 
   await page.goto('/')
   await createSession(page, title)
 
-  const viewTabs = page.getByRole('tablist', { name: 'Selected agent view' })
-  await expect(viewTabs.getByRole('tab', { name: /Chat/ })).toHaveAttribute('aria-selected', 'true')
-  await viewTabs.getByRole('tab', { name: /Diffs/ }).click()
-  await expect(viewTabs.getByRole('tab', { name: /Diffs/ })).toHaveAttribute('aria-selected', 'true')
-  await page.getByRole('button', { name: 'Open scratchpad' }).click()
-  await expect(page.getByTestId('scratchpad-float')).toBeVisible()
-  await page.getByRole('button', { name: 'Close scratchpad' }).last().click()
-  await expect(page.getByTestId('scratchpad-float')).toBeHidden()
+  const resourceTabs = page.getByRole('tablist', { name: 'Project resources' })
+  await expect(resourceTabs.getByRole('tab', { name: title })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tablist', { name: 'Selected agent view' })).toHaveCount(0)
+  if (!isMobile) {
+    await page.getByRole('button', { name: 'Open scratchpad' }).click()
+    await expect(page.getByTestId('scratchpad-float')).toBeVisible()
+    await page.getByRole('button', { name: 'Close scratchpad' }).last().click()
+    await expect(page.getByTestId('scratchpad-float')).toBeHidden()
+  }
   await openAgentResource(page, title)
 
   await page.keyboard.press('Control+K')
@@ -1435,13 +1436,14 @@ async function latestStartedSessionRow(existingSessionIds: ReadonlySet<string>) 
 }
 
 async function showSelectedAgentChat(page: import('@playwright/test').Page) {
-  const chatTabs = page.getByRole('tab', { name: /Chat/ })
-  const count = await chatTabs.count()
+  if (await page.getByTestId('chat-input').isVisible().catch(() => false)) return
+  const agentTabs = page.getByTestId('resource-tab-agent')
+  const count = await agentTabs.count()
   for (let index = 0; index < count; index += 1) {
-    const tab = chatTabs.nth(index)
+    const tab = agentTabs.nth(index)
     if (await tab.isVisible().catch(() => false)) {
       await tab.click()
-      await expect(tab).toHaveAttribute('aria-selected', 'true')
+      await expect(page.getByTestId('chat-input')).toBeVisible()
       return
     }
   }

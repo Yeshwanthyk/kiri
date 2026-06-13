@@ -14,7 +14,7 @@ type StageProps = React.ComponentProps<typeof ResourceStage>
 
 type CornerPeekShellProps = Omit<
   StageProps,
-  'selectedProject' | 'selectedAgent' | 'tab' | 'onTabChange' | 'chrome' | 'projects' | 'onStartSession'
+  'selectedProject' | 'selectedAgent' | 'tab' | 'chrome' | 'projects' | 'onStartSession'
 > & {
   readonly projects: ProjectRow[]
   readonly hiddenProjects: ProjectRow[]
@@ -29,7 +29,6 @@ type CornerPeekShellProps = Omit<
     readonly activeResourceId: ResourceId | null
   }>
   readonly cornerPeekHeld: boolean
-  readonly onAgentTabChange: (tab: SidebarTab) => void
   readonly onSelectProject: (projectId: string) => void
   readonly onSelectAgent: (projectId: string, agentId: string) => void
   readonly onSelectResource: (projectId: string, resourceId: ResourceId) => void
@@ -55,7 +54,6 @@ export function CornerPeekShell({
   hydrated,
   resourcesByProject,
   cornerPeekHeld,
-  onAgentTabChange,
   onSelectProject,
   onSelectAgent,
   onSelectResource,
@@ -130,7 +128,6 @@ export function CornerPeekShell({
         selectedProject={selectedProject}
         selectedAgent={stageAgent}
         tab={stageTab}
-        onTabChange={onAgentTabChange}
         projects={projects}
         onStartSession={onStartSession}
       />

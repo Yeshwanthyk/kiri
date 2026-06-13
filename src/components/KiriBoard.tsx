@@ -351,7 +351,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       openScratchpadResource: () => {
         setScratchpadOpen(true)
       },
-      setTab,
       closeCommandPalette,
     }),
     [
@@ -436,8 +435,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       <MobileTopBar
         project={selectedProject}
         agent={selectedAgent}
-        tab={tab}
-        onTabChange={setTab}
         onOpenAgentSwitcher={() => setAgentSwitcherOpen(true)}
         onSelectAgent={(agentId) => {
           selectAgent(selectedProject.id, agentId)
@@ -531,7 +528,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         hydrated={hydrated}
         resourcesByProject={projectResources.resourcesByProject}
         cornerPeekHeld={cornerPeekHeld}
-        onAgentTabChange={setTab}
         onSelectProject={selectProject}
         onSelectAgent={selectAgent}
         onSelectResource={selectResource}

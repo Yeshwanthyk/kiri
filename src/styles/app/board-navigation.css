@@ -750,8 +750,7 @@
 .agent-switcher-row,
 .mobile-topbar-main,
 .mobile-project-trigger,
-.mobile-actions,
-.mobile-view-tabs {
+.mobile-actions {
   display: flex;
   align-items: center;
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { MessageSquareText, NotebookPen, Plus, TerminalSquare } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import * as React from 'react'
 import type {
   AgentCell,
@@ -18,7 +18,6 @@ import { thinkingLevelSchema } from '~/lib/contracts'
 import { agentDetailQueryOptions, fetchAgentDetail } from '~/server/workspace'
 import type { ThemeMode } from '~/theme/kiri-themes'
 import { errorMessage, formatKeyShort, formatThinkingLevel } from './format'
-import { ScratchpadHeader, ScratchpadPanel } from './scratchpad'
 import { ChatPanel } from './chat-panel'
 import { TerminalPanel } from './terminal-panel'
 import { TerminalWorkspace } from './terminal-workspace'
@@ -38,7 +37,6 @@ export function SelectedAgentPane({
   selectedProject,
   selectedAgent,
   tab,
-  onTabChange,
   chrome = 'sidebar',
   chatFocusRequest,
   terminalFocusRequest,
@@ -57,17 +55,10 @@ export function SelectedAgentPane({
   onForkSession,
   onReviewSession,
   onAnswerQuestion,
-  scratchpadBlocks,
-  projects,
-  settings,
-  onCaptureBlock,
-  onDeleteBlock,
-  onTriggerBlock,
 }: {
   selectedProject: ProjectRow
   selectedAgent: AgentCell | undefined
   tab: SidebarTab
-  onTabChange: (tab: SidebarTab) => void
   chrome?: 'sidebar' | 'stage'
   chatFocusRequest: number
   terminalFocusRequest: number
@@ -211,58 +202,6 @@ export function SelectedAgentPane({
       setOlderHistoryPending(false)
     }
   }, [agent, olderHistoryPending])
-  const showSidebarResourceTabs = chrome === 'sidebar'
-  const showAgentViewTabs = Boolean(agent) && (
-    chrome === 'sidebar' ||
-    tab === 'chat'
-  )
-  const tabBar = (
-    <div className="sidebar-tabs" role="tablist" aria-label="Selected agent view">
-      <button
-        type="button"
-        role="tab"
-        aria-selected={tab === 'chat'}
-        className={tab === 'chat' ? 'active' : ''}
-        onClick={() => onTabChange('chat')}
-        disabled={!agent}
-        data-testid="tab-chat"
-      >
-        <MessageSquareText size={15} />
-        Chat
-      </button>
-      {showSidebarResourceTabs ? (
-      <button
-        type="button"
-        role="tab"
-        aria-selected={tab === 'terminal'}
-        className={tab === 'terminal' ? 'active' : ''}
-        onClick={() => onTabChange('terminal')}
-        disabled={!agent}
-        data-testid="tab-terminal"
-      >
-        <TerminalSquare size={15} />
-        Terminal
-      </button>
-      ) : null}
-      {showSidebarResourceTabs ? (
-      <button
-        type="button"
-        role="tab"
-        aria-selected={tab === 'scratchpad'}
-        className={tab === 'scratchpad' ? 'active' : ''}
-        onClick={() => onTabChange('scratchpad')}
-        data-testid="tab-scratchpad"
-      >
-        <NotebookPen size={15} />
-        Scratchpad
-        {scratchpadBlocks.length > 0 ? (
-          <span className="sidebar-tab-count">{scratchpadBlocks.length}</span>
-        ) : null}
-      </button>
-      ) : null}
-    </div>
-  )
-
   return (
     <aside
       className={chrome === 'stage' ? 'resource-stage' : 'sidebar-pane'}
@@ -276,23 +215,9 @@ export function SelectedAgentPane({
           onDeleteSession={onDeleteSession}
           onRenameSession={onRenameSession}
         />
-      ) : tab === 'scratchpad' ? (
-        <ScratchpadHeader blockCount={scratchpadBlocks.length} />
       ) : null}
 
-      {showAgentViewTabs ? tabBar : null}
-
-      {tab === 'scratchpad' ? (
-        <ScratchpadPanel
-          blocks={scratchpadBlocks}
-          projects={projects}
-          settings={settings}
-          selectedProjectId={selectedProject.id}
-          onCapture={onCaptureBlock}
-          onDelete={onDeleteBlock}
-          onTrigger={onTriggerBlock}
-        />
-      ) : agent && tab === 'chat' && !chatUsesTerminal ? (
+      {agent && tab === 'chat' && !chatUsesTerminal ? (
         <ChatPanel
           key={agent.id}
           agent={agent}
