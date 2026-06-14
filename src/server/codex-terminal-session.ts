@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 const codexSessionIdFile = 'codex-session-id'
 const codexHookSessionFile = 'codex-hook-session.json'
@@ -65,6 +65,50 @@ export function readCodexHookSessionBinding(sessionDir: string): CodexHookSessio
   }
 }
 
+export function readCodexTerminalResumeId(input: {
+  readonly agentId: string
+  readonly cwd: string
+  readonly sessionDir: string
+  readonly state?: Record<string, unknown>
+  readonly launchedAtMs?: number
+}) {
+  const binding = readCodexHookSessionBinding(input.sessionDir)
+  const hookSessionId = codexHookSessionIdForLaunch(binding, input)
+  const rejectedHookSessionId = binding && !codexHookSessionBindingMatchesLaunch(binding, input)
+    ? binding.sessionId
+    : undefined
+  return hookSessionId
+    ?? rejectCodexSessionId(readCodexTerminalSessionId(input.sessionDir), rejectedHookSessionId)
+    ?? rejectCodexSessionId(normalizeCodexSessionId(input.state?.codexSessionId), rejectedHookSessionId)
+    ?? normalizeCodexSessionId(input.state?.resume)
+}
+
+export function codexHookSessionIdForLaunch(
+  binding: CodexHookSessionBinding | undefined,
+  input: {
+    readonly agentId: string
+    readonly cwd: string
+    readonly launchedAtMs?: number
+  },
+) {
+  return binding && codexHookSessionBindingMatchesLaunch(binding, input)
+    ? binding.sessionId
+    : undefined
+}
+
+export function codexHookSessionBindingMatchesLaunch(
+  binding: CodexHookSessionBinding,
+  input: {
+    readonly agentId: string
+    readonly cwd: string
+    readonly launchedAtMs?: number
+  },
+) {
+  if (binding.agentId !== input.agentId) return false
+  if (input.launchedAtMs !== undefined && binding.writtenAtMs < input.launchedAtMs - 2_000) return false
+  return !binding.cwd || resolve(binding.cwd) === resolve(input.cwd)
+}
+
 export function writeCodexHookSessionBinding(sessionDir: string, binding: CodexHookSessionBinding) {
   mkdirSync(sessionDir, { recursive: true })
   writeFileAtomic(codexHookSessionBindingPath(sessionDir), `${JSON.stringify({
@@ -93,6 +137,10 @@ function writeFileAtomic(path: string, contents: string) {
     rmSync(tmp, { force: true })
     throw error
   }
+}
+
+function rejectCodexSessionId(sessionId: string | undefined, rejectedSessionId: string | undefined) {
+  return sessionId && sessionId !== rejectedSessionId ? sessionId : undefined
 }
 
 function stringValue(value: unknown) {

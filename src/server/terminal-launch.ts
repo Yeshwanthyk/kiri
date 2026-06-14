@@ -12,7 +12,7 @@ import {
 export { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { commonTerminalEnv, removeColorDisablingEnv } from './terminal-env'
-import { readCodexTerminalSessionId } from './codex-terminal-session'
+import { readCodexTerminalResumeId } from './codex-terminal-session'
 
 export type TerminalAgentLaunchConfig = {
   id: string
@@ -304,9 +304,12 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
   const state = yield* parseRuntimeState(config.runtimeStateJson)
   const initialTerminalInput = firstPendingTerminalInput(state)
   const command = yield* resolveExecutable(context, 'codex', context.env.KIRI_CODEX_BIN)
-  const resume = stringValue(state.resume)
-    ?? readCodexTerminalSessionId(config.sessionDir)
-    ?? stringValue(state.codexSessionId)
+  const resume = readCodexTerminalResumeId({
+    agentId: config.id,
+    cwd: config.cwd,
+    sessionDir: config.sessionDir,
+    state,
+  })
   const args = resume
     ? ['resume']
     : []

@@ -11,7 +11,10 @@ import {
   TerminalLaunchError,
   type TerminalAgentLaunchConfig,
 } from '~/server/terminal-launch'
-import { writeCodexTerminalSessionId } from '~/server/codex-terminal-session'
+import {
+  writeCodexHookSessionBinding,
+  writeCodexTerminalSessionId,
+} from '~/server/codex-terminal-session'
 
 const shell = { command: '/bin/zsh', args: ['-l', '-i'] }
 const codexKiriPrompt = [
@@ -336,7 +339,7 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.args.at(-1)).toBe('sidecar-codex-session')
   })
 
-  it('prefers an explicit Codex resume state over the discovered session id', () => {
+  it('prefers a Codex-specific runtime session id over generic resume state', () => {
     vi.stubEnv('KIRI_MCP_BIN', '/tmp/bin/kiri-mcp')
     vi.stubEnv('KIRI_CODEX_HOOKS', '0')
 
@@ -355,8 +358,31 @@ describe('buildTerminalProcessLaunch', () => {
       '--no-alt-screen',
       '--model',
       'test-model',
-      'explicit-codex-session',
+      'discovered-codex-session',
     ])
+  })
+
+  it('ignores Codex ids written by a mismatched hook binding', () => {
+    stubCodexTerminalEnv()
+    const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-session-'))
+    writeCodexTerminalSessionId(sessionDir, 'wrong-hook-session')
+    writeCodexHookSessionBinding(sessionDir, {
+      agentId: 'agent-1',
+      sessionId: 'wrong-hook-session',
+      cwd: '/tmp/other-project',
+      source: 'startup',
+      hookEventName: 'SessionStart',
+      writtenAtMs: Date.now(),
+    })
+
+    const launch = buildTerminalProcessLaunch({
+      ...launchConfig('codex'),
+      sessionDir,
+      runtimeStateJson: JSON.stringify({ codexSessionId: 'wrong-hook-session' }),
+    }, 'runtime', shell)
+
+    expect(launch.args).not.toContain('resume')
+    expect(launch.args).not.toContain('wrong-hook-session')
   })
 
   it('uses the packaged helper wrapper for Codex hook commands', async () => {

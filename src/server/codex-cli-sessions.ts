@@ -11,10 +11,9 @@ import { join, resolve } from 'node:path'
 import type { TerminalAgentLaunchConfig } from './terminal-launch'
 import { getAgentRuntimeState, setAgentRuntimeState } from './db'
 import {
-  type CodexHookSessionBinding,
-  normalizeCodexSessionId,
+  codexHookSessionIdForLaunch,
   readCodexHookSessionBinding,
-  readCodexTerminalSessionId,
+  readCodexTerminalResumeId,
   writeCodexTerminalSessionId,
 } from './codex-terminal-session'
 
@@ -234,8 +233,12 @@ async function waitForCodexHookSessionBinding(
 
 function freshCodexHookSessionBinding(config: TerminalAgentLaunchConfig, launchedAtMs: number) {
   const binding = readCodexHookSessionBinding(config.sessionDir)
-  if (!binding || binding.agentId !== config.id) return undefined
-  return binding.writtenAtMs >= launchedAtMs - 2_000 ? binding : undefined
+  const sessionId = codexHookSessionIdForLaunch(binding, {
+    agentId: config.id,
+    cwd: config.cwd,
+    launchedAtMs,
+  })
+  return sessionId ? binding : undefined
 }
 
 function codexResumeIdFromState(
@@ -243,20 +246,13 @@ function codexResumeIdFromState(
   config: TerminalAgentLaunchConfig,
   launchedAtMs: number,
 ) {
-  return normalizeCodexSessionId(state.resume)
-    ?? codexHookSessionIdForAgent(readCodexHookSessionBinding(config.sessionDir), config.id, launchedAtMs)
-    ?? readCodexTerminalSessionId(config.sessionDir)
-    ?? normalizeCodexSessionId(state.codexSessionId)
-}
-
-function codexHookSessionIdForAgent(
-  binding: CodexHookSessionBinding | undefined,
-  agentId: string,
-  launchedAtMs: number,
-) {
-  return binding?.agentId === agentId && binding.writtenAtMs >= launchedAtMs - 2_000
-    ? binding.sessionId
-    : undefined
+  return readCodexTerminalResumeId({
+    agentId: config.id,
+    cwd: config.cwd,
+    sessionDir: config.sessionDir,
+    state,
+    launchedAtMs,
+  })
 }
 
 function codexSessionCreatedMs(birthtimeMs: number, mtimeMs: number) {

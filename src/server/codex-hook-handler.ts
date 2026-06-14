@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import {
   normalizeCodexSessionId,
   writeCodexHookSessionBinding,
@@ -22,6 +22,10 @@ export async function handleCodexSessionStartHook(input: {
 
     const payload = parseHookPayload(input.stdin)
     if (!payload.ok) return payload
+    const expectedCwd = stringValue(input.env.KIRI_PROJECT_CWD)
+    if (expectedCwd && (!payload.cwd || resolve(payload.cwd) !== resolve(expectedCwd))) {
+      return { ok: true, reason: 'Ignored SessionStart hook for a different cwd' }
+    }
 
     writeCodexTerminalSessionId(sessionDir, payload.sessionId)
     writeCodexHookSessionBinding(sessionDir, {

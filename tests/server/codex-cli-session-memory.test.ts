@@ -186,6 +186,25 @@ describe('Codex terminal session memory', () => {
     expect(dbMock.state.get(mismatchedConfig.id)).toEqual({ codexSessionId: 'fallback-session' })
   })
 
+  it('ignores wrong-cwd hook bindings and matching persisted ids before using scan fallback', async () => {
+    const { rememberCodexTerminalSession } = await import('~/server/codex-cli-sessions')
+    const codexHome = mkdtempSync(join(tmpdir(), 'kiri-codex-home-'))
+    const cwd = '/tmp/project'
+    const config = launchConfig({ id: 'agent-wrong-cwd-hook', cwd })
+    writeHookBinding(config.sessionDir, config.id, 'wrong-cwd-session', Date.now(), '/tmp/other-project')
+    dbMock.state.set(config.id, { codexSessionId: 'wrong-cwd-session' })
+    writeCodexSession(codexHome, '2026/05/15/rollout-fallback.jsonl', 'fallback-session', cwd, 10)
+
+    await expect(rememberCodexTerminalSession(config, { CODEX_HOME: codexHome }, {
+      launchedAtMs: 9_500,
+      launchToken: 'wrong-cwd-token',
+      hookWaitMs: 0,
+    })).resolves.toBe(true)
+
+    expect(dbMock.state.get(config.id)).toEqual({ codexSessionId: 'fallback-session' })
+    expect(readCodexTerminalSessionId(config.sessionDir)).toBe('fallback-session')
+  })
+
   it('does not let JSONL scan overwrite a binding that appears during fallback', async () => {
     const { rememberCodexTerminalSession } = await import('~/server/codex-cli-sessions')
     const codexHome = mkdtempSync(join(tmpdir(), 'kiri-codex-home-'))
@@ -274,10 +293,17 @@ function writeCodexSession(
   return path
 }
 
-function writeHookBinding(sessionDir: string, agentId: string, sessionId: string, writtenAtMs = Date.now()) {
+function writeHookBinding(
+  sessionDir: string,
+  agentId: string,
+  sessionId: string,
+  writtenAtMs = Date.now(),
+  cwd = '/tmp/project',
+) {
   writeCodexHookSessionBinding(sessionDir, {
     agentId,
     sessionId,
+    cwd,
     source: 'startup',
     hookEventName: 'SessionStart',
     writtenAtMs,

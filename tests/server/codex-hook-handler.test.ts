@@ -74,6 +74,23 @@ describe('Codex SessionStart hook handler', () => {
     expect(existsSync(codexHookSessionBindingPath(sessionDir))).toBe(false)
   })
 
+  it('ignores SessionStart payloads from a different cwd', async () => {
+    const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-hook-'))
+
+    const result = await handleCodexSessionStartHook({
+      stdin: hookPayload({ session_id: 'wrong-cwd-session' }),
+      env: {
+        KIRI_SESSION_DIR: sessionDir,
+        KIRI_AGENT_ID: 'agent-hook',
+        KIRI_PROJECT_CWD: '/tmp/other-project',
+      },
+    })
+
+    expect(result).toEqual({ ok: true, reason: 'Ignored SessionStart hook for a different cwd' })
+    expect(existsSync(codexTerminalSessionIdPath(sessionDir))).toBe(false)
+    expect(existsSync(codexHookSessionBindingPath(sessionDir))).toBe(false)
+  })
+
   it('overwrites both files when Codex starts a replacement session', async () => {
     const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-hook-'))
 
