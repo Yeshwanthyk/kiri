@@ -24,6 +24,7 @@ describe('buildBoardCommandActions', () => {
       'end-session',
       'settings',
       'terminal',
+      'browser',
       'scratchpad',
       'add-project',
       'hide-project',
@@ -58,6 +59,7 @@ describe('buildBoardCommandActions', () => {
     expect(actions.find((action) => action.id === 'start-session')?.disabled).toBe(true)
     expect(actions.find((action) => action.id === 'end-session')?.disabled).toBe(true)
     expect(actions.find((action) => action.id === 'terminal')?.disabled).toBe(true)
+    expect(actions.find((action) => action.id === 'browser')?.disabled).toBe(true)
     expect(actions.find((action) => action.id === 'hide-project')?.disabled).toBe(true)
   })
 
@@ -94,6 +96,8 @@ function callbacks() {
     selectProject: vi.fn(),
     selectAgent: vi.fn(),
     openTerminalResource: vi.fn(),
+    openBrowserResource: vi.fn(),
+    browserAvailable: true,
     openScratchpadResource: vi.fn(),
     setTab: vi.fn(),
     closeCommandPalette: vi.fn(),
@@ -122,6 +126,7 @@ function workspaceWithProjects(
         agentNext: 'l',
         focusChat: 'i',
         openTerminal: 't',
+        openBrowser: 'b',
         openScratchpad: 's',
         startSession: 'n',
         deleteSession: 'backspace',

@@ -117,6 +117,7 @@ describe('ui preferences', () => {
   it('fills new keymap defaults when reading older preference files', () => {
     withPreferencesPath((path) => {
       const oldKeymap: Partial<typeof defaultKeymap> = { ...defaultKeymap }
+      delete oldKeymap.openBrowser
       delete oldKeymap.toggleTerminalFocus
       writeFileSync(path, JSON.stringify({
         theme: defaultThemeSelection,
@@ -125,6 +126,7 @@ describe('ui preferences', () => {
         agentByProject: {},
       }))
 
+      expect(getUiPreferences(path).keymap.openBrowser).toBe(defaultKeymap.openBrowser)
       expect(getUiPreferences(path).keymap.toggleTerminalFocus).toBe(defaultKeymap.toggleTerminalFocus)
     })
   })

@@ -7,14 +7,21 @@ import type { SidebarTab } from './board-types'
 import { CornerPeek } from './corner-peek'
 import { ResourceStage } from './resource-stage'
 import { ResourceTabStrip } from './resource-tab-strip'
-import type { ProjectResource, ResourceId } from './resource-tabs'
+import type { BrowserResource, ProjectResource, ResourceId } from './resource-tabs'
 import { ScratchpadHeader, ScratchpadPanel } from './scratchpad'
 
 type StageProps = React.ComponentProps<typeof ResourceStage>
 
 type CornerPeekShellProps = Omit<
   StageProps,
-  'selectedProject' | 'selectedAgent' | 'tab' | 'chrome' | 'projects' | 'onStartSession'
+  | 'selectedProject'
+  | 'selectedAgent'
+  | 'selectedBrowserResource'
+  | 'browserResources'
+  | 'tab'
+  | 'chrome'
+  | 'projects'
+  | 'onStartSession'
 > & {
   readonly projects: ProjectRow[]
   readonly hiddenProjects: ProjectRow[]
@@ -24,6 +31,7 @@ type CornerPeekShellProps = Omit<
   readonly activeResourceId: ResourceId | null
   readonly scratchpadOpen: boolean
   readonly hydrated: boolean
+  readonly browserAvailable: boolean
   readonly resourcesByProject: Record<string, {
     readonly resources: readonly ProjectResource[]
     readonly activeResourceId: ResourceId | null
@@ -36,6 +44,7 @@ type CornerPeekShellProps = Omit<
   readonly onCloseAgent: (agentId: string) => void
   readonly onRenameAgent: (agentId: string, title: string) => Promise<void>
   readonly onEnsureTerminal: (projectId: string) => void
+  readonly onEnsureBrowser: (projectId: string) => void
   readonly onOpenScratchpad: () => void
   readonly onCloseScratchpad: () => void
   readonly onStartSession: () => void
@@ -52,6 +61,7 @@ export function CornerPeekShell({
   activeResourceId,
   scratchpadOpen,
   hydrated,
+  browserAvailable,
   resourcesByProject,
   cornerPeekHeld,
   onSelectProject,
@@ -61,6 +71,7 @@ export function CornerPeekShell({
   onCloseAgent,
   onRenameAgent,
   onEnsureTerminal,
+  onEnsureBrowser,
   onOpenScratchpad,
   onCloseScratchpad,
   onStartSession,
@@ -74,7 +85,12 @@ export function CornerPeekShell({
     [selectedProject.agents],
   )
   const stageAgent = resolveStageAgent(selectedProject, selectedAgent, activeResource)
+  const stageBrowser = resolveStageBrowser(activeResource)
   const stageTab = resolveStageTab(activeResource)
+  const browserResources = React.useMemo(
+    () => resources.filter((resource): resource is BrowserResource => resource.kind === 'browser'),
+    [resources],
+  )
 
   function selectResource(resourceId: ResourceId) {
     const resource = resources.find((item) => item.id === resourceId)
@@ -105,6 +121,8 @@ export function CornerPeekShell({
           if (selectedAgent) onEnsureTerminal(selectedProject.id)
         }}
         terminalDisabled={!selectedAgent}
+        browserAvailable={browserAvailable}
+        onAddBrowser={() => onEnsureBrowser(selectedProject.id)}
         onOpenScratchpad={onOpenScratchpad}
         onStartSession={onStartSession}
       />
@@ -127,6 +145,8 @@ export function CornerPeekShell({
         chrome="stage"
         selectedProject={selectedProject}
         selectedAgent={stageAgent}
+        selectedBrowserResource={stageBrowser}
+        browserResources={browserResources}
         tab={stageTab}
         projects={projects}
         onStartSession={onStartSession}
@@ -187,7 +207,12 @@ function resolveStageAgent(
   return undefined
 }
 
+function resolveStageBrowser(activeResource: ProjectResource | undefined) {
+  return activeResource?.kind === 'browser' ? activeResource : undefined
+}
+
 function resolveStageTab(activeResource: ProjectResource | undefined): SidebarTab {
   if (activeResource?.kind === 'terminal') return 'terminal'
+  if (activeResource?.kind === 'browser') return 'browser'
   return 'chat'
 }

@@ -26,6 +26,7 @@ type BoardKeyboardShortcutsInput = {
   onMoveActiveResource: (delta: 1 | -1) => void
   onOpenAgentResource: () => void
   onOpenTerminalResource: () => void
+  onOpenBrowserResource: () => void
   onToggleScratchpad: () => void
   setCornerPeekHeld: (held: boolean) => void
   setAgentSwitcherOpen: (open: boolean) => void
@@ -54,6 +55,7 @@ export function useBoardKeyboardShortcuts({
   onMoveActiveResource,
   onOpenAgentResource,
   onOpenTerminalResource,
+  onOpenBrowserResource,
   onToggleScratchpad,
   setCornerPeekHeld,
   setAgentSwitcherOpen,
@@ -98,6 +100,11 @@ export function useBoardKeyboardShortcuts({
         setSessionLauncherOpen(false)
         setAgentSwitcherOpen(false)
         setCommandPaletteOpen((open) => !open)
+        return
+      }
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && key === keymap.openBrowser) {
+        event.preventDefault()
+        onOpenBrowserResource()
         return
       }
 
@@ -160,6 +167,8 @@ export function useBoardKeyboardShortcuts({
         return
       }
 
+      if (action === 'openBrowser' && !event.metaKey && !event.ctrlKey) return
+
       event.preventDefault()
 
       if (action === 'focusChat') {
@@ -169,6 +178,11 @@ export function useBoardKeyboardShortcuts({
 
       if (action === 'openTerminal') {
         onOpenTerminalResource()
+        return
+      }
+
+      if (action === 'openBrowser') {
+        onOpenBrowserResource()
         return
       }
 
@@ -230,6 +244,7 @@ export function useBoardKeyboardShortcuts({
     keymap,
     onDeleteSession,
     onOpenAgentResource,
+    onOpenBrowserResource,
     onToggleScratchpad,
     onOpenSessionLauncher,
     onOpenTerminalResource,

@@ -103,6 +103,10 @@
   border-color: color-mix(in oklab, var(--warn) 28%, var(--line-subtle));
 }
 
+.resource-tab-shell[data-resource-kind='browser'] {
+  border-color: color-mix(in oklab, var(--accent-2) 24%, var(--line-subtle));
+}
+
 .resource-tab {
   display: inline-flex;
   min-width: 0;
@@ -160,6 +164,11 @@
 
 .resource-tab-shell[data-resource-kind='terminal'] .resource-dot {
   background: var(--warn);
+}
+
+.resource-tab-shell[data-resource-kind='browser'] .resource-dot,
+.resource-browser-dot {
+  background: var(--accent-2);
 }
 
 .resource-tab-close {
@@ -237,6 +246,10 @@
   border-color: color-mix(in oklab, var(--warn) 28%, var(--accent-muted));
   background: color-mix(in oklab, var(--panel) 84%, var(--accent-soft));
   color: var(--ink);
+}
+
+.resource-add-actions button[data-kind='browser'][data-active='true'] {
+  border-color: color-mix(in oklab, var(--accent-2) 38%, var(--accent-muted));
 }
 
 .resource-add-actions button[data-active='true']:hover {

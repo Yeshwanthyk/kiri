@@ -122,6 +122,7 @@ function buildSnapshot(overrides: {
         agentNext: 'l',
         focusChat: 'i',
         openTerminal: 't',
+        openBrowser: 'b',
         openScratchpad: 's',
         startSession: 'n',
         deleteSession: 'backspace',

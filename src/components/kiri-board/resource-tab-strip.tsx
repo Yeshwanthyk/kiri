@@ -1,6 +1,6 @@
 'use client'
 
-import { NotebookPen, Plus, X } from 'lucide-react'
+import { Globe2, NotebookPen, Plus, X } from 'lucide-react'
 import * as React from 'react'
 import type { AgentResource, ProjectResource, ResourceId } from './resource-tabs'
 
@@ -14,6 +14,8 @@ type ResourceTabStripProps = {
   readonly onRenameAgent: (agentId: string, title: string) => Promise<void>
   readonly onAddTerminal: () => void
   readonly terminalDisabled?: boolean
+  readonly browserAvailable: boolean
+  readonly onAddBrowser: () => void
   readonly onOpenScratchpad: () => void
   readonly onStartSession: () => void
 }
@@ -28,11 +30,14 @@ export function ResourceTabStrip({
   onRenameAgent,
   onAddTerminal,
   terminalDisabled = false,
+  browserAvailable,
+  onAddBrowser,
   onOpenScratchpad,
   onStartSession,
 }: ResourceTabStripProps) {
   const tabResources = resources.filter((resource): resource is AgentResource => resource.kind === 'agent')
   const terminalActive = activeResourceId?.startsWith('terminal:') ?? false
+  const browserActive = activeResourceId?.startsWith('browser:') ?? false
   const stripRef = React.useRef<HTMLDivElement | null>(null)
   const dragRef = React.useRef<{
     readonly pointerId: number
@@ -248,6 +253,22 @@ export function ResourceTabStrip({
           </span>
           terminal
         </button>
+        {browserAvailable ? (
+          <button
+            type="button"
+            onClick={onAddBrowser}
+            aria-label="Open browser resource"
+            aria-pressed={browserActive}
+            data-active={browserActive ? 'true' : 'false'}
+            data-kind="browser"
+            data-testid="resource-browser-action"
+          >
+            <span className="resource-action-icon" aria-hidden="true">
+              {browserActive ? <span className="resource-dot resource-browser-dot" /> : <Globe2 size={14} />}
+            </span>
+            browser
+          </button>
+        ) : null}
         <button type="button" onClick={onOpenScratchpad} aria-label="Open scratchpad">
           <NotebookPen size={14} aria-hidden="true" />
           scratchpad

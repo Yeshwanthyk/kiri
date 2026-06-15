@@ -27,6 +27,7 @@ import { useBoardSurfaces } from './kiri-board/board-surfaces'
 import { useBoardWorkspace } from './kiri-board/board-workspace'
 import { useProjectResources } from './kiri-board/use-project-resources'
 import { agentResourceId, selectAdjacentResource, type ResourceId } from './kiri-board/resource-tabs'
+import { getKiriBrowserBridge } from '~/lib/host-capabilities'
 
 const SettingsScreen = React.lazy(() =>
   import('./kiri-board/settings-screen').then((module) => ({ default: module.SettingsScreen })))
@@ -35,6 +36,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [tab, setTab] = React.useState<SidebarTab>('chat')
   const [cornerPeekHeld, setCornerPeekHeld] = React.useState(false)
   const [scratchpadOpen, setScratchpadOpen] = React.useState(false)
+  const [browserAvailable, setBrowserAvailable] = React.useState(false)
   const projectManagerReturnFocusRef = React.useRef<HTMLElement | null>(null)
   const previousProjectManagerOpenRef = React.useRef(false)
   const {
@@ -124,6 +126,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   })
 
   React.useEffect(() => {
+    setBrowserAvailable(Boolean(getKiriBrowserBridge()))
+  }, [])
+
+  React.useEffect(() => {
     const wasOpen = previousProjectManagerOpenRef.current
     previousProjectManagerOpenRef.current = projectManagerOpen
     if (!wasOpen || projectManagerOpen) return
@@ -183,6 +189,9 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     if (resource?.kind === 'agent') {
       selectBoardAgent(projectId, resource.agentId)
       setTab('chat')
+    } else if (resource?.kind === 'browser') {
+      if (project && project.id !== selection.projectId) selectBoardProject(project.id)
+      setTab('browser')
     } else if (project && project.id !== selection.projectId) {
       selectBoardProject(project.id)
     }
@@ -199,6 +208,12 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const resetChatFocus = React.useCallback(() => {
     setChatFocusRequest(0)
   }, [])
+
+  const openBrowserResource = React.useCallback(() => {
+    if (!browserAvailable || !selectedProject) return
+    projectResources.ensureBrowser(selectedProject.id)
+    setTab('browser')
+  }, [browserAvailable, projectResources, selectedProject])
 
   const {
     pendingDelete,
@@ -307,6 +322,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       if (!selectedProject) return
       projectResources.ensureTerminal(selectedProject.id)
     },
+    onOpenBrowserResource: openBrowserResource,
     onToggleScratchpad: () => {
       setScratchpadOpen((open) => !open)
     },
@@ -349,6 +365,8 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         if (!selectedProject) return
         projectResources.ensureTerminal(selectedProject.id)
       },
+      openBrowserResource,
+      browserAvailable,
       openScratchpadResource: () => {
         setScratchpadOpen(true)
       },
@@ -356,10 +374,12 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     }),
     [
       closeCommandPalette,
+      browserAvailable,
       handleDeleteSession,
       handleHideProject,
       handleUnhideProject,
       openProjectManagerWithReturnFocus,
+      openBrowserResource,
       openSettings,
       projectResources,
       requestDeleteProject,
@@ -527,6 +547,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         activeResourceId={activeResourceId}
         scratchpadOpen={scratchpadOpen}
         hydrated={hydrated}
+        browserAvailable={browserAvailable}
         resourcesByProject={projectResources.resourcesByProject}
         cornerPeekHeld={cornerPeekHeld}
         onSelectProject={selectProject}
@@ -536,6 +557,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onCloseAgent={handleDeleteSession}
         onRenameAgent={handleRenameSession}
         onEnsureTerminal={projectResources.ensureTerminal}
+        onEnsureBrowser={(projectId) => {
+          projectResources.ensureBrowser(projectId)
+          setTab('browser')
+        }}
         onOpenScratchpad={() => setScratchpadOpen(true)}
         onCloseScratchpad={() => setScratchpadOpen(false)}
         onStartSession={() => openSessionLauncher()}

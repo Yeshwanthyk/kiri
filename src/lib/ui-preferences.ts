@@ -14,6 +14,7 @@ const keymapActions = [
   'deleteSession',
   'focusChat',
   'openTerminal',
+  'openBrowser',
   'openScratchpad',
   'toggleTerminalFocus',
 ] as const
@@ -30,6 +31,7 @@ export const keyOptions = [
   'x',
   'c',
   'd',
+  'b',
   't',
   's',
   'tab',
@@ -48,6 +50,7 @@ export const defaultKeymap: KeymapSettings = {
   deleteSession: 'x',
   focusChat: 'c',
   openTerminal: 't',
+  openBrowser: 'b',
   openScratchpad: 's',
   toggleTerminalFocus: 'tab',
 }
@@ -156,6 +159,7 @@ export const keymapSettingsSchema = z.object({
   deleteSession: keyBindingSchema.default(defaultKeymap.deleteSession),
   focusChat: keyBindingSchema.default(defaultKeymap.focusChat),
   openTerminal: keyBindingSchema.default(defaultKeymap.openTerminal),
+  openBrowser: keyBindingSchema.default(defaultKeymap.openBrowser),
   openScratchpad: keyBindingSchema.default(defaultKeymap.openScratchpad),
   toggleTerminalFocus: keyBindingSchema.default(defaultKeymap.toggleTerminalFocus),
 }).superRefine((value, context) => {

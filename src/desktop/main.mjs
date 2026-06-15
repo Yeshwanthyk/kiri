@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, WebContentsView } from 'electron'
 import { spawn } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
@@ -10,6 +10,9 @@ const preloadPath = join(desktopDir, 'preload.cjs')
 let mainWindow = null
 let backendProcess = null
 let backendUrlPromise = null
+
+/** browserId -> { view: WebContentsView, favicon: string | null } */
+const browserViews = new Map()
 
 app.setName('kiri')
 
@@ -74,6 +77,10 @@ function createWindow(appUrl) {
     event.preventDefault()
     const target = safeExternalUrl(url)
     if (target) void shell.openExternal(target)
+  })
+
+  win.on('closed', () => {
+    for (const browserId of [...browserViews.keys()]) destroyBrowserView(browserId)
   })
 
   return win
@@ -220,6 +227,127 @@ function installIpcHandlers() {
     if (!isAbsolute(target)) throw new Error('Path must be absolute')
     shell.showItemInFolder(target)
   })
+
+  ipcMain.on('kiri:browser:create', (_event, browserId, url) => {
+    createBrowserView(String(browserId), safeBrowserUrl(url))
+  })
+  ipcMain.on('kiri:browser:set-bounds', (_event, browserId, bounds) => {
+    const entry = browserViews.get(String(browserId))
+    if (!entry) return
+    if (!bounds || typeof bounds !== 'object') {
+      entry.view.setVisible(false)
+      return
+    }
+    entry.view.setBounds({
+      x: Math.round(bounds.x),
+      y: Math.round(bounds.y),
+      width: Math.max(0, Math.round(bounds.width)),
+      height: Math.max(0, Math.round(bounds.height)),
+    })
+    entry.view.setVisible(true)
+  })
+  ipcMain.on('kiri:browser:navigate', (_event, browserId, url) => {
+    const entry = browserViews.get(String(browserId))
+    if (!entry) return
+    const target = safeBrowserUrl(url)
+    if (target) entry.view.webContents.loadURL(target).catch(() => {})
+  })
+  ipcMain.on('kiri:browser:go-back', (_event, browserId) => {
+    browserViews.get(String(browserId))?.view.webContents.navigationHistory.goBack()
+  })
+  ipcMain.on('kiri:browser:go-forward', (_event, browserId) => {
+    browserViews.get(String(browserId))?.view.webContents.navigationHistory.goForward()
+  })
+  ipcMain.on('kiri:browser:reload', (_event, browserId) => {
+    browserViews.get(String(browserId))?.view.webContents.reload()
+  })
+  ipcMain.on('kiri:browser:stop', (_event, browserId) => {
+    browserViews.get(String(browserId))?.view.webContents.stop()
+  })
+  ipcMain.on('kiri:browser:destroy', (_event, browserId) => {
+    destroyBrowserView(String(browserId))
+  })
+}
+
+function createBrowserView(browserId, url) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (browserViews.has(browserId)) return
+  const view = new WebContentsView({
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  })
+  view.setBackgroundColor('#ffffff')
+  const entry = { view, favicon: null }
+  browserViews.set(browserId, entry)
+  mainWindow.contentView.addChildView(view)
+  view.setVisible(false)
+
+  const wc = view.webContents
+  const emit = () => sendBrowserState(browserId)
+  wc.on('did-start-loading', emit)
+  wc.on('did-stop-loading', emit)
+  wc.on('did-navigate', emit)
+  wc.on('did-navigate-in-page', emit)
+  wc.on('did-fail-load', emit)
+  wc.on('page-title-updated', emit)
+  wc.on('page-favicon-updated', (_e, favicons) => {
+    entry.favicon = Array.isArray(favicons) && favicons.length > 0 ? favicons[0] : null
+    emit()
+  })
+  // Open popups (target=_blank) in the same view instead of a new OS window.
+  wc.setWindowOpenHandler(({ url: popupUrl }) => {
+    const target = safeBrowserUrl(popupUrl)
+    if (target) wc.loadURL(target).catch(() => {})
+    return { action: 'deny' }
+  })
+
+  if (url) wc.loadURL(url).catch(() => {})
+}
+
+function destroyBrowserView(browserId) {
+  const entry = browserViews.get(browserId)
+  if (!entry) return
+  browserViews.delete(browserId)
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.contentView.removeChildView(entry.view)
+    }
+  } catch {
+    // view may already be detached
+  }
+  try {
+    entry.view.webContents.close()
+  } catch {
+    // already closed
+  }
+}
+
+function sendBrowserState(browserId) {
+  const entry = browserViews.get(browserId)
+  if (!entry) return
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const wc = entry.view.webContents
+  if (wc.isDestroyed()) return
+  mainWindow.webContents.send('kiri:browser:state', {
+    browserId,
+    url: wc.getURL(),
+    title: wc.getTitle(),
+    canGoBack: wc.navigationHistory.canGoBack(),
+    canGoForward: wc.navigationHistory.canGoForward(),
+    isLoading: wc.isLoading(),
+    favicon: entry.favicon,
+  })
+}
+
+function safeBrowserUrl(value) {
+  try {
+    const url = new URL(String(value))
+    if (url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'about:') {
+      return url.toString()
+    }
+  } catch {
+    return null
+  }
+  return null
 }
 
 function safeExternalUrl(value) {
@@ -253,6 +381,7 @@ function installApplicationMenu(win) {
       label: 'View',
       submenu: [
         { label: 'Open Terminal', accelerator: 'CmdOrCtrl+`', click: () => send('terminal') },
+        { label: 'Open Browser', accelerator: 'CmdOrCtrl+Shift+B', click: () => send('browser') },
         { role: 'reload' },
         { role: 'toggleDevTools' },
       ],

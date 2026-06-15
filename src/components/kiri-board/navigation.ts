@@ -46,6 +46,7 @@ export const keymapGroups: {
     rows: [
       { action: 'focusChat', label: 'Focus chat', hint: 'Jump cursor to composer' },
       { action: 'openTerminal', label: 'Open terminal', hint: 'Open terminal resource' },
+      { action: 'openBrowser', label: 'Open browser', hint: 'Open browser resource' },
       { action: 'openScratchpad', label: 'Toggle scratchpad', hint: 'Open or close scratchpad' },
       { action: 'toggleTerminalFocus', label: 'Toggle terminal focus', hint: 'Jump into or out of the visible terminal' },
     ],

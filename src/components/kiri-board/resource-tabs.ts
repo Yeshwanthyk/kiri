@@ -3,9 +3,12 @@ import type { ProjectRow } from '~/lib/contracts'
 export type ResourceId =
   | `agent:${string}`
   | `terminal:${string}`
+  | `browser:${string}`
   | 'scratchpad'
 
-export type ResourceKind = 'agent' | 'terminal'
+export type ResourceKind = 'agent' | 'terminal' | 'browser'
+
+export const DEFAULT_BROWSER_URL = 'https://www.google.com'
 
 export type AgentResource = {
   readonly id: `agent:${string}`
@@ -30,15 +33,26 @@ export type TerminalResource = {
   readonly purpose: TerminalResourcePurpose
 }
 
+export type BrowserResource = {
+  readonly id: `browser:${string}`
+  readonly kind: 'browser'
+  readonly browserId: string
+  readonly title: string
+  readonly url: string
+}
+
 export type ProjectResource =
   | AgentResource
   | TerminalResource
+  | BrowserResource
 
 export type ProjectResourceLayout = {
   readonly activeResourceId: ResourceId | null
   readonly order: readonly ResourceId[]
   readonly terminals: readonly TerminalResource[]
+  readonly browsers: readonly BrowserResource[]
   readonly activeTerminalResourceId?: `terminal:${string}`
+  readonly activeBrowserResourceId?: `browser:${string}`
 }
 
 export type ResourceShellLayout = {
@@ -59,6 +73,10 @@ export function terminalResourceId(terminalId: string): `terminal:${string}` {
   return `terminal:${terminalId}`
 }
 
+export function browserResourceId(browserId: string): `browser:${string}` {
+  return `browser:${browserId}`
+}
+
 export function reconcileProjectResources(input: {
   readonly project: ProjectRow
   readonly layout: ProjectResourceLayout | undefined
@@ -75,26 +93,34 @@ export function reconcileProjectResources(input: {
   const agentIds = new Set<ResourceId>(agentResources.map((resource) => resource.id))
   const terminals = dedupeTerminals(input.layout?.terminals ?? [])
   const terminalIds = new Set<ResourceId>(terminals.map((resource) => resource.id))
+  const browsers = dedupeBrowsers(input.layout?.browsers ?? [])
+  const browserIds = new Set<ResourceId>(browsers.map((resource) => resource.id))
   const resourcesById = new Map<ResourceId, ProjectResource>([
     ...agentResources.map((resource) => [resource.id, resource] as const),
     ...terminals.map((resource) => [resource.id, resource] as const),
+    ...browsers.map((resource) => [resource.id, resource] as const),
   ])
 
   const order: ResourceId[] = []
   for (const resourceId of input.layout?.order ?? []) {
     if (!isResourceId(resourceId)) continue
     if (order.includes(resourceId)) continue
-    if (agentIds.has(resourceId) || terminalIds.has(resourceId)) {
+    if (agentIds.has(resourceId) || terminalIds.has(resourceId) || browserIds.has(resourceId)) {
       order.push(resourceId)
     }
   }
 
   for (const resource of agentResources) {
     if (order.includes(resource.id)) continue
-    const terminalIndex = order.findIndex((resourceId) => resourceId.startsWith('terminal:'))
-    order.splice(terminalIndex >= 0 ? terminalIndex : order.length, 0, resource.id)
+    const nonAgentIndex = order.findIndex(
+      (resourceId) => resourceId.startsWith('terminal:') || resourceId.startsWith('browser:'),
+    )
+    order.splice(nonAgentIndex >= 0 ? nonAgentIndex : order.length, 0, resource.id)
   }
   for (const resource of terminals) {
+    if (!order.includes(resource.id)) order.push(resource.id)
+  }
+  for (const resource of browsers) {
     if (!order.includes(resource.id)) order.push(resource.id)
   }
 
@@ -107,6 +133,11 @@ export function reconcileProjectResources(input: {
     input.layout?.activeTerminalResourceId,
     activeResourceId,
   )
+  const activeBrowserResourceId = resolveActiveBrowserResourceId(
+    browsers,
+    input.layout?.activeBrowserResourceId,
+    activeResourceId,
+  )
 
   return {
     resources,
@@ -115,7 +146,9 @@ export function reconcileProjectResources(input: {
       activeResourceId,
       order: resources.map((resource) => resource.id),
       terminals,
+      browsers,
       ...(activeTerminalResourceId ? { activeTerminalResourceId } : {}),
+      ...(activeBrowserResourceId ? { activeBrowserResourceId } : {}),
     },
   }
 }
@@ -155,8 +188,10 @@ export function insertAgentResource(input: {
     return { ...input.layout, activeResourceId: resourceId }
   }
   const order = [...input.layout.order]
-  const terminalIndex = order.findIndex((item) => item.startsWith('terminal:'))
-  const insertIndex = terminalIndex >= 0 ? terminalIndex : order.length
+  const nonAgentIndex = order.findIndex(
+    (item) => item.startsWith('terminal:') || item.startsWith('browser:'),
+  )
+  const insertIndex = nonAgentIndex >= 0 ? nonAgentIndex : order.length
   order.splice(insertIndex, 0, resourceId)
   return {
     ...input.layout,
@@ -210,11 +245,58 @@ export function ensureTerminalResource(input: {
   }
 }
 
+export function ensureBrowserResource(input: {
+  readonly layout: ProjectResourceLayout
+  readonly browserId?: string
+  readonly title?: string
+  readonly url?: string
+}): {
+  readonly layout: ProjectResourceLayout
+  readonly resourceId: `browser:${string}`
+} {
+  const existing = input.layout.activeBrowserResourceId
+    ? input.layout.browsers.find((resource) => resource.id === input.layout.activeBrowserResourceId)
+    : input.layout.browsers[0]
+  if (existing) {
+    return {
+      resourceId: existing.id,
+      layout: {
+        ...input.layout,
+        activeResourceId: existing.id,
+        activeBrowserResourceId: existing.id,
+      },
+    }
+  }
+
+  const browserId = input.browserId ?? createBrowserId()
+  const resourceId = browserResourceId(browserId)
+  const browser: BrowserResource = {
+    id: resourceId,
+    kind: 'browser',
+    browserId,
+    title: input.title?.trim() || 'browser',
+    url: input.url?.trim() || DEFAULT_BROWSER_URL,
+  }
+  return {
+    resourceId,
+    layout: {
+      ...input.layout,
+      activeResourceId: resourceId,
+      activeBrowserResourceId: resourceId,
+      order: input.layout.order.includes(resourceId)
+        ? input.layout.order
+        : [...input.layout.order, resourceId],
+      browsers: [...input.layout.browsers, browser],
+    },
+  }
+}
+
 export function isResourceId(value: unknown): value is ResourceId {
   return value === 'scratchpad' ||
     (typeof value === 'string' && (
       value.startsWith('agent:') ||
-      value.startsWith('terminal:')
+      value.startsWith('terminal:') ||
+      value.startsWith('browser:')
     ))
 }
 
@@ -227,6 +309,9 @@ export function normalizeProjectResourceLayout(value: unknown): ProjectResourceL
   const terminals = Array.isArray(record.terminals)
     ? record.terminals.map(normalizeTerminalResource).filter((item): item is TerminalResource => Boolean(item))
     : []
+  const browsers = Array.isArray(record.browsers)
+    ? record.browsers.map(normalizeBrowserResource).filter((item): item is BrowserResource => Boolean(item))
+    : []
   const activeResourceId = isResourceId(record.activeResourceId) ? record.activeResourceId : null
   const activeTerminalResourceId = (
     typeof record.activeTerminalResourceId === 'string' &&
@@ -234,11 +319,19 @@ export function normalizeProjectResourceLayout(value: unknown): ProjectResourceL
   )
     ? record.activeTerminalResourceId as `terminal:${string}`
     : undefined
+  const activeBrowserResourceId = (
+    typeof record.activeBrowserResourceId === 'string' &&
+    record.activeBrowserResourceId.startsWith('browser:')
+  )
+    ? record.activeBrowserResourceId as `browser:${string}`
+    : undefined
   return {
     activeResourceId,
     order: order.filter((resourceId) => resourceId !== 'scratchpad'),
     terminals,
+    browsers,
     ...(activeTerminalResourceId ? { activeTerminalResourceId } : {}),
+    ...(activeBrowserResourceId ? { activeBrowserResourceId } : {}),
   }
 }
 
@@ -291,6 +384,20 @@ function normalizeTerminalPurpose(value: unknown): TerminalResourcePurpose {
   return { kind: 'manual' }
 }
 
+function normalizeBrowserResource(value: unknown): BrowserResource | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (typeof record.id !== 'string' || !record.id.startsWith('browser:')) return undefined
+  if (typeof record.browserId !== 'string' || !record.browserId.trim()) return undefined
+  return {
+    id: record.id as `browser:${string}`,
+    kind: 'browser',
+    browserId: record.browserId,
+    title: typeof record.title === 'string' && record.title.trim() ? record.title : 'browser',
+    url: typeof record.url === 'string' && record.url.trim() ? record.url : DEFAULT_BROWSER_URL,
+  }
+}
+
 function dedupeTerminals(terminals: readonly TerminalResource[]) {
   const seen = new Set<ResourceId>()
   const next: TerminalResource[] = []
@@ -298,6 +405,17 @@ function dedupeTerminals(terminals: readonly TerminalResource[]) {
     if (seen.has(terminal.id)) continue
     seen.add(terminal.id)
     next.push(terminal)
+  }
+  return next
+}
+
+function dedupeBrowsers(browsers: readonly BrowserResource[]) {
+  const seen = new Set<ResourceId>()
+  const next: BrowserResource[] = []
+  for (const browser of browsers) {
+    if (seen.has(browser.id)) continue
+    seen.add(browser.id)
+    next.push(browser)
   }
   return next
 }
@@ -325,11 +443,33 @@ function asTerminalResourceId(value: ResourceId): `terminal:${string}` | undefin
   return value.startsWith('terminal:') ? value as `terminal:${string}` : undefined
 }
 
+function resolveActiveBrowserResourceId(
+  browsers: readonly BrowserResource[],
+  stored: `browser:${string}` | undefined,
+  activeResourceId: ResourceId | null,
+) {
+  if (stored && browsers.some((browser) => browser.id === stored)) return stored
+  const activeBrowserId = activeResourceId ? asBrowserResourceId(activeResourceId) : undefined
+  if (activeBrowserId) return activeBrowserId
+  return browsers[0]?.id
+}
+
+function asBrowserResourceId(value: ResourceId): `browser:${string}` | undefined {
+  return value.startsWith('browser:') ? value as `browser:${string}` : undefined
+}
+
 function createTerminalId() {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return crypto.randomUUID()
   }
   return `terminal-${Date.now().toString(36)}`
+}
+
+function createBrowserId() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID()
+  }
+  return `browser-${Date.now().toString(36)}`
 }
 
 function clamp(value: number, min: number, max: number) {

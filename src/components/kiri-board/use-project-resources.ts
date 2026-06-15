@@ -9,6 +9,7 @@ import {
   reconcileProjectResources,
   selectAdjacentResource,
   ensureTerminalResource,
+  ensureBrowserResource,
   type ResourceId,
   type ResourceShellLayout,
 } from './resource-tabs'
@@ -29,13 +30,29 @@ export function useProjectResources({
   const [storedLayout, setStoredLayout] = React.useState<ResourceShellLayout>(
     emptyResourceShellLayout,
   )
+  const [initialStoredActiveProjectId, setInitialStoredActiveProjectId] = React.useState<string | null>(null)
   const [hydrated, setHydrated] = React.useState(false)
   const initialActiveProjectIdRef = React.useRef(activeProjectId)
 
   React.useEffect(() => {
-    setStoredLayout(readStoredResourceLayout())
+    const layout = readStoredResourceLayout()
+    setStoredLayout(layout)
+    setInitialStoredActiveProjectId(layout.activeProjectId)
     setHydrated(true)
   }, [])
+
+  React.useEffect(() => {
+    if (!hydrated || !initialStoredActiveProjectId) return
+    const storedActiveProjectVisible = workspace.projects.some((project) =>
+      project.id === initialStoredActiveProjectId)
+    if (
+      !storedActiveProjectVisible ||
+      activeProjectId === initialStoredActiveProjectId ||
+      activeProjectId !== initialActiveProjectIdRef.current
+    ) {
+      setInitialStoredActiveProjectId(null)
+    }
+  }, [activeProjectId, hydrated, initialStoredActiveProjectId, workspace.projects])
 
   const reconciled = React.useMemo(() => {
     const projects: Record<string, ReturnType<typeof reconcileProjectResources>> = {}
@@ -50,8 +67,8 @@ export function useProjectResources({
 
   const layout = React.useMemo<ResourceShellLayout>(() => {
     const storedActiveProjectVisible = Boolean(
-      storedLayout.activeProjectId &&
-      workspace.projects.some((project) => project.id === storedLayout.activeProjectId),
+      initialStoredActiveProjectId &&
+      workspace.projects.some((project) => project.id === initialStoredActiveProjectId),
     )
     const shouldUseStoredActiveProject =
       hydrated &&
@@ -59,7 +76,7 @@ export function useProjectResources({
       activeProjectId === initialActiveProjectIdRef.current
     return {
       activeProjectId: shouldUseStoredActiveProject
-        ? storedLayout.activeProjectId
+        ? initialStoredActiveProjectId
         : activeProjectId || storedLayout.activeProjectId,
       projects: Object.fromEntries(
         Object.entries(reconciled).map(([projectId, projectLayout]) => [
@@ -71,6 +88,7 @@ export function useProjectResources({
   }, [
     activeProjectId,
     hydrated,
+    initialStoredActiveProjectId,
     reconciled,
     storedLayout.activeProjectId,
     workspace.projects,
@@ -103,6 +121,9 @@ export function useProjectResources({
       const activeTerminalResourceId = resourceId.startsWith('terminal:')
         ? resourceId as `terminal:${string}`
         : undefined
+      const activeBrowserResourceId = resourceId.startsWith('browser:')
+        ? resourceId as `browser:${string}`
+        : undefined
       return {
         ...current,
         activeProjectId: projectId,
@@ -113,6 +134,9 @@ export function useProjectResources({
             activeResourceId: resourceId,
             ...(activeTerminalResourceId
               ? { activeTerminalResourceId }
+              : {}),
+            ...(activeBrowserResourceId
+              ? { activeBrowserResourceId }
               : {}),
           },
         },
@@ -210,6 +234,32 @@ export function useProjectResources({
     return nextResourceId
   }, [updateProjectLayout, workspace.projects])
 
+  const ensureBrowser = React.useCallback((projectId: string) => {
+    let nextResourceId: ResourceId | null = null
+    updateProjectLayout(projectId, (current) => {
+      const project = workspace.projects.find((item) => item.id === projectId)
+      if (!project) return current
+      const reconciledProject = reconcileProjectResources({
+        project,
+        layout: current.projects[projectId],
+      })
+      const next = ensureBrowserResource({
+        layout: reconciledProject.layout,
+        title: 'browser',
+      })
+      nextResourceId = next.resourceId
+      return {
+        ...current,
+        activeProjectId: projectId,
+        projects: {
+          ...current.projects,
+          [projectId]: next.layout,
+        },
+      }
+    })
+    return nextResourceId
+  }, [updateProjectLayout, workspace.projects])
+
   const activeProjectResources = reconciled[activeProjectId]
 
   return {
@@ -222,6 +272,7 @@ export function useProjectResources({
     selectAdjacent,
     insertAgent,
     ensureTerminal,
+    ensureBrowser,
   }
 }
 

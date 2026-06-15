@@ -19,12 +19,14 @@ import { agentDetailQueryOptions, fetchAgentDetail } from '~/server/workspace'
 import type { ThemeMode } from '~/theme/kiri-themes'
 import { errorMessage, formatKeyShort, formatThinkingLevel } from './format'
 import { ChatPanel } from './chat-panel'
+import { BrowserPanel } from './browser-panel'
 import { TerminalPanel } from './terminal-panel'
 import { TerminalWorkspace } from './terminal-workspace'
 import { mergeAgentDetail, prependAgentDetailPages } from './agent-detail'
 import type { RefreshAgentDetail, SidebarTab } from './board-types'
 import type { KeymapSettings } from './navigation'
 import type { ChatTypographySettings } from './storage'
+import type { BrowserResource } from './resource-tabs'
 
 type OlderDetailPage = {
   readonly agentId: string
@@ -36,6 +38,8 @@ type OlderDetailPage = {
 export function SelectedAgentPane({
   selectedProject,
   selectedAgent,
+  selectedBrowserResource,
+  browserResources,
   tab,
   chrome = 'sidebar',
   chatFocusRequest,
@@ -58,6 +62,8 @@ export function SelectedAgentPane({
 }: {
   selectedProject: ProjectRow
   selectedAgent: AgentCell | undefined
+  selectedBrowserResource?: BrowserResource
+  browserResources: readonly BrowserResource[]
   tab: SidebarTab
   chrome?: 'sidebar' | 'stage'
   chatFocusRequest: number
@@ -141,6 +147,9 @@ export function SelectedAgentPane({
     readonly runtime: boolean
     readonly shell: boolean
   }>({ runtime: false, shell: false })
+  const [mountedBrowserResourceIds, setMountedBrowserResourceIds] = React.useState<
+    readonly `browser:${string}`[]
+  >([])
   React.useEffect(() => {
     setMountedTerminalModes({
       runtime: selectedAgent?.interfaceMode === 'terminal' && tab === 'chat',
@@ -153,6 +162,20 @@ export function SelectedAgentPane({
       ? current
       : { ...current, [visibleTerminalMode]: true })
   }, [visibleTerminalMode])
+  React.useEffect(() => {
+    if (tab !== 'browser' || !selectedBrowserResource) return
+    setMountedBrowserResourceIds((current) =>
+      current.includes(selectedBrowserResource.id)
+        ? current
+        : [...current, selectedBrowserResource.id])
+  }, [selectedBrowserResource, tab])
+  React.useEffect(() => {
+    const available = new Set(browserResources.map((resource) => resource.id))
+    setMountedBrowserResourceIds((current) => {
+      const next = current.filter((resourceId) => available.has(resourceId))
+      return next.length === current.length ? current : next
+    })
+  }, [browserResources])
   const refreshDetail = React.useCallback(async () => {
     if (!selectedAgent) return
     await detailQuery.refetch()
@@ -240,7 +263,7 @@ export function SelectedAgentPane({
           olderHistoryPending={olderHistoryPending}
           onLoadOlderHistory={loadOlderHistory}
         />
-      ) : agent && (tab === 'terminal' || (tab === 'chat' && chatUsesTerminal)) ? null : !agent ? (
+      ) : agent && (tab === 'terminal' || (tab === 'chat' && chatUsesTerminal)) ? null : tab === 'browser' ? null : !agent ? (
         <EmptySessionPanel
           project={selectedProject}
           startSessionKey={startSessionKey}
@@ -275,6 +298,15 @@ export function SelectedAgentPane({
           visible={visibleTerminalMode === 'shell'}
         />
       ) : null}
+      {browserResources
+        .filter((resource) => mountedBrowserResourceIds.includes(resource.id))
+        .map((resource) => (
+          <BrowserPanel
+            key={`browser-${resource.browserId}`}
+            resource={resource}
+            visible={tab === 'browser' && selectedBrowserResource?.id === resource.id}
+          />
+        ))}
     </aside>
   )
 }

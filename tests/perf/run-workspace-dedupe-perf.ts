@@ -59,7 +59,7 @@ function buildSnapshot(tick: number, churning: boolean): WorkspaceSnapshot {
       theme: { mode: 'dark', name: 'kiri' },
       keymap: {
         projectPrev: 'k', projectNext: 'j', agentPrev: 'h', agentNext: 'l',
-        focusChat: 'i', openTerminal: 't', openScratchpad: 's',
+        focusChat: 'i', openTerminal: 't', openBrowser: 'b', openScratchpad: 's',
         startSession: 'n', deleteSession: 'backspace', toggleTerminalFocus: 'f',
       },
       chatTypography: { fontSize: 'comfortable', monoFont: 'fira' },

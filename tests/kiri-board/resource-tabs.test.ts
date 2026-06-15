@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentCell, ProjectRow } from '~/lib/contracts'
 import {
+  ensureBrowserResource,
   ensureTerminalResource,
   insertAgentResource,
   moveProjectResource,
@@ -30,6 +31,7 @@ describe('resource tabs', () => {
         activeResourceId: 'scratchpad',
         order: ['scratchpad', 'agent:a2', 'agent:a1'],
         terminals: [],
+        browsers: [],
       },
     })
 
@@ -48,6 +50,7 @@ describe('resource tabs', () => {
         title: 'server',
         purpose: { kind: 'manual' },
       }],
+      browsers: [],
     }
 
     expect(insertAgentResource({ layout, agentId: 'a2' })).toMatchObject({
@@ -69,6 +72,7 @@ describe('resource tabs', () => {
           title: 'server',
           purpose: { kind: 'manual' },
         }],
+        browsers: [],
       },
     })
 
@@ -87,6 +91,7 @@ describe('resource tabs', () => {
         title: 'server',
         purpose: { kind: 'manual' },
       }],
+      browsers: [],
     }
     const moved = moveProjectResource({ layout, resourceId: 'terminal:t1', toIndex: 2 })
     const reconciled = reconcileProjectResources({
@@ -107,6 +112,7 @@ describe('resource tabs', () => {
       activeResourceId: 'agent:a1',
       order: ['agent:a1'],
       terminals: [],
+      browsers: [],
     }
 
     const first = ensureTerminalResource({ layout, terminalId: 'term-1', title: 'server' })
@@ -120,6 +126,34 @@ describe('resource tabs', () => {
       terminalId: 'term-1',
       title: 'server',
       purpose: { kind: 'manual' },
+    }])
+    expect(second.resourceId).toBe(first.resourceId)
+  })
+
+  it('creates and reuses browser resources', () => {
+    const layout: ProjectResourceLayout = {
+      activeResourceId: 'agent:a1',
+      order: ['agent:a1'],
+      terminals: [],
+      browsers: [],
+    }
+
+    const first = ensureBrowserResource({
+      layout,
+      browserId: 'browser-1',
+      title: 'docs',
+      url: 'https://example.com',
+    })
+    const second = ensureBrowserResource({ layout: first.layout })
+
+    expect(first.resourceId).toBe('browser:browser-1')
+    expect(first.layout.order).toEqual(['agent:a1', 'browser:browser-1'])
+    expect(first.layout.browsers).toEqual([{
+      id: 'browser:browser-1',
+      kind: 'browser',
+      browserId: 'browser-1',
+      title: 'docs',
+      url: 'https://example.com',
     }])
     expect(second.resourceId).toBe(first.resourceId)
   })

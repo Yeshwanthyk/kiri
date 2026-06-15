@@ -503,6 +503,7 @@
 }
 
 .resource-stage .chat-panel,
+.resource-stage .browser-panel,
 .resource-stage .terminal-panel,
 .resource-stage .terminal-workspace,
 .resource-stage .scratchpad-panel {
@@ -855,12 +856,124 @@
 }
 
 .chat-panel,
+.browser-panel,
 .terminal-panel {
   display: flex;
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
+}
+
+.browser-panel {
+  background: var(--panel);
+}
+
+.browser-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  flex: 0 0 auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 50px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--line-subtle);
+  background: color-mix(in oklab, var(--panel) 86%, var(--paper));
+}
+
+.browser-nav-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.browser-nav-actions button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    color 150ms cubic-bezier(0.2, 0, 0, 1),
+    transform 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.browser-nav-actions button:hover:not(:disabled),
+.browser-nav-actions button:focus-visible {
+  outline: none;
+  border-color: var(--accent-muted);
+  color: var(--ink);
+}
+
+.browser-nav-actions button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.browser-nav-actions button:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.browser-omnibar {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  height: 32px;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.browser-omnibar:focus-within {
+  border-color: var(--accent-muted);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 12%, transparent);
+}
+
+.browser-omnibar img {
+  width: 14px;
+  height: 14px;
+}
+
+.browser-omnibar .lucide-loader-circle {
+  animation: browser-spin 900ms linear infinite;
+}
+
+.browser-omnibar input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.browser-view-anchor {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--panel);
+}
+
+.browser-fallback {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  place-items: center;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+@keyframes browser-spin {
+  to { transform: rotate(360deg); }
 }
 
 .terminal-panel {

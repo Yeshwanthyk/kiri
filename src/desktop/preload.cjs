@@ -23,4 +23,19 @@ contextBridge.exposeInMainWorld('kiriHost', {
     ipcRenderer.on('kiri:menu-action', listener)
     return () => ipcRenderer.removeListener('kiri:menu-action', listener)
   },
+  browser: {
+    create: (browserId, url) => ipcRenderer.send('kiri:browser:create', browserId, url),
+    setBounds: (browserId, bounds) => ipcRenderer.send('kiri:browser:set-bounds', browserId, bounds),
+    navigate: (browserId, url) => ipcRenderer.send('kiri:browser:navigate', browserId, url),
+    goBack: (browserId) => ipcRenderer.send('kiri:browser:go-back', browserId),
+    goForward: (browserId) => ipcRenderer.send('kiri:browser:go-forward', browserId),
+    reload: (browserId) => ipcRenderer.send('kiri:browser:reload', browserId),
+    stop: (browserId) => ipcRenderer.send('kiri:browser:stop', browserId),
+    destroy: (browserId) => ipcRenderer.send('kiri:browser:destroy', browserId),
+    onState: (handler) => {
+      const listener = (_event, state) => handler(state)
+      ipcRenderer.on('kiri:browser:state', listener)
+      return () => ipcRenderer.removeListener('kiri:browser:state', listener)
+    },
+  },
 })

@@ -3,6 +3,7 @@ import {
   Eye,
   EyeOff,
   FolderOpen,
+  Globe2,
   NotebookPen,
   Plus,
   Settings2,
@@ -28,6 +29,8 @@ type BoardCommandActionsInput = {
   selectProject: (projectId: string) => void
   selectAgent: (projectId: string, agentId: string) => void
   openTerminalResource: () => void
+  openBrowserResource: () => void
+  browserAvailable: boolean
   openScratchpadResource: () => void
   closeCommandPalette: () => void
 }
@@ -47,6 +50,8 @@ export function buildBoardCommandActions(input: BoardCommandActionsInput): Comma
     selectProject,
     selectAgent,
     openTerminalResource,
+    openBrowserResource,
+    browserAvailable,
     openScratchpadResource,
     closeCommandPalette,
   } = input
@@ -89,6 +94,17 @@ export function buildBoardCommandActions(input: BoardCommandActionsInput): Comma
       run: () => {
         closeCommandPalette()
         openTerminalResource()
+      },
+    },
+    {
+      id: 'browser',
+      title: 'Open browser',
+      detail: browserAvailable ? 'Desktop browser resource' : 'Desktop only',
+      icon: Globe2,
+      disabled: !selectedProject || !browserAvailable,
+      run: () => {
+        closeCommandPalette()
+        openBrowserResource()
       },
     },
     {

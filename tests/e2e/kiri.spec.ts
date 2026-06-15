@@ -198,6 +198,25 @@ test('project arrows move through empty projects and focused scratchpad dialog',
   await expect.poll(() => activeLayoutProjectId(page)).toBe('e2e-kiri')
 })
 
+test('project arrows can return to the snapshot project after restoring stored layout', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'desktop board keymaps only')
+
+  await page.evaluate(() => {
+    window.localStorage.setItem('kiri:resource-layout:v1', JSON.stringify({
+      activeProjectId: 'test-reference',
+      projects: {},
+    }))
+  })
+  await page.reload()
+  await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
+  await expect(page.getByTestId('selected-project')).toContainText('Test Reference')
+  await expect.poll(() => activeLayoutProjectId(page)).toBe('test-reference')
+
+  await pressMetaKeyFromFocus(page, 'ArrowUp')
+  await expect(page.getByTestId('selected-project')).toContainText(/kiri/i)
+  await expect.poll(() => activeLayoutProjectId(page)).toBe('e2e-kiri')
+})
+
 test('scratchpad shortcut toggles floating panel', async ({ page, isMobile }) => {
   test.skip(isMobile, 'desktop board keymaps only')
 
