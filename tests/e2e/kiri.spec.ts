@@ -284,24 +284,25 @@ test('start and remove session with keymaps', async ({ page }, testInfo) => {
 
 test('resource tabs reorder by keyboard and mouse drag', async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, 'desktop drag flow only')
-  const title = `Movable Resource ${testInfo.project.name}`
+  const firstTitle = `Movable First ${testInfo.project.name}`
+  const secondTitle = `Movable Second ${testInfo.project.name}`
 
   await page.goto('/')
-  await createSession(page, title)
-  await openTerminalResource(page)
-  await expect.poll(() => resourceTabOrder(page)).toEqual([title, 'terminal'])
+  await createSession(page, firstTitle)
+  await createSession(page, secondTitle)
+  await expect.poll(() => resourceTabOrder(page)).toEqual([firstTitle, secondTitle])
 
   await pressMetaShiftKey(page, 'ArrowLeft')
-  await expect.poll(() => resourceTabOrder(page)).toEqual(['terminal', title])
+  await expect.poll(() => resourceTabOrder(page)).toEqual([secondTitle, firstTitle])
 
-  const terminalTab = page
+  const secondTab = page
     .locator('.resource-tab-shell')
-    .filter({ has: page.getByRole('tab', { name: 'terminal' }) })
-  const agentTab = page
+    .filter({ has: page.getByRole('tab', { name: secondTitle }) })
+  const firstTab = page
     .locator('.resource-tab-shell')
-    .filter({ has: page.getByRole('tab', { name: title }) })
-  await terminalTab.dragTo(agentTab)
-  await expect.poll(() => resourceTabOrder(page)).toEqual([title, 'terminal'])
+    .filter({ has: page.getByRole('tab', { name: firstTitle }) })
+  await secondTab.dragTo(firstTab)
+  await expect.poll(() => resourceTabOrder(page)).toEqual([firstTitle, secondTitle])
 })
 
 test('agent resource tabs expose a close control', async ({ page, isMobile }, testInfo) => {
@@ -1281,13 +1282,10 @@ async function createSession(
 }
 
 async function openTerminalResource(page: import('@playwright/test').Page) {
-  const existingTerminal = page.getByTestId('resource-tab-terminal').first()
-  if (await existingTerminal.isVisible().catch(() => false)) {
-    await existingTerminal.click()
-  } else {
-    await page.getByRole('button', { name: 'Open terminal resource' }).click()
-  }
+  await expect(page.getByTestId('resource-tab-terminal')).toHaveCount(0)
+  await page.getByTestId('resource-terminal-action').click()
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-active-resource-kind', 'terminal')
+  await expect(page.getByTestId('resource-terminal-action')).toHaveAttribute('data-active', 'true')
 }
 
 async function openProjectsPage(page: import('@playwright/test').Page) {

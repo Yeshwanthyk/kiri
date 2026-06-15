@@ -229,6 +229,28 @@
   color: var(--ink);
 }
 
+.resource-add-actions button[data-active='true'] {
+  border-color: color-mix(in oklab, var(--warn) 28%, var(--accent-muted));
+  background: color-mix(in oklab, var(--panel) 84%, var(--accent-soft));
+  color: var(--ink);
+}
+
+.resource-add-actions button[data-active='true']:hover {
+  background: color-mix(in oklab, var(--panel-2) 86%, var(--accent-soft));
+}
+
+.resource-action-icon {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.resource-terminal-dot {
+  background: var(--warn);
+}
+
 .resource-add-actions button:disabled {
   opacity: 0.42;
   cursor: default;

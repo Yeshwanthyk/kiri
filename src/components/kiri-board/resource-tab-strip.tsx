@@ -31,6 +31,8 @@ export function ResourceTabStrip({
   onOpenScratchpad,
   onStartSession,
 }: ResourceTabStripProps) {
+  const tabResources = resources.filter((resource): resource is AgentResource => resource.kind === 'agent')
+  const terminalActive = activeResourceId?.startsWith('terminal:') ?? false
   const stripRef = React.useRef<HTMLDivElement | null>(null)
   const dragRef = React.useRef<{
     readonly pointerId: number
@@ -149,7 +151,7 @@ export function ResourceTabStrip({
         role="tablist"
         aria-label="Project resources"
       >
-        {resources.map((resource) => {
+        {tabResources.map((resource) => {
           const label = resourceLabel(resource, agentTitles)
           const dragging = resource.id === draggingResourceId
           const dropTarget = resource.id === dropTargetResourceId && resource.id !== draggingResourceId
@@ -236,9 +238,14 @@ export function ResourceTabStrip({
           type="button"
           onClick={onAddTerminal}
           aria-label="Open terminal resource"
+          aria-pressed={terminalActive}
+          data-active={terminalActive ? 'true' : 'false'}
+          data-testid="resource-terminal-action"
           disabled={terminalDisabled}
         >
-          <Plus size={14} aria-hidden="true" />
+          <span className="resource-action-icon" aria-hidden="true">
+            {terminalActive ? <span className="resource-dot resource-terminal-dot" /> : <Plus size={14} />}
+          </span>
           terminal
         </button>
         <button type="button" onClick={onOpenScratchpad} aria-label="Open scratchpad">

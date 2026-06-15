@@ -291,6 +291,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     },
     onMoveActiveResource: (delta) => {
       if (!selectedProject || !projectResources.activeProjectResources || !activeResourceId) return
+      if (activeResource?.kind === 'terminal') return
       const index = projectResources.activeProjectResources.resources.findIndex((resource) =>
         resource.id === activeResourceId)
       const nextIndex = index + delta

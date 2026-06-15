@@ -91,7 +91,7 @@ export function useBoardKeyboardShortcuts({
 
     function onKeyDown(event: KeyboardEvent) {
       const key = event.key.toLowerCase()
-      if (event.metaKey) setCornerPeekHeld(true)
+      if (event.metaKey && isArrowKey(key)) setCornerPeekHeld(true)
       if ((event.metaKey || event.ctrlKey) && key === 'k') {
         event.preventDefault()
         setSettingsOpen(false)
@@ -252,6 +252,10 @@ export function useBoardKeyboardShortcuts({
     setTerminalFocusRequest,
     visibleTerminalSelected,
   ])
+}
+
+function isArrowKey(key: string) {
+  return key === 'arrowup' || key === 'arrowdown' || key === 'arrowleft' || key === 'arrowright'
 }
 
 function isTerminalHelperTarget(target: EventTarget | null) {

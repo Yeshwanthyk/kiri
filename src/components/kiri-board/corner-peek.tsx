@@ -63,6 +63,8 @@ export function CornerPeek({
         <div className="corner-peek-projects">
           {projects.map((project) => {
             const projectResources = resourcesByProject[project.id]
+            const visibleResources = (projectResources?.resources ?? []).filter((resource) =>
+              resource.kind === 'agent')
             const selected = project.id === selectedProjectId
             return (
               <div
@@ -82,7 +84,7 @@ export function CornerPeek({
                   <small>{project.agents.length}</small>
                 </button>
                 <div className="corner-peek-resources" aria-label={`${project.name} resources`}>
-                  {(projectResources?.resources ?? []).map((resource) => (
+                  {visibleResources.map((resource) => (
                     <button
                       key={resource.id}
                       type="button"
