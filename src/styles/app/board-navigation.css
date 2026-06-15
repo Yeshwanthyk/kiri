@@ -10,8 +10,10 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  overflow-x: hidden;
+  height: 100svh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
   background: var(--paper);
 }
 
@@ -19,9 +21,11 @@
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
-  min-height: 100vh;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   padding: 14px 16px 16px;
   gap: 10px;
 }

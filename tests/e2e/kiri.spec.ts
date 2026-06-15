@@ -581,10 +581,36 @@ test('chat timeline selection and new-content indicator stay stable', async ({ p
   await page.keyboard.press('ArrowDown')
   await expect(page.locator('.timeline-row[aria-current="true"]')).toHaveCount(0)
 
+  const inputBeforeScroll = await page.getByTestId('chat-input').boundingBox()
+  if (!inputBeforeScroll) throw new Error('Chat input was not visible before timeline scroll')
+  await page.evaluate(() => window.scrollTo(0, 400))
+  await expect.poll(() => page.evaluate(() => document.scrollingElement?.scrollTop ?? 0)).toBe(0)
   await page.locator('.message-list').evaluate((list) => {
     list.scrollTop = 0
     list.dispatchEvent(new Event('scroll', { bubbles: true }))
   })
+  const inputAfterScroll = await page.getByTestId('chat-input').boundingBox()
+  if (!inputAfterScroll) throw new Error('Chat input was not visible after timeline scroll')
+  const inputBottomBeforeScroll = inputBeforeScroll.y + inputBeforeScroll.height
+  const inputBottomAfterScroll = inputAfterScroll.y + inputAfterScroll.height
+  expect(Math.abs(inputBottomAfterScroll - inputBottomBeforeScroll)).toBeLessThanOrEqual(2)
+  const viewport = page.viewportSize()
+  if (!viewport) throw new Error('Missing Playwright viewport')
+  expect(inputAfterScroll.y).toBeGreaterThanOrEqual(0)
+  expect(inputBottomAfterScroll).toBeLessThanOrEqual(viewport.height + 1)
+  const documentScroll = await page.evaluate(() => {
+    const scrollingElement = document.scrollingElement
+    if (!scrollingElement) return null
+    return {
+      scrollTop: scrollingElement.scrollTop,
+      scrollHeight: scrollingElement.scrollHeight,
+      clientHeight: scrollingElement.clientHeight,
+    }
+  })
+  if (!documentScroll) throw new Error('Missing document scrolling element')
+  expect(documentScroll.scrollTop).toBe(0)
+  expect(documentScroll.scrollHeight).toBeLessThanOrEqual(documentScroll.clientHeight + 1)
+
   await page.getByTestId('chat-input').fill('new content while reading older messages')
   await page.getByRole('button', { name: 'Send prompt' }).click()
   await expect(page.getByRole('button', { name: 'Jump to latest messages' })).toBeVisible()

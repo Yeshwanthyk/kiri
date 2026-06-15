@@ -387,32 +387,34 @@ export function ChatPanel({
           </button>
         ) : null}
       </div>
-      {error ? <span className="chat-error" role="status">{error}</span> : null}
-      {agent.pendingQuestion ? (
-        <PendingQuestionPanel
-          pendingQuestion={agent.pendingQuestion}
-          onAnswer={async (answers) => {
-            setError(null)
-            try {
-              await onAnswerQuestion(agent.id, agent.pendingQuestion!.requestId, answers)
-            } catch (cause) {
-              setError(errorMessage(cause))
-            }
-          }}
+      <div className="composer-dock">
+        {error ? <span className="chat-error" role="status">{error}</span> : null}
+        {agent.pendingQuestion ? (
+          <PendingQuestionPanel
+            pendingQuestion={agent.pendingQuestion}
+            onAnswer={async (answers) => {
+              setError(null)
+              try {
+                await onAnswerQuestion(agent.id, agent.pendingQuestion!.requestId, answers)
+              } catch (cause) {
+                setError(errorMessage(cause))
+              }
+            }}
+          />
+        ) : null}
+        <ChatComposer
+          agentId={agent.id}
+          contextUsage={agent.contextUsage}
+          focusRequest={focusRequest}
+          isBackendRunning={isBackendRunning}
+          isRunning={isRunning}
+          pending={pending}
+          onError={setError}
+          onInterrupt={interrupt}
+          onSubmitPrompt={submitPrompt}
+          onEmptyChange={setComposerEmpty}
         />
-      ) : null}
-      <ChatComposer
-        agentId={agent.id}
-        contextUsage={agent.contextUsage}
-        focusRequest={focusRequest}
-        isBackendRunning={isBackendRunning}
-        isRunning={isRunning}
-        pending={pending}
-        onError={setError}
-        onInterrupt={interrupt}
-        onSubmitPrompt={submitPrompt}
-        onEmptyChange={setComposerEmpty}
-      />
+      </div>
     </div>
   )
 }
