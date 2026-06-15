@@ -1,6 +1,6 @@
 ---
 name: kiri-control
-description: Use the compact Kiri MCP/CLI operation surface to deterministically list models, manage projects, manage scratchpad blocks, spawn or steer sessions, drive terminal sessions, and run durable workflows from this repo.
+description: Use the compact Kiri MCP/CLI operation surface to deterministically list models, manage projects, rename Kiri-launched sessions, manage scratchpad blocks, spawn or steer sessions, drive terminal sessions, and run durable workflows from this repo.
 ---
 
 # kiri Control
@@ -223,6 +223,6 @@ Archive completed or obsolete runs with `workflow.archive`; archived runs are re
 - Session identity is `agentId`.
 - `session.archive` archives the session; `session.restore` brings it back.
 - Workflow identity is `id`; workflow item identity is `itemId`.
-- Keep Kiri session titles meaningful. If a session is generic or stale, list sessions and call `session.rename`.
+- Keep Kiri session titles meaningful. In a Kiri-launched terminal, prefer `$KIRI_AGENT_ID`; if absent, list sessions and call `session.rename` for the current/relevant session only.
 - Run `pnpm build` after code or contract changes.
 - Run `pnpm kiri:agent-harness` after CLI or skill changes.
