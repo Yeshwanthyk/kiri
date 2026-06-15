@@ -168,13 +168,21 @@ function mergeSettings(base: unknown, override: unknown): unknown {
   for (const [runtime, overrideRuntime] of Object.entries(override.runtimes)) {
     const baseRuntime = isRecord(runtimes[runtime]) ? runtimes[runtime] : {}
     const runtimePatch = isRecord(overrideRuntime) ? overrideRuntime : {}
-    const models = Object.hasOwn(runtimePatch, 'models')
+    const replacesModels = Object.hasOwn(runtimePatch, 'models')
+    const models = replacesModels
       ? uniqueStrings(arrayValue(runtimePatch.models))
       : arrayValue(baseRuntime.models)
+    const defaultModel = mergedDefaultModel({
+      baseRuntime,
+      models,
+      replacesModels,
+      runtimePatch,
+    })
     runtimes[runtime] = {
       ...baseRuntime,
       ...runtimePatch,
       models,
+      defaultModel,
       contextWindows: {
         ...(isRecord(baseRuntime.contextWindows) ? baseRuntime.contextWindows : {}),
         ...(isRecord(runtimePatch.contextWindows) ? runtimePatch.contextWindows : {}),
@@ -199,6 +207,23 @@ function arrayValue(value: unknown) {
 
 function uniqueStrings(values: readonly string[]) {
   return [...new Set(values)]
+}
+
+function mergedDefaultModel(input: {
+  readonly baseRuntime: Record<string, unknown>
+  readonly models: readonly string[]
+  readonly replacesModels: boolean
+  readonly runtimePatch: Record<string, unknown>
+}) {
+  if (Object.hasOwn(input.runtimePatch, 'defaultModel')) return input.runtimePatch.defaultModel
+  const baseDefaultModel = input.baseRuntime.defaultModel
+  if (
+    typeof baseDefaultModel === 'string'
+    && (!input.replacesModels || input.models.includes(baseDefaultModel))
+  ) {
+    return baseDefaultModel
+  }
+  return input.models[0]
 }
 
 function validateSettings(settings: KiriSettings) {

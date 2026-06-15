@@ -179,13 +179,41 @@ describe('settings service', () => {
     )).toThrow()
   })
 
-  it('rejects replaced user model lists when the default model is not included', () => {
+  it('uses the first user model as default when user settings replace models without a default', () => {
     const files = new Map([
       ['/repo/settings.json', validSettingsJson],
       ['/state/settings.json', JSON.stringify({
         runtimes: {
           pi: {
             models: ['deepseek/deepseek-v4-flash'],
+          },
+        },
+      })],
+    ])
+
+    const settings = loadSettings(
+      '/repo/settings.json',
+      (path) => {
+        const value = files.get(path)
+        if (value === undefined) throw new Error(`missing ${path}`)
+        return value
+      },
+      '/state/settings.json',
+      (path) => files.has(path),
+    )
+
+    expect(settings.runtimes.pi.defaultModel).toBe('deepseek/deepseek-v4-flash')
+    expect(settings.runtimes.pi.models).toEqual(['deepseek/deepseek-v4-flash'])
+  })
+
+  it('rejects explicit user defaults missing from replaced model lists', () => {
+    const files = new Map([
+      ['/repo/settings.json', validSettingsJson],
+      ['/state/settings.json', JSON.stringify({
+        runtimes: {
+          pi: {
+            models: ['deepseek/deepseek-v4-flash'],
+            defaultModel: 'pi-default',
           },
         },
       })],
