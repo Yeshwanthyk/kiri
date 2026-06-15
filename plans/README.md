@@ -41,6 +41,29 @@ the measured result, e.g. asar size delta for 008).
   and the `verify:desktop:package` gate.
 - 002, 003, 004, 005, 006 are mutually independent.
 
+## Browser keymap & terminal sync (2026-06-15)
+
+Separate from the perf/RAM audit above — these came out of the
+corner-peek-shell browser work and the terminal PTY-respawn investigation
+(commit `297e31e`). Different category (bugfix/architecture), tracked here for
+discoverability.
+
+| Plan | Title | Priority | Effort | Risk | Depends on | Status |
+|---|---|---|---|---|---|---|
+| [009](009-browser-keymap-forwarding.md) | Forward board keymap chords from the focused browser view | P1 | M | MED | — | TODO |
+| [010](010-terminal-respawn-tactical-fix.md) | Stop duplicate PTY spawns; auto-reattach renderer on respawn | P1 | M | MED | — | TODO |
+| [011](011-event-based-terminal-sync.md) | Subscribe-to-key terminal sync with respawn-as-an-event | P2 | L | MED-HIGH | 010 (soft) | TODO |
+
+Order: **009** first (contained, ships the cmd+arrow-over-browser fix). **010**
+is the urgent terminal bugfix (spawn dedup + renderer reattach). **011** is the
+event-based rework that supersedes 010's client reconnect and also fixes the
+MCP polling/divergence at the source; schedule as a deliberate follow-up.
+
+- **010 → 011 (soft)**: 010 stops the data loss now with a tiny diff; 011 is the
+  correct architecture. 011 removes 010's client reconnect shim (keeps spawn
+  dedup). Do 010 first unless committing to 011 immediately.
+- 009 is independent of 010/011 (different subsystem).
+
 ## Findings considered and rejected
 
 Recorded so future audits don't re-litigate them:
