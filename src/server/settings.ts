@@ -168,13 +168,13 @@ function mergeSettings(base: unknown, override: unknown): unknown {
   for (const [runtime, overrideRuntime] of Object.entries(override.runtimes)) {
     const baseRuntime = isRecord(runtimes[runtime]) ? runtimes[runtime] : {}
     const runtimePatch = isRecord(overrideRuntime) ? overrideRuntime : {}
+    const models = Object.hasOwn(runtimePatch, 'models')
+      ? uniqueStrings(arrayValue(runtimePatch.models))
+      : arrayValue(baseRuntime.models)
     runtimes[runtime] = {
       ...baseRuntime,
       ...runtimePatch,
-      models: uniqueStrings([
-        ...arrayValue(baseRuntime.models),
-        ...arrayValue(runtimePatch.models),
-      ]),
+      models,
       contextWindows: {
         ...(isRecord(baseRuntime.contextWindows) ? baseRuntime.contextWindows : {}),
         ...(isRecord(runtimePatch.contextWindows) ? runtimePatch.contextWindows : {}),

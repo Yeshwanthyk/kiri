@@ -77,6 +77,7 @@ describe('settings service', () => {
     }))
 
     expect(settings.runtimes.opencode.defaultModel).toBe('opencode/gpt-5.5')
+    expect(settings.runtimes.pi.models).toEqual(['pi-default'])
   })
 
   it.effect('returns runtime settings from injected readers', () =>
@@ -92,13 +93,45 @@ describe('settings service', () => {
     }),
   )
 
-  it('merges user runtime settings additively over bundled settings', () => {
+  it('replaces bundled runtime models with user-provided runtime models', () => {
     const files = new Map([
       ['/repo/settings.json', validSettingsJson],
       ['/state/settings.json', JSON.stringify({
         runtimes: {
           pi: {
             models: ['deepseek/deepseek-v4-flash'],
+            defaultModel: 'deepseek/deepseek-v4-flash',
+            contextWindows: { 'deepseek/deepseek-v4-flash': 1_000_000 },
+          },
+        },
+      })],
+    ])
+
+    const settings = loadSettings(
+      '/repo/settings.json',
+      (path) => {
+        const value = files.get(path)
+        if (value === undefined) throw new Error(`missing ${path}`)
+        return value
+      },
+      '/state/settings.json',
+      (path) => files.has(path),
+    )
+
+    expect(settings.runtimes.pi.defaultModel).toBe('deepseek/deepseek-v4-flash')
+    expect(settings.runtimes.pi.models).toEqual(['deepseek/deepseek-v4-flash'])
+    expect(settings.runtimes.pi.contextWindows?.['deepseek/deepseek-v4-flash']).toBe(1_000_000)
+    expect(settings.runtimes.pi.contextWindows?.['pi-default']).toBe(1000)
+    expect(settings.runtimes.pi.interfaceModes).toEqual(['terminal'])
+    expect(settings.runtimes.pi.defaultInterfaceMode).toBe('terminal')
+  })
+
+  it('falls back to bundled runtime models when user settings omit models', () => {
+    const files = new Map([
+      ['/repo/settings.json', validSettingsJson],
+      ['/state/settings.json', JSON.stringify({
+        runtimes: {
+          pi: {
             contextWindows: { 'deepseek/deepseek-v4-flash': 1_000_000 },
           },
         },
@@ -117,14 +150,57 @@ describe('settings service', () => {
     )
 
     expect(settings.runtimes.pi.defaultModel).toBe('pi-default')
-    expect(settings.runtimes.pi.models).toEqual([
-      'pi-default',
-      'pi-alt',
-      'deepseek/deepseek-v4-flash',
-    ])
+    expect(settings.runtimes.pi.models).toEqual(['pi-default', 'pi-alt'])
     expect(settings.runtimes.pi.contextWindows?.['deepseek/deepseek-v4-flash']).toBe(1_000_000)
-    expect(settings.runtimes.pi.interfaceModes).toEqual(['terminal'])
-    expect(settings.runtimes.pi.defaultInterfaceMode).toBe('terminal')
+  })
+
+  it('rejects explicit empty user model lists', () => {
+    const files = new Map([
+      ['/repo/settings.json', validSettingsJson],
+      ['/state/settings.json', JSON.stringify({
+        runtimes: {
+          pi: {
+            models: [],
+            defaultModel: 'pi-default',
+          },
+        },
+      })],
+    ])
+
+    expect(() => loadSettings(
+      '/repo/settings.json',
+      (path) => {
+        const value = files.get(path)
+        if (value === undefined) throw new Error(`missing ${path}`)
+        return value
+      },
+      '/state/settings.json',
+      (path) => files.has(path),
+    )).toThrow()
+  })
+
+  it('rejects replaced user model lists when the default model is not included', () => {
+    const files = new Map([
+      ['/repo/settings.json', validSettingsJson],
+      ['/state/settings.json', JSON.stringify({
+        runtimes: {
+          pi: {
+            models: ['deepseek/deepseek-v4-flash'],
+          },
+        },
+      })],
+    ])
+
+    expect(() => loadSettings(
+      '/repo/settings.json',
+      (path) => {
+        const value = files.get(path)
+        if (value === undefined) throw new Error(`missing ${path}`)
+        return value
+      },
+      '/state/settings.json',
+      (path) => files.has(path),
+    )).toThrow('settings.json pi.defaultModel must be listed in pi.models')
   })
 
   it('allows user settings to opt Pi back into GUI launches', () => {
