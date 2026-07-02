@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { openKiriDatabase } from '../../src/server/db/connection'
 import { insertProject } from '../../src/server/db/projects'
@@ -227,6 +227,81 @@ describe('session repository', () => {
     }
   })
 
+  it('retries generated session ids after a primary-key collision', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-id-retry-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    const collisionRandom = 0.123456789
+    const retryRandom = 0.987654321
+    const collisionSuffix = suffixFromRandom(collisionRandom)
+    const retrySuffix = suffixFromRandom(retryRandom)
+    const randomSpy = vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(collisionRandom)
+      .mockReturnValueOnce(retryRandom)
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      insertSessionRow(database, {
+        projectId,
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, 'sessions', slot),
+        slotTimestampMs: () => 20,
+        slotSuffix: () => collisionSuffix,
+      })
+
+      const retriedId = insertSessionRow(database, {
+        projectId,
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, 'sessions', slot),
+        slotTimestampMs: () => 20,
+      })
+
+      expect(retriedId).toBe(`${projectId}-session-k-${retrySuffix}`)
+      expect(randomSpy).toHaveBeenCalledTimes(2)
+      expect(database.prepare('SELECT COUNT(*) AS count FROM agent_slots').get()).toEqual({
+        count: 2,
+      })
+    } finally {
+      randomSpy.mockRestore()
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not retry caller-forced session id collisions', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-id-forced-collision-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const input = {
+        projectId,
+        runtime: 'pi' as const,
+        interfaceMode: 'gui' as const,
+        model: 'test-model',
+        sessionDirForSlot: (slot: string) => join(root, 'sessions', slot),
+        slotTimestampMs: () => 21,
+        slotSuffix: () => 'aaaaaa',
+      }
+      insertSessionRow(database, input)
+
+      expect(() => insertSessionRow(database, input)).toThrow(/UNIQUE constraint failed|constraint/i)
+      expect(database.prepare('SELECT COUNT(*) AS count FROM agent_slots').get()).toEqual({
+        count: 1,
+      })
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('rolls back archive failures and compacts session positions on success', () => {
     const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-archive-rollback-'))
     const cwd = join(root, 'project')
@@ -439,4 +514,8 @@ function sessionPositions(database: ReturnType<typeof openKiriDatabase>) {
   return database
     .prepare('SELECT id, archived_at AS archivedAt, position FROM agent_slots ORDER BY position ASC, id ASC')
     .all() as Array<{ id: string; archivedAt: string | null; position: number }>
+}
+
+function suffixFromRandom(value: number) {
+  return value.toString(36).slice(2, 8)
 }

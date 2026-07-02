@@ -112,53 +112,82 @@ export function insertSessionRow(database: DatabaseSync, input: InsertSessionInp
   const nextPosition = database
     .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM agent_slots WHERE project_id = ?')
     .get(projectId) as { position: number }
-  const suffix = input.slotSuffix?.() ?? Math.random().toString(36).slice(2, 8)
-  const slot = `session-${(input.slotTimestampMs?.() ?? Date.now()).toString(36)}-${suffix}`
-  const id = `${projectId}-${slot}`
   const title = input.title?.trim() || `Session ${nextPosition.position + 1}`
-  const now = input.now?.() ?? new Date().toISOString()
-  const sessionDir = input.sessionDirForSlot(slot)
 
-  withTransaction(database, () => {
-    database
-      .prepare(
-        `
-          INSERT INTO agent_slots (
-            id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, position
+  let lastCollision: unknown
+  const maxAttempts = input.slotSuffix ? 1 : 5
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const suffix = input.slotSuffix?.() ?? randomSessionSlotSuffix()
+    const slot = `session-${(input.slotTimestampMs?.() ?? Date.now()).toString(36)}-${suffix}`
+    const id = `${projectId}-${slot}`
+    const now = input.now?.() ?? new Date().toISOString()
+    const sessionDir = input.sessionDirForSlot(slot)
+
+    try {
+      withTransaction(database, () => {
+        database
+          .prepare(
+            `
+              INSERT INTO agent_slots (
+                id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, position
+              )
+              VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, NULL, ?)
+            `,
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, NULL, ?)
-        `,
-      )
-      .run(
-        id,
-        projectId,
-        slot,
-        title,
-        input.runtime,
-        input.interfaceMode,
-        input.model,
-        sessionDir,
-        nextPosition.position,
-      )
-    database
-      .prepare(
-        `
-          INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
-          VALUES (?, ?, 1, 'Ready.', 0, ?)
-        `,
-      )
-      .run(`thread-${id}`, id, now)
-    insertAgentInfoEvent(database, {
-      agentId: id,
-      kind: 'thinking_level',
-      label: 'Thinking level changed',
-      detail: input.thinkingLevel,
-      timestamp: now,
-    })
-  })
+          .run(
+            id,
+            projectId,
+            slot,
+            title,
+            input.runtime,
+            input.interfaceMode,
+            input.model,
+            sessionDir,
+            nextPosition.position,
+          )
+        database
+          .prepare(
+            `
+              INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
+              VALUES (?, ?, 1, 'Ready.', 0, ?)
+            `,
+          )
+          .run(`thread-${id}`, id, now)
+        insertAgentInfoEvent(database, {
+          agentId: id,
+          kind: 'thinking_level',
+          label: 'Thinking level changed',
+          detail: input.thinkingLevel,
+          timestamp: now,
+        })
+      })
 
-  forgetPiHydrationStamp(id)
-  return id
+      return id
+    } catch (error) {
+      if (input.slotSuffix || !isSessionIdCollision(error)) throw normalizeInsertSessionError(error)
+      lastCollision = error
+    }
+  }
+
+  throw normalizeInsertSessionError(lastCollision)
+}
+
+function randomSessionSlotSuffix() {
+  return Math.random().toString(36).slice(2, 8)
+}
+
+function isSessionIdCollision(error: unknown) {
+  if (!(error instanceof Error)) return false
+  const code = 'code' in error ? String(error.code) : ''
+  return code.includes('SQLITE_CONSTRAINT') ||
+    /UNIQUE constraint failed: agent_slots\.id|PRIMARY KEY/i.test(error.message)
+}
+
+function normalizeInsertSessionError(error: unknown) {
+  if (error instanceof Error) return error
+  if (error === undefined) return new Error('Session id collision retry exhausted')
+  if (typeof error === 'string') return new Error(error)
+  return new Error('Session insert failed', { cause: error })
 }
 
 export function assertSessionProjectExists(database: DatabaseSync, projectId: string) {
