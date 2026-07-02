@@ -153,12 +153,12 @@ resulting Claude task rows.
 | Plan | Title | Priority | Effort | Risk | Depends on | Status |
 |---|---|---|---|---|---|---|
 | [019](019-osc-agent-presence.md) | Terminal-stream agent presence via OSC 3008: hooks `printf` to their own tty, the server-side headless xterm parses per-PTY (deterministic status, zero process spawn, SSH-safe) | P2 | M | MED | soft: 014 (hook registration), 011 (daemon-mode delivery) | DONE (embedded; daemon projection deferred) |
-| [020](020-zmx-durable-terminal-sessions.md) | Durable terminal sessions via zmx (evaluate + prototype): wrap PTY launches in `zmx attach` so agents survive backend restart/crash; would supersede the kiriterm daemon on GO | P2 | L | MED-HIGH | coord 010/011/012 — land 012's A-KILL regardless | TODO |
+| [020](020-zmx-durable-terminal-sessions.md) | Durable terminal sessions via zmx (evaluate + prototype): wrap PTY launches in `zmx attach` so agents survive backend restart/crash; would supersede the kiriterm daemon on GO | P2 | L | MED-HIGH | coord 010/011/012 — land 012's A-KILL regardless | DONE (GO prototype; default/packaging follow-up) |
 
 - **020 is the strategic track, 012 the tactical one.** 012 is small and
-  relieves pain now; run 020's spike after (or alongside, different files).
-  If 020's decision gate is GO, a follow-up plan retires the kiriterm daemon
-  and 012's daemon-only steps (3/5/6).
+  relieves pain now. 020's opt-in prototype passed the real zmx reattach/send
+  smoke; a follow-up owns vendoring/packaging, making it default, orphan
+  reaping, and retiring the kiriterm daemon / 012 daemon-only steps (3/5/6).
 - **019 complements 014** rather than replacing it: OSC becomes the transport
   for the small, frequent status events; `kirictl` remains for SessionStart
   resume-binding and TodoWrite payloads. The shipped path is the new runtime

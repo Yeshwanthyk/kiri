@@ -315,6 +315,43 @@ Stop and report back (do not improvise) if:
   Zig binary is a bigger maintenance commitment; surface it as a decision
   input rather than quietly forking.
 
+## Completion notes (2026-07-02)
+
+Decision: **GO for opt-in prototype; default adoption is a follow-up**.
+
+- Built the actual `/tmp/zmx` source with `zig build -Doptimize=ReleaseSafe`.
+  The local binary reports `zmx 0.6.0`, `ghostty_vt
+  ghostty-1.3.2-dev-5UdBC8HuDgWFQtz8pKQ-0HH6z0Cb_PKbI0R7AunQhdDF`, and is a
+  1.7MB arm64 Mach-O.
+- Source/CLI checks changed the wrapper shape from the draft plan:
+  `zmx attach <name> [command...]` takes the inner command directly; there is
+  no `--` separator. `zmx list --short` is the stable name-only output for
+  lifecycle/reaper logic. `ctrl+\` remains the zmx detach key and is not
+  configurable in this version.
+- Added `src/server/zmx.ts`: opt-in resolution (`KIRI_ZMX=1`, optional
+  `KIRI_ZMX_BIN`), short deterministic `kiri-*` session names, real attach
+  argv builder, defensive list parsing, and shell-free `list`/`send`/`kill`
+  wrappers.
+- `terminal-server.ts` now wraps PTY launches in `zmx attach` only when the
+  spike flag resolves a binary. Without `KIRI_ZMX=1`, behavior is unchanged.
+  Lazy rejoin is provided by zmx's create-or-attach semantics: after backend
+  restart, the same Kiri registry key maps to the same zmx session name and
+  reattaches instead of creating a new inner command. Explicit
+  `closeAgentRuntime` also issues `zmx kill <name>` so session deletion means
+  the durable host dies too.
+- Real zmx smoke passed with the built binary and `node-pty`: create an
+  attached shell, kill the attach client, reattach with a different command
+  and observe replay without starting the new command, inject input via
+  `zmx send`, observe OSC 3008 passthrough, then `zmx kill` and confirm
+  `zmx list --short` is empty.
+- Remaining follow-up before making zmx default: vendor/package per-arch
+  binaries, run the browser-visible app matrix with `KIRI_ZMX=1`, add orphan
+  reaping for hard-deleted Kiri rows, decide how to present/document
+  `ctrl+\` detach, and delete/migrate the kiriterm daemon path.
+- Verification run:
+  `pnpm exec vitest run tests/server/zmx.test.ts tests/server/terminal-server.test.ts`
+  and `pnpm typecheck`.
+
 ## Maintenance notes
 
 - If GO: the follow-up plan owns deleting `kiriterm-daemon.ts`/

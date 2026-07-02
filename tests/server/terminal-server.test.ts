@@ -14,6 +14,7 @@ import {
 } from '~/server/terminal-server'
 import { readCodexHookSessionBinding } from '~/server/codex-terminal-session'
 import type { TerminalRegistrySession } from '~/server/terminal-registry'
+import { zmxSessionName } from '~/server/zmx'
 
 describe('terminal server', () => {
   afterEach(async () => {
@@ -359,6 +360,56 @@ describe('terminal server', () => {
       expect(resize).toHaveBeenCalledWith(132, 40)
     } finally {
       await service.close()
+    }
+  })
+
+  it('wraps terminal launches in zmx attach when the spike flag is enabled', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-zmx-bin-'))
+    const zmxBin = join(root, 'zmx')
+    writeFileSync(zmxBin, '#!/bin/sh\n')
+    chmodSync(zmxBin, 0o755)
+    vi.stubEnv('KIRI_ZMX', '1')
+    vi.stubEnv('KIRI_ZMX_BIN', zmxBin)
+    const spawnPty = vi.fn(() => ({
+      write: vi.fn(),
+      resize: vi.fn(),
+      kill: vi.fn(),
+      onData: vi.fn(),
+      onExit: vi.fn(),
+    } as never))
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'pi',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake-agent',
+        args: ['--flag'],
+        cwd: '/tmp/project',
+        env: process.env,
+        label: 'pi',
+      }),
+      spawnPty,
+    })
+
+    try {
+      await service.spawnAgentRuntime({ agentId: 'agent-1' })
+
+      expect(spawnPty).toHaveBeenCalledWith(
+        zmxBin,
+        ['attach', zmxSessionName('agent-1:runtime'), '/bin/fake-agent', '--flag'],
+        expect.objectContaining({
+          cwd: '/tmp/project',
+        }),
+      )
+    } finally {
+      await service.close()
+      rmSync(root, { recursive: true, force: true })
     }
   })
 

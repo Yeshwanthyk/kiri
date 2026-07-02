@@ -40,6 +40,12 @@ import {
   type TerminalProcessLaunch,
 } from './terminal-launch'
 import { makeTerminalRegistry, type TerminalRegistrySession } from './terminal-registry'
+import {
+  resolveZmxBinary,
+  zmxAttachArgv,
+  zmxKillSession,
+  zmxSessionName,
+} from './zmx'
 
 export type TerminalServerInfo = {
   host: string
@@ -318,6 +324,7 @@ export function makeTerminalServerService(
       }
     },
     closeAgentRuntime: (agentId: string) => {
+      killZmxRuntimeSession(agentId)
       runtime.registry.closeAgentRuntime(agentId)
     },
     close: async () => {
@@ -554,7 +561,8 @@ async function getOrCreateTerminalSession(
   await cleanupStaleClaudeSession(launch)
   const launchedAtMs = Date.now()
   const launchToken = `${launchedAtMs}:${randomBytes(8).toString('hex')}`
-  const proc = runtime.dependencies.spawnPty(launch.command, launch.args, {
+  const spawnedLaunch = wrapZmxLaunch(key, launch)
+  const proc = runtime.dependencies.spawnPty(spawnedLaunch.command, spawnedLaunch.args, {
     name: 'xterm-256color',
     cols,
     rows,
@@ -613,6 +621,30 @@ async function getOrCreateTerminalSession(
     throw error
   }
   return session
+}
+
+function wrapZmxLaunch(
+  key: string,
+  launch: TerminalProcessLaunch,
+): { readonly command: string; readonly args: readonly string[] } {
+  const binary = resolveZmxBinary()
+  if (!binary) return launch
+  return {
+    command: binary,
+    args: zmxAttachArgv(zmxSessionName(key), launch.command, launch.args),
+  }
+}
+
+function killZmxRuntimeSession(agentId: string) {
+  const binary = resolveZmxBinary()
+  if (!binary) return
+  void zmxKillSession({
+    binary,
+    name: zmxSessionName(`${agentId}:runtime`),
+    env: process.env,
+  }).catch((error) => {
+    console.error('zmx runtime kill failed', error)
+  })
 }
 
 function attachTerminalSocket(
