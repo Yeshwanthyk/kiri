@@ -6,7 +6,7 @@ import type {
   ThinkingLevel,
   TimelineEventTone,
 } from '~/lib/contracts'
-import { Cause, Data, Effect, Exit, Layer, Option } from 'effect'
+import { Cause, Data, Effect, Exit, Layer, Option, Runtime } from 'effect'
 import type {
   recordRuntimeContextUsage,
   recordRuntimeMessage,
@@ -115,16 +115,44 @@ export function enqueueAgentTurn(
   agentId: string,
   queues: Map<string, Promise<void>>,
   run: () => Promise<void>,
+  projection: RuntimeLifecycleProjection,
+): Effect.Effect<void, RuntimeLifecycleError, never>
+export function enqueueAgentTurn(
+  agentId: string,
+  queues: Map<string, Promise<void>>,
+  run: () => Promise<void>,
+): Effect.Effect<void, RuntimeLifecycleError, RuntimeProjector>
+export function enqueueAgentTurn(
+  agentId: string,
+  queues: Map<string, Promise<void>>,
+  run: () => Promise<void>,
+  projection?: RuntimeLifecycleProjection,
 ) {
-  return Effect.tryPromise({
-    try: () => {
-      const previous = queues.get(agentId) ?? Promise.resolve()
-      const next = previous.then(run)
-      queues.set(agentId, next.catch(() => {}))
-      return next
-    },
-    catch: (cause) => runtimeLifecycleError('Runtime turn failed', cause),
-  })
+  const enqueue = (projection: RuntimeLifecycleProjection) =>
+    Effect.gen(function* () {
+      const runtime = yield* Effect.runtime<never>()
+      const previous = queues.get(agentId)
+      const queued = previous !== undefined
+      if (queued) yield* setRuntimeStatus(agentId, 'queued', projection)
+
+      const next = (previous ?? Promise.resolve()).then(async () => {
+        if (queued) {
+          await Runtime.runPromise(runtime)(setRuntimeStatus(agentId, 'running', projection))
+        }
+        await run()
+      })
+      const retained = next.catch(() => {})
+      queues.set(agentId, retained)
+
+      return yield* Effect.tryPromise({
+        try: () =>
+          next.finally(() => {
+            if (queues.get(agentId) === retained) queues.delete(agentId)
+          }),
+        catch: (cause) => runtimeLifecycleError('Runtime turn failed', cause),
+      })
+    })
+  return projection ? enqueue(projection) : Effect.flatMap(RuntimeProjector, enqueue)
 }
 
 export function nextThinkingLevel(current: ThinkingLevel | null) {

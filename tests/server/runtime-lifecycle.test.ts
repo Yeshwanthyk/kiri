@@ -37,20 +37,51 @@ describe('runtime lifecycle', () => {
     Effect.gen(function* () {
     const queues = new Map<string, Promise<void>>()
     const order: string[] = []
+    const { fake } = projection()
 
     const first = yield* Effect.exit(enqueueAgentTurn('agent-1', queues, () => {
       order.push('first')
       return Promise.reject(new Error('boom'))
-    }))
+    }, fake))
     expect(Exit.isFailure(first)).toBe(true)
 
     yield* enqueueAgentTurn('agent-1', queues, () => {
       order.push('second')
       return Promise.resolve()
-    })
+    }, fake)
 
     expect(order).toEqual(['first', 'second'])
   }))
+
+  it('projects queued while waiting and running when the queued turn starts', async () => {
+    const queues = new Map<string, Promise<void>>()
+    const { calls, fake } = projection()
+    const firstGate = deferred()
+    const order: string[] = []
+
+    const first = Effect.runPromise(enqueueAgentTurn('agent-1', queues, async () => {
+      order.push('first-start')
+      await firstGate.promise
+      order.push('first-end')
+    }, fake))
+    await eventually(() => {
+      expect(order).toEqual(['first-start'])
+    })
+
+    const second = Effect.runPromise(enqueueAgentTurn('agent-1', queues, () => {
+      order.push('second')
+      return Promise.resolve()
+    }, fake))
+    await Promise.resolve()
+    expect(statuses(calls)).toEqual(['queued'])
+
+    firstGate.resolve()
+    await Promise.all([first, second])
+
+    expect(order).toEqual(['first-start', 'first-end', 'second'])
+    expect(statuses(calls)).toEqual(['queued', 'running'])
+    expect(queues.has('agent-1')).toBe(false)
+  })
 
   it.effect('marks running then idle for successful current turns', () =>
     Effect.gen(function* () {
@@ -168,7 +199,7 @@ describe('runtime lifecycle', () => {
       ))
 
       expect(result).toBe(turnError)
-      yield* enqueueAgentTurn('agent-1', queues, () => Promise.resolve())
+      yield* enqueueAgentTurn('agent-1', queues, () => Promise.resolve(), projection().fake)
     }))
 
   it.effect('preserves non-Error failures and legacy timeline detail formatting', () =>
@@ -317,4 +348,27 @@ function statuses(calls: Array<{ type: string; value: unknown }>) {
     if (call.type !== 'status') return []
     return (call.value as { status: AgentStatus }).status
   })
+}
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((complete) => {
+    resolve = complete
+  })
+  return { promise, resolve }
+}
+
+async function eventually(assertion: () => void) {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      assertion()
+      return
+    } catch (error) {
+      lastError = error
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+  }
+  if (lastError instanceof Error) throw lastError
+  throw new Error('Expectation did not pass')
 }
