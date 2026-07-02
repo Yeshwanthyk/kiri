@@ -56,6 +56,7 @@ struct AppState {
     sessions: Arc<RwLock<HashMap<String, Arc<Session>>>>,
     generations: Arc<RwLock<HashMap<String, u64>>>,
     launch_configs: Arc<RwLock<HashMap<String, LaunchConfig>>>,
+    pending_inputs: Arc<RwLock<HashMap<String, Vec<PendingInput>>>>,
     restored_sessions: Arc<Mutex<HashMap<String, PersistedSession>>>,
 }
 
@@ -155,6 +156,32 @@ struct LaunchConfig {
 #[derive(Deserialize)]
 struct UpsertAgentRequest {
     config: LaunchConfig,
+    #[serde(rename = "pendingInputs", default)]
+    pending_inputs: Vec<PendingInput>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingInput {
+    text: String,
+    submit: bool,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentIdRequest {
+    agent_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentInputRequest {
+    agent_id: String,
+    text: String,
+    #[serde(default = "default_submit")]
+    submit: bool,
 }
 
 #[derive(Deserialize)]
@@ -292,11 +319,14 @@ async fn main() -> Result<()> {
         sessions: Arc::new(RwLock::new(HashMap::new())),
         generations: Arc::new(RwLock::new(HashMap::new())),
         launch_configs: Arc::new(RwLock::new(HashMap::new())),
+        pending_inputs: Arc::new(RwLock::new(HashMap::new())),
         restored_sessions: Arc::new(Mutex::new(restored_sessions)),
     };
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/agents/upsert", post(upsert_agent))
+        .route("/api/agents/close-runtime", post(close_agent_runtime))
+        .route("/api/agents/input", post(input_agent))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/read", post(read_session))
         .route("/api/sessions/snapshot", post(snapshot_session))
@@ -364,12 +394,84 @@ async fn upsert_agent(
         )
             .into_response();
     }
+    let agent_id = body.config.id.clone();
     state
         .launch_configs
         .write()
         .await
-        .insert(body.config.id.clone(), body.config);
+        .insert(agent_id.clone(), body.config);
+    if !body.pending_inputs.is_empty() {
+        let mut pending_inputs = state.pending_inputs.write().await;
+        pending_inputs
+            .entry(agent_id)
+            .or_default()
+            .extend(body.pending_inputs);
+    }
     Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+async fn close_agent_runtime(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AgentIdRequest>,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    let key = format!("{}:runtime", body.agent_id);
+    if let Some(session) = session_by_key(&state, &key).await {
+        kill_session_process(&state, &session).await;
+    }
+    state.restored_sessions.lock().await.remove(&key);
+    let _ = fs::remove_file(persisted_session_path(&state.sessions_dir, &key));
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+async fn input_agent(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AgentInputRequest>,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    if body.text.is_empty() {
+        return bad_request("text is required".to_string());
+    }
+    let key = format!("{}:runtime", body.agent_id);
+    if let Some(session) = session_by_key(&state, &key).await {
+        if !session.exited.load(Ordering::SeqCst) {
+            let data = if body.submit {
+                format!("{}\r", body.text)
+            } else {
+                body.text
+            };
+            if let Err(error) = write_session_input(&session, &data).await {
+                return server_error(error.to_string());
+            }
+            return Json(serde_json::json!({ "ok": true, "delivered": true })).into_response();
+        }
+    }
+    if !state
+        .launch_configs
+        .read()
+        .await
+        .contains_key(&body.agent_id)
+    {
+        return not_found(format!("Unknown agent {}", body.agent_id));
+    }
+    state
+        .pending_inputs
+        .write()
+        .await
+        .entry(body.agent_id)
+        .or_default()
+        .push(PendingInput {
+            text: body.text,
+            submit: body.submit,
+            created_at: iso_now(),
+        });
+    Json(serde_json::json!({ "ok": true, "delivered": false, "queued": true })).into_response()
 }
 
 async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
@@ -1134,11 +1236,13 @@ async fn persist_session(state: &AppState, session: &Session) -> Result<()> {
         snapshot,
         saved_at: iso_now(),
     };
-    let path = state
-        .sessions_dir
-        .join(format!("{}.json", encode_uri_component(&session.key)));
+    let path = persisted_session_path(&state.sessions_dir, &session.key);
     write_file_atomic(&path, &serde_json::to_vec_pretty(&persisted)?)
         .with_context(|| format!("failed to persist {}", session.key))
+}
+
+fn persisted_session_path(sessions_dir: &Path, key: &str) -> PathBuf {
+    sessions_dir.join(format!("{}.json", encode_uri_component(key)))
 }
 
 fn write_file_atomic(path: &Path, contents: &[u8]) -> Result<()> {
@@ -1484,6 +1588,10 @@ fn idle_kill_ms() -> u64 {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(DEFAULT_IDLE_KILL_MS)
+}
+
+fn default_submit() -> bool {
+    true
 }
 
 async fn wait_for_shutdown(shutdown: CancellationToken) {

@@ -33,6 +33,11 @@ fn websocket_flow_control_pauses_until_client_ack() {
 }
 
 #[test]
+fn agent_input_queues_and_close_runtime_clears_snapshot() {
+    with_daemon(run_agent_routes_smoke);
+}
+
+#[test]
 fn shutdown_route_stops_daemon_and_removes_record() {
     let state_dir = temp_state_dir();
     let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
@@ -565,6 +570,57 @@ fn run_flow_control_smoke(state_dir: &Path) -> Result<(), String> {
         }
     }
     Err("timed out waiting for flow-control-end after ACK".to_string())
+}
+
+fn run_agent_routes_smoke(state_dir: &Path) -> Result<(), String> {
+    let record = wait_record(state_dir)?;
+    let unknown = http_status(
+        &record,
+        "POST",
+        "/api/agents/input",
+        Some(json!({ "agentId": "missing-agent", "text": "hello" })),
+    )?;
+    assert!(unknown.starts_with("HTTP/1.1 404"));
+
+    post_upsert(&record, state_dir)?;
+    let queued = http_json(
+        &record,
+        "POST",
+        "/api/agents/input",
+        Some(json!({ "agentId": "agent-t1", "text": "queued turn", "submit": false })),
+    )?;
+    assert_eq!(queued["ok"], true);
+    assert_eq!(queued["delivered"], false);
+    assert_eq!(queued["queued"], true);
+
+    let sessions_dir = state_dir.join("sessions");
+    fs::create_dir_all(&sessions_dir).map_err(|error| error.to_string())?;
+    let runtime_snapshot = sessions_dir.join("agent-t1%3Aruntime.json");
+    fs::write(
+        &runtime_snapshot,
+        json!({
+            "key": "agent-t1:runtime",
+            "mode": "runtime",
+            "label": "codex",
+            "cwd": state_dir,
+            "cols": 80,
+            "rows": 24,
+            "snapshot": "runtime snapshot",
+            "savedAt": "123"
+        })
+        .to_string(),
+    )
+    .map_err(|error| error.to_string())?;
+    assert!(runtime_snapshot.exists());
+    let closed = http_json(
+        &record,
+        "POST",
+        "/api/agents/close-runtime",
+        Some(json!({ "agentId": "agent-t1" })),
+    )?;
+    assert_eq!(closed["ok"], true);
+    assert!(!runtime_snapshot.exists());
+    Ok(())
 }
 
 fn run_shutdown_smoke(state_dir: &Path, child: &mut std::process::Child) -> Result<(), String> {
