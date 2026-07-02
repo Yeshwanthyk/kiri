@@ -57,6 +57,8 @@ struct AppState {
     generations: Arc<RwLock<HashMap<String, u64>>>,
     launch_configs: Arc<RwLock<HashMap<String, LaunchConfig>>>,
     pending_inputs: Arc<RwLock<HashMap<String, Vec<PendingInput>>>>,
+    subscriptions: Arc<RwLock<HashMap<String, SubscriptionRecord>>>,
+    subscription_counter: Arc<AtomicU64>,
     restored_sessions: Arc<Mutex<HashMap<String, PersistedSession>>>,
 }
 
@@ -247,6 +249,41 @@ struct WaitAnyRequest {
     quorum: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubscribeRequest {
+    targets: Vec<WaitTarget>,
+    timeout_ms: Option<u64>,
+    quorum: Option<String>,
+    deliver: SubscribeDeliver,
+}
+
+#[derive(Clone, Deserialize)]
+struct SubscribeDeliver {
+    #[serde(rename = "agentId")]
+    agent_id: String,
+    note: Option<String>,
+    title: Option<String>,
+}
+
+#[derive(Clone)]
+struct SubscriptionRecord {
+    id: String,
+    targets: Vec<WaitTarget>,
+    timeout_ms: u64,
+    quorum: String,
+    deliver: SubscribeDeliver,
+    status: String,
+    outcome: Option<String>,
+}
+
+struct WaitAnyResult {
+    matched: bool,
+    matches: Vec<serde_json::Value>,
+    missing: Vec<String>,
+    elapsed_ms: u64,
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WaitTarget {
@@ -333,6 +370,8 @@ async fn main() -> Result<()> {
         generations: Arc::new(RwLock::new(HashMap::new())),
         launch_configs: Arc::new(RwLock::new(HashMap::new())),
         pending_inputs: Arc::new(RwLock::new(HashMap::new())),
+        subscriptions: Arc::new(RwLock::new(HashMap::new())),
+        subscription_counter: Arc::new(AtomicU64::new(0)),
         restored_sessions: Arc::new(Mutex::new(restored_sessions)),
     };
     let app = Router::new()
@@ -348,6 +387,8 @@ async fn main() -> Result<()> {
         .route("/api/sessions/resize", post(resize_session))
         .route("/api/sessions/wait-for", post(wait_for_session))
         .route("/api/sessions/wait-any", post(wait_any_session))
+        .route("/api/sessions/subscribe", post(subscribe_session))
+        .route("/api/subscriptions", get(list_subscriptions))
         .route("/api/sessions/kill", post(kill_session))
         .route("/api/sessions/kill-prefix", post(kill_prefix))
         .route("/api/shutdown", post(shutdown_daemon))
@@ -709,21 +750,39 @@ async fn wait_any_session(
     if let Some(response) = unauthorized_response(&state, &headers) {
         return response;
     }
-    if body.targets.is_empty() || body.targets.len() > 32 {
-        return bad_request("targets must contain 1..32 entries".to_string());
+    match run_wait_any(
+        &state,
+        body.targets,
+        body.timeout_ms.unwrap_or(60_000),
+        body.quorum.unwrap_or_else(|| "any".to_string()),
+    )
+    .await
+    {
+        Ok(result) => wait_any_result_response(result),
+        Err(error) => bad_request(error),
     }
-    let quorum = body.quorum.as_deref().unwrap_or("any");
-    if !matches!(quorum, "any" | "all") {
-        return bad_request(format!("Invalid quorum: {quorum}"));
+}
+
+async fn run_wait_any(
+    state: &AppState,
+    targets: Vec<WaitTarget>,
+    timeout_ms: u64,
+    quorum: String,
+) -> std::result::Result<WaitAnyResult, String> {
+    if targets.is_empty() || targets.len() > 32 {
+        return Err("targets must contain 1..32 entries".to_string());
+    }
+    if !matches!(quorum.as_str(), "any" | "all") {
+        return Err(format!("Invalid quorum: {quorum}"));
     }
     let started_at = Instant::now();
-    let timeout = wait_timeout(body.timeout_ms, 60_000);
+    let timeout = wait_timeout(Some(timeout_ms), 60_000);
     let mut missing = Vec::new();
     let mut live = Vec::new();
 
-    for target in body.targets {
+    for target in targets {
         if target.pattern.is_none() && target.idle_ms.is_none() {
-            return bad_request("Each target needs pattern and/or idleMs".to_string());
+            return Err("Each target needs pattern and/or idleMs".to_string());
         }
         let Some(session) = session_by_key(&state, &target.key).await else {
             missing.push(target.key);
@@ -736,7 +795,7 @@ async fn wait_any_session(
         let matcher = match &target.pattern {
             Some(pattern) => match compile_regex(pattern, target.flags.as_deref().unwrap_or("")) {
                 Ok(matcher) => Some(matcher),
-                Err(error) => return bad_request(error),
+                Err(error) => return Err(error),
             },
             None => None,
         };
@@ -750,7 +809,7 @@ async fn wait_any_session(
     }
 
     if live.is_empty() {
-        return wait_any_response(false, Vec::new(), missing, started_at);
+        return Ok(wait_any_result(false, Vec::new(), missing, started_at));
     }
 
     let mut matches = Vec::new();
@@ -770,7 +829,7 @@ async fn wait_any_session(
                     let payload =
                         wait_match_payload(&live_target.target, &session, None, true).await;
                     if quorum == "any" {
-                        return wait_any_response(true, vec![payload], missing, started_at);
+                        return Ok(wait_any_result(true, vec![payload], missing, started_at));
                     }
                     matches.push(payload);
                 }
@@ -779,7 +838,7 @@ async fn wait_any_session(
             if let Some(matcher) = &live_target.matcher {
                 let scope = live_target.target.scope.as_deref().unwrap_or("screen");
                 if !matches!(scope, "screen" | "output") {
-                    return bad_request(format!("Invalid wait scope: {scope}"));
+                    return Err(format!("Invalid wait scope: {scope}"));
                 }
                 if let Some(found) = match_session_target(&session, matcher, scope).await {
                     matched[index] = true;
@@ -798,7 +857,7 @@ async fn wait_any_session(
             }
             if let Some(idle_ms) = live_target.target.idle_ms {
                 if !(250..=600_000).contains(&idle_ms) {
-                    return bad_request("idleMs must be between 250 and 600000".to_string());
+                    return Err("idleMs must be between 250 and 600000".to_string());
                 }
                 let seq = session.output_seq.load(Ordering::SeqCst);
                 if seq != live_target.last_seq {
@@ -826,14 +885,245 @@ async fn wait_any_session(
         if quorum == "any" && !ready_any.is_empty() {
             ready_any.sort_by_key(|ready| ready.order_ms);
             let winner = ready_any.remove(0).payload;
-            return wait_any_response(true, vec![winner], missing, started_at);
+            return Ok(wait_any_result(true, vec![winner], missing, started_at));
         }
         if quorum == "all" && matches.len() == live.len() {
-            return wait_any_response(missing.is_empty(), matches, missing, started_at);
+            return Ok(wait_any_result(
+                missing.is_empty(),
+                matches,
+                missing,
+                started_at,
+            ));
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    wait_any_response(false, matches, missing, started_at)
+    Ok(wait_any_result(false, matches, missing, started_at))
+}
+
+async fn subscribe_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SubscribeRequest>,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    if body.deliver.agent_id.trim().is_empty() {
+        return bad_request("deliver.agentId is required".to_string());
+    }
+    if body
+        .deliver
+        .note
+        .as_ref()
+        .is_some_and(|note| note.len() > 2_000)
+    {
+        return bad_request("deliver.note is too long".to_string());
+    }
+    if body
+        .deliver
+        .title
+        .as_ref()
+        .is_some_and(|title| title.len() > 200)
+    {
+        return bad_request("deliver.title is too long".to_string());
+    }
+    let timeout_ms = body.timeout_ms.unwrap_or(60_000).clamp(1, 600_000);
+    let quorum = body.quorum.unwrap_or_else(|| "any".to_string());
+    if let Err(error) = validate_wait_targets(&body.targets, &quorum) {
+        return bad_request(error);
+    }
+    let id = format!(
+        "sub-{}-{}",
+        epoch_ms(),
+        state.subscription_counter.fetch_add(1, Ordering::SeqCst) + 1
+    );
+    let record = SubscriptionRecord {
+        id: id.clone(),
+        targets: body.targets,
+        timeout_ms,
+        quorum,
+        deliver: body.deliver,
+        status: "pending".to_string(),
+        outcome: None,
+    };
+    state
+        .subscriptions
+        .write()
+        .await
+        .insert(id.clone(), record.clone());
+    let task_state = state.clone();
+    tokio::spawn(async move {
+        run_subscription(task_state, record).await;
+    });
+    Json(serde_json::json!({ "ok": true, "id": id })).into_response()
+}
+
+async fn list_subscriptions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    let subscriptions = state.subscriptions.read().await;
+    let payload: Vec<_> = subscriptions
+        .values()
+        .map(|record| {
+            serde_json::json!({
+                "id": record.id,
+                "status": record.status,
+                "deliverAgentId": record.deliver.agent_id,
+                "targets": record.targets.len(),
+                "outcome": record.outcome,
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "subscriptions": payload })).into_response()
+}
+
+fn validate_wait_targets(targets: &[WaitTarget], quorum: &str) -> std::result::Result<(), String> {
+    if targets.is_empty() || targets.len() > 32 {
+        return Err("targets must contain 1..32 entries".to_string());
+    }
+    if !matches!(quorum, "any" | "all") {
+        return Err(format!("Invalid quorum: {quorum}"));
+    }
+    for target in targets {
+        if target.pattern.is_none() && target.idle_ms.is_none() {
+            return Err("Each target needs pattern and/or idleMs".to_string());
+        }
+        if let Some(pattern) = &target.pattern {
+            if pattern.len() > 2_000 {
+                return Err("pattern is too long".to_string());
+            }
+        }
+        if let Some(label) = &target.label {
+            if label.len() > 200 {
+                return Err("label is too long".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_subscription(state: AppState, record: SubscriptionRecord) {
+    let result = run_wait_any(
+        &state,
+        record.targets.clone(),
+        record.timeout_ms,
+        record.quorum.clone(),
+    )
+    .await;
+    match result {
+        Ok(result) => {
+            let outcome = if result.matched {
+                "condition met".to_string()
+            } else {
+                "timed out".to_string()
+            };
+            let text = compose_wake(&record, &result);
+            match deliver_subscription(&state, &record.deliver.agent_id, &text).await {
+                Ok(()) => update_subscription(&state, &record.id, "delivered", Some(outcome)).await,
+                Err(error) => update_subscription(&state, &record.id, "failed", Some(error)).await,
+            }
+        }
+        Err(error) => update_subscription(&state, &record.id, "failed", Some(error)).await,
+    }
+}
+
+async fn deliver_subscription(
+    state: &AppState,
+    agent_id: &str,
+    text: &str,
+) -> std::result::Result<(), String> {
+    let key = format!("{agent_id}:runtime");
+    let session = match session_by_key(state, &key).await {
+        Some(session) if !session.exited.load(Ordering::SeqCst) => session,
+        _ => {
+            let config = state
+                .launch_configs
+                .read()
+                .await
+                .get(agent_id)
+                .cloned()
+                .ok_or_else(|| format!("no live session {key} to deliver to"))?;
+            spawn_runtime_session(state, config, 80, 24)
+                .await
+                .map_err(|error| format!("spawn for delivery failed: {error}"))?
+        }
+    };
+    write_session_input(&session, text)
+        .await
+        .map_err(|error| error.to_string())?;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    write_session_input(&session, "\r")
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn update_subscription(state: &AppState, id: &str, status: &str, outcome: Option<String>) {
+    if let Some(record) = state.subscriptions.write().await.get_mut(id) {
+        record.status = status.to_string();
+        record.outcome = outcome;
+    }
+}
+
+fn compose_wake(record: &SubscriptionRecord, result: &WaitAnyResult) -> String {
+    let mut lines = Vec::new();
+    let heading = record.deliver.title.as_deref().unwrap_or("await");
+    if result.matched || !result.matches.is_empty() {
+        let summary = result
+            .matches
+            .iter()
+            .map(|matched| {
+                let label = matched["label"]
+                    .as_str()
+                    .or_else(|| matched["key"].as_str())
+                    .unwrap_or("");
+                if matched["idle"] == true {
+                    format!("{label}: went idle")
+                } else {
+                    format!(
+                        "{label}: matched {}",
+                        serde_json::to_string(&matched["match"])
+                            .unwrap_or_else(|_| "\"\"".to_string())
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        lines.push(format!("[kiri wake {}] {heading}: {summary}", record.id));
+        for matched in &result.matches {
+            let Some(tail) = matched["tail"].as_array() else {
+                continue;
+            };
+            if tail.is_empty() {
+                continue;
+            }
+            let label = matched["label"]
+                .as_str()
+                .or_else(|| matched["key"].as_str())
+                .unwrap_or("");
+            let tail = tail
+                .iter()
+                .filter_map(|line| line.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ");
+            lines.push(format!("tail {label}: {tail}"));
+        }
+    } else {
+        lines.push(format!(
+            "[kiri wake {}] {heading}: timed out after {}ms with no match",
+            record.id, record.timeout_ms
+        ));
+    }
+    if !result.missing.is_empty() {
+        lines.push(format!("missing sessions: {}", result.missing.join(", ")));
+    }
+    if let Some(note) = &record.deliver.note {
+        lines.push(format!("note: {note}"));
+    }
+    lines.join("\n")
 }
 
 async fn kill_session(
@@ -1686,17 +1976,26 @@ async fn read_screen_tail(session: &Session) -> Vec<String> {
         .collect()
 }
 
-fn wait_any_response(
+fn wait_any_result(
     matched: bool,
     matches: Vec<serde_json::Value>,
     missing: Vec<String>,
     started_at: Instant,
-) -> axum::response::Response {
+) -> WaitAnyResult {
+    WaitAnyResult {
+        matched,
+        matches,
+        missing,
+        elapsed_ms: started_at.elapsed().as_millis() as u64,
+    }
+}
+
+fn wait_any_result_response(result: WaitAnyResult) -> axum::response::Response {
     Json(serde_json::json!({
-        "matched": matched,
-        "matches": matches,
-        "missing": missing,
-        "elapsedMs": started_at.elapsed().as_millis() as u64,
+        "matched": result.matched,
+        "matches": result.matches,
+        "missing": result.missing,
+        "elapsedMs": result.elapsed_ms,
     }))
     .into_response()
 }

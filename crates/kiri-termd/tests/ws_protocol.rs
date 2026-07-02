@@ -57,6 +57,24 @@ fn agent_spawn_launches_runtime_and_drains_queued_input() {
 }
 
 #[test]
+fn subscription_delivers_wake_to_runtime_session() {
+    let state_dir = temp_state_dir();
+    let fake_codex = write_fake_runtime(&state_dir).expect("fake runtime should be written");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", &state_dir)
+        .env("KIRI_CODEX_BIN", &fake_codex)
+        .spawn()
+        .expect("kiri-termd should spawn");
+
+    let result = run_subscription_smoke(&state_dir);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&state_dir);
+
+    result.expect("subscription smoke should pass");
+}
+
+#[test]
 fn shutdown_route_stops_daemon_and_removes_record() {
     let state_dir = temp_state_dir();
     let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
@@ -730,6 +748,84 @@ fn run_runtime_spawn_smoke(state_dir: &Path) -> Result<(), String> {
     )?;
     assert_eq!(reused_input_wait["matched"], true);
     Ok(())
+}
+
+fn run_subscription_smoke(state_dir: &Path) -> Result<(), String> {
+    let record = wait_record(state_dir)?;
+    post_upsert_agent(&record, "orch-agent", "proj-orch", state_dir)?;
+    http_json(
+        &record,
+        "POST",
+        "/api/agents/spawn",
+        Some(json!({ "agentId": "orch-agent" })),
+    )?;
+    post_upsert(&record, state_dir)?;
+    let worker_url = format!(
+        "ws://{}:{}{}?agentId=agent-t1&mode=shell&cols=80&rows=24&token={}",
+        record["host"].as_str().unwrap(),
+        record["port"].as_u64().unwrap(),
+        record["path"].as_str().unwrap(),
+        record["token"].as_str().unwrap()
+    );
+    let (mut worker, _) = connect(&worker_url).map_err(|error| error.to_string())?;
+    assert_eq!(
+        read_json_frame(&mut worker, Duration::from_secs(5))?["type"],
+        "snapshot"
+    );
+    let subscribed = http_json(
+        &record,
+        "POST",
+        "/api/sessions/subscribe",
+        Some(json!({
+            "targets": [
+                { "key": "proj-t1:shell", "label": "Shell worker", "pattern": "wake-trigger-99" }
+            ],
+            "timeoutMs": 5000,
+            "quorum": "any",
+            "deliver": { "agentId": "orch-agent", "note": "go integrate", "title": "daemon wake" }
+        })),
+    )?;
+    assert_eq!(subscribed["ok"], true);
+    worker
+        .send(Message::Text(
+            json!({ "type": "input", "data": "printf 'wake-%s\\n' trigger-99\r" }).to_string(),
+        ))
+        .map_err(|error| error.to_string())?;
+
+    let woke = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "orch-agent:runtime",
+            "pattern": "input:\\[kiri wake .*daemon wake: Shell worker: matched",
+            "scope": "output",
+            "timeoutMs": 5000
+        })),
+    )?;
+    assert_eq!(woke["matched"], true);
+    let noted = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "orch-agent:runtime",
+            "pattern": "input:note: go integrate",
+            "scope": "output",
+            "timeoutMs": 5000
+        })),
+    )?;
+    assert_eq!(noted["matched"], true);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let subscriptions = http_json(&record, "GET", "/api/subscriptions", None)?;
+        if subscriptions.to_string().contains("\"delivered\"") {
+            let _ = worker.close(None);
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err("subscription did not reach delivered status".to_string())
 }
 
 fn write_fake_runtime(state_dir: &Path) -> Result<PathBuf, String> {
