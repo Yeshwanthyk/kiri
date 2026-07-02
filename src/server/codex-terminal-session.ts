@@ -12,6 +12,7 @@ export type CodexHookSessionBinding = {
   readonly cwd?: string
   readonly transcriptPath?: string
   readonly model?: string
+  readonly pid?: number
   readonly hookEventName: 'SessionStart'
   readonly writtenAtMs: number
 }
@@ -57,6 +58,7 @@ export function readCodexHookSessionBinding(sessionDir: string): CodexHookSessio
       cwd: stringValue(record.cwd),
       transcriptPath: stringValue(record.transcriptPath),
       model: stringValue(record.model),
+      pid: numberValue(record.pid),
       hookEventName: 'SessionStart',
       writtenAtMs,
     }
@@ -119,6 +121,7 @@ export function writeCodexHookSessionBinding(sessionDir: string, binding: CodexH
     cwd: binding.cwd,
     transcriptPath: binding.transcriptPath,
     model: binding.model,
+    pid: binding.pid,
     hookEventName: binding.hookEventName,
     writtenAtMs: binding.writtenAtMs,
   }, null, 2)}\n`)
@@ -145,4 +148,8 @@ function rejectCodexSessionId(sessionId: string | undefined, rejectedSessionId: 
 
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function numberValue(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }

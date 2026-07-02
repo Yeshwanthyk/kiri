@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -146,6 +146,37 @@ describe('Codex SessionStart hook handler', () => {
     expect(readCodexHookSessionBinding(sessionDir)).toMatchObject({
       agentId: 'agent-cli',
       sessionId: 'cli-session',
+    })
+  }, 20_000)
+
+  it('runs through the kirictl hook command with --stdin-file and unlinks it', () => {
+    const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-hook-cli-file-'))
+    const stdinFile = join(sessionDir, 'hook.json')
+    writeFileSync(stdinFile, hookPayload({ session_id: 'cli-file-session', source: 'startup' }))
+
+    const stdout = execFileSync('pnpm', [
+      'exec',
+      'tsx',
+      'src/cli/kirictl.ts',
+      'codex-hook',
+      'session-start',
+      '--stdin-file',
+      stdinFile,
+    ], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        KIRI_SESSION_DIR: sessionDir,
+        KIRI_AGENT_ID: 'agent-cli-file',
+      },
+    })
+
+    expect(stdout).toBe('')
+    expect(existsSync(stdinFile)).toBe(false)
+    expect(readCodexHookSessionBinding(sessionDir)).toMatchObject({
+      agentId: 'agent-cli-file',
+      sessionId: 'cli-file-session',
     })
   }, 20_000)
 })

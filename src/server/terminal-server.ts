@@ -14,6 +14,7 @@ import {
   type TerminalServerFrame,
 } from '~/lib/contracts'
 import { rememberCodexTerminalSession } from './codex-cli-sessions'
+import { writeCodexHookSessionBinding } from './codex-terminal-session'
 import {
   getAgentLaunchConfig,
   requeueAgentTerminalInputs,
@@ -518,6 +519,16 @@ async function getOrCreateTerminalSession(
     cwd: launch.cwd,
     env: launch.env,
   })
+  if (mode === 'runtime' && launch.label === 'codex' && launch.codexResumeSessionId) {
+    writeCodexHookSessionBinding(config.sessionDir, {
+      agentId: config.id,
+      sessionId: launch.codexResumeSessionId,
+      cwd: config.cwd,
+      pid: proc.pid,
+      hookEventName: 'SessionStart',
+      writtenAtMs: Date.now(),
+    })
+  }
   const restored = runtime.options.restoreContent?.(key, mode)
   const session = runtime.registry.register({
     key,
@@ -533,6 +544,7 @@ async function getOrCreateTerminalSession(
     void runtime.dependencies.rememberCodexTerminalSession(config, launch.env, {
       launchedAtMs,
       launchToken,
+      pid: proc.pid,
     }).catch((error) => {
       console.error('Failed to remember Codex terminal session', error)
     })

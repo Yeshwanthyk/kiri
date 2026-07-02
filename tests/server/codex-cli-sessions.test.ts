@@ -81,6 +81,22 @@ describe('Codex CLI session discovery', () => {
     })).toBe('first-session')
   })
 
+  it('prefers the pid-open Codex session over ambiguous same-cwd timestamps', () => {
+    const codexHome = mkdtempSync(join(tmpdir(), 'kiri-codex-home-'))
+    const cwd = '/tmp/project'
+    writeCodexSession(codexHome, '2026/05/15/rollout-first.jsonl', 'first-session', cwd, 10)
+    const secondPath = writeCodexSession(codexHome, '2026/05/15/rollout-second.jsonl', 'second-session', cwd, 11)
+
+    expect(findLatestCodexSessionForCwd({
+      codexHome,
+      cwd,
+      pid: 1234,
+      newerThanMs: 5_000,
+      requireUnique: true,
+      openFilesForPid: () => [secondPath],
+    })).toBe('second-session')
+  })
+
   it('waits briefly for Codex to write session metadata after terminal launch', async () => {
     const codexHome = mkdtempSync(join(tmpdir(), 'kiri-codex-home-'))
     const cwd = '/tmp/project'
@@ -111,4 +127,5 @@ function writeCodexSession(
   })}\n`)
   const date = new Date(mtimeSeconds * 1000)
   utimesSync(path, date, date)
+  return path
 }

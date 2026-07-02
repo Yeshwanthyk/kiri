@@ -34,12 +34,15 @@ function codexKiriArgs(kiriMcpBin = '/tmp/bin/kiri-mcp') {
 }
 
 function codexHookArgs(kiriMcpBin = '/tmp/bin/kiri-mcp') {
+  const invocation = `'${kiriMcpBin}' 'codex-hook' 'session-start'`
+  const script = `f="$(mktemp -t kiri-codex-hook)"; cat > "$f"; (${invocation} --stdin-file "$f" >> /tmp/kiri-codex-hook.log 2>&1; rm -f "$f") & printf '{}'`
+  const command = `/bin/sh -c '${script.replaceAll("'", "'\\''")}'`
   return [
     '--enable',
     'hooks',
     '--dangerously-bypass-hook-trust',
     '--config',
-    `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(`'${kiriMcpBin}' 'codex-hook' 'session-start'`)},timeout=10}]}]`,
+    `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(command)},timeout=5}]}]`,
   ]
 }
 
@@ -79,6 +82,8 @@ describe('buildTerminalProcessLaunch', () => {
     vi.stubEnv('KIRI_CLAUDE_HOME', '/tmp/claude-home')
     vi.stubEnv('KIRI_MCP_BIN', '/tmp/bin/kiri-mcp')
     vi.stubEnv('ANTHROPIC_API_KEY', 'from-outer-shell')
+    vi.stubEnv('CLAUDECODE', '1')
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '/outer/claude')
 
     const config = launchConfig('claude')
     const sessionId = claudeTerminalSessionId(config.id)
@@ -109,6 +114,8 @@ describe('buildTerminalProcessLaunch', () => {
     ])
     expect(launch.cwd).toBe('/tmp/project')
     expect(launch.env.HOME).toBe('/tmp/claude-home')
+    expect(launch.env.CLAUDE_CONFIG_DIR).toBe('/tmp/claude-home/.claude')
+    expect(launch.env.CLAUDECODE).toBeUndefined()
     expect(launch.env.ANTHROPIC_API_KEY).toBeUndefined()
     expect(launch.env.FORCE_COLOR).toBe('3')
     expect(launch.env.CLICOLOR_FORCE).toBe('1')
@@ -441,7 +448,7 @@ describe('buildTerminalProcessLaunch', () => {
 
     expect(launch.args).toContain(`mcp_servers.kiri.command=${JSON.stringify(packagedHelper)}`)
     expect(launch.args).toContain(
-      `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(`'${packagedHelper}' 'codex-hook' 'session-start'`)},timeout=10}]}]`,
+      codexHookArgs(packagedHelper).at(-1),
     )
   })
 

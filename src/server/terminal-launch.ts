@@ -32,6 +32,7 @@ export type TerminalProcessLaunch = {
   env: NodeJS.ProcessEnv
   label: string
   initialTerminalInput?: TerminalLaunchInitialInput | null
+  codexResumeSessionId?: string
 }
 
 export type TerminalLaunchInitialInput = {
@@ -215,7 +216,13 @@ function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunch
     delete env.ANTHROPIC_AUTH_TOKEN
     delete env.ANTHROPIC_OAUTH_TOKEN
   }
-  if (homePath) env.HOME = homePath
+  delete env.CLAUDECODE
+  if (homePath) {
+    env.HOME = homePath
+    env.CLAUDE_CONFIG_DIR = join(homePath, '.claude')
+  } else {
+    delete env.CLAUDE_CONFIG_DIR
+  }
 
   return {
     command: yield* resolveExecutable(context, 'claude', context.env.KIRI_CLAUDE_BIN ?? stringValue(state.binaryPath)),
@@ -339,19 +346,26 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
     env,
     label: 'codex',
     initialTerminalInput: resume ? null : initialTerminalInput,
+    codexResumeSessionId: resume,
   }
   })
 }
 
 function codexSessionStartHookArgs(invocation: KirictlInvocation) {
-  const command = [invocation.command, ...invocation.args].map(shellQuote).join(' ')
+  const command = codexSessionStartHookCommand(invocation)
   return [
     '--enable',
     'hooks',
     '--dangerously-bypass-hook-trust',
     '--config',
-    `hooks.SessionStart=[{hooks=[{type="command",command=${tomlString(command)},timeout=10}]}]`,
+    `hooks.SessionStart=[{hooks=[{type="command",command=${tomlString(command)},timeout=5}]}]`,
   ]
+}
+
+function codexSessionStartHookCommand(invocation: KirictlInvocation) {
+  const command = [invocation.command, ...invocation.args].map(shellQuote).join(' ')
+  const script = `f="$(mktemp -t kiri-codex-hook)"; cat > "$f"; (${command} --stdin-file "$f" >> /tmp/kiri-codex-hook.log 2>&1; rm -f "$f") & printf '{}'`
+  return `/bin/sh -c ${shellQuote(script)}`
 }
 
 function codexKiriConfigArgs(agentId: string, config: KiriMcpServerConfig) {

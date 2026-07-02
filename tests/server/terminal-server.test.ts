@@ -11,6 +11,7 @@ import {
   makeTerminalServerService,
   TerminalServerService,
 } from '~/server/terminal-server'
+import { readCodexHookSessionBinding } from '~/server/codex-terminal-session'
 
 describe('terminal server', () => {
   afterEach(async () => {
@@ -212,6 +213,51 @@ describe('terminal server', () => {
       expect(write).toHaveBeenCalledWith('\r')
     } finally {
       await service.close()
+    }
+  })
+
+  it('writes a fresh pid-bound Codex hook binding for resume launches', async () => {
+    const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-resume-'))
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'codex',
+        sessionDir,
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake',
+        args: ['resume', 'codex-session-1'],
+        cwd: '/tmp/project',
+        env: process.env,
+        label: 'codex',
+        codexResumeSessionId: 'codex-session-1',
+      }),
+      spawnPty: () => ({
+        pid: 4242,
+        write: vi.fn(),
+        resize: vi.fn(),
+        kill: vi.fn(),
+        onData: vi.fn(),
+        onExit: vi.fn(),
+      } as never),
+    })
+
+    try {
+      await service.spawnAgentRuntime({ agentId: 'agent-1' })
+
+      expect(readCodexHookSessionBinding(sessionDir)).toMatchObject({
+        agentId: 'agent-1',
+        sessionId: 'codex-session-1',
+        cwd: '/tmp/project',
+        pid: 4242,
+      })
+    } finally {
+      await service.close()
+      rmSync(sessionDir, { recursive: true, force: true })
     }
   })
 

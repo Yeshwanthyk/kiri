@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -11,6 +11,12 @@ import { KiriControl, type KiriControlApi } from '~/server/kiri-control'
 import { runKiriMcpServer } from '~/server/kiri-mcp'
 import { runKiriOperation } from '~/server/kiri-router'
 import { knownTerminalKeys } from '~/lib/terminal-keys'
+import {
+  kiriOperationSchema,
+  kiriOperationResponseSchema,
+  type KiriOperation,
+  type KiriOperationResponse,
+} from '~/lib/contracts'
 import {
   defaultKiritermStateDir,
   readKiritermDaemonRecord,
@@ -55,14 +61,29 @@ const mcpCommand = Command.make('mcp', {}, () =>
   }),
 ).pipe(Command.withDescription('Run the Kiri MCP server over stdio'))
 
-const codexHookSessionStartCommand = Command.make('session-start', {}, () =>
-  Effect.promise(async () => {
-    const result = await handleCodexSessionStartHook({
-      stdin: readFileSync(0, 'utf8'),
-      env: process.env,
-    })
-    if (!result.ok) {
-      console.error(`codex SessionStart hook failed: ${result.reason ?? 'unknown error'}`)
+const stdinFileOption = Options.text('stdin-file').pipe(
+  Options.withDescription('Read hook stdin from a file and unlink it'),
+  Options.optional,
+)
+
+const codexHookSessionStartCommand = Command.make('session-start', { stdinFile: stdinFileOption }, ({ stdinFile }) =>
+  Effect.sync(() => {
+    const watchdog = setTimeout(() => process.exit(0), 5_000)
+    watchdog.unref?.()
+    try {
+      const file = optionValue(stdinFile)
+      const stdin = file ? readHookStdinFile(file) : readFileSync(0, 'utf8')
+      const result = handleCodexSessionStartHook({
+        stdin,
+        env: process.env,
+      })
+      if (!result.ok) {
+        console.error(`codex SessionStart hook failed: ${result.reason ?? 'unknown error'}`)
+      } else if (result.reason) {
+        console.error(`codex SessionStart hook: ${result.reason}`)
+      }
+    } finally {
+      clearTimeout(watchdog)
     }
   }),
 ).pipe(Command.withDescription('Record a Codex SessionStart hook binding'))
@@ -195,7 +216,7 @@ export async function runKiriOperationRequest(request: unknown) {
 export async function runKiriOperationWithBackendFallback(
   control: KiriControlApi,
   request: unknown,
-) {
+): Promise<KiriOperationResponse> {
   const backend = await tryRunBackendOperation(request)
   if (backend.kind === 'handled') return backend.response
   return runKiriOperation(control, request)
@@ -223,6 +244,14 @@ function readRequest(file: string | undefined, request: string | undefined) {
   return readFileSync(0, 'utf8')
 }
 
+function readHookStdinFile(file: string) {
+  try {
+    return readFileSync(file, 'utf8')
+  } finally {
+    rmSync(file, { force: true })
+  }
+}
+
 function parseRequest(input: string) {
   try {
     return { ok: true as const, value: globalThis.JSON.parse(input) as unknown }
@@ -241,7 +270,11 @@ function parseRequest(input: string) {
   }
 }
 
-async function tryRunBackendOperation(request: unknown) {
+type BackendOperationResult =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'handled'; readonly response: KiriOperationResponse }
+
+async function tryRunBackendOperation(request: unknown): Promise<BackendOperationResult> {
   const info = readBackendControlInfo()
   if (!info) return { kind: 'none' as const }
   const timeoutMs = backendControlTimeoutMs()
@@ -256,9 +289,16 @@ async function tryRunBackendOperation(request: unknown) {
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (response.ok) {
+      const parsed = await parseBackendResponseBody(response)
+      if (!parsed) {
+        return {
+          kind: 'handled' as const,
+          response: backendInvalidResponse(request),
+        }
+      }
       return {
         kind: 'handled' as const,
-        response: await response.json(),
+        response: parsed,
       }
     }
     return {
@@ -305,7 +345,7 @@ function backendControlTimeoutMs() {
   return Number.isFinite(value) && value > 0 ? value : 15_000
 }
 
-async function backendErrorResponse(response: Response, request: unknown) {
+async function backendErrorResponse(response: Response, request: unknown): Promise<KiriOperationResponse> {
   const parsed = await parseBackendErrorBody(response)
   if (parsed) return parsed
   return {
@@ -323,28 +363,39 @@ async function backendErrorResponse(response: Response, request: unknown) {
 async function parseBackendErrorBody(response: Response) {
   try {
     const value: unknown = await response.json()
-    if (isOperationResponse(value)) return value
+    const parsed = kiriOperationResponseSchema.safeParse(value)
+    return parsed.success ? parsed.data : null
   } catch {
     // Fall through to a normalized control error.
   }
   return null
 }
 
-function isOperationResponse(value: unknown) {
-  if (!value || typeof value !== 'object') return false
-  if (!('ok' in value) || typeof value.ok !== 'boolean') return false
-  if (!('operation' in value) || typeof value.operation !== 'string') return false
-  if (value.ok === true) return 'result' in value
-  if (!('error' in value) || !value.error || typeof value.error !== 'object') return false
-  return 'code' in value.error
-    && typeof value.error.code === 'string'
-    && 'message' in value.error
-    && typeof value.error.message === 'string'
+async function parseBackendResponseBody(response: Response) {
+  try {
+    const value: unknown = await response.json()
+    const parsed = kiriOperationResponseSchema.safeParse(value)
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
 }
 
-function operationName(request: unknown) {
+function backendInvalidResponse(request: unknown): KiriOperationResponse {
+  return {
+    ok: false,
+    operation: operationName(request),
+    error: {
+      code: 'BACKEND_CONTROL_FAILED',
+      message: 'Kiri backend control endpoint returned an invalid operation response',
+    },
+  }
+}
+
+function operationName(request: unknown): KiriOperation {
   if (request && typeof request === 'object' && 'operation' in request && typeof request.operation === 'string') {
-    return request.operation
+    const parsed = kiriOperationSchema.safeParse(request.operation)
+    if (parsed.success) return parsed.data
   }
   return 'operations.list'
 }

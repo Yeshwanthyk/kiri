@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import {
   closeSync,
   existsSync,
@@ -25,10 +26,12 @@ type CodexSessionCandidate = {
 type CodexSessionDiscoveryInput = {
   readonly codexHome?: string
   readonly cwd: string
+  readonly pid?: number
   readonly limit?: number
   readonly newerThanMs?: number
   readonly closestToMs?: number
   readonly requireUnique?: boolean
+  readonly openFilesForPid?: (pid: number) => readonly string[] | null
 }
 
 type WaitForCodexSessionInput = CodexSessionDiscoveryInput & {
@@ -39,6 +42,7 @@ type WaitForCodexSessionInput = CodexSessionDiscoveryInput & {
 type RememberCodexTerminalSessionInput = {
   readonly launchedAtMs: number
   readonly launchToken: string
+  readonly pid?: number
   readonly attempts?: number
   readonly hookWaitMs?: number
   readonly intervalMs?: number
@@ -62,7 +66,7 @@ export function findLatestCodexSessionForCwd(input: CodexSessionDiscoveryInput) 
     .filter((candidate) => input.newerThanMs === undefined || candidate.createdMs >= input.newerThanMs)
     .sort((left, right) => right.createdMs - left.createdMs)
     .slice(0, input.limit ?? 200)
-  const matchingSessions: Array<{ id: string; sortMs: number }> = []
+  const matchingSessions: Array<{ id: string; path: string; sortMs: number }> = []
 
   for (const candidate of candidates) {
     const firstLine = readFirstLine(candidate.path)
@@ -83,13 +87,18 @@ export function findLatestCodexSessionForCwd(input: CodexSessionDiscoveryInput) 
           ? Date.parse(payload.timestamp)
           : NaN
         const sortMs = Number.isFinite(payloadTimestamp) ? payloadTimestamp : candidate.createdMs
-        matchingSessions.push({ id, sortMs })
+        matchingSessions.push({ id, path: candidate.path, sortMs })
       }
     } catch {
       continue
     }
   }
 
+  if (input.pid !== undefined) {
+    const confirmed = pidConfirmedSessions(input.pid, matchingSessions, input.openFilesForPid)
+    if (confirmed.length === 1) return confirmed[0]?.id ?? null
+    if (confirmed.length > 1 && input.requireUnique) return null
+  }
   if (input.requireUnique) return matchingSessions.length === 1 ? matchingSessions[0].id : null
   if (input.closestToMs !== undefined) {
     const closestToMs = input.closestToMs
@@ -138,6 +147,7 @@ export async function rememberCodexTerminalSession(
   const sessionId = await waitForLatestCodexSessionForCwd({
     codexHome: env.CODEX_HOME,
     cwd: config.cwd,
+    pid: input.pid,
     newerThanMs: input.launchedAtMs - 1000,
     requireUnique: true,
     attempts: remainingAttempts,
@@ -259,6 +269,32 @@ function codexSessionCreatedMs(birthtimeMs: number, mtimeMs: number) {
   if (!Number.isFinite(birthtimeMs) || birthtimeMs <= 0) return mtimeMs
   if (!Number.isFinite(mtimeMs) || mtimeMs <= 0) return birthtimeMs
   return Math.min(birthtimeMs, mtimeMs)
+}
+
+function pidConfirmedSessions(
+  pid: number,
+  sessions: ReadonlyArray<{ readonly id: string; readonly path: string; readonly sortMs: number }>,
+  openFilesForPid: ((pid: number) => readonly string[] | null) | undefined,
+) {
+  const openFiles = openFilesForPid?.(pid) ?? lsofOpenFilesForPid(pid)
+  if (!openFiles?.length) return []
+  const normalizedOpenFiles = new Set(openFiles.map((path) => resolve(path)))
+  return sessions.filter((session) => normalizedOpenFiles.has(resolve(session.path)))
+}
+
+function lsofOpenFilesForPid(pid: number) {
+  const result = spawnSync('lsof', ['-p', String(pid)], {
+    encoding: 'utf8',
+    timeout: 2_000,
+  })
+  if (result.error || result.status !== 0) return null
+  const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
+  return output
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      const file = line.trim().split(/\s+/).at(-1)
+      return file && file.startsWith('/') ? [file] : []
+    })
 }
 
 function normalizePath(path: string) {
