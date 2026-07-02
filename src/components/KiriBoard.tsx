@@ -39,6 +39,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [browserAvailable, setBrowserAvailable] = React.useState(false)
   const projectManagerReturnFocusRef = React.useRef<HTMLElement | null>(null)
   const previousProjectManagerOpenRef = React.useRef(false)
+  const previousBrowserActiveRef = React.useRef(false)
   const {
     settingsOpen,
     projectManagerOpen,
@@ -62,6 +63,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   } = useBoardSurfaces()
   const [chatFocusRequest, setChatFocusRequest] = React.useState(0)
   const [terminalFocusRequest, setTerminalFocusRequest] = React.useState(0)
+  const [peekExpanded, setPeekExpanded] = React.useState(false)
   const {
     workspaceQueries: {
       refreshWorkspace,
@@ -71,6 +73,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
       setAgentByProjectPreference,
       setChatTypographyPreference,
       setKeymapPreference,
+      setLastSelectedProjectPreference,
       setThemePreference,
     },
     sessionMutations,
@@ -102,6 +105,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     snapshot,
     workspace,
     persistAgentByProject: setAgentByProjectPreference,
+    persistLastSelectedProject: setLastSelectedProjectPreference,
   })
   const {
     hydrated,
@@ -160,6 +164,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   }, [selectBoardProject])
 
   React.useEffect(() => {
+    if (snapshot.preferences.lastSelectedProjectId) return
     const storedProjectId = projectResources.layout.activeProjectId
     if (!projectResources.hydrated || !storedProjectId || storedProjectId === selection.projectId) return
     if (!workspace.projects.some((project) => project.id === storedProjectId)) return
@@ -169,6 +174,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     projectResources.layout.activeProjectId,
     selectProject,
     selection.projectId,
+    snapshot.preferences.lastSelectedProjectId,
     workspace.projects,
   ])
 
@@ -282,6 +288,22 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     setTab,
   })
 
+  const browserOverlayOpen = commandPaletteOpen ||
+    agentSwitcherOpen ||
+    sessionLauncherOpen ||
+    Boolean(pendingDelete) ||
+    Boolean(pendingProjectDelete) ||
+    scratchpadOpen ||
+    peekExpanded ||
+    projectManagerOpen ||
+    settingsOpen
+
+  React.useEffect(() => {
+    const browserVisible = activeResource?.kind === 'browser' && tab === 'browser' && !browserOverlayOpen
+    if (previousBrowserActiveRef.current && !browserVisible) getKiriBrowserBridge()?.focusHost()
+    previousBrowserActiveRef.current = browserVisible
+  }, [activeResource?.kind, browserOverlayOpen, tab])
+
   useBoardKeyboardShortcuts({
     agentSwitcherOpen,
     commandPaletteOpen,
@@ -394,39 +416,6 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   )
 
   useHostMenuActions(commandActions)
-  if (projectManagerOpen) {
-    return (
-      <ProjectManagerDialog
-        projects={workspace.projects}
-        hiddenProjects={workspace.hiddenProjects}
-        onAdd={handleAddProject}
-        onChooseDirectory={handleChooseProjectDirectory}
-        onDelete={handleDeleteProject}
-        onHide={handleHideProject}
-        onReorderProjects={handleReorderProjects}
-        onUnhide={handleUnhideProject}
-        onClose={closeProjectManager}
-        returnFocusElement={projectManagerReturnFocusRef.current}
-      />
-    )
-  }
-
-  if (settingsOpen) {
-    return (
-      <React.Suspense fallback={<div className="empty-panel">Loading settings...</div>}>
-        <SettingsScreen
-          keymap={keymap}
-          themeSelection={themeSelection}
-          chatTypography={chatTypography}
-          onKeymapChange={(action, value) => void changeKeymapPreference(action, value)}
-          onKeymapReset={() => void resetKeymapPreference()}
-          onThemeChange={(next) => void changeThemePreference(next)}
-          onChatTypographyChange={(next) => void changeChatTypographyPreference(next)}
-          onClose={closeSettings}
-        />
-      </React.Suspense>
-    )
-  }
 
   if (!selectedProject) {
     return (
@@ -453,6 +442,38 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
 
   return (
     <main className="kiri-shell">
+      {projectManagerOpen ? (
+        <ProjectManagerDialog
+          projects={workspace.projects}
+          hiddenProjects={workspace.hiddenProjects}
+          onAdd={handleAddProject}
+          onChooseDirectory={handleChooseProjectDirectory}
+          onDelete={handleDeleteProject}
+          onHide={handleHideProject}
+          onReorderProjects={handleReorderProjects}
+          onUnhide={handleUnhideProject}
+          onClose={closeProjectManager}
+          returnFocusElement={projectManagerReturnFocusRef.current}
+        />
+      ) : null}
+
+      {settingsOpen ? (
+        <div className="settings-overlay">
+          <React.Suspense fallback={<div className="empty-panel">Loading settings...</div>}>
+            <SettingsScreen
+              keymap={keymap}
+              themeSelection={themeSelection}
+              chatTypography={chatTypography}
+              onKeymapChange={(action, value) => void changeKeymapPreference(action, value)}
+              onKeymapReset={() => void resetKeymapPreference()}
+              onThemeChange={(next) => void changeThemePreference(next)}
+              onChatTypographyChange={(next) => void changeChatTypographyPreference(next)}
+              onClose={closeSettings}
+            />
+          </React.Suspense>
+        </div>
+      ) : null}
+
       <MobileTopBar
         project={selectedProject}
         agent={selectedAgent}
@@ -548,8 +569,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         scratchpadOpen={scratchpadOpen}
         hydrated={hydrated}
         browserAvailable={browserAvailable}
+        browserOverlayOpen={browserOverlayOpen}
         resourcesByProject={projectResources.resourcesByProject}
         cornerPeekHeld={cornerPeekHeld}
+        onPeekExpandedChange={setPeekExpanded}
         onSelectProject={selectProject}
         onSelectAgent={selectAgent}
         onSelectResource={selectResource}

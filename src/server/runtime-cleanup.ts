@@ -7,7 +7,7 @@ import {
   listSessionSummaries,
 } from './db'
 import { forgetProviderRuntimeAgent } from './provider-runtime'
-import { closeAgentRuntimeTerminal } from './terminal-server'
+import { closeAgentRuntimeTerminal, closeProjectShellTerminals } from './terminal-server'
 
 type RuntimeCleanupSession = {
   readonly id: string
@@ -22,6 +22,7 @@ type RuntimeCleanupDependencies = {
 type ProjectRuntimeCleanupDependencies<Result> = RuntimeCleanupDependencies & {
   readonly listSessions: (projectId: string) => readonly RuntimeCleanupSession[]
   readonly deleteProject: (id: string) => Result
+  readonly closeProjectTerminals?: (projectId: string) => void
 }
 
 type SessionRuntimeCleanupDependencies<Result> = RuntimeCleanupDependencies & {
@@ -38,16 +39,27 @@ function cleanupRuntimeSessions(
   sessions: readonly RuntimeCleanupSession[],
   dependencies: RuntimeCleanupDependencies = liveCleanupDependencies,
 ) {
+  const errors: unknown[] = []
   for (const session of sessions) {
-    dependencies.forgetRuntime(session.runtime, session.id)
-    dependencies.closeTerminal(session.id)
+    try {
+      dependencies.forgetRuntime(session.runtime, session.id)
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      dependencies.closeTerminal(session.id)
+    } catch (error) {
+      errors.push(error)
+    }
   }
+  return errors
 }
 
 export function deleteProjectWithRuntimeCleanup(
   id: string,
   dependencies: ProjectRuntimeCleanupDependencies<ReturnType<typeof deleteProject>> = {
     ...liveCleanupDependencies,
+    closeProjectTerminals: closeProjectShellTerminals,
     listSessions: (projectId) => listSessionSummaries({ projectId, includeArchived: true }),
     deleteProject,
   },
@@ -59,6 +71,7 @@ export function deleteProjectSummaryWithRuntimeCleanup(
   id: string,
   dependencies: ProjectRuntimeCleanupDependencies<ReturnType<typeof deleteProjectSummary>> = {
     ...liveCleanupDependencies,
+    closeProjectTerminals: closeProjectShellTerminals,
     listSessions: (projectId) => listSessionSummaries({ projectId, includeArchived: true }),
     deleteProject: deleteProjectSummary,
   },
@@ -93,9 +106,14 @@ function deleteProjectAndCleanupRuntimes<Result>(
   dependencies: ProjectRuntimeCleanupDependencies<Result>,
 ) {
   const sessions = dependencies.listSessions(id)
-  const result = dependencies.deleteProject(id)
-  cleanupRuntimeSessions(sessions, dependencies)
-  return result
+  const errors = cleanupRuntimeSessions(sessions, dependencies)
+  try {
+    dependencies.closeProjectTerminals?.(id)
+  } catch (error) {
+    errors.push(error)
+  }
+  reportCleanupErrors(errors)
+  return dependencies.deleteProject(id)
 }
 
 function deleteSessionAndCleanupRuntime<Result>(
@@ -106,7 +124,7 @@ function deleteSessionAndCleanupRuntime<Result>(
   if (!session) throw new Error(`Session not found: ${input.agentId}`)
 
   const result = dependencies.deleteSession(input)
-  cleanupRuntimeSessions([session], dependencies)
+  throwCleanupErrors(cleanupRuntimeSessions([session], dependencies))
   return result
 }
 
@@ -118,4 +136,15 @@ function findActiveSessionForRuntimeCleanup(agentId: string) {
 function findAnySessionForRuntimeCleanup(agentId: string) {
   return listSessionSummaries({ includeArchived: true })
     .find((session) => session.id === agentId)
+}
+
+function reportCleanupErrors(errors: readonly unknown[]) {
+  if (errors.length === 0) return
+  console.error(`Runtime cleanup failed with ${errors.length} error(s)`, errors)
+}
+
+function throwCleanupErrors(errors: readonly unknown[]) {
+  if (errors.length === 0) return
+  if (errors.length === 1) throw errors[0]
+  throw new AggregateError(errors, 'Runtime cleanup failed')
 }

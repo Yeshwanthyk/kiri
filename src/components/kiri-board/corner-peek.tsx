@@ -19,6 +19,7 @@ type CornerPeekProps = {
   readonly onSelectResource: (projectId: string, resourceId: ResourceId) => void
   readonly onOpenProjects: (returnFocusElement?: HTMLElement | null) => void
   readonly onOpenSettings: () => void
+  readonly onExpandedChange?: (expanded: boolean) => void
 }
 
 export function CornerPeek({
@@ -32,14 +33,22 @@ export function CornerPeek({
   onSelectResource,
   onOpenProjects,
   onOpenSettings,
+  onExpandedChange,
 }: CornerPeekProps) {
   const [open, setOpen] = React.useState(false)
+  const [hovered, setHovered] = React.useState(false)
   const anchorRef = React.useRef<HTMLButtonElement | null>(null)
-  const expanded = open || held
+  const expanded = open || held || hovered
+
+  React.useEffect(() => {
+    onExpandedChange?.(expanded)
+  }, [expanded, onExpandedChange])
 
   return (
     <div
       className={`corner-peek-wrap ${held ? 'held' : ''} ${open ? 'open' : ''}`}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       onKeyDown={(event) => {
         if (event.key === 'Escape') setOpen(false)
       }}

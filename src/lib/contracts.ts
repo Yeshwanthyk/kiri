@@ -310,6 +310,7 @@ export const setThemePreferenceInputSchema = themeSelectionSchema
 export const setKeymapPreferenceInputSchema = keymapSettingsSchema
 export const setChatTypographyPreferenceInputSchema = chatTypographySchema
 export const setAgentByProjectPreferenceInputSchema = agentByProjectSchema
+export const setLastSelectedProjectPreferenceInputSchema = z.string().trim().min(1).nullable()
 
 export const addProjectInputSchema = z.object({
   id: z.string().trim().optional(),

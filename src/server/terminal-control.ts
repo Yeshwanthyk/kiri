@@ -16,6 +16,7 @@ export type ControlRouteResult = {
 }
 
 const sessionKeySchema = z.object({ key: z.string().min(1) })
+const sessionKeyPrefixSchema = z.object({ keyPrefix: z.string().min(1) })
 
 const sessionInputSchema = z.object({
   key: z.string().min(1),
@@ -263,6 +264,17 @@ export async function handleSessionControlRoute(
     const session = registry.sessions.get(input.key)
     if (session) registry.kill(session)
     return { status: 200, body: { ok: true } }
+  }
+
+  if (route === 'POST /api/sessions/kill-prefix') {
+    const input = sessionKeyPrefixSchema.parse(body)
+    let killed = 0
+    for (const session of registry.sessions.values()) {
+      if (session.key !== input.keyPrefix && !session.key.startsWith(`${input.keyPrefix}:`)) continue
+      registry.kill(session)
+      killed += 1
+    }
+    return { status: 200, body: { ok: true, killed } }
   }
 
   return null

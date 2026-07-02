@@ -133,6 +133,7 @@ function buildSnapshot(overrides: {
         monoFont: 'fira',
       },
       agentByProject: {},
+      lastSelectedProjectId: null,
     },
     projects: [project('alpha', [
       agent('alpha-a', 'alpha', {

@@ -865,6 +865,12 @@
   overflow: hidden;
 }
 
+.chat-panel[hidden],
+.browser-panel[hidden],
+.terminal-panel[hidden] {
+  display: none;
+}
+
 .browser-panel {
   background: var(--panel);
 }

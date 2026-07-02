@@ -64,6 +64,7 @@ function buildSnapshot(tick: number, churning: boolean): WorkspaceSnapshot {
       },
       chatTypography: { fontSize: 'comfortable', monoFont: 'fira' },
       agentByProject: {},
+      lastSelectedProjectId: null,
     },
     projects,
     hiddenProjects: [],

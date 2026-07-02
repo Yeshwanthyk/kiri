@@ -40,6 +40,7 @@ export function SelectedAgentPane({
   selectedAgent,
   selectedBrowserResource,
   browserResources,
+  browserOverlayOpen = false,
   tab,
   chrome = 'sidebar',
   chatFocusRequest,
@@ -64,6 +65,7 @@ export function SelectedAgentPane({
   selectedAgent: AgentCell | undefined
   selectedBrowserResource?: BrowserResource
   browserResources: readonly BrowserResource[]
+  browserOverlayOpen?: boolean
   tab: SidebarTab
   chrome?: 'sidebar' | 'stage'
   chatFocusRequest: number
@@ -304,7 +306,7 @@ export function SelectedAgentPane({
           <BrowserPanel
             key={`browser-${resource.browserId}`}
             resource={resource}
-            visible={tab === 'browser' && selectedBrowserResource?.id === resource.id}
+            visible={!browserOverlayOpen && tab === 'browser' && selectedBrowserResource?.id === resource.id}
           />
         ))}
     </aside>

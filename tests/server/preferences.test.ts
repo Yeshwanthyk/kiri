@@ -84,6 +84,7 @@ describe('ui preferences', () => {
         keymap: defaultKeymap,
         chatTypography: defaultChatTypography,
         agentByProject: {},
+        lastSelectedProjectId: null,
       })
     })
   })
@@ -174,6 +175,7 @@ describe('ui preferences', () => {
         keymap: defaultKeymap,
         chatTypography: defaultChatTypography,
         agentByProject: {},
+        lastSelectedProjectId: null,
       })
       expect(updated.theme).toEqual({ name: 'rosepine', mode: 'light' })
       expect(directories).toEqual(['/tmp'])

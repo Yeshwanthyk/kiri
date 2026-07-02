@@ -11,11 +11,13 @@ export type ResolvedBoardSelection = {
 }
 
 type PersistAgentByProject = (input: { data: Record<string, string> }) => Promise<unknown>
+type PersistLastSelectedProject = (input: { data: string | null }) => Promise<unknown>
 
 type BoardSelectionInput = {
   readonly snapshot: WorkspaceSnapshot
   readonly workspace: WorkspaceSnapshot
   readonly persistAgentByProject: PersistAgentByProject
+  readonly persistLastSelectedProject: PersistLastSelectedProject
 }
 
 type BoardSelectionState = ResolvedBoardSelection & {
@@ -31,8 +33,10 @@ export function useBoardSelection({
   snapshot,
   workspace,
   persistAgentByProject,
+  persistLastSelectedProject,
 }: BoardSelectionInput): BoardSelectionState {
   const [activeProjectId, setActiveProjectId] = React.useState<string>(snapshot.selected.projectId)
+  const activeProjectIdRef = React.useRef(activeProjectId)
   const [agentByProject, setAgentByProjectState] = React.useState<Record<string, string>>(() =>
     snapshot.preferences.agentByProject,
   )
@@ -54,16 +58,26 @@ export function useBoardSelection({
     })
   }, [persistAgentByProject, setAgentByProject])
 
-  const selectAgent = React.useCallback((projectId: string, agentId: string) => {
+  const saveSelectedProject = React.useCallback((projectId: string) => {
+    const previous = activeProjectIdRef.current
+    activeProjectIdRef.current = projectId
     setActiveProjectId(projectId)
+    if (previous === projectId) return
+    void persistLastSelectedProject({ data: projectId }).catch((error) => {
+      console.error('Failed to save selected project preference', error)
+    })
+  }, [persistLastSelectedProject])
+
+  const selectAgent = React.useCallback((projectId: string, agentId: string) => {
+    saveSelectedProject(projectId)
     const previous = agentByProjectRef.current
     if (previous[projectId] === agentId) return
     saveAgentByProject({ ...previous, [projectId]: agentId }, previous)
-  }, [saveAgentByProject])
+  }, [saveAgentByProject, saveSelectedProject])
 
   const selectProject = React.useCallback((projectId: string) => {
-    setActiveProjectId(projectId)
-  }, [])
+    saveSelectedProject(projectId)
+  }, [saveSelectedProject])
 
   const forgetProject = React.useCallback((projectId: string) => {
     const previous = agentByProjectRef.current
@@ -74,12 +88,12 @@ export function useBoardSelection({
   }, [saveAgentByProject])
 
   const activateProject = React.useCallback((projectId: string) => {
-    setActiveProjectId(projectId)
-  }, [])
+    saveSelectedProject(projectId)
+  }, [saveSelectedProject])
 
   const activateProjectIfCurrent = React.useCallback((projectId: string, nextProjectId: string) => {
-    setActiveProjectId((current) => current === projectId ? nextProjectId : current)
-  }, [])
+    if (activeProjectIdRef.current === projectId) saveSelectedProject(nextProjectId)
+  }, [saveSelectedProject])
 
   const resolved = React.useMemo(
     () => resolveBoardSelection(workspace, activeProjectId, agentByProject),

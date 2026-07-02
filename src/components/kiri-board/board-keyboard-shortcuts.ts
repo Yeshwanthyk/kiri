@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import type { ProjectRow } from '~/lib/contracts'
+import { getKiriBrowserBridge, type BrowserShortcutInput } from '~/lib/host-capabilities'
 import { actionForKey, moveProject, type KeymapSettings } from './navigation'
 import { isEditableTarget, type SidebarTab } from './board-types'
 
@@ -9,6 +10,11 @@ type BoardSelection = {
   projectId: string
   agentId: string
 }
+
+type ChordInput = Pick<
+  KeyboardEvent | BrowserShortcutInput,
+  'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'
+>
 
 type BoardKeyboardShortcutsInput = {
   agentSwitcherOpen: boolean
@@ -91,52 +97,55 @@ export function useBoardKeyboardShortcuts({
       setProjectManagerOpen(true)
     }
 
-    function onKeyDown(event: KeyboardEvent) {
-      const key = event.key.toLowerCase()
-      if (event.metaKey && isArrowKey(key)) setCornerPeekHeld(true)
-      if ((event.metaKey || event.ctrlKey) && key === 'k') {
-        event.preventDefault()
+    function handleBoardChord(input: ChordInput) {
+      const key = input.key.toLowerCase()
+      if ((input.metaKey || input.ctrlKey) && key === 'k') {
         setSettingsOpen(false)
         setSessionLauncherOpen(false)
         setAgentSwitcherOpen(false)
         setCommandPaletteOpen((open) => !open)
-        return
+        return true
       }
-      if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && key === keymap.openBrowser) {
-        event.preventDefault()
+      if ((input.metaKey || input.ctrlKey) && input.shiftKey && !input.altKey && key === keymap.openBrowser) {
         onOpenBrowserResource()
-        return
+        return true
       }
 
-      const directProjectIndex = directProjectIndexForEvent(event)
+      const directProjectIndex = directProjectIndexForEvent(input)
       if (directProjectIndex !== null) {
-        event.preventDefault()
         const project = projects[directProjectIndex]
-        if (!project) return
+        if (!project) return true
         onSelectProject(project.id)
-        return
+        return true
       }
 
-      const resourceMoveDelta = resourceMoveDeltaForEvent(event)
+      const resourceMoveDelta = resourceMoveDeltaForEvent(input)
       if (resourceMoveDelta !== null) {
-        event.preventDefault()
         onMoveActiveResource(resourceMoveDelta)
-        return
+        return true
       }
 
-      const projectDelta = projectDeltaForEvent(event)
+      const projectDelta = projectDeltaForEvent(input)
       if (projectDelta !== null) {
-        event.preventDefault()
         const nextProjectId = moveProject(projects, selection.projectId, projectDelta)
-        if (nextProjectId === selection.projectId) return
+        if (nextProjectId === selection.projectId) return true
         onSelectProject(nextProjectId)
-        return
+        return true
       }
 
-      const resourceDelta = resourceDeltaForEvent(event)
+      const resourceDelta = resourceDeltaForEvent(input)
       if (resourceDelta !== null) {
-        event.preventDefault()
         onSelectAdjacentResource(resourceDelta)
+        return true
+      }
+      return false
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      const key = event.key.toLowerCase()
+      if (event.metaKey && isArrowKey(key)) setCornerPeekHeld(true)
+      if (handleBoardChord(event)) {
+        event.preventDefault()
         return
       }
 
@@ -233,10 +242,18 @@ export function useBoardKeyboardShortcuts({
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
     window.addEventListener('blur', onBlur)
+    const unsubscribeBrowserShortcut = getKiriBrowserBridge()?.onShortcut((input) => {
+      if (input.release) {
+        setCornerPeekHeld(false)
+        return
+      }
+      handleBoardChord(input)
+    })
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
+      unsubscribeBrowserShortcut?.()
     }
   }, [
     agentSwitcherOpen,
@@ -278,13 +295,13 @@ function isTerminalHelperTarget(target: EventTarget | null) {
     target.classList.contains('xterm-helper-textarea')
 }
 
-function directProjectIndexForEvent(event: KeyboardEvent) {
+function directProjectIndexForEvent(event: ChordInput) {
   if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return null
   if (!/^[1-9]$/.test(event.key)) return null
   return Number(event.key) - 1
 }
 
-function projectDeltaForEvent(event: KeyboardEvent): 1 | -1 | null {
+function projectDeltaForEvent(event: ChordInput): 1 | -1 | null {
   const key = event.key.toLowerCase()
   if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
     if (key === 'arrowup') return -1
@@ -293,7 +310,7 @@ function projectDeltaForEvent(event: KeyboardEvent): 1 | -1 | null {
   return null
 }
 
-function resourceDeltaForEvent(event: KeyboardEvent): 1 | -1 | null {
+function resourceDeltaForEvent(event: ChordInput): 1 | -1 | null {
   const key = event.key.toLowerCase()
   if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
     if (key === 'arrowleft') return -1
@@ -302,7 +319,7 @@ function resourceDeltaForEvent(event: KeyboardEvent): 1 | -1 | null {
   return null
 }
 
-function resourceMoveDeltaForEvent(event: KeyboardEvent): 1 | -1 | null {
+function resourceMoveDeltaForEvent(event: ChordInput): 1 | -1 | null {
   const key = event.key.toLowerCase()
   if (event.metaKey && !event.ctrlKey && !event.altKey && event.shiftKey) {
     if (key === 'arrowleft') return -1

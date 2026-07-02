@@ -81,6 +81,7 @@ export function TerminalPanel({
   const terminalRef = React.useRef<XTermTerminalInstance | null>(null)
   const fitAddonRef = React.useRef<XTermFitAddonInstance | null>(null)
   const themeModeRef = React.useRef(themeMode)
+  const toggleFocusKeyRef = React.useRef(toggleFocusKey)
   const typographyRef = React.useRef(typography)
   const transcriptEnabledRef = React.useRef(false)
   const previousVisibleRef = React.useRef(visible)
@@ -113,6 +114,10 @@ export function TerminalPanel({
     const host = hostRef.current
     if (term && host) term.options.theme = terminalThemeForHost(host, themeMode)
   }, [themeMode])
+
+  React.useEffect(() => {
+    toggleFocusKeyRef.current = toggleFocusKey
+  }, [toggleFocusKey])
 
   React.useEffect(() => {
     typographyRef.current = typography
@@ -175,6 +180,8 @@ export function TerminalPanel({
     let pendingServerBytes = 0
     let writeFrame: number | null = null
     let debugFrame: number | null = null
+    let reconnectTimer: number | null = null
+    let receivedExitFrame = false
     const terminalDisposables: TerminalDisposable[] = []
 
     function captureDebugSnapshot() {
@@ -242,6 +249,8 @@ export function TerminalPanel({
         appendTranscript(frame.data)
         return
       }
+      receivedExitFrame = true
+      setStatus('Closed')
       enqueueWrite(frame.message)
       appendTranscript(frame.message)
     }
@@ -319,7 +328,7 @@ export function TerminalPanel({
           attributeFilter: ['data-theme', 'data-theme-mode', 'style'],
         })
         term.attachCustomKeyEventHandler((event) => {
-          if (isTerminalToggleFocusEvent(event, toggleFocusKey)) {
+          if (isTerminalToggleFocusEvent(event, toggleFocusKeyRef.current)) {
             event.preventDefault()
             event.stopPropagation()
             term?.blur()
@@ -380,6 +389,11 @@ export function TerminalPanel({
           if (!disposed) {
             setStatus('Closed')
             appendTranscript('\r\n[kiri terminal socket closed]\r\n')
+            if (mode === 'runtime' && receivedExitFrame) {
+              reconnectTimer = window.setTimeout(() => {
+                if (!disposed) setConnectionGeneration((generation) => generation + 1)
+              }, 1500)
+            }
           }
         }
         socket.onerror = () => {
@@ -422,6 +436,7 @@ export function TerminalPanel({
       socket?.close()
       if (writeFrame !== null) window.cancelAnimationFrame(writeFrame)
       if (debugFrame !== null) window.cancelAnimationFrame(debugFrame)
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
       resizeObserver?.disconnect()
       themeObserver?.disconnect()
       for (const disposable of terminalDisposables) {
@@ -434,7 +449,7 @@ export function TerminalPanel({
       debugEnabledRef.current = false
       term?.dispose()
     }
-  }, [agent.id, connectionGeneration, mode, project.cwd, termId, toggleFocusKey])
+  }, [agent.id, connectionGeneration, mode, project.cwd, termId])
 
   const label = mode === 'runtime' ? 'Agent terminal' : 'Shell terminal'
   const toggleFocusLabel = `Toggle terminal focus (Shift+${formatTerminalKey(toggleFocusKey)})`

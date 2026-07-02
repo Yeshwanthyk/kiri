@@ -22,6 +22,17 @@ export type BrowserNavState = {
   readonly favicon: string | null
 }
 
+export type BrowserShortcutInput = {
+  readonly browserId: string
+  readonly key: string
+  readonly metaKey: boolean
+  readonly ctrlKey: boolean
+  readonly altKey: boolean
+  readonly shiftKey: boolean
+  readonly repeat: boolean
+  readonly release?: boolean
+}
+
 export type KiriBrowserBridge = {
   readonly create: (browserId: string, url: string) => void
   readonly setBounds: (browserId: string, bounds: BrowserBounds | null) => void
@@ -30,8 +41,10 @@ export type KiriBrowserBridge = {
   readonly goForward: (browserId: string) => void
   readonly reload: (browserId: string) => void
   readonly stop: (browserId: string) => void
+  readonly focusHost: () => void
   readonly destroy: (browserId: string) => void
   readonly onState: (handler: (state: BrowserNavState) => void) => () => void
+  readonly onShortcut: (handler: (input: BrowserShortcutInput) => void) => () => void
 }
 
 export type KiriHostBridge = {

@@ -1,15 +1,18 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
 import { terminalServerFrameSchema, type TerminalServerFrame } from '../../src/lib/contracts'
 import {
+  acquireKiritermDaemonLock,
   checkKiritermDaemonHealth,
   readKiritermDaemonRecord,
   startKiritermDaemon,
   type KiritermDaemonHandle,
 } from '../../src/server/kiriterm-daemon'
+import { makeKiritermDaemonClient } from '../../src/server/kiriterm-daemon-client'
 
 const cleanups: Array<() => Promise<void> | void> = []
 
@@ -40,6 +43,16 @@ async function startDaemonWithOptions(
   return handle
 }
 
+function listen(server: ReturnType<typeof createServer>) {
+  return new Promise<number>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      resolve(typeof address === 'object' && address ? address.port : 0)
+    })
+  })
+}
+
 function launchConfig(stateDir: string) {
   return {
     id: 'agent-t1',
@@ -51,6 +64,19 @@ function launchConfig(stateDir: string) {
     cwd: stateDir,
     runtimeStateJson: null,
   }
+}
+
+function useFakeCodexTerminal(stateDir: string) {
+  const previousBin = process.env.KIRI_CODEX_BIN
+  const previousHome = process.env.KIRI_CODEX_HOME
+  process.env.KIRI_CODEX_BIN = join(process.cwd(), 'tests/harness/fake-codex-terminal.mjs')
+  process.env.KIRI_CODEX_HOME = stateDir
+  cleanups.push(() => {
+    if (previousBin === undefined) delete process.env.KIRI_CODEX_BIN
+    else process.env.KIRI_CODEX_BIN = previousBin
+    if (previousHome === undefined) delete process.env.KIRI_CODEX_HOME
+    else process.env.KIRI_CODEX_HOME = previousHome
+  })
 }
 
 function api(handle: KiritermDaemonHandle, route: string, body?: unknown) {
@@ -243,18 +269,105 @@ describe('kiriterm daemon', () => {
     })
   }, 30_000)
 
+  it('removes legacy runtime snapshots at startup without dropping shell snapshots', async () => {
+    const stateDir = tempStateDir()
+    const sessionsDir = join(stateDir, 'sessions')
+    mkdirSync(sessionsDir, { recursive: true })
+    const runtimePath = join(sessionsDir, `${encodeURIComponent('agent-t1:runtime')}.json`)
+    const shellPath = join(sessionsDir, `${encodeURIComponent('proj-t1:shell')}.json`)
+    const savedAt = new Date().toISOString()
+    writeFileSync(runtimePath, JSON.stringify({
+      key: 'agent-t1:runtime',
+      mode: 'runtime',
+      label: 'codex',
+      cwd: stateDir,
+      cols: 100,
+      rows: 30,
+      snapshot: 'legacy-runtime',
+      savedAt,
+    }))
+    writeFileSync(shellPath, JSON.stringify({
+      key: 'proj-t1:shell',
+      mode: 'shell',
+      label: 'shell',
+      cwd: stateDir,
+      cols: 100,
+      rows: 30,
+      snapshot: 'legacy-shell',
+      savedAt,
+    }))
+
+    await startDaemon(stateDir)
+
+    expect(existsSync(runtimePath)).toBe(false)
+    expect(existsSync(shellPath)).toBe(true)
+  }, 30_000)
+
+  it('does not persist live runtime snapshots during daemon dumps', async () => {
+    const stateDir = tempStateDir()
+    useFakeCodexTerminal(stateDir)
+    const handle = await startDaemonWithOptions(stateDir, { dumpIntervalMs: 50 })
+    await apiJson(handle, 'agents/upsert', { config: launchConfig(stateDir) })
+    await apiJson(handle, 'agents/spawn', { agentId: 'agent-t1' })
+    await until(async () => JSON.stringify(await apiJson(handle, 'sessions')).includes('agent-t1:runtime'))
+
+    const runtimePath = join(stateDir, 'sessions', `${encodeURIComponent('agent-t1:runtime')}.json`)
+    await new Promise((resolve) => setTimeout(resolve, 180))
+    expect(existsSync(runtimePath)).toBe(false)
+  }, 30_000)
+
+  it('serializes daemon startup with a releasable lock file', () => {
+    const stateDir = tempStateDir()
+    const first = acquireKiritermDaemonLock(stateDir)
+    expect(first).not.toBeNull()
+    expect(acquireKiritermDaemonLock(stateDir)).toBeNull()
+
+    first?.release()
+    const second = acquireKiritermDaemonLock(stateDir)
+    expect(second).not.toBeNull()
+    second?.release()
+  })
+
+  it('accepts a recovered existing daemon record after transient health failures', async () => {
+    const stateDir = tempStateDir()
+    let healthChecks = 0
+    const server = createServer((request, response) => {
+      if (request.url !== '/api/health') {
+        response.writeHead(404).end()
+        return
+      }
+      healthChecks += 1
+      const healthy = healthChecks >= 3
+      response.writeHead(healthy ? 200 : 503, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ ok: healthy }))
+    })
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())))
+    const port = await listen(server)
+    writeFileSync(join(stateDir, 'daemon.json'), JSON.stringify({
+      pid: process.pid,
+      host: '127.0.0.1',
+      port,
+      path: '/terminal',
+      token: 'token',
+      version: 'test',
+      startedAt: '2026-01-01T00:00:00.000Z',
+    }))
+
+    const previousDaemonBin = process.env.KIRI_TERM_DAEMON_BIN
+    process.env.KIRI_TERM_DAEMON_BIN = process.execPath
+    cleanups.push(() => {
+      if (previousDaemonBin === undefined) delete process.env.KIRI_TERM_DAEMON_BIN
+      else process.env.KIRI_TERM_DAEMON_BIN = previousDaemonBin
+    })
+
+    const client = makeKiritermDaemonClient({ stateDir, spawnTimeoutMs: 1_000 })
+    await expect(client.ensure()).resolves.toMatchObject({ host: '127.0.0.1', port })
+    expect(healthChecks).toBeGreaterThanOrEqual(3)
+  })
+
   it('delivers wake subscriptions into a runtime session over the control api', async () => {
     const stateDir = tempStateDir()
-    const previousBin = process.env.KIRI_CODEX_BIN
-    const previousHome = process.env.KIRI_CODEX_HOME
-    process.env.KIRI_CODEX_BIN = join(process.cwd(), 'tests/harness/fake-codex-terminal.mjs')
-    process.env.KIRI_CODEX_HOME = stateDir
-    cleanups.push(() => {
-      if (previousBin === undefined) delete process.env.KIRI_CODEX_BIN
-      else process.env.KIRI_CODEX_BIN = previousBin
-      if (previousHome === undefined) delete process.env.KIRI_CODEX_HOME
-      else process.env.KIRI_CODEX_HOME = previousHome
-    })
+    useFakeCodexTerminal(stateDir)
 
     const handle = await startDaemon(stateDir)
     // Orchestrator: a fake-codex runtime session. Worker: a shell session.

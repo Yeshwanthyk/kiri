@@ -491,6 +491,8 @@ export function makeKiriControl(
     },
   )
 
+  // Shell terminals are intentionally project-scoped: any session in the
+  // project shares and can control the same shell PTY.
   const terminalSessionKey = (target: TerminalTarget) =>
     target.mode === 'runtime'
       ? `${target.agentId}:runtime`

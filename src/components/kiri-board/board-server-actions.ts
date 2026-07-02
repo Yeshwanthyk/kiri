@@ -24,6 +24,7 @@ import {
   setAgentByProjectPreferenceMutation,
   setChatTypographyPreferenceMutation,
   setKeymapPreferenceMutation,
+  setLastSelectedProjectPreferenceMutation,
   setThemePreferenceMutation,
   setThinkingLevelMutation,
   startSessionMutation,
@@ -51,6 +52,7 @@ export function useBoardServerActions() {
   const setAgentByProjectPreference = useServerFn(setAgentByProjectPreferenceMutation)
   const setChatTypographyPreference = useServerFn(setChatTypographyPreferenceMutation)
   const setKeymapPreference = useServerFn(setKeymapPreferenceMutation)
+  const setLastSelectedProjectPreference = useServerFn(setLastSelectedProjectPreferenceMutation)
   const setThemePreference = useServerFn(setThemePreferenceMutation)
   const setThinkingLevel = useServerFn(setThinkingLevelMutation)
   const steerMessage = useServerFn(steerMessageMutation)
@@ -73,11 +75,13 @@ export function useBoardServerActions() {
     setAgentByProjectPreference,
     setChatTypographyPreference,
     setKeymapPreference,
+    setLastSelectedProjectPreference,
     setThemePreference,
   }), [
     setAgentByProjectPreference,
     setChatTypographyPreference,
     setKeymapPreference,
+    setLastSelectedProjectPreference,
     setThemePreference,
   ])
 

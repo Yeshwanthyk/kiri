@@ -166,7 +166,8 @@ export function readWorkspaceSnapshot(
     }))
   const snapshotProjects = snapshotProjectRows.filter((project) => !project.hiddenAt)
   const hiddenProjects = snapshotProjectRows.filter((project) => project.hiddenAt)
-  const selectedProject = snapshotProjects[0]
+  const selectedProject = snapshotProjects.find((project) =>
+    project.id === input.preferences.lastSelectedProjectId) ?? snapshotProjects[0]
   const selectedAgent = selectedProject?.agents[0]
 
   return workspaceSnapshotSchema.parse({

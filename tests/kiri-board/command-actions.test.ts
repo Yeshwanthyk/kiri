@@ -137,6 +137,7 @@ function workspaceWithProjects(
         monoFont: 'fira',
       },
       agentByProject: {},
+      lastSelectedProjectId: null,
     },
     projects,
     hiddenProjects,

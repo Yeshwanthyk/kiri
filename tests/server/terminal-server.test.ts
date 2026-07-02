@@ -265,6 +265,166 @@ describe('terminal server', () => {
     }
   })
 
+  it('dedups concurrent runtime spawns and resizes joined callers to their geometry', async () => {
+    const resize = vi.fn()
+    const spawnPty = vi.fn(() => ({
+      write: vi.fn(),
+      resize,
+      kill: vi.fn(),
+      onData: vi.fn(),
+      onExit: vi.fn(),
+    } as never))
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'pi',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake',
+        args: [],
+        cwd: '/tmp/project',
+        env: process.env,
+        label: 'pi',
+      }),
+      spawnPty,
+    })
+
+    try {
+      await service.ensure()
+      await Promise.all([
+        service.spawnAgentRuntime({ agentId: 'agent-1', cols: 80, rows: 24 }),
+        service.spawnAgentRuntime({ agentId: 'agent-1', cols: 132, rows: 40 }),
+      ])
+
+      expect(spawnPty).toHaveBeenCalledTimes(1)
+      expect(service.registry.sessions.size).toBe(1)
+      expect(service.registry.sessions.get('agent-1:runtime')).toMatchObject({
+        cols: 132,
+        rows: 40,
+      })
+      expect(resize).toHaveBeenCalledWith(132, 40)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('drains pending runtime input after joining an in-flight spawn', async () => {
+    const write = vi.fn()
+    const pendingInput = {
+      text: 'late prompt',
+      submit: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }
+    let takeCount = 0
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'pi',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake',
+        args: [],
+        cwd: '/tmp/project',
+        env: process.env,
+        label: 'pi',
+      }),
+      spawnPty: () => ({
+        write,
+        resize: vi.fn(),
+        kill: vi.fn(),
+        onData: vi.fn(),
+        onExit: vi.fn(),
+      } as never),
+      takeAgentTerminalInputs: () => {
+        takeCount += 1
+        return takeCount === 2 ? [pendingInput] : []
+      },
+    })
+
+    try {
+      await service.ensure()
+      await Promise.all([
+        service.spawnAgentRuntime({ agentId: 'agent-1' }),
+        service.spawnAgentRuntime({ agentId: 'agent-1' }),
+      ])
+
+      expect(write).toHaveBeenCalledWith('late prompt\r')
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('can idle-kill shells without scheduling runtime idle cleanup when configured shell-only', async () => {
+    const runtimeKill = vi.fn()
+    const shellKill = vi.fn()
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'pi',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake',
+        args: [],
+        cwd: '/tmp/project',
+        env: process.env,
+        label: 'pi',
+      }),
+      spawnPty: () => ({
+        write: vi.fn(),
+        resize: vi.fn(),
+        kill: runtimeKill,
+        onData: vi.fn(),
+        onExit: vi.fn(),
+      } as never),
+    }, { idleKillModes: ['shell'] })
+
+    try {
+      await service.spawnAgentRuntime({ agentId: 'agent-1' })
+      const runtime = service.registry.sessions.get('agent-1:runtime')
+      if (!runtime) throw new Error('expected runtime session')
+      service.registry.scheduleIdleKill(runtime)
+      expect(runtime.idleTimer).toBeNull()
+      expect(runtimeKill).not.toHaveBeenCalled()
+
+      const shell = service.registry.register({
+        key: 'project-1:shell',
+        cwd: '/tmp/project',
+        mode: 'shell',
+        label: 'shell',
+        cols: 100,
+        rows: 30,
+        banner: '',
+        proc: {
+          write: vi.fn(),
+          resize: vi.fn(),
+          kill: shellKill,
+          onData: vi.fn(),
+          onExit: vi.fn(),
+        } as never,
+      })
+      service.registry.scheduleIdleKill(shell)
+      expect(shell.idleTimer).not.toBeNull()
+      expect(shellKill).not.toHaveBeenCalled()
+    } finally {
+      await service.close()
+    }
+  })
+
   it('provides a scoped Effect service layer and closes resources after scope exit', async () => {
     const info = await Effect.runPromise(Effect.scoped(
       Effect.gen(function* () {

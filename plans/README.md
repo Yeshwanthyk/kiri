@@ -50,8 +50,8 @@ discoverability.
 
 | Plan | Title | Priority | Effort | Risk | Depends on | Status |
 |---|---|---|---|---|---|---|
-| [009](009-browser-keymap-forwarding.md) | Forward board keymap chords from the focused browser view | P1 | M | MED | — | TODO |
-| [010](010-terminal-respawn-tactical-fix.md) | Stop duplicate PTY spawns; auto-reattach renderer on respawn | P1 | M | MED | — | TODO |
+| [009](009-browser-keymap-forwarding.md) | Forward board keymap chords from the focused browser view | P1 | M | MED | — | DONE — reserved browser chords forwarded; modifier-release clears corner peek |
+| [010](010-terminal-respawn-tactical-fix.md) | Stop duplicate PTY spawns; auto-reattach renderer on respawn | P1 | M | MED | — | DONE — shared spawn singleflight; runtime panes reconnect after exit |
 | [011](011-event-based-terminal-sync.md) | Subscribe-to-key terminal sync with respawn-as-an-event | P2 | L | MED-HIGH | 010 (soft) | TODO |
 
 Order: **009** first (contained, ships the cmd+arrow-over-browser fix). **010**
@@ -78,13 +78,13 @@ above; work them by priority, not strictly in number order.
 
 | Plan | Title | Priority | Effort | Risk | Depends on | Status |
 |---|---|---|---|---|---|---|
-| [012](012-terminal-daemon-pty-lifecycle.md) | Stop killing & double-spawning long-running PTYs (runtime idle-kill, WS-attach dedup gap in 010, cross-process daemon lock, daemon RAM/disk leaks) | P1 | M | MED | soft: 010/011 | TODO |
+| [012](012-terminal-daemon-pty-lifecycle.md) | Stop killing & double-spawning long-running PTYs (runtime idle-kill, WS-attach dedup gap in 010, cross-process daemon lock, daemon RAM/disk leaks) | P1 | M | MED | soft: 010/011 | DONE — runtime idle-kill disabled; shared spawn singleflight; daemon lock/runtime snapshot cleanup |
 | [013](013-codex-thread-mapping-correctness.md) | Codex thread mapping: clear bindings on reset, re-register on steer, subagent-hook guard, concurrent same-cwd cross-map, fragile respawn classifier | P1 | M | MED | soft: 014 | TODO |
 | [014](014-agent-hooks-tightening.md) | Agent hooks tightening (cmux-informed): codex resume re-bind, fire-and-forget hooks, full Claude `--settings` hook bundle, PATH-shim wrappers, pid-anchored transcript | P1 | L | MED | — | TODO |
-| [015](015-session-state-machine-hardening.md) | Session state machine: stuck `blocked` / dead `answerQuestion`, archive-vs-in-flight-turn race, per-read FS-walk cost, no hard-delete growth | P2 | M | MED | — | TODO |
-| [016](016-browser-resource-lifecycle.md) | Browser resource lifecycle: hide-don't-destroy across project/dialog switch, DOM overlays behind native view, focus handoff | P1 | M | MED | pairs with 009 | TODO |
+| [015](015-session-state-machine-hardening.md) | Session state machine: stuck `blocked` / dead `answerQuestion`, archive-vs-in-flight-turn race, per-read FS-walk cost, no hard-delete growth | P2 | M | MED | — | TODO — D12 cleanup overlap satisfied by 018/H7 |
+| [016](016-browser-resource-lifecycle.md) | Browser resource lifecycle: hide-don't-destroy across project/dialog switch, DOM overlays behind native view, focus handoff | P1 | M | MED | pairs with 009 | DONE — browser views stay mounted/hidden across switches and overlays; focus handoff added |
 | [017](017-todos-titles-scratchpad-knowledge.md) | Deterministic auto-titles, TodoWrite capture + cross-session todo view, scratchpad titles, knowledge UI/CRUD/RAG | P1 | L | MED | 014 (hook signals) | TODO |
-| [018](018-workspace-project-switch-move.md) | Workspace hygiene: project-delete shell PTY leak, positional "selected" drift, hide drops tab layout; scopes why real cross-project "move" doesn't exist | P2 | M | MED | coord 012/015/016 | TODO |
+| [018](018-workspace-project-switch-move.md) | Workspace hygiene: project-delete shell PTY leak, positional "selected" drift, hide drops tab layout; scopes why real cross-project "move" doesn't exist | P2 | M | MED | coord 012/015/016 | DONE — project shell cleanup, last-selected project, hidden resource layouts, best-effort runtime cleanup; H6/H8 documented |
 
 Order and dependencies:
 - **012, 013, 014 are the P1 core** of the codex/terminal reliability story and

@@ -91,6 +91,7 @@ export type TerminalServerOptions = {
 type TerminalServerRuntime = {
   readonly token: string
   readonly registry: ReturnType<typeof makeTerminalRegistry>
+  readonly spawnInFlight: Map<string, Promise<TerminalRegistrySession>>
   readonly dependencies: TerminalServerDependencies
   readonly options: TerminalServerOptions
   subscriptions: TerminalSubscriptionsApi
@@ -149,7 +150,10 @@ function makeTerminalServerFacade(): TerminalServerApi {
   let embedded: TerminalServerApi | null = null
 
   const embeddedService = () => {
-    embedded ??= makeTerminalServerService()
+    // Embedded PTYs are owned by this backend process. Runtime PTYs survive
+    // project/resource switches, but not a backend restart; use the daemon (or
+    // a future durable host) when cross-process reattach is required.
+    embedded ??= makeTerminalServerService({}, { idleKillModes: ['shell'] })
     return embedded
   }
 
@@ -206,6 +210,13 @@ export function closeAgentRuntimeTerminal(agentId: string) {
   defaultTerminalServerService.closeAgentRuntime(agentId)
 }
 
+export function closeProjectShellTerminals(projectId: string) {
+  void terminalControlRequest('sessions/kill-prefix', { keyPrefix: `${projectId}:shell` })
+    .catch((error) => {
+      console.error('Kiri project shell cleanup failed', error)
+    })
+}
+
 export function pasteAgentRuntimeTerminal(input: {
   readonly agentId: string
 }) {
@@ -227,6 +238,7 @@ export function makeTerminalServerService(
   let httpServer: Server | null = null
   let webSocketServer: WebSocketServer | null = null
   let terminalServerPromise: Promise<TerminalServerInfo> | null = null
+  const spawnInFlight = new Map<string, Promise<TerminalRegistrySession>>()
   const registry = makeTerminalRegistry({
     idleKillMs,
     socketOpenState: WebSocket.OPEN,
@@ -240,6 +252,7 @@ export function makeTerminalServerService(
   const runtime: TerminalServerRuntime = {
     token: randomBytes(32).toString('base64url'),
     registry,
+    spawnInFlight,
     options,
     subscriptions,
     dependencies: {
@@ -282,7 +295,7 @@ export function makeTerminalServerService(
     }) => {
       await ensureRuntimeTerminalServer(runtime)
       const config = runtime.dependencies.getAgentLaunchConfig(input.agentId)
-      const session = await getOrCreateTerminalSession(
+      const session = await dedupedGetOrCreateTerminalSession(
         runtime,
         config,
         'runtime',
@@ -302,6 +315,7 @@ export function makeTerminalServerService(
       const wss = webSocketServer
       const server = httpServer
       runtime.registry.closeAll()
+      runtime.spawnInFlight.clear()
       webSocketServer = null
       httpServer = null
       terminalServer = null
@@ -417,7 +431,7 @@ async function handleTerminalConnection(
     const cols = positiveInt(query.cols, 100)
     const rows = positiveInt(query.rows, 30)
     const termId = parseTermId(query.termId)
-    session = await getOrCreateTerminalSession(runtime, config, mode, cols, rows, termId)
+    session = await dedupedGetOrCreateTerminalSession(runtime, config, mode, cols, rows, termId)
     attachTerminalSocket(runtime, session, socket)
   } catch (error) {
     closeWithReason(socket, error instanceof Error ? error.message : String(error))
@@ -441,6 +455,39 @@ async function handleTerminalConnection(
   socket.on('close', () => {
     detachTerminalSocket(runtime, session, socket)
   })
+}
+
+async function dedupedGetOrCreateTerminalSession(
+  runtime: TerminalServerRuntime,
+  config: TerminalAgentLaunchConfig,
+  mode: TerminalMode,
+  cols: number,
+  rows: number,
+  termId = 'main',
+) {
+  const existing = runtime.registry.getReusable(config, mode, cols, rows, termId)
+  if (existing) {
+    writePendingTerminalInputs(runtime, config.id, existing, mode)
+    return existing
+  }
+
+  const key = runtime.registry.sessionKey(config, mode, termId)
+  let inflight = runtime.spawnInFlight.get(key)
+  const joinedInFlight = Boolean(inflight)
+  if (!inflight) {
+    inflight = getOrCreateTerminalSession(runtime, config, mode, cols, rows, termId)
+      .finally(() => {
+        runtime.spawnInFlight.delete(key)
+      })
+    runtime.spawnInFlight.set(key, inflight)
+  }
+
+  const session = await inflight
+  if (!session.exited && (session.cols !== cols || session.rows !== rows)) {
+    runtime.registry.resize(session, cols, rows)
+  }
+  if (joinedInFlight && !session.exited) writePendingTerminalInputs(runtime, config.id, session, mode)
+  return session
 }
 
 async function getOrCreateTerminalSession(

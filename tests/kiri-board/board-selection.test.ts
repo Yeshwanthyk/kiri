@@ -68,6 +68,7 @@ function workspaceWithProjects(projects: ProjectRow[]): WorkspaceSnapshot {
         monoFont: 'fira',
       },
       agentByProject: {},
+      lastSelectedProjectId: null,
     },
     projects,
     hiddenProjects: [],

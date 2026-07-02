@@ -191,6 +191,7 @@ export const uiPreferencesSchema = z.object({
   keymap: keymapSettingsSchema.default(defaultKeymap),
   chatTypography: chatTypographySchema.default(defaultChatTypography),
   agentByProject: agentByProjectSchema.default({}),
+  lastSelectedProjectId: z.string().nullable().default(null),
 })
 
 export type UiPreferences = z.infer<typeof uiPreferencesSchema>

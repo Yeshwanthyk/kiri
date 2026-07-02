@@ -31,11 +31,17 @@ contextBridge.exposeInMainWorld('kiriHost', {
     goForward: (browserId) => ipcRenderer.send('kiri:browser:go-forward', browserId),
     reload: (browserId) => ipcRenderer.send('kiri:browser:reload', browserId),
     stop: (browserId) => ipcRenderer.send('kiri:browser:stop', browserId),
+    focusHost: () => ipcRenderer.send('kiri:browser:focus-host'),
     destroy: (browserId) => ipcRenderer.send('kiri:browser:destroy', browserId),
     onState: (handler) => {
       const listener = (_event, state) => handler(state)
       ipcRenderer.on('kiri:browser:state', listener)
       return () => ipcRenderer.removeListener('kiri:browser:state', listener)
+    },
+    onShortcut: (handler) => {
+      const listener = (_event, input) => handler(input)
+      ipcRenderer.on('kiri:browser:shortcut', listener)
+      return () => ipcRenderer.removeListener('kiri:browser:shortcut', listener)
     },
   },
 })

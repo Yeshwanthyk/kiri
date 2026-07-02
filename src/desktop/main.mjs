@@ -264,6 +264,9 @@ function installIpcHandlers() {
   ipcMain.on('kiri:browser:stop', (_event, browserId) => {
     browserViews.get(String(browserId))?.view.webContents.stop()
   })
+  ipcMain.on('kiri:browser:focus-host', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.focus()
+  })
   ipcMain.on('kiri:browser:destroy', (_event, browserId) => {
     destroyBrowserView(String(browserId))
   })
@@ -273,7 +276,12 @@ function createBrowserView(browserId, url) {
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (browserViews.has(browserId)) return
   const view = new WebContentsView({
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      partition: `persist:kiri-browser-${browserPartitionId(browserId)}`,
+    },
   })
   view.setBackgroundColor('#ffffff')
   const entry = { view, favicon: null }
@@ -287,7 +295,9 @@ function createBrowserView(browserId, url) {
   wc.on('did-stop-loading', emit)
   wc.on('did-navigate', emit)
   wc.on('did-navigate-in-page', emit)
-  wc.on('did-fail-load', emit)
+  wc.on('did-fail-load', (_event, _errorCode, _errorDescription, _validatedURL, isMainFrame) => {
+    if (isMainFrame) emit()
+  })
   wc.on('page-title-updated', emit)
   wc.on('page-favicon-updated', (_e, favicons) => {
     entry.favicon = Array.isArray(favicons) && favicons.length > 0 ? favicons[0] : null
@@ -296,11 +306,81 @@ function createBrowserView(browserId, url) {
   // Open popups (target=_blank) in the same view instead of a new OS window.
   wc.setWindowOpenHandler(({ url: popupUrl }) => {
     const target = safeBrowserUrl(popupUrl)
-    if (target) wc.loadURL(target).catch(() => {})
-    return { action: 'deny' }
+    if (!target) return { action: 'deny' }
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          partition: `persist:kiri-browser-${browserPartitionId(browserId)}`,
+        },
+      },
+    }
+  })
+  wc.on('before-input-event', (event, input) => {
+    if (isBrowserModifierRelease(input)) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('kiri:browser:shortcut', browserShortcutPayload(browserId, input, {
+          release: true,
+        }))
+      }
+      return
+    }
+    if (!isReservedBrowserChord(input)) return
+    event.preventDefault()
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('kiri:browser:shortcut', browserShortcutPayload(browserId, input))
+    }
   })
 
   if (url) wc.loadURL(url).catch(() => {})
+}
+
+function browserPartitionId(browserId) {
+  return String(browserId).replace(/[^a-z0-9_-]/gi, '-').slice(0, 80) || 'default'
+}
+
+function isBrowserModifierRelease(input) {
+  if (input.type !== 'keyUp') return false
+  const key = String(input.key ?? '').toLowerCase()
+  return key === 'meta' || key === 'control'
+}
+
+function isReservedBrowserChord(input) {
+  if (input.type !== 'keyDown') return false
+  if (input.isComposing) return false
+  const key = String(input.key ?? '').toLowerCase()
+  const meta = Boolean(input.meta)
+  const control = Boolean(input.control)
+  const alt = Boolean(input.alt)
+  const shift = Boolean(input.shift)
+  const repeat = Boolean(input.isAutoRepeat)
+
+  if ((meta || control) && !alt && !shift && key === 'k') return !repeat
+  if (meta && !control && !alt && !shift && /^[1-9]$/.test(key)) return !repeat
+  if (meta && !control && !alt && !shift) {
+    return key === 'arrowleft' || key === 'arrowright' || key === 'arrowup' || key === 'arrowdown'
+  }
+  if (meta && !control && !alt && shift) {
+    if (repeat) return false
+    return key === 'arrowleft' || key === 'arrowright'
+  }
+  return false
+}
+
+function browserShortcutPayload(browserId, input, extra = {}) {
+  return {
+    browserId,
+    key: String(input.key ?? ''),
+    metaKey: Boolean(input.meta),
+    ctrlKey: Boolean(input.control),
+    altKey: Boolean(input.alt),
+    shiftKey: Boolean(input.shift),
+    repeat: Boolean(input.isAutoRepeat),
+    ...extra,
+  }
 }
 
 function destroyBrowserView(browserId) {

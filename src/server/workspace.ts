@@ -20,6 +20,7 @@ import {
   setAgentByProjectPreferenceInputSchema,
   setChatTypographyPreferenceInputSchema,
   setKeymapPreferenceInputSchema,
+  setLastSelectedProjectPreferenceInputSchema,
   setThemePreferenceInputSchema,
   setThinkingLevelInputSchema,
   startSessionInputSchema,
@@ -110,6 +111,11 @@ export const setAgentByProjectPreferenceMutation = createServerFn({ method: 'POS
   .inputValidator(setAgentByProjectPreferenceInputSchema)
   .handler(async ({ data }) =>
     runWorkspaceServiceMethod((workspace) => workspace.setAgentByProjectPreference(data)))
+
+export const setLastSelectedProjectPreferenceMutation = createServerFn({ method: 'POST' })
+  .inputValidator(setLastSelectedProjectPreferenceInputSchema)
+  .handler(async ({ data }) =>
+    runWorkspaceServiceMethod((workspace) => workspace.setLastSelectedProjectPreference(data)))
 
 export const resetSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(resetSessionInputSchema)

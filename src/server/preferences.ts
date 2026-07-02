@@ -34,6 +34,9 @@ export type UiPreferencesApi = {
   readonly setAgentByProject: (
     agentByProject: Record<string, string>,
   ) => Effect.Effect<UiPreferences, UiPreferencesError>
+  readonly setLastSelectedProject: (
+    projectId: string | null,
+  ) => Effect.Effect<UiPreferences, UiPreferencesError>
 }
 
 export type PreferencesFileSystem = {
@@ -121,6 +124,14 @@ export function makeUiPreferencesService(input: {
           fs,
         )
       ),
+    setLastSelectedProject: (projectId) =>
+      withPath((preferencesPath) =>
+        updateUiPreferencesWithFs(
+          (current) => ({ ...current, lastSelectedProjectId: projectId }),
+          preferencesPath,
+          fs,
+        )
+      ),
   }
 }
 
@@ -154,6 +165,13 @@ export function setAgentByProjectPreference(
   preferencesPath = getKiriConfig().preferencesPath,
 ): UiPreferences {
   return updateUiPreferences((current) => ({ ...current, agentByProject }), preferencesPath)
+}
+
+export function setLastSelectedProjectPreference(
+  projectId: string | null,
+  preferencesPath = getKiriConfig().preferencesPath,
+): UiPreferences {
+  return updateUiPreferences((current) => ({ ...current, lastSelectedProjectId: projectId }), preferencesPath)
 }
 
 function updateUiPreferences(

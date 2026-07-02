@@ -8,6 +8,7 @@ import {
   takeAgentTerminalInputs,
 } from './db'
 import {
+  acquireKiritermDaemonLock,
   checkKiritermDaemonHealth,
   defaultKiritermStateDir,
   readKiritermDaemonRecord,
@@ -51,12 +52,25 @@ export function makeKiritermDaemonClient(
       record = existing
       return existing
     }
-    spawnDaemonProcess(stateDir)
-    const deadline = Date.now() + (options.spawnTimeoutMs ?? 8_000)
+    const spawnTimeoutMs = options.spawnTimeoutMs ?? 8_000
+    const lock = acquireKiritermDaemonLock(stateDir, spawnTimeoutMs)
+    if (lock) {
+      try {
+        const latest = readKiritermDaemonRecord(stateDir)
+        if (latest && (await checkKiritermDaemonHealth(latest))) {
+          record = latest
+          return latest
+        }
+        spawnDaemonProcess(stateDir)
+      } finally {
+        lock.release()
+      }
+    }
+    const deadline = Date.now() + spawnTimeoutMs
     while (Date.now() < deadline) {
       await sleep(120)
       const candidate = readKiritermDaemonRecord(stateDir)
-      if (candidate && candidate !== existing && (await checkKiritermDaemonHealth(candidate))) {
+      if (candidate && (await checkKiritermDaemonHealth(candidate))) {
         record = candidate
         return candidate
       }

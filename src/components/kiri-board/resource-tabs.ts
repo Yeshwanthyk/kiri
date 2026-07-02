@@ -65,6 +65,21 @@ export const emptyResourceShellLayout: ResourceShellLayout = {
   projects: {},
 }
 
+export function collectBrowserResources(
+  resourcesByProject: Record<string, { readonly resources: readonly ProjectResource[] }>,
+) {
+  const seen = new Set<string>()
+  const result: BrowserResource[] = []
+  for (const entry of Object.values(resourcesByProject)) {
+    for (const resource of entry.resources) {
+      if (resource.kind !== 'browser' || seen.has(resource.id)) continue
+      seen.add(resource.id)
+      result.push(resource)
+    }
+  }
+  return result
+}
+
 export function agentResourceId(agentId: string): `agent:${string}` {
   return `agent:${agentId}`
 }

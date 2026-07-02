@@ -6,6 +6,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -54,6 +55,11 @@ const pendingInputSchema = z.object({
   submit: z.boolean(),
   createdAt: z.string(),
 })
+
+const daemonRecordFile = 'daemon.json'
+const daemonLockFile = 'daemon.lock'
+const daemonLockStaleMs = 8_000
+const daemonHealthTimeoutMs = 2_000
 
 const launchConfigSchema = z.object({
   id: z.string().min(1),
@@ -131,7 +137,7 @@ export function defaultKiritermStateDir() {
 }
 
 export function readKiritermDaemonRecord(stateDir: string): KiritermDaemonRecord | null {
-  const recordPath = join(stateDir, 'daemon.json')
+  const recordPath = join(stateDir, daemonRecordFile)
   if (!existsSync(recordPath)) return null
   try {
     const parsed: unknown = JSON.parse(readFileSync(recordPath, 'utf8'))
@@ -155,7 +161,7 @@ export async function checkKiritermDaemonHealth(record: KiritermDaemonRecord) {
   try {
     const response = await fetch(`http://${record.host}:${record.port}/api/health`, {
       headers: { authorization: `Bearer ${record.token}` },
-      signal: AbortSignal.timeout(700),
+      signal: AbortSignal.timeout(daemonHealthTimeoutMs),
     })
     if (!response.ok) return false
     const body: unknown = await response.json()
@@ -163,6 +169,49 @@ export async function checkKiritermDaemonHealth(record: KiritermDaemonRecord) {
   } catch {
     return false
   }
+}
+
+export type KiritermDaemonLock = {
+  readonly path: string
+  readonly release: () => void
+}
+
+export function acquireKiritermDaemonLock(
+  stateDir: string,
+  staleMs = daemonLockStaleMs,
+): KiritermDaemonLock | null {
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const lockPath = join(stateDir, daemonLockFile)
+  const owner = `${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+  const contents = JSON.stringify({ owner, pid: process.pid, createdAtMs: Date.now() })
+
+  const tryWrite = () => {
+    try {
+      writeFileSync(lockPath, contents, { flag: 'wx', mode: 0o600 })
+      let released = false
+      return {
+        path: lockPath,
+        release: () => {
+          if (released) return
+          released = true
+          if (readDaemonLockOwner(lockPath) === owner) {
+            rmSync(lockPath, { force: true })
+          }
+        },
+      }
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST') {
+        return null
+      }
+      throw error
+    }
+  }
+
+  const acquired = tryWrite()
+  if (acquired) return acquired
+  if (!isDaemonLockStale(lockPath, staleMs)) return null
+  rmSync(lockPath, { force: true })
+  return tryWrite()
 }
 
 export async function startKiritermDaemon(
@@ -176,12 +225,27 @@ export async function startKiritermDaemon(
   if (existing && (await checkKiritermDaemonHealth(existing))) {
     throw new Error(`kiriterm daemon already running (pid ${existing.pid}, port ${existing.port})`)
   }
+  let startLock = acquireKiritermDaemonLock(stateDir)
+  if (!startLock) {
+    const deadline = Date.now() + daemonLockStaleMs
+    while (!startLock && Date.now() < deadline) {
+      const healthy = readKiritermDaemonRecord(stateDir)
+      if (healthy && (await checkKiritermDaemonHealth(healthy))) {
+        throw new Error(`kiriterm daemon already running (pid ${healthy.pid}, port ${healthy.port})`)
+      }
+      await sleep(100)
+      startLock = acquireKiritermDaemonLock(stateDir)
+    }
+    if (!startLock) throw new Error('kiriterm daemon is already starting')
+  }
 
   const agents = new Map<string, AgentEntry>()
   const codexLaunches: KiritermCodexLaunch[] = []
   const restoredSessions = loadPersistedSessions(sessionsDir)
   const lastDumpByKey = new Map<string, string>()
+  let dumpInFlight: Promise<void> | null = null
 
+  try {
   const service = makeTerminalServerService(
     {
       getAgentLaunchConfig: (agentId) => {
@@ -217,7 +281,11 @@ export async function startKiritermDaemon(
       handleHttpRequest: (request, response, context) =>
         handleControlRequest(request, response, context),
       restoreContent: (key, mode) => {
-        if (mode !== 'shell') return null
+        if (mode !== 'shell') {
+          restoredSessions.delete(key)
+          deletePersistedSession(sessionsDir, key)
+          return null
+        }
         const persisted = restoredSessions.get(key)
         if (!persisted) return null
         restoredSessions.delete(key)
@@ -236,10 +304,11 @@ export async function startKiritermDaemon(
     version: options.version ?? process.env.KIRI_TERM_DAEMON_VERSION ?? 'dev',
     startedAt: new Date().toISOString(),
   }
-  writeFileAtomic(join(stateDir, 'daemon.json'), JSON.stringify(record, null, 2))
+  writeFileAtomic(join(stateDir, daemonRecordFile), JSON.stringify(record, null, 2))
+  startLock.release()
 
   const dumpInterval = setInterval(() => {
-    dumpSessions()
+    void queueDumpSessions()
   }, options.dumpIntervalMs ?? 30_000)
   dumpInterval.unref?.()
 
@@ -248,23 +317,40 @@ export async function startKiritermDaemon(
     if (closed) return
     closed = true
     clearInterval(dumpInterval)
-    dumpSessions()
+    await queueDumpSessions()
     await service.close()
     const current = readKiritermDaemonRecord(stateDir)
     if (current && current.pid === process.pid) {
-      rmSync(join(stateDir, 'daemon.json'), { force: true })
+      rmSync(join(stateDir, daemonRecordFile), { force: true })
     }
+    startLock.release()
   }
 
   return { info, record, stateDir, close }
 
-  function dumpSessions() {
+  function queueDumpSessions() {
+    dumpInFlight ??= dumpSessions().finally(() => {
+      dumpInFlight = null
+    })
+    return dumpInFlight
+  }
+
+  async function dumpSessions() {
     const liveKeys = new Set<string>()
     for (const session of service.registry.sessions.values()) {
       if (session.exited) continue
+      if (session.mode !== 'shell') {
+        lastDumpByKey.delete(session.key)
+        deletePersistedSession(sessionsDir, session.key)
+        await yieldToEventLoop()
+        continue
+      }
       liveKeys.add(session.key)
       const stamp = `${session.outputSeq}:${session.cols}:${session.rows}`
-      if (lastDumpByKey.get(session.key) === stamp) continue
+      if (lastDumpByKey.get(session.key) === stamp) {
+        await yieldToEventLoop()
+        continue
+      }
       try {
         const snapshot = service.registry.snapshot(session)
         const persisted: PersistedSession = {
@@ -278,13 +364,14 @@ export async function startKiritermDaemon(
           savedAt: new Date().toISOString(),
         }
         writeFileAtomic(
-          join(sessionsDir, `${encodeURIComponent(session.key)}.json`),
+          persistedSessionPath(sessionsDir, session.key),
           JSON.stringify(persisted),
         )
         lastDumpByKey.set(session.key, stamp)
       } catch (error) {
         console.error('kiriterm: failed to persist session snapshot', session.key, error)
       }
+      await yieldToEventLoop()
     }
     for (const key of lastDumpByKey.keys()) {
       if (!liveKeys.has(key)) lastDumpByKey.delete(key)
@@ -371,6 +458,10 @@ export async function startKiritermDaemon(
     if (route === 'POST /api/agents/close-runtime') {
       const input = agentIdSchema.parse(body)
       service.closeAgentRuntime(input.agentId)
+      const key = `${input.agentId}:runtime`
+      lastDumpByKey.delete(key)
+      restoredSessions.delete(key)
+      deletePersistedSession(sessionsDir, key)
       sendControlJson(response, 200, { ok: true })
       return
     }
@@ -408,6 +499,10 @@ export async function startKiritermDaemon(
 
     sendControlJson(response, 404, { error: `Unknown route ${route}` })
   }
+  } catch (error) {
+    startLock.release()
+    throw error
+  }
 }
 
 export async function runKiritermDaemon(options: KiritermDaemonOptions = {}) {
@@ -436,10 +531,15 @@ function loadPersistedSessions(sessionsDir: string) {
   }
   for (const entry of entries) {
     if (!entry.endsWith('.json')) continue
+    const path = join(sessionsDir, entry)
     try {
-      const parsed: unknown = JSON.parse(readFileSync(join(sessionsDir, entry), 'utf8'))
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
       const result = persistedSessionSchema.safeParse(parsed)
-      if (result.success) restored.set(result.data.key, result.data)
+      if (result.success && result.data.mode === 'shell') {
+        restored.set(result.data.key, result.data)
+      } else if (result.success) {
+        rmSync(path, { force: true })
+      }
     } catch {
       // Ignore corrupted snapshot files.
     }
@@ -452,4 +552,61 @@ function writeFileAtomic(path: string, contents: string) {
   writeFileSync(tmp, contents, { mode: 0o600 })
   chmodSync(tmp, 0o600)
   renameSync(tmp, path)
+}
+
+function persistedSessionPath(sessionsDir: string, key: string) {
+  return join(sessionsDir, `${encodeURIComponent(key)}.json`)
+}
+
+function deletePersistedSession(sessionsDir: string, key: string) {
+  rmSync(persistedSessionPath(sessionsDir, key), { force: true })
+}
+
+function readDaemonLockOwner(path: string) {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      'owner' in parsed &&
+      typeof parsed.owner === 'string'
+    ) {
+      return parsed.owner
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function isDaemonLockStale(path: string, staleMs: number) {
+  const now = Date.now()
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      'createdAtMs' in parsed &&
+      typeof parsed.createdAtMs === 'number'
+    ) {
+      return now - parsed.createdAtMs > staleMs
+    }
+  } catch {
+    // Fall back to mtime below.
+  }
+  try {
+    return now - statSync(path).mtimeMs > staleMs
+  } catch {
+    return true
+  }
+}
+
+function yieldToEventLoop() {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }

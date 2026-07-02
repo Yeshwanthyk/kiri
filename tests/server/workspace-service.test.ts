@@ -366,6 +366,7 @@ describe('WorkspaceService', () => {
       setKeymap: () => Effect.succeed(defaultUiPreferences),
       setChatTypography: () => Effect.succeed(defaultUiPreferences),
       setAgentByProject: () => Effect.succeed(defaultUiPreferences),
+      setLastSelectedProject: () => Effect.succeed(defaultUiPreferences),
     })
     const layer = WorkspaceService.layer.pipe(
       Layer.provide(Layer.mergeAll(terminalLayer, preferencesLayer)),
@@ -408,6 +409,7 @@ function testDependencies(
     setKeymapPreference: () => Effect.succeed(defaultUiPreferences),
     setChatTypographyPreference: () => Effect.succeed(defaultUiPreferences),
     setAgentByProjectPreference: () => Effect.succeed(defaultUiPreferences),
+    setLastSelectedProjectPreference: () => Effect.succeed(defaultUiPreferences),
     resetAgentSession: () => Promise.resolve(),
     forkAgentSession: () => Promise.resolve('agent-2'),
     reviewAgentSession: () => Promise.resolve(),

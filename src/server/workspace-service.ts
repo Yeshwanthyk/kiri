@@ -113,6 +113,9 @@ export type WorkspaceServiceApi = {
   readonly setAgentByProjectPreference: (
     input: UiPreferences['agentByProject']
   ) => Effect.Effect<UiPreferences, WorkspaceServiceError>
+  readonly setLastSelectedProjectPreference: (
+    input: UiPreferences['lastSelectedProjectId']
+  ) => Effect.Effect<UiPreferences, WorkspaceServiceError>
   readonly resetSession: (input: ResetSessionInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly forkSession: (input: ForkSessionInput) => Effect.Effect<{
     readonly agentId: string
@@ -185,6 +188,9 @@ export type WorkspaceServiceDependencies = {
   readonly setAgentByProjectPreference: (
     input: UiPreferences['agentByProject']
   ) => Effect.Effect<UiPreferences, unknown>
+  readonly setLastSelectedProjectPreference: (
+    input: UiPreferences['lastSelectedProjectId']
+  ) => Effect.Effect<UiPreferences, unknown>
   readonly resetAgentSession: (input: ResetSessionInput) => Promise<unknown>
   readonly forkAgentSession: (input: ForkSessionInput) => Promise<string>
   readonly reviewAgentSession: (input: ReviewSessionInput) => Promise<unknown>
@@ -226,6 +232,7 @@ function liveWorkspaceServiceDependencies(
     setKeymapPreference: input.preferences.setKeymap,
     setChatTypographyPreference: input.preferences.setChatTypography,
     setAgentByProjectPreference: input.preferences.setAgentByProject,
+    setLastSelectedProjectPreference: input.preferences.setLastSelectedProject,
     resetAgentSession,
     forkAgentSession,
     reviewAgentSession,
@@ -362,6 +369,10 @@ export function makeWorkspaceService(
     setAgentByProjectPreference: effectMethod(
       'WorkspaceService.setAgentByProjectPreference',
       dependencies.setAgentByProjectPreference,
+    ),
+    setLastSelectedProjectPreference: effectMethod(
+      'WorkspaceService.setLastSelectedProjectPreference',
+      dependencies.setLastSelectedProjectPreference,
     ),
     resetSession: snapshotAfterPromiseMethod('WorkspaceService.resetSession', dependencies.resetAgentSession),
     forkSession: Effect.fn('WorkspaceService.forkSession')(function* (input) {

@@ -155,6 +155,54 @@ describe('workspace snapshot projection', () => {
     }
   })
 
+  it('uses last selected project preference before positional fallback', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-workspace-selected-project-'))
+    const alphaCwd = join(root, 'alpha')
+    const betaCwd = join(root, 'beta')
+    mkdirSync(alphaCwd, { recursive: true })
+    mkdirSync(betaCwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const alphaId = insertProject(database, { name: 'Alpha', cwd: alphaCwd })
+      const betaId = insertProject(database, { name: 'Beta', cwd: betaCwd })
+      insertSessionRow(database, {
+        projectId: alphaId,
+        title: 'Alpha Session',
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, 'sessions', slot),
+        now: () => '2026-01-01T00:00:00.000Z',
+        slotTimestampMs: () => 10,
+        slotSuffix: () => 'aaaaaa',
+      })
+      const betaAgentId = insertSessionRow(database, {
+        projectId: betaId,
+        title: 'Beta Session',
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, 'sessions', slot),
+        now: () => '2026-01-01T00:00:01.000Z',
+        slotTimestampMs: () => 11,
+        slotSuffix: () => 'bbbbbb',
+      })
+
+      const snapshot = readWorkspaceSnapshot(database, {
+        settings,
+        preferences: { ...defaultUiPreferences, lastSelectedProjectId: betaId },
+        scratchpadBlocks: [],
+      })
+
+      expect(snapshot.projects.map((project) => project.id)).toEqual([alphaId, betaId])
+      expect(snapshot.selected).toEqual({ projectId: betaId, agentId: betaAgentId })
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('changes the cheap revision when projected workspace state changes', () => {
     const root = mkdtempSync(join(tmpdir(), 'kiri-db-workspace-revision-'))
     const cwd = join(root, 'project')

@@ -231,6 +231,14 @@
   background: var(--paper);
 }
 
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  overflow: auto;
+  background: var(--paper);
+}
+
 .settings-topbar {
   position: sticky;
   top: 0;

@@ -7,7 +7,12 @@ import type { SidebarTab } from './board-types'
 import { CornerPeek } from './corner-peek'
 import { ResourceStage } from './resource-stage'
 import { ResourceTabStrip } from './resource-tab-strip'
-import type { BrowserResource, ProjectResource, ResourceId } from './resource-tabs'
+import {
+  collectBrowserResources,
+  type BrowserResource,
+  type ProjectResource,
+  type ResourceId,
+} from './resource-tabs'
 import { ScratchpadHeader, ScratchpadPanel } from './scratchpad'
 
 type StageProps = React.ComponentProps<typeof ResourceStage>
@@ -50,6 +55,7 @@ type CornerPeekShellProps = Omit<
   readonly onStartSession: () => void
   readonly onOpenProjects: (returnFocusElement?: HTMLElement | null) => void
   readonly onOpenSettings: () => void
+  readonly onPeekExpandedChange?: (expanded: boolean) => void
 }
 
 export function CornerPeekShell({
@@ -77,6 +83,7 @@ export function CornerPeekShell({
   onStartSession,
   onOpenProjects,
   onOpenSettings,
+  onPeekExpandedChange,
   ...stageProps
 }: CornerPeekShellProps) {
   const activeResource = resources.find((resource) => resource.id === activeResourceId) ?? resources[0]
@@ -88,8 +95,8 @@ export function CornerPeekShell({
   const stageBrowser = resolveStageBrowser(activeResource)
   const stageTab = resolveStageTab(activeResource)
   const browserResources = React.useMemo(
-    () => resources.filter((resource): resource is BrowserResource => resource.kind === 'browser'),
-    [resources],
+    () => collectBrowserResources(resourcesByProject),
+    [resourcesByProject],
   )
 
   function selectResource(resourceId: ResourceId) {
@@ -138,6 +145,7 @@ export function CornerPeekShell({
         onSelectResource={onSelectResource}
         onOpenProjects={onOpenProjects}
         onOpenSettings={onOpenSettings}
+        onExpandedChange={onPeekExpandedChange}
       />
 
       <ResourceStage

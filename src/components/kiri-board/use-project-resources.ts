@@ -54,16 +54,21 @@ export function useProjectResources({
     }
   }, [activeProjectId, hydrated, initialStoredActiveProjectId, workspace.projects])
 
+  const resourceProjects = React.useMemo(
+    () => [...workspace.projects, ...workspace.hiddenProjects],
+    [workspace.hiddenProjects, workspace.projects],
+  )
+
   const reconciled = React.useMemo(() => {
     const projects: Record<string, ReturnType<typeof reconcileProjectResources>> = {}
-    for (const project of workspace.projects) {
+    for (const project of resourceProjects) {
       projects[project.id] = reconcileProjectResources({
         project,
         layout: storedLayout.projects[project.id],
       })
     }
     return projects
-  }, [storedLayout.projects, workspace.projects])
+  }, [resourceProjects, storedLayout.projects])
 
   const layout = React.useMemo<ResourceShellLayout>(() => {
     const storedActiveProjectVisible = Boolean(
@@ -91,7 +96,7 @@ export function useProjectResources({
     initialStoredActiveProjectId,
     reconciled,
     storedLayout.activeProjectId,
-    workspace.projects,
+    resourceProjects,
   ])
 
   React.useEffect(() => {

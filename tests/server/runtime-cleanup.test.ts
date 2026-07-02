@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { WorkspaceSnapshot } from '~/lib/contracts'
 import { defaultUiPreferences } from '~/lib/ui-preferences'
 import {
@@ -25,7 +25,7 @@ const emptyWorkspaceSnapshot: WorkspaceSnapshot = {
 }
 
 describe('runtime cleanup use-cases', () => {
-  it('cleans every project session runtime only after project delete succeeds', () => {
+  it('cleans every project session runtime before deleting the project', () => {
     const calls: string[] = []
 
     const result = deleteProjectSummaryWithRuntimeCleanup('project-1', {
@@ -57,15 +57,51 @@ describe('runtime cleanup use-cases', () => {
     expect(result).toMatchObject({ id: 'project-1', name: 'Project' })
     expect(calls).toEqual([
       'list:project-1',
-      'delete:project-1',
       'forget:pi:agent-1',
       'terminal:agent-1',
       'forget:codex:agent-2',
       'terminal:agent-2',
+      'delete:project-1',
     ])
   })
 
-  it('does not stop runtimes when project delete validation fails', () => {
+  it('closes project-scoped shell terminals before deleting the project', () => {
+    const calls: string[] = []
+
+    deleteProjectSummaryWithRuntimeCleanup('project-1', {
+      listSessions: (projectId) => {
+        calls.push(`list:${projectId}`)
+        return []
+      },
+      deleteProject: (projectId) => {
+        calls.push(`delete:${projectId}`)
+        return {
+          id: projectId,
+          name: 'Project',
+          cwd: '/tmp/project',
+          hidden: false,
+          sessionCount: 0,
+        }
+      },
+      forgetRuntime: (runtime, agentId) => {
+        calls.push(`forget:${runtime}:${agentId}`)
+      },
+      closeTerminal: (agentId) => {
+        calls.push(`terminal:${agentId}`)
+      },
+      closeProjectTerminals: (projectId) => {
+        calls.push(`project-terminal:${projectId}`)
+      },
+    })
+
+    expect(calls).toEqual([
+      'list:project-1',
+      'project-terminal:project-1',
+      'delete:project-1',
+    ])
+  })
+
+  it('cleans live runtimes before surfacing project delete validation failures', () => {
     const calls: string[] = []
 
     expect(() =>
@@ -87,7 +123,54 @@ describe('runtime cleanup use-cases', () => {
       }),
     ).toThrow('Cannot delete the last project')
 
-    expect(calls).toEqual(['list', 'delete'])
+    expect(calls).toEqual(['list', 'forget:pi:agent-1', 'terminal:agent-1', 'delete'])
+  })
+
+  it('attempts every project runtime and shell cleanup before logging cleanup failures', () => {
+    const calls: string[] = []
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      const result = deleteProjectSummaryWithRuntimeCleanup('project-1', {
+        listSessions: () => [
+          { id: 'agent-1', runtime: 'pi' },
+          { id: 'agent-2', runtime: 'codex' },
+        ],
+        deleteProject: (projectId) => {
+          calls.push(`delete:${projectId}`)
+          return {
+            id: projectId,
+            name: 'Project',
+            cwd: '/tmp/project',
+            hidden: false,
+            sessionCount: 2,
+          }
+        },
+        forgetRuntime: (runtime, agentId) => {
+          calls.push(`forget:${runtime}:${agentId}`)
+          if (agentId === 'agent-1') throw new Error('Runtime cleanup failed')
+        },
+        closeTerminal: (agentId) => {
+          calls.push(`terminal:${agentId}`)
+        },
+        closeProjectTerminals: (projectId) => {
+          calls.push(`project-terminal:${projectId}`)
+        },
+      })
+
+      expect(result.id).toBe('project-1')
+      expect(calls).toEqual([
+        'forget:pi:agent-1',
+        'terminal:agent-1',
+        'forget:codex:agent-2',
+        'terminal:agent-2',
+        'project-terminal:project-1',
+        'delete:project-1',
+      ])
+      expect(consoleError).toHaveBeenCalledTimes(1)
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 
   it('cleans a session runtime only after session delete succeeds', () => {
@@ -202,6 +285,7 @@ describe('runtime cleanup use-cases', () => {
       'find:agent-1',
       'delete:agent-1',
       'forget:codex:agent-1',
+      'terminal:agent-1',
     ])
   })
 
