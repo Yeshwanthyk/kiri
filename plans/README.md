@@ -152,7 +152,7 @@ resulting Claude task rows.
 
 | Plan | Title | Priority | Effort | Risk | Depends on | Status |
 |---|---|---|---|---|---|---|
-| [019](019-osc-agent-presence.md) | Terminal-stream agent presence via OSC 3008: hooks `printf` to their own tty, the server-side headless xterm parses per-PTY (deterministic status, zero process spawn, SSH-safe, supacode-format-compatible) | P2 | M | MED | soft: 014 (hook registration), 011 (daemon-mode delivery) | TODO |
+| [019](019-osc-agent-presence.md) | Terminal-stream agent presence via OSC 3008: hooks `printf` to their own tty, the server-side headless xterm parses per-PTY (deterministic status, zero process spawn, SSH-safe) | P2 | M | MED | soft: 014 (hook registration), 011 (daemon-mode delivery) | DONE (embedded; daemon projection deferred) |
 | [020](020-zmx-durable-terminal-sessions.md) | Durable terminal sessions via zmx (evaluate + prototype): wrap PTY launches in `zmx attach` so agents survive backend restart/crash; would supersede the kiriterm daemon on GO | P2 | L | MED-HIGH | coord 010/011/012 — land 012's A-KILL regardless | TODO |
 
 - **020 is the strategic track, 012 the tactical one.** 012 is small and
@@ -161,9 +161,8 @@ resulting Claude task rows.
   and 012's daemon-only steps (3/5/6).
 - **019 complements 014** rather than replacing it: OSC becomes the transport
   for the small, frequent status events; `kirictl` remains for SessionStart
-  resume-binding and TodoWrite payloads. Per-PTY attribution also covers the
-  hand-typed invocations 014 Step 4's shim explicitly cannot bind, and picks
-  up presence from supacode-installed hooks for free.
+  resume-binding and TodoWrite payloads. The shipped path is the new runtime
+  launch bundle; PATH shims were left out of scope.
 
 ## Findings considered and rejected
 

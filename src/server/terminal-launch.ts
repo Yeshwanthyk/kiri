@@ -9,6 +9,7 @@ import {
   type RuntimeBinaryError,
   type RuntimeBinariesApi,
 } from './runtime-binaries'
+import { agentPresenceShellCommand } from './agent-presence'
 export { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { commonTerminalEnv, removeColorDisablingEnv, withTerminalShimPath } from './terminal-env'
@@ -238,11 +239,11 @@ function writeClaudeHookSettings(config: TerminalAgentLaunchConfig, context: Ter
   return Effect.gen(function* () {
   const settings = claudeHookSettings({
     SessionStart: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'session-start'])),
-    UserPromptSubmit: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'user-prompt-submit'])),
-    Stop: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'stop'])),
-    SessionEnd: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'session-end'])),
-    PreToolUse: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'pre-tool-use'])),
-    PermissionRequest: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'permission-request'])),
+    UserPromptSubmit: agentPresenceShellCommand('claude', 'busy'),
+    Stop: agentPresenceShellCommand('claude', 'idle'),
+    SessionEnd: agentPresenceShellCommand('claude', 'session_end'),
+    PreToolUse: agentPresenceShellCommand('claude', 'awaiting_input'),
+    PermissionRequest: agentPresenceShellCommand('claude', 'awaiting_input'),
     PostToolUse: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'post-tool-use'])),
   })
   const settingsPath = join(config.sessionDir, 'claude-hooks-settings.json')

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { Effect } from 'effect'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket, type RawData } from 'ws'
+import type { AgentStatus } from '~/lib/contracts'
 import {
   closeTerminalServerForTests,
   ensureTerminalServer,
@@ -12,6 +13,7 @@ import {
   TerminalServerService,
 } from '~/server/terminal-server'
 import { readCodexHookSessionBinding } from '~/server/codex-terminal-session'
+import type { TerminalRegistrySession } from '~/server/terminal-registry'
 
 describe('terminal server', () => {
   afterEach(async () => {
@@ -360,6 +362,77 @@ describe('terminal server', () => {
     }
   })
 
+  it('projects runtime OSC presence into agent status and leaves shell presence local', async () => {
+    const statuses: Array<{ agentId: string; status: AgentStatus }> = []
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'claude',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake',
+        args: [],
+        cwd: '/tmp/project',
+        env: process.env,
+        label: 'claude',
+      }),
+      spawnPty: () => ({
+        write: vi.fn(),
+        resize: vi.fn(),
+        kill: vi.fn(),
+        onData: vi.fn(),
+        onExit: vi.fn(),
+      } as never),
+      setAgentStatus: (agentId, status) => {
+        statuses.push({ agentId, status })
+      },
+    })
+
+    try {
+      await service.spawnAgentRuntime({ agentId: 'agent-1' })
+      const runtime = service.registry.sessions.get('agent-1:runtime')
+      if (!runtime) throw new Error('expected runtime session')
+      service.registry.append(runtime, '\x1b]3008;start=claude;event=busy\x1b\\')
+      await drainTerminalSession(runtime)
+      service.registry.append(runtime, '\x1b]3008;start=claude;event=awaiting_input\x1b\\')
+      await drainTerminalSession(runtime)
+      service.registry.exit(runtime, '[exited]')
+
+      const shell = service.registry.register({
+        key: 'project-1:shell',
+        cwd: '/tmp/project',
+        mode: 'shell',
+        label: 'shell',
+        cols: 100,
+        rows: 30,
+        banner: '',
+        proc: {
+          write: vi.fn(),
+          resize: vi.fn(),
+          kill: vi.fn(),
+          onData: vi.fn(),
+          onExit: vi.fn(),
+        } as never,
+      })
+      service.registry.append(shell, '\x1b]3008;start=claude;event=busy\x1b\\')
+      await drainTerminalSession(shell)
+
+      expect(statuses).toEqual([
+        { agentId: 'agent-1', status: 'running' },
+        { agentId: 'agent-1', status: 'blocked' },
+        { agentId: 'agent-1', status: 'idle' },
+      ])
+      expect(shell.presence).toEqual({ agent: 'claude', event: 'busy' })
+    } finally {
+      await service.close()
+    }
+  })
+
   it('drains pending runtime input after joining an in-flight spawn', async () => {
     const write = vi.fn()
     const pendingInput = {
@@ -605,6 +678,14 @@ function rawDataToString(raw: RawData) {
   if (Array.isArray(raw)) return Buffer.concat(raw).toString('utf8')
   if (Buffer.isBuffer(raw)) return raw.toString('utf8')
   return Buffer.from(raw).toString('utf8')
+}
+
+function drainTerminalSession(session: TerminalRegistrySession) {
+  return new Promise<void>((resolve) => {
+    session.headless.write('', () => {
+      resolve()
+    })
+  })
 }
 
 function close(server: Server) {

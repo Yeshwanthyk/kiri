@@ -4,6 +4,7 @@ import { delimiter, join, resolve } from 'node:path'
 import { Effect } from 'effect'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { makeRuntimeBinariesService, RuntimeBinaryError } from '~/server/runtime-binaries'
+import { agentPresenceShellCommand } from '~/server/agent-presence'
 import {
   buildTerminalProcessLaunch,
   claudeTerminalSessionId,
@@ -145,9 +146,17 @@ describe('buildTerminalProcessLaunch', () => {
     expect(settings.hooks.SessionStart?.[0]?.hooks[0]?.command)
       .toBe("'/tmp/bin/kiri-mcp' 'claude-hook' 'session-start'")
     expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.async).toBe(true)
+    expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command)
+      .toBe(agentPresenceShellCommand('claude', 'busy'))
     expect(settings.hooks.Stop?.[0]?.hooks[0]?.command)
-      .toBe("'/tmp/bin/kiri-mcp' 'claude-hook' 'stop'")
+      .toBe(agentPresenceShellCommand('claude', 'idle'))
+    expect(settings.hooks.SessionEnd?.[0]?.hooks[0]?.command)
+      .toBe(agentPresenceShellCommand('claude', 'session_end'))
     expect(settings.hooks.PreToolUse?.[0]?.matcher).toBe('AskUserQuestion|ExitPlanMode')
+    expect(settings.hooks.PreToolUse?.[0]?.hooks[0]?.command)
+      .toBe(agentPresenceShellCommand('claude', 'awaiting_input'))
+    expect(settings.hooks.PermissionRequest?.[0]?.hooks[0]?.command)
+      .toBe(agentPresenceShellCommand('claude', 'awaiting_input'))
     expect(settings.hooks.PostToolUse?.[0]?.matcher).toBe('TodoWrite')
     expect(settings.hooks.PostToolUse?.[0]?.hooks[0]?.command)
       .toBe("'/tmp/bin/kiri-mcp' 'claude-hook' 'post-tool-use'")

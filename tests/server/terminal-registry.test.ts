@@ -4,6 +4,7 @@ import {
   makeTerminalRegistry,
   type TerminalRegistrySession,
 } from '../../src/server/terminal-registry'
+import type { AgentPresenceEvent } from '../../src/server/agent-presence'
 
 function proc() {
   return {
@@ -43,6 +44,7 @@ type RegistryOptions = {
   idleKillMs?: number
   highWatermarkBytes?: number
   lowWatermarkBytes?: number
+  onPresenceEvent?: (key: string, mode: 'runtime' | 'shell', event: AgentPresenceEvent) => void
 }
 
 function createRegistry(options: RegistryOptions = {}) {
@@ -52,6 +54,7 @@ function createRegistry(options: RegistryOptions = {}) {
     socketOpenState: 1,
     highWatermarkBytes: options.highWatermarkBytes,
     lowWatermarkBytes: options.lowWatermarkBytes,
+    onPresenceEvent: options.onPresenceEvent,
     timers: {
       setTimeout: (callback) => {
         timers.push(callback)
@@ -145,6 +148,50 @@ describe('terminal registry', () => {
     expect(screen.cursorX).toBe(6)
     expect(screen.cursorY).toBe(1)
     expect(screen.bufferType).toBe('normal')
+  })
+
+  it('parses OSC 3008 agent presence per session', async () => {
+    const events: Array<{
+      key: string
+      mode: 'runtime' | 'shell'
+      event: AgentPresenceEvent
+    }> = []
+    const { registry } = createRegistry({
+      onPresenceEvent: (key, mode, event) => {
+        events.push({ key, mode, event })
+      },
+    })
+    const session = registerSession(registry)
+
+    registry.append(session, '\x1b]3008;start=claude;event=busy;pid=42\x1b\\')
+    await drain(session)
+
+    expect(session.presence).toEqual({ agent: 'claude', event: 'busy', pid: 42 })
+    expect(events).toEqual([{
+      key: 'agent-1:runtime',
+      mode: 'runtime',
+      event: { agent: 'claude', event: 'busy', pid: 42 },
+    }])
+  })
+
+  it('emits synthetic presence end when a present session is killed', async () => {
+    const events: Array<AgentPresenceEvent> = []
+    const { registry } = createRegistry({
+      onPresenceEvent: (_key, _mode, event) => {
+        events.push(event)
+      },
+    })
+    const session = registerSession(registry)
+
+    registry.append(session, '\x1b]3008;start=claude;event=awaiting_input;pid=42\x1b\\')
+    await drain(session)
+    registry.kill(session)
+
+    expect(session.presence).toBeNull()
+    expect(events).toEqual([
+      { agent: 'claude', event: 'awaiting_input', pid: 42 },
+      { agent: 'claude', event: 'session_end', pid: 42 },
+    ])
   })
 
   it('tracks output sequence only for content writes', () => {

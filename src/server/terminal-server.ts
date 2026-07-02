@@ -9,15 +9,18 @@ import * as pty from 'node-pty'
 import {
   terminalClientFrameSchema,
   terminalModeSchema,
+  type AgentStatus,
   type TerminalClientFrame,
   type TerminalMode,
   type TerminalServerFrame,
 } from '~/lib/contracts'
+import type { AgentPresenceEvent, AgentPresenceStatus } from './agent-presence'
 import { rememberCodexTerminalSession } from './codex-cli-sessions'
 import { writeCodexHookSessionBinding } from './codex-terminal-session'
 import {
   getAgentLaunchConfig,
   requeueAgentTerminalInputs,
+  setAgentStatus,
   takeAgentTerminalInputs,
 } from './db'
 import {
@@ -118,6 +121,7 @@ export type TerminalServerDependencies = {
   readonly rememberCodexTerminalSession: typeof rememberCodexTerminalSession
   readonly takeAgentTerminalInputs: typeof takeAgentTerminalInputs
   readonly requeueAgentTerminalInputs: typeof requeueAgentTerminalInputs
+  readonly setAgentStatus: typeof setAgentStatus
 }
 
 const terminalPath = '/terminal'
@@ -244,6 +248,9 @@ export function makeTerminalServerService(
     idleKillMs,
     socketOpenState: WebSocket.OPEN,
     idleKillModes: options.idleKillModes,
+    onPresenceEvent: (key, mode, event) => {
+      projectPresenceEvent(runtime, key, mode, event)
+    },
   })
   const subscriptions = makeTerminalSubscriptions({
     registry,
@@ -263,6 +270,7 @@ export function makeTerminalServerService(
       rememberCodexTerminalSession,
       takeAgentTerminalInputs,
       requeueAgentTerminalInputs,
+      setAgentStatus,
       ...dependencies,
     },
     setInfo: (info) => {
@@ -340,6 +348,40 @@ export function makeTerminalServerService(
       throw error
     })
     return terminalServerPromise
+  }
+}
+
+function projectPresenceEvent(
+  runtime: TerminalServerRuntime,
+  key: string,
+  mode: TerminalMode,
+  event: AgentPresenceEvent,
+) {
+  if (mode !== 'runtime' || !('event' in event)) return
+  const agentId = runtimeAgentIdFromKey(key)
+  if (!agentId) return
+  const status = agentStatusFromPresenceEvent(event.event)
+  if (!status) return
+  runtime.dependencies.setAgentStatus(agentId, status)
+}
+
+function runtimeAgentIdFromKey(key: string) {
+  const suffix = ':runtime'
+  return key.endsWith(suffix) ? key.slice(0, -suffix.length) : null
+}
+
+function agentStatusFromPresenceEvent(event: AgentPresenceStatus): AgentStatus | null {
+  switch (event) {
+    case 'busy':
+      return 'running'
+    case 'awaiting_input':
+      return 'blocked'
+    case 'session_start':
+    case 'idle':
+    case 'session_end':
+      return 'idle'
+    default:
+      return null
   }
 }
 

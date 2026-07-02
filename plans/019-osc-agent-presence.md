@@ -263,6 +263,35 @@ daemon process, which has no DB access. Options, in preference order:
 **Verify**: whichever option is taken, a daemon-mode test (or a recorded
 deferral note) exists; `pnpm exec vitest run tests/server/` → pass.
 
+## Completion notes (2026-07-02)
+
+- Shipped `src/server/agent-presence.ts` with the OSC 3008 parser, bounded
+  notify decoding, runtime allowlist, and `printf` command rendering.
+- `terminal-registry.ts` now registers a per-session xterm OSC handler,
+  stores current status presence, and emits a synthetic `session_end` when a
+  present PTY exits or is killed.
+- Embedded `terminal-server.ts` maps runtime-session presence into DB status:
+  `busy -> running`, `awaiting_input -> blocked`, and
+  `session_start`/`idle`/`session_end -> idle`. Shell session presence stays
+  local to the registry because there is no agent row to update.
+- New Claude runtime launches use OSC commands for status-shaped hooks:
+  `UserPromptSubmit`, `Stop`, `SessionEnd`, `PreToolUse` question matcher,
+  and `PermissionRequest`. `kirictl` remains for `SessionStart` binding and
+  `PostToolUse` TodoWrite projection.
+- PATH shims were intentionally not changed. The supported shipped path is
+  newly launched runtime sessions, not compatibility behavior for existing
+  shell wrappers.
+- Daemon-mode DB projection is deferred by the Step 4 decision gate:
+  `kiriterm-daemon` owns the registry in daemon mode, while
+  `kiriterm-daemon-client` only sends backend-to-daemon control requests and
+  processes Codex launch records returned by those requests. There is no
+  existing daemon-to-backend event/writeback path to carry presence into the
+  database, and this plan explicitly forbids a bespoke new channel just for
+  presence.
+- Verification run:
+  `pnpm exec vitest run tests/server/agent-presence.test.ts tests/server/terminal-registry.test.ts tests/server/terminal-server.test.ts tests/server/terminal-launch.test.ts`
+  and `pnpm typecheck`.
+
 ## STOP conditions
 
 Stop and report back (do not improvise) if:

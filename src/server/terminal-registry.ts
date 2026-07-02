@@ -5,6 +5,11 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 // import is erased at runtime.
 import xtermHeadless, { type Terminal as HeadlessTerminal } from '@xterm/headless'
 import type { RuntimeKind, TerminalMode, TerminalServerFrame } from '~/lib/contracts'
+import {
+  parseAgentPresenceOsc,
+  type AgentPresenceEvent,
+  type AgentPresenceStatusEvent,
+} from './agent-presence'
 
 const { Terminal: HeadlessTerminalCtor } = xtermHeadless
 
@@ -72,6 +77,7 @@ export type TerminalRegistrySession = {
   readonly outstandingBytes: Map<TerminalRegistrySocket, number>
   readonly recentOutputChunks: string[]
   readonly screenListeners: Set<() => void>
+  presence: AgentPresenceStatusEvent | null
   recentOutputBytes: number
   recentOutputStartSeq: number
   outputSeq: number
@@ -96,6 +102,11 @@ type TerminalRegistryInput = {
   readonly lowWatermarkBytes?: number
   readonly maxRecentOutputBytes?: number
   readonly timers?: TerminalRegistryTimers
+  readonly onPresenceEvent?: (
+    key: string,
+    mode: TerminalMode,
+    event: AgentPresenceEvent,
+  ) => void
   // Which session modes are killed after sitting idle with no clients. The
   // daemon disables this for runtime sessions so background agents keep
   // running detached; shells stay reclaimable.
@@ -190,6 +201,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       outstandingBytes: new Map(),
       recentOutputChunks: [],
       screenListeners: new Set(),
+      presence: null,
       recentOutputBytes: 0,
       recentOutputStartSeq: 1,
       outputSeq: 0,
@@ -200,6 +212,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       idleTimer: null,
       exited: false,
     }
+    registerPresenceParser(session)
     sessions.set(session.key, session)
     if (inputSession.banner) append(session, inputSession.banner)
     if (isReplacement) publishReplacement(session)
@@ -282,6 +295,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       timers.clearTimeout(session.idleTimer)
       session.idleTimer = null
     }
+    emitSyntheticPresenceEnd(session)
     deleteOwnedSession(session)
     closeKeyState(session.state)
     session.proc.kill()
@@ -502,6 +516,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       timers.clearTimeout(session.idleTimer)
       session.idleTimer = null
     }
+    emitSyntheticPresenceEnd(session)
     append(session, message)
     const frame: TerminalServerFrame = { type: 'exit', message }
     for (const socket of session.sockets) {
@@ -592,6 +607,45 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   function disposeEmulator(session: TerminalRegistrySession) {
     session.screenListeners.clear()
     session.headless.dispose()
+  }
+
+  function registerPresenceParser(session: TerminalRegistrySession) {
+    const parser = (session.headless as unknown as {
+      readonly parser?: {
+        readonly registerOscHandler?: (
+          id: number,
+          callback: (data: string) => boolean,
+        ) => unknown
+      }
+    }).parser
+    parser?.registerOscHandler?.(3008, (data) => {
+      const event = parseAgentPresenceOsc(data)
+      if (!event) return false
+      recordPresenceEvent(session, event)
+      return true
+    })
+  }
+
+  function recordPresenceEvent(
+    session: TerminalRegistrySession,
+    event: AgentPresenceEvent,
+  ) {
+    if ('event' in event) {
+      session.presence = event.event === 'session_end' ? null : event
+    }
+    input.onPresenceEvent?.(session.key, session.mode, event)
+  }
+
+  function emitSyntheticPresenceEnd(session: TerminalRegistrySession) {
+    const presence = session.presence
+    if (!presence) return
+    const event: AgentPresenceStatusEvent = {
+      agent: presence.agent,
+      event: 'session_end',
+      ...(presence.pid === undefined ? {} : { pid: presence.pid }),
+    }
+    session.presence = null
+    input.onPresenceEvent?.(session.key, session.mode, event)
   }
 
   function deleteOwnedSession(session: TerminalRegistrySession) {
