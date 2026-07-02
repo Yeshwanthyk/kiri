@@ -34,6 +34,10 @@ describe('desktop package contract', () => {
       from: 'dist/bin/kiri-read-model-indexer',
       to: 'bin/kiri-read-model-indexer',
     })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'dist/bin/kiri-termd',
+      to: 'bin/kiri-termd',
+    })
     expect(isExecutable(join(process.cwd(), 'resources/bin/kiri-mcp'))).toBe(true)
   })
 
@@ -63,6 +67,10 @@ describe('desktop package contract', () => {
       expect(
         isExecutable(join(resourcesRoot, 'bin/kiri-read-model-indexer')),
         `${appRoot} has executable kiri-read-model-indexer`,
+      ).toBe(true)
+      expect(
+        isExecutable(join(resourcesRoot, 'bin/kiri-termd')),
+        `${appRoot} has executable kiri-termd`,
       ).toBe(true)
       const header = readAsarHeader(appAsar)
       expect(hasAsarPath(header, ['scripts', 'kiri-desktop-backend.mjs'])).toBe(true)

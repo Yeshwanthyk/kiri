@@ -107,6 +107,10 @@
       {
         "from": "dist/bin/kiri-read-model-indexer",
         "to": "bin/kiri-read-model-indexer"
+      },
+      {
+        "from": "dist/bin/kiri-termd",
+        "to": "bin/kiri-termd"
       }
     ],
     "mac": {
