@@ -27,8 +27,6 @@ describe('automatic Codex server request responses', () => {
   })
 
   it('answers unsupported tool requests with the existing failure message', () => {
-    expect(automaticCodexServerRequestResponse('item/tool/requestUserInput'))
-      .toEqual({ answers: {} })
     expect(automaticCodexServerRequestResponse('item/tool/call')).toEqual({
       contentItems: [{ type: 'inputText', text: 'kiri cannot run client dynamic tools yet.' }],
       success: false,
@@ -36,6 +34,7 @@ describe('automatic Codex server request responses', () => {
   })
 
   it('leaves unknown requests to the caller', () => {
+    expect(automaticCodexServerRequestResponse('item/tool/requestUserInput')).toBeNull()
     expect(automaticCodexServerRequestResponse('unknown/request')).toBeNull()
   })
 })

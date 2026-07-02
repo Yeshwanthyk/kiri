@@ -66,6 +66,10 @@ describe('codex retained state', () => {
     state.queues.set('agent-1', Promise.resolve())
     state.bumpGeneration('agent-1')
     state.rememberTurnStartProjection(codexRetainedTurnKey('thread-2', 'turn-2'))
+    state.rememberPendingServerRequest('agent-1', {
+      id: 'request-1',
+      method: 'item/tool/requestUserInput',
+    })
 
     state.forgetAgent('agent-1')
 
@@ -76,7 +80,27 @@ describe('codex retained state', () => {
       queues: 0,
       sessionGenerations: 0,
       turnStartProjections: 0,
+      pendingServerRequests: 0,
     })
+  })
+
+  it('remembers and takes one pending server request per agent', () => {
+    const state = makeCodexRetainedState()
+
+    state.rememberPendingServerRequest('agent-1', {
+      id: 'request-1',
+      method: 'item/tool/requestUserInput',
+    })
+
+    expect(state.pendingServerRequest('agent-1')).toEqual({
+      id: 'request-1',
+      method: 'item/tool/requestUserInput',
+    })
+    expect(state.takePendingServerRequest('agent-1')).toEqual({
+      id: 'request-1',
+      method: 'item/tool/requestUserInput',
+    })
+    expect(state.pendingServerRequest('agent-1')).toBeUndefined()
   })
 
   it('can keep generation during reset while clearing active runtime state', () => {

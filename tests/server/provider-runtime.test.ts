@@ -23,6 +23,7 @@ describe('provider runtime registry', () => {
     expect(runtimeAdapters.codex.setThinkingLevel).toBeTypeOf('function')
     expect(runtimeAdapters.codex.reset).toBeTypeOf('function')
     expect(runtimeAdapters.codex.review).toBeTypeOf('function')
+    expect(runtimeAdapters.codex.answerQuestion).toBeTypeOf('function')
 
     expect(runtimeAdapters.claude.prompt).toBeUndefined()
     expect(runtimeAdapters.claude.steer).toBeUndefined()

@@ -16,8 +16,10 @@ import { WebSocketServer, type RawData, type WebSocket } from 'ws'
 
 type RpcRequest = {
   id: string | number
-  method: string
+  method?: string
   params?: unknown
+  result?: unknown
+  error?: unknown
 }
 
 const dbMock = vi.hoisted(() => {
@@ -44,6 +46,15 @@ const dbMock = vi.hoisted(() => {
     recordRuntimeTimelineEvent: vi.fn(),
     replaceAgentTasks: vi.fn(),
     resetSession: vi.fn(),
+    setAgentPendingQuestion: vi.fn((agentId: string, pendingQuestion: unknown) => {
+      const state = runtimeStates.get(agentId) ?? {}
+      if (pendingQuestion) runtimeStates.set(agentId, { ...state, pendingQuestion })
+      else {
+        const nextState = { ...state }
+        delete nextState.pendingQuestion
+        runtimeStates.set(agentId, nextState)
+      }
+    }),
     setAgentRuntimeState: vi.fn((agentId: string, state: Record<string, unknown>) => {
       runtimeStates.set(agentId, state)
     }),
@@ -70,6 +81,7 @@ describe('Codex runtime', () => {
       dbMock.recordRuntimeTimelineEvent,
       dbMock.replaceAgentTasks,
       dbMock.resetSession,
+      dbMock.setAgentPendingQuestion,
       dbMock.setAgentRuntimeState,
       dbMock.setAgentStatus,
     ]) {
@@ -128,6 +140,156 @@ describe('Codex runtime', () => {
         threadAgents: 1,
       })
       expect(harness.requests.some((request) => request.method === 'turn/steer')).toBe(true)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('auto-resolves non-question server requests without projecting blocked', async () => {
+    const harness = await startCodexHarness()
+    const { promptCodexAgent } = await import('~/server/codex-runtime')
+    dbMock.launchConfigs.set('agent-1', launchConfig({
+      id: 'agent-1',
+      runtimeStateJson: JSON.stringify({ threadId: 'thread-1', websocketUrl: harness.url }),
+    }))
+    dbMock.runtimeStates.set('agent-1', { threadId: 'thread-1', websocketUrl: harness.url })
+
+    try {
+      await promptCodexAgent({
+        agentId: 'agent-1',
+        text: 'continue',
+        runtimeBinaries: testRuntimeBinaries({}),
+      })
+      dbMock.setAgentStatus.mockClear()
+      harness.messages.length = 0
+
+      harness.sendServerMessage({
+        id: 'approval-1',
+        method: 'item/commandExecution/requestApproval',
+        params: { threadId: 'thread-1' },
+      })
+
+      await waitForExpectation(() => {
+        expect(harness.messages).toContainEqual({
+          id: 'approval-1',
+          result: { decision: 'decline' },
+        })
+      })
+      expect(dbMock.setAgentStatus).not.toHaveBeenCalledWith('agent-1', 'blocked')
+      expect(dbMock.setAgentPendingQuestion).not.toHaveBeenCalled()
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('projects requestUserInput as a pending question and answers it later', async () => {
+    const harness = await startCodexHarness()
+    const {
+      answerQuestionCodexAgent,
+      promptCodexAgent,
+    } = await import('~/server/codex-runtime')
+    dbMock.launchConfigs.set('agent-1', launchConfig({
+      id: 'agent-1',
+      runtimeStateJson: JSON.stringify({ threadId: 'thread-1', websocketUrl: harness.url }),
+    }))
+    dbMock.runtimeStates.set('agent-1', { threadId: 'thread-1', websocketUrl: harness.url })
+
+    try {
+      await promptCodexAgent({
+        agentId: 'agent-1',
+        text: 'continue',
+        runtimeBinaries: testRuntimeBinaries({}),
+      })
+      dbMock.setAgentStatus.mockClear()
+      harness.messages.length = 0
+
+      harness.sendServerMessage({
+        id: 'question-1',
+        method: 'item/tool/requestUserInput',
+        params: {
+          threadId: 'thread-1',
+          questions: [{
+            id: 'confirm',
+            header: 'Confirm',
+            question: 'Proceed?',
+            options: [{ label: 'yes', description: 'Continue' }],
+          }],
+        },
+      })
+
+      await waitForExpectation(() => {
+        expect(dbMock.setAgentPendingQuestion).toHaveBeenCalledWith('agent-1', {
+          requestId: 'question-1',
+          questions: [{
+            id: 'confirm',
+            header: 'Confirm',
+            question: 'Proceed?',
+            options: [{ label: 'yes', description: 'Continue' }],
+            multiSelect: false,
+          }],
+        })
+      })
+      expect(dbMock.setAgentStatus).toHaveBeenCalledWith('agent-1', 'blocked')
+      expect(harness.messages.some((message) => message.id === 'question-1')).toBe(false)
+
+      await answerQuestionCodexAgent({
+        agentId: 'agent-1',
+        requestId: 'question-1',
+        answers: { confirm: 'yes' },
+        runtimeBinaries: testRuntimeBinaries({}),
+      })
+
+      await waitForExpectation(() => {
+        expect(harness.messages).toContainEqual({
+          id: 'question-1',
+          result: { answers: { confirm: 'yes' } },
+        })
+      })
+      expect(dbMock.setAgentPendingQuestion).toHaveBeenLastCalledWith('agent-1', null)
+      expect(dbMock.setAgentStatus).toHaveBeenLastCalledWith('agent-1', 'running')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('rejects stale pending question answers without clearing state', async () => {
+    const harness = await startCodexHarness()
+    const {
+      answerQuestionCodexAgent,
+      promptCodexAgent,
+    } = await import('~/server/codex-runtime')
+    dbMock.launchConfigs.set('agent-1', launchConfig({
+      id: 'agent-1',
+      runtimeStateJson: JSON.stringify({ threadId: 'thread-1', websocketUrl: harness.url }),
+    }))
+    dbMock.runtimeStates.set('agent-1', { threadId: 'thread-1', websocketUrl: harness.url })
+
+    try {
+      await promptCodexAgent({
+        agentId: 'agent-1',
+        text: 'continue',
+        runtimeBinaries: testRuntimeBinaries({}),
+      })
+      harness.sendServerMessage({
+        id: 'question-2',
+        method: 'item/tool/requestUserInput',
+        params: { threadId: 'thread-1', question: 'Proceed?' },
+      })
+      await waitForExpectation(() => {
+        expect(dbMock.setAgentPendingQuestion).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+          requestId: 'question-2',
+        }))
+      })
+      dbMock.setAgentPendingQuestion.mockClear()
+
+      await expect(answerQuestionCodexAgent({
+        agentId: 'agent-1',
+        requestId: 'wrong-question',
+        answers: { confirm: 'yes' },
+        runtimeBinaries: testRuntimeBinaries({}),
+      })).rejects.toThrow('Codex pending question mismatch')
+
+      expect(dbMock.setAgentPendingQuestion).not.toHaveBeenCalled()
     } finally {
       await harness.close()
     }
@@ -205,8 +367,29 @@ async function startCodexHarness() {
   return {
     url: `ws://127.0.0.1:${port}`,
     requests,
+    messages: requests,
+    sendServerMessage: (message: RpcRequest) => {
+      for (const socket of sockets) {
+        socket.send(JSON.stringify(message))
+      }
+    },
     close: () => closeHarness(server, wss, sockets),
   }
+}
+
+async function waitForExpectation(assertion: () => void) {
+  const startedAt = Date.now()
+  let lastError: unknown
+  while (Date.now() - startedAt < 1_000) {
+    try {
+      assertion()
+      return
+    } catch (error) {
+      lastError = error
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
+  throw lastError
 }
 
 function rawDataToString(raw: RawData) {

@@ -6,6 +6,7 @@ import {
   recordRuntimeMessage,
   recordRuntimeTimelineEvent,
   replaceAgentTasks,
+  setAgentPendingQuestion,
   setAgentRuntimeState,
   setAgentStatus,
 } from './db'
@@ -55,6 +56,10 @@ function projectRuntimeEventToDb(event: RuntimeProjectionEvent) {
   }
   if (event.type === 'clearContextUsage') {
     clearRuntimeContextUsage(event.agentId)
+    return
+  }
+  if (event.type === 'pendingQuestion') {
+    setAgentPendingQuestion(event.agentId, event.value)
     return
   }
   if (event.type === 'tasksUpdated') {

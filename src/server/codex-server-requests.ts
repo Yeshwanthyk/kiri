@@ -8,9 +8,6 @@ export function automaticCodexServerRequestResponse(method: string) {
   if (method === 'item/permissions/requestApproval') {
     return { permissions: {}, scope: 'turn' }
   }
-  if (method === 'item/tool/requestUserInput') {
-    return { answers: {} }
-  }
   if (method === 'mcpServer/elicitation/request') {
     return { action: 'decline', content: null, _meta: null }
   }

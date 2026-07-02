@@ -3,6 +3,7 @@ import type {
   AgentStatus,
   ContextUsage,
   KiriSettings,
+  PendingQuestion,
   RuntimeKind,
 } from '~/lib/contracts'
 import {
@@ -148,6 +149,21 @@ export function takeAgentTerminalInputs(database: DatabaseSync, agentId: string)
   return pending
 }
 
+export function setAgentPendingQuestion(
+  database: DatabaseSync,
+  agentId: string,
+  pendingQuestion: PendingQuestion | null,
+) {
+  const state = getAgentRuntimeState(database, agentId)
+  const nextState = { ...state }
+  if (pendingQuestion) {
+    nextState.pendingQuestion = pendingQuestion
+  } else {
+    delete nextState.pendingQuestion
+  }
+  setAgentRuntimeState(database, agentId, nextState)
+}
+
 export function clearAgentRuntimeState(database: DatabaseSync, agentId: string) {
   database
     .prepare('UPDATE agent_slots SET runtime_state_json = NULL, runtime_state_updated_at = ? WHERE id = ?')
@@ -253,15 +269,27 @@ export function readPendingQuestion(database: DatabaseSync, agentId: string) {
 function pendingTerminalInputs(value: unknown): PendingTerminalInput[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((item) => {
-    if (!item || typeof item !== 'object') return []
-    const text = 'text' in item && typeof item.text === 'string' ? item.text : null
+    const object = recordValue(item)
+    if (!object) return []
+    const text = stringField(object, 'text')
     if (text === null) return []
     return [{
       text,
-      submit: 'submit' in item && typeof item.submit === 'boolean' ? item.submit : true,
-      createdAt: 'createdAt' in item && typeof item.createdAt === 'string'
-        ? item.createdAt
+      submit: typeof object.submit === 'boolean' ? object.submit : true,
+      createdAt: typeof object.createdAt === 'string'
+        ? object.createdAt
         : new Date(0).toISOString(),
     }]
   })
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function stringField(value: Record<string, unknown>, field: string) {
+  const candidate = value[field]
+  return typeof candidate === 'string' ? candidate : null
 }

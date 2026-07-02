@@ -12,6 +12,7 @@ import type {
   KnowledgeAddInput,
   KnowledgeMarkSeenInput,
   KnowledgeSearchInput,
+  PendingQuestion,
   RestoreSessionInput,
   ScratchpadBlock,
   StartSessionInput,
@@ -82,6 +83,7 @@ import {
   requeueAgentTerminalInputs as requeueAgentTerminalInputsInDb,
   readContextUsage,
   readPendingQuestion,
+  setAgentPendingQuestion as setAgentPendingQuestionInDb,
   setAgentRuntimeState as setAgentRuntimeStateInDb,
   setAgentStatus as setAgentStatusInDb,
   takeAgentTerminalInputs as takeAgentTerminalInputsFromDb,
@@ -545,6 +547,10 @@ export function getAgentRuntimeState(agentId: string) {
 
 export function setAgentRuntimeState(agentId: string, state: Record<string, unknown>) {
   setAgentRuntimeStateInDb(getDb(), agentId, state)
+}
+
+export function setAgentPendingQuestion(agentId: string, pendingQuestion: PendingQuestion | null) {
+  setAgentPendingQuestionInDb(getDb(), agentId, pendingQuestion)
 }
 
 export function queueAgentTerminalInput(input: {

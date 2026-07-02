@@ -1,4 +1,11 @@
-import type { AgentStatus, AgentTask, RuntimeKind, ThinkingLevel, TimelineEventTone } from '~/lib/contracts'
+import type {
+  AgentStatus,
+  AgentTask,
+  PendingQuestion,
+  RuntimeKind,
+  ThinkingLevel,
+  TimelineEventTone,
+} from '~/lib/contracts'
 import { Cause, Data, Effect, Exit, Layer, Option } from 'effect'
 import type {
   recordRuntimeContextUsage,
@@ -38,6 +45,11 @@ export type RuntimeProjectionEvent =
   | {
     type: 'clearContextUsage'
     agentId: string
+  }
+  | {
+    type: 'pendingQuestion'
+    agentId: string
+    value: PendingQuestion | null
   }
   | {
     type: 'tasksUpdated'

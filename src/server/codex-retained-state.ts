@@ -1,4 +1,5 @@
 import type { CodexAppServerAdapter } from './codex-app-server'
+import type { JsonRpcId } from './codex-app-protocol'
 
 export type CodexRetainedStateStats = {
   adapters: number
@@ -9,6 +10,7 @@ export type CodexRetainedStateStats = {
   queues: number
   sessionGenerations: number
   turnStartProjections: number
+  pendingServerRequests: number
 }
 
 export type CodexRetainedStateTestInput = {
@@ -29,6 +31,10 @@ export function makeCodexRetainedState(input: {
   const queues = new Map<string, Promise<void>>()
   const sessionGenerations = new Map<string, number>()
   const turnStartProjections = new Set<string>()
+  const pendingServerRequests = new Map<string, {
+    readonly id: JsonRpcId
+    readonly method: string
+  }>()
 
   function pruneTurnKeysForThread(turnKeys: Set<string>, threadId: string) {
     const prefix = `${threadId}:`
@@ -76,6 +82,7 @@ export function makeCodexRetainedState(input: {
     }
     agentThreads.delete(agentId)
     queues.delete(agentId)
+    pendingServerRequests.delete(agentId)
     if (!options.keepGeneration) sessionGenerations.delete(agentId)
   }
 
@@ -104,6 +111,7 @@ export function makeCodexRetainedState(input: {
     queues.clear()
     sessionGenerations.clear()
     turnStartProjections.clear()
+    pendingServerRequests.clear()
   }
 
   function stats(): CodexRetainedStateStats {
@@ -116,6 +124,7 @@ export function makeCodexRetainedState(input: {
       queues: queues.size,
       sessionGenerations: sessionGenerations.size,
       turnStartProjections: turnStartProjections.size,
+      pendingServerRequests: pendingServerRequests.size,
     }
   }
 
@@ -143,6 +152,18 @@ export function makeCodexRetainedState(input: {
     generation: (agentId: string) => sessionGenerations.get(agentId) ?? 0,
     isCurrentGeneration: (agentId: string, generation: number) =>
       (sessionGenerations.get(agentId) ?? 0) === generation,
+    rememberPendingServerRequest: (
+      agentId: string,
+      pending: { readonly id: JsonRpcId; readonly method: string },
+    ) => {
+      pendingServerRequests.set(agentId, pending)
+    },
+    takePendingServerRequest: (agentId: string) => {
+      const pending = pendingServerRequests.get(agentId)
+      pendingServerRequests.delete(agentId)
+      return pending
+    },
+    pendingServerRequest: (agentId: string) => pendingServerRequests.get(agentId),
     forgetThread,
     forgetAgent,
     rememberThread,

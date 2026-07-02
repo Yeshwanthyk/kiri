@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 import { rmSync } from 'node:fs'
-import type { ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
+import type { PendingQuestion, ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import {
   CodexAppServerAdapter,
   CodexAppServerError,
@@ -46,6 +46,7 @@ import {
   recordRuntimeMessage,
   recordRuntimeTimelineEvent,
   resetSession as resetStoredSession,
+  setAgentPendingQuestion,
   setAgentStatus,
 } from './db'
 import { fileOperationFromCodexItem } from './runtime-file-operations'
@@ -167,6 +168,28 @@ export async function interruptCodexAgent(input: { agentId: string } & CodexRunt
     threadId: state.threadId,
     turnId: activeTurnId,
   })
+}
+
+export async function answerQuestionCodexAgent(input: {
+  agentId: string
+  requestId: string
+  answers: Record<string, string | string[]>
+} & CodexRuntimeDependencies) {
+  await Promise.resolve()
+  const runtimeBinaries = runtimeBinariesFor(input)
+  const state = codexState(getAgentRuntimeState(input.agentId))
+  const pending = retainedState.pendingServerRequest(input.agentId)
+  if (!pending) {
+    throw new Error('Codex session has no pending question')
+  }
+  if (String(pending.id) !== input.requestId) {
+    throw new Error(`Codex pending question mismatch: expected ${String(pending.id)}, got ${input.requestId}`)
+  }
+  const adapter = getOrCreateCodexAdapter(state.websocketUrl, runtimeBinaries)
+  adapter.respond(pending.id, { answers: input.answers })
+  retainedState.takePendingServerRequest(input.agentId)
+  setAgentPendingQuestion(input.agentId, null)
+  setAgentStatus(input.agentId, 'running')
 }
 
 export function setCodexThinkingLevel(input: {
@@ -525,7 +548,14 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
     if (agentId && retainedState.threadForAgent(agentId) !== threadId) return
 
     if ('id' in message) {
-      if (agentId) {
+      if (message.method === 'item/tool/requestUserInput' && agentId) {
+        const pendingQuestion = pendingQuestionFromCodexRequest(message)
+        yield* Effect.sync(() =>
+          retainedState.rememberPendingServerRequest(agentId, {
+            id: message.id,
+            method: message.method,
+          }))
+        yield* projectRuntimeEvent({ type: 'pendingQuestion', agentId, value: pendingQuestion })
         yield* projectRuntimeEvent({ type: 'status', agentId, status: 'blocked' })
         yield* projectRuntimeEvent({
           type: 'timelineEvent',
@@ -534,15 +564,30 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
             kind: 'codex_server_request',
             tone: 'info',
             label: message.method,
-            detail: 'Codex requested client-side input or approval.',
+            detail: 'Codex requested user input.',
             payload: message,
           },
         })
+        return
       }
       const response = automaticCodexServerRequestResponse(message.method)
       if (response) {
         adapter.respond(message.id, response)
       } else {
+        if (agentId) {
+          yield* projectRuntimeEvent({ type: 'status', agentId, status: 'blocked' })
+          yield* projectRuntimeEvent({
+            type: 'timelineEvent',
+            value: {
+              agentId,
+              kind: 'codex_server_request',
+              tone: 'info',
+              label: message.method,
+              detail: 'Codex requested unsupported client-side input.',
+              payload: message,
+            },
+          })
+        }
         adapter.reject(message.id, `kiri cannot handle ${message.method} yet`)
       }
       return
@@ -651,6 +696,65 @@ function projectCodexNotification(adapter: CodexAppServerAdapter, message: Codex
       recordCodexItem(agentId, decoded.item, timestampFromMs(decoded.completedAtMs))
       yield* projectCodexFileOperation(agentId, decoded.item, 'fileOperationCompleted')
     }
+  })
+}
+
+function pendingQuestionFromCodexRequest(message: CodexServerMessage & { id: string | number }): PendingQuestion {
+  const params = objectValue(message.params)
+  const questions = codexQuestionArray(params)
+  return {
+    requestId: String(message.id),
+    questions: questions.length > 0
+      ? questions
+      : [codexQuestionFromObject(params, 0)],
+  }
+}
+
+function codexQuestionArray(params: Record<string, unknown>): PendingQuestion['questions'] {
+  const candidates = [
+    params.questions,
+    objectValue(params.input).questions,
+    objectValue(params.request).questions,
+  ]
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue
+    const questions = candidate
+      .map((value, index) => codexQuestionFromObject(objectValue(value), index))
+      .filter((question) => question.question.trim())
+    if (questions.length > 0) return questions
+  }
+  return []
+}
+
+function codexQuestionFromObject(value: Record<string, unknown>, index: number): PendingQuestion['questions'][number] {
+  const header = stringValue(value.header)
+    ?? stringValue(value.label)
+    ?? stringValue(value.title)
+    ?? 'Question'
+  return {
+    id: stringValue(value.id) ?? stringValue(value.name) ?? `question-${index + 1}`,
+    header,
+    question: stringValue(value.question)
+      ?? stringValue(value.prompt)
+      ?? stringValue(value.text)
+      ?? stringValue(value.message)
+      ?? header,
+    options: codexQuestionOptions(value.options),
+    multiSelect: value.multiSelect === true,
+  }
+}
+
+function codexQuestionOptions(value: unknown): PendingQuestion['questions'][number]['options'] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((option) => {
+    if (typeof option === 'string') return [{ label: option, description: '' }]
+    const object = objectValue(option)
+    const label = stringValue(object.label) ?? stringValue(object.value) ?? stringValue(object.id)
+    if (!label) return []
+    return [{
+      label,
+      description: stringValue(object.description) ?? '',
+    }]
   })
 }
 

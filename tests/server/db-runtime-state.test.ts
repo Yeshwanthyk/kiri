@@ -17,6 +17,7 @@ import {
   readContextUsage,
   readPendingQuestion,
   requeueAgentTerminalInputs,
+  setAgentPendingQuestion,
   setAgentRuntimeState,
   setAgentStatus,
   takeAgentTerminalInputs,
@@ -93,6 +94,21 @@ describe('runtime state repository', () => {
       })
       expect(getAgentRuntimeState(database, agentId)).toMatchObject({ threadId: 'thread-1' })
       expect(readPendingQuestion(database, agentId)).toMatchObject({ requestId: 'request-1' })
+      setAgentPendingQuestion(database, agentId, {
+        requestId: 'request-2',
+        questions: [{
+          id: 'q2',
+          header: 'Confirm',
+          question: 'Proceed?',
+          options: [],
+          multiSelect: false,
+        }],
+      })
+      expect(getAgentRuntimeState(database, agentId)).toMatchObject({ threadId: 'thread-1' })
+      expect(readPendingQuestion(database, agentId)).toMatchObject({ requestId: 'request-2' })
+      setAgentPendingQuestion(database, agentId, null)
+      expect(getAgentRuntimeState(database, agentId)).toMatchObject({ threadId: 'thread-1' })
+      expect(readPendingQuestion(database, agentId)).toBeNull()
 
       clearAgentRuntimeState(database, agentId)
       expect(getAgentRuntimeState(database, agentId)).toEqual({})

@@ -1,6 +1,7 @@
 import { Context, Data, Effect, Either, Layer } from 'effect'
 import type { ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import {
+  answerQuestionCodexAgent,
   interruptCodexAgent,
   promptCodexAgent,
   resetCodexSession,
@@ -85,6 +86,8 @@ export const runtimeAdapters: Record<RuntimeKind, ProviderRuntimeAdapter> = {
     setThinkingLevel: setCodexThinkingLevel,
     reset: (command) => resetCodexSession({ ...command, runtimeBinaries: compatibilityRuntimeBinaries }),
     review: (command) => reviewCodexSession({ ...command, runtimeBinaries: compatibilityRuntimeBinaries }),
+    answerQuestion: (command) =>
+      answerQuestionCodexAgent({ ...command, runtimeBinaries: compatibilityRuntimeBinaries }),
   },
   claude: {
   },
@@ -127,6 +130,7 @@ function runtimeAdaptersWithServices(input: {
       setThinkingLevel: setCodexThinkingLevel,
       reset: (command) => resetCodexSession({ ...command, runtimeBinaries: input.runtimeBinaries }),
       review: (command) => reviewCodexSession({ ...command, runtimeBinaries: input.runtimeBinaries }),
+      answerQuestion: (command) => answerQuestionCodexAgent({ ...command, runtimeBinaries: input.runtimeBinaries }),
     },
   }
 }
