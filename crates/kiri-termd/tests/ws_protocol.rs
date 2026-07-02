@@ -75,6 +75,42 @@ fn subscription_delivers_wake_to_runtime_session() {
 }
 
 #[test]
+fn subscription_idle_target_respects_idle_ms() {
+    let state_dir = temp_state_dir();
+    let fake_codex = write_fake_runtime(&state_dir).expect("fake runtime should be written");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", &state_dir)
+        .env("KIRI_CODEX_BIN", &fake_codex)
+        .spawn()
+        .expect("kiri-termd should spawn");
+
+    let result = run_subscription_idle_smoke(&state_dir);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&state_dir);
+
+    result.expect("subscription idle smoke should pass");
+}
+
+#[test]
+fn subscription_journal_rearms_pending_wake_after_restart() {
+    let state_dir = temp_state_dir();
+    let fake_codex = write_fake_runtime(&state_dir).expect("fake runtime should be written");
+    let mut first = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", &state_dir)
+        .env("KIRI_CODEX_BIN", &fake_codex)
+        .spawn()
+        .expect("first kiri-termd should spawn");
+
+    let result = run_subscription_journal_smoke(&state_dir, &fake_codex, &mut first);
+    let _ = first.kill();
+    let _ = first.wait();
+    let _ = fs::remove_dir_all(&state_dir);
+
+    result.expect("subscription journal smoke should pass");
+}
+
+#[test]
 fn shutdown_route_stops_daemon_and_removes_record() {
     let state_dir = temp_state_dir();
     let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
@@ -391,6 +427,25 @@ fn run_wait_smoke(state_dir: &Path) -> Result<(), String> {
     assert_eq!(missing_any["matches"][0]["key"], "proj-t1:shell");
     assert_eq!(missing_any["matches"][0]["label"], "Shell");
     assert_eq!(missing_any["missing"][0], "missing:shell");
+
+    let partial_all_started = Instant::now();
+    let partial_all = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-any",
+        Some(json!({
+            "targets": [
+                { "key": "missing:shell", "pattern": "never" },
+                { "key": "proj-t1:shell", "label": "Shell", "pattern": "wait-screen-ok" }
+            ],
+            "timeoutMs": 3000,
+            "quorum": "all"
+        })),
+    )?;
+    assert_eq!(partial_all["matched"], false);
+    assert_eq!(partial_all["matches"][0]["key"], "proj-t1:shell");
+    assert_eq!(partial_all["missing"][0], "missing:shell");
+    assert!(partial_all_started.elapsed() < Duration::from_secs(1));
 
     let multi_ready_any = http_json(
         &record,
@@ -826,6 +881,212 @@ fn run_subscription_smoke(state_dir: &Path) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(50));
     }
     Err("subscription did not reach delivered status".to_string())
+}
+
+fn run_subscription_idle_smoke(state_dir: &Path) -> Result<(), String> {
+    let record = wait_record(state_dir)?;
+    post_upsert_agent(&record, "orch-agent", "proj-orch", state_dir)?;
+    http_json(
+        &record,
+        "POST",
+        "/api/agents/spawn",
+        Some(json!({ "agentId": "orch-agent" })),
+    )?;
+    post_upsert(&record, state_dir)?;
+    let worker_url = format!(
+        "ws://{}:{}{}?agentId=agent-t1&mode=shell&cols=80&rows=24&token={}",
+        record["host"].as_str().unwrap(),
+        record["port"].as_u64().unwrap(),
+        record["path"].as_str().unwrap(),
+        record["token"].as_str().unwrap()
+    );
+    let (mut worker, _) = connect(&worker_url).map_err(|error| error.to_string())?;
+    assert_eq!(
+        read_json_frame(&mut worker, Duration::from_secs(5))?["type"],
+        "snapshot"
+    );
+    let subscribed = http_json(
+        &record,
+        "POST",
+        "/api/sessions/subscribe",
+        Some(json!({
+            "targets": [
+                { "key": "proj-t1:shell", "label": "Idle shell", "idleMs": 1000 }
+            ],
+            "timeoutMs": 5000,
+            "quorum": "any",
+            "deliver": { "agentId": "orch-agent", "note": "idle fired", "title": "idle wake" }
+        })),
+    )?;
+    assert_eq!(subscribed["ok"], true);
+
+    let woke = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "orch-agent:runtime",
+            "pattern": "input:\\[kiri wake .*idle wake: Idle shell: went idle",
+            "scope": "output",
+            "timeoutMs": 8000
+        })),
+    )?;
+    assert_eq!(woke["matched"], true);
+    let noted = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "orch-agent:runtime",
+            "pattern": "input:note: idle fired",
+            "scope": "output",
+            "timeoutMs": 5000
+        })),
+    )?;
+    assert_eq!(noted["matched"], true);
+    let delivered = wait_subscription_status(&record, "delivered")?;
+    assert!(delivered.to_string().contains("condition met"));
+    let _ = worker.close(None);
+    Ok(())
+}
+
+fn run_subscription_journal_smoke(
+    state_dir: &Path,
+    fake_codex: &Path,
+    first: &mut std::process::Child,
+) -> Result<(), String> {
+    let record = wait_record(state_dir)?;
+    post_upsert_agent(&record, "orch-agent", "proj-orch", state_dir)?;
+    post_upsert(&record, state_dir)?;
+    let subscribed = http_json(
+        &record,
+        "POST",
+        "/api/sessions/subscribe",
+        Some(json!({
+            "targets": [
+                { "key": "proj-t1:shell", "label": "Worker one", "pattern": "journal-one-42" },
+                { "key": "proj-t2:shell", "label": "Worker two", "pattern": "journal-two-42" }
+            ],
+            "timeoutMs": 10000,
+            "quorum": "all",
+            "deliver": { "agentId": "orch-agent", "note": "restart survivor", "title": "journal wake" }
+        })),
+    )?;
+    assert_eq!(subscribed["ok"], true);
+    let journal_path = state_dir.join("subscriptions.json");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if fs::read_to_string(&journal_path)
+            .map(|contents| contents.contains("\"status\": \"pending\""))
+            .unwrap_or(false)
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(journal_path.exists());
+    http_json(&record, "POST", "/api/shutdown", Some(json!({})))?;
+    wait_child_exit_and_record_removed(state_dir, first)?;
+
+    let mut second = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", state_dir)
+        .env("KIRI_CODEX_BIN", fake_codex)
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let second_result = (|| {
+        let record = wait_record(state_dir)?;
+        post_upsert_agent(&record, "orch-agent", "proj-orch", state_dir)?;
+        post_upsert(&record, state_dir)?;
+        let worker_one_url = format!(
+            "ws://{}:{}{}?agentId=agent-t1&mode=shell&cols=80&rows=24&token={}",
+            record["host"].as_str().unwrap(),
+            record["port"].as_u64().unwrap(),
+            record["path"].as_str().unwrap(),
+            record["token"].as_str().unwrap()
+        );
+        let (mut worker_one, _) = connect(&worker_one_url).map_err(|error| error.to_string())?;
+        assert_eq!(
+            read_json_frame(&mut worker_one, Duration::from_secs(5))?["type"],
+            "snapshot"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        post_upsert_agent(&record, "agent-t2", "proj-t2", state_dir)?;
+        let worker_two_url = format!(
+            "ws://{}:{}{}?agentId=agent-t2&mode=shell&cols=80&rows=24&token={}",
+            record["host"].as_str().unwrap(),
+            record["port"].as_u64().unwrap(),
+            record["path"].as_str().unwrap(),
+            record["token"].as_str().unwrap()
+        );
+        let (mut worker_two, _) = connect(&worker_two_url).map_err(|error| error.to_string())?;
+        assert_eq!(
+            read_json_frame(&mut worker_two, Duration::from_secs(5))?["type"],
+            "snapshot"
+        );
+        worker_one
+            .send(Message::Text(
+                json!({ "type": "input", "data": "printf 'journal-one-42\\n'\r" }).to_string(),
+            ))
+            .map_err(|error| error.to_string())?;
+        worker_two
+            .send(Message::Text(
+                json!({ "type": "input", "data": "printf 'journal-two-42\\n'\r" }).to_string(),
+            ))
+            .map_err(|error| error.to_string())?;
+        poll_session_key_exists(&record, "orch-agent:runtime")?;
+        let woke = http_json(
+            &record,
+            "POST",
+            "/api/sessions/wait-for",
+            Some(json!({
+                "key": "orch-agent:runtime",
+                "pattern": "input:note: restart survivor",
+                "scope": "output",
+                "timeoutMs": 8000
+            })),
+        )?;
+        assert_eq!(woke["matched"], true);
+        let delivered = wait_subscription_status(&record, "delivered")?;
+        assert!(delivered.to_string().contains("condition met"));
+        let _ = worker_one.close(None);
+        let _ = worker_two.close(None);
+        http_json(&record, "POST", "/api/shutdown", Some(json!({})))?;
+        wait_child_exit_and_record_removed(state_dir, &mut second)
+    })();
+    let _ = second.kill();
+    let _ = second.wait();
+    second_result
+}
+
+fn poll_session_key_exists(record: &Value, key: &str) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let sessions = http_json(record, "GET", "/api/sessions", None)?;
+        if sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|session| session["key"] == key)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!("timed out waiting for session {key}"))
+}
+
+fn wait_subscription_status(record: &Value, status: &str) -> Result<Value, String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let subscriptions = http_json(record, "GET", "/api/subscriptions", None)?;
+        if subscriptions.to_string().contains(&format!("\"{status}\"")) {
+            return Ok(subscriptions);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!(
+        "timed out waiting for subscription status {status}"
+    ))
 }
 
 fn write_fake_runtime(state_dir: &Path) -> Result<PathBuf, String> {

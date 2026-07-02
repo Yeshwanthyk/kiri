@@ -58,6 +58,7 @@ struct AppState {
     launch_configs: Arc<RwLock<HashMap<String, LaunchConfig>>>,
     pending_inputs: Arc<RwLock<HashMap<String, Vec<PendingInput>>>>,
     subscriptions: Arc<RwLock<HashMap<String, SubscriptionRecord>>>,
+    subscription_journal_path: PathBuf,
     subscription_counter: Arc<AtomicU64>,
     restored_sessions: Arc<Mutex<HashMap<String, PersistedSession>>>,
 }
@@ -258,7 +259,7 @@ struct SubscribeRequest {
     deliver: SubscribeDeliver,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct SubscribeDeliver {
     #[serde(rename = "agentId")]
     agent_id: String,
@@ -266,9 +267,11 @@ struct SubscribeDeliver {
     title: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SubscriptionRecord {
     id: String,
+    created_at: String,
     targets: Vec<WaitTarget>,
     timeout_ms: u64,
     quorum: String,
@@ -284,7 +287,7 @@ struct WaitAnyResult {
     elapsed_ms: u64,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WaitTarget {
     key: String,
@@ -360,6 +363,8 @@ async fn main() -> Result<()> {
     let token = token();
     let shutdown = CancellationToken::new();
     let restored_sessions = load_persisted_sessions(&sessions_dir);
+    let subscription_journal_path = state_dir.join("subscriptions.json");
+    let restored_subscriptions = load_subscription_journal(&subscription_journal_path);
     let state = AppState {
         token: token.clone(),
         record_path: state_dir.join("daemon.json"),
@@ -370,10 +375,12 @@ async fn main() -> Result<()> {
         generations: Arc::new(RwLock::new(HashMap::new())),
         launch_configs: Arc::new(RwLock::new(HashMap::new())),
         pending_inputs: Arc::new(RwLock::new(HashMap::new())),
-        subscriptions: Arc::new(RwLock::new(HashMap::new())),
+        subscriptions: Arc::new(RwLock::new(restored_subscriptions)),
+        subscription_journal_path,
         subscription_counter: Arc::new(AtomicU64::new(0)),
         restored_sessions: Arc::new(Mutex::new(restored_sessions)),
     };
+    rearm_pending_subscriptions(&state).await;
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/agents/upsert", post(upsert_agent))
@@ -755,6 +762,7 @@ async fn wait_any_session(
         body.targets,
         body.timeout_ms.unwrap_or(60_000),
         body.quorum.unwrap_or_else(|| "any".to_string()),
+        false,
     )
     .await
     {
@@ -768,6 +776,7 @@ async fn run_wait_any(
     targets: Vec<WaitTarget>,
     timeout_ms: u64,
     quorum: String,
+    retry_missing: bool,
 ) -> std::result::Result<WaitAnyResult, String> {
     if targets.is_empty() || targets.len() > 32 {
         return Err("targets must contain 1..32 entries".to_string());
@@ -777,7 +786,7 @@ async fn run_wait_any(
     }
     let started_at = Instant::now();
     let timeout = wait_timeout(Some(timeout_ms), 60_000);
-    let mut missing = Vec::new();
+    let mut missing_targets = Vec::new();
     let mut live = Vec::new();
 
     for target in targets {
@@ -785,11 +794,11 @@ async fn run_wait_any(
             return Err("Each target needs pattern and/or idleMs".to_string());
         }
         let Some(session) = session_by_key(&state, &target.key).await else {
-            missing.push(target.key);
+            missing_targets.push(target);
             continue;
         };
         if session.exited.load(Ordering::SeqCst) {
-            missing.push(target.key);
+            missing_targets.push(target);
             continue;
         }
         let matcher = match &target.pattern {
@@ -808,13 +817,22 @@ async fn run_wait_any(
         });
     }
 
-    if live.is_empty() {
-        return Ok(wait_any_result(false, Vec::new(), missing, started_at));
+    if live.is_empty() && !retry_missing {
+        return Ok(wait_any_result(
+            false,
+            Vec::new(),
+            missing_keys(&missing_targets),
+            started_at,
+        ));
     }
 
     let mut matches = Vec::new();
     let mut matched = vec![false; live.len()];
     while started_at.elapsed() < timeout {
+        if retry_missing && !missing_targets.is_empty() {
+            attach_available_wait_targets(state, &mut missing_targets, &mut live, &mut matched)
+                .await?;
+        }
         let mut ready_any: Vec<ReadyWaitMatch> = Vec::new();
         for (index, live_target) in live.iter_mut().enumerate() {
             if matched[index] {
@@ -829,7 +847,12 @@ async fn run_wait_any(
                     let payload =
                         wait_match_payload(&live_target.target, &session, None, true).await;
                     if quorum == "any" {
-                        return Ok(wait_any_result(true, vec![payload], missing, started_at));
+                        return Ok(wait_any_result(
+                            true,
+                            vec![payload],
+                            missing_keys(&missing_targets),
+                            started_at,
+                        ));
                     }
                     matches.push(payload);
                 }
@@ -885,9 +908,19 @@ async fn run_wait_any(
         if quorum == "any" && !ready_any.is_empty() {
             ready_any.sort_by_key(|ready| ready.order_ms);
             let winner = ready_any.remove(0).payload;
-            return Ok(wait_any_result(true, vec![winner], missing, started_at));
+            return Ok(wait_any_result(
+                true,
+                vec![winner],
+                missing_keys(&missing_targets),
+                started_at,
+            ));
         }
         if quorum == "all" && matches.len() == live.len() {
+            if retry_missing && !missing_targets.is_empty() {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                continue;
+            }
+            let missing = missing_keys(&missing_targets);
             return Ok(wait_any_result(
                 missing.is_empty(),
                 matches,
@@ -897,7 +930,52 @@ async fn run_wait_any(
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    Ok(wait_any_result(false, matches, missing, started_at))
+    Ok(wait_any_result(
+        false,
+        matches,
+        missing_keys(&missing_targets),
+        started_at,
+    ))
+}
+
+fn missing_keys(targets: &[WaitTarget]) -> Vec<String> {
+    targets.iter().map(|target| target.key.clone()).collect()
+}
+
+async fn attach_available_wait_targets(
+    state: &AppState,
+    missing_targets: &mut Vec<WaitTarget>,
+    live: &mut Vec<LiveWaitTarget>,
+    matched: &mut Vec<bool>,
+) -> std::result::Result<(), String> {
+    let mut index = 0;
+    while index < missing_targets.len() {
+        let target = missing_targets[index].clone();
+        let Some(session) = session_by_key(state, &target.key).await else {
+            index += 1;
+            continue;
+        };
+        if session.exited.load(Ordering::SeqCst) {
+            index += 1;
+            continue;
+        }
+        let matcher = match &target.pattern {
+            Some(pattern) => Some(compile_regex(
+                pattern,
+                target.flags.as_deref().unwrap_or(""),
+            )?),
+            None => None,
+        };
+        live.push(LiveWaitTarget {
+            target,
+            matcher,
+            last_seq: session.output_seq.load(Ordering::SeqCst),
+            last_changed_at: Instant::now(),
+        });
+        matched.push(false);
+        missing_targets.remove(index);
+    }
+    Ok(())
 }
 
 async fn subscribe_session(
@@ -939,6 +1017,7 @@ async fn subscribe_session(
     );
     let record = SubscriptionRecord {
         id: id.clone(),
+        created_at: iso_now(),
         targets: body.targets,
         timeout_ms,
         quorum,
@@ -951,6 +1030,7 @@ async fn subscribe_session(
         .write()
         .await
         .insert(id.clone(), record.clone());
+    persist_subscription_journal(&state).await;
     let task_state = state.clone();
     tokio::spawn(async move {
         run_subscription(task_state, record).await;
@@ -1007,13 +1087,7 @@ fn validate_wait_targets(targets: &[WaitTarget], quorum: &str) -> std::result::R
 }
 
 async fn run_subscription(state: AppState, record: SubscriptionRecord) {
-    let result = run_wait_any(
-        &state,
-        record.targets.clone(),
-        record.timeout_ms,
-        record.quorum.clone(),
-    )
-    .await;
+    let result = run_subscription_wait(&state, &record).await;
     match result {
         Ok(result) => {
             let outcome = if result.matched {
@@ -1029,6 +1103,20 @@ async fn run_subscription(state: AppState, record: SubscriptionRecord) {
         }
         Err(error) => update_subscription(&state, &record.id, "failed", Some(error)).await,
     }
+}
+
+async fn run_subscription_wait(
+    state: &AppState,
+    record: &SubscriptionRecord,
+) -> std::result::Result<WaitAnyResult, String> {
+    run_wait_any(
+        state,
+        record.targets.clone(),
+        record.timeout_ms,
+        record.quorum.clone(),
+        true,
+    )
+    .await
 }
 
 async fn deliver_subscription(
@@ -1066,6 +1154,7 @@ async fn update_subscription(state: &AppState, id: &str, status: &str, outcome: 
         record.status = status.to_string();
         record.outcome = outcome;
     }
+    persist_subscription_journal(state).await;
 }
 
 fn compose_wake(record: &SubscriptionRecord, result: &WaitAnyResult) -> String {
@@ -1760,6 +1849,48 @@ async fn persist_all_sessions(state: &AppState) {
         if let Err(error) = persist_session(state, &session).await {
             warn!("failed to persist session {}: {error}", session.key);
         }
+    }
+}
+
+fn load_subscription_journal(path: &Path) -> HashMap<String, SubscriptionRecord> {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    let Ok(records) = serde_json::from_str::<Vec<SubscriptionRecord>>(&contents) else {
+        return HashMap::new();
+    };
+    records
+        .into_iter()
+        .map(|record| (record.id.clone(), record))
+        .collect()
+}
+
+async fn persist_subscription_journal(state: &AppState) {
+    let records: Vec<_> = state.subscriptions.read().await.values().cloned().collect();
+    match serde_json::to_vec_pretty(&records) {
+        Ok(contents) => {
+            if let Err(error) = write_file_atomic(&state.subscription_journal_path, &contents) {
+                warn!("failed to persist subscription journal: {error}");
+            }
+        }
+        Err(error) => warn!("failed to serialize subscription journal: {error}"),
+    }
+}
+
+async fn rearm_pending_subscriptions(state: &AppState) {
+    let pending: Vec<_> = state
+        .subscriptions
+        .read()
+        .await
+        .values()
+        .filter(|record| record.status == "pending")
+        .cloned()
+        .collect();
+    for record in pending {
+        let task_state = state.clone();
+        tokio::spawn(async move {
+            run_subscription(task_state, record).await;
+        });
     }
 }
 
