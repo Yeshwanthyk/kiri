@@ -502,7 +502,10 @@ export function makeKiriControl(
     function* (input: TerminalReadInput) {
       const key = yield* fromSync(() => terminalSessionKey(input))
       return yield* Effect.tryPromise({
-        try: () => dependencies.terminalControlRequest('sessions/read', { key }),
+        try: () => dependencies.terminalControlRequest('sessions/read', {
+          key,
+          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        }),
         catch: normalizeError,
       })
     },
@@ -539,6 +542,7 @@ export function makeKiriControl(
           flags: input.flags,
           timeoutMs: input.timeoutMs,
           scope: input.scope,
+          followReplacement: input.followReplacement ?? true,
         }),
         catch: normalizeError,
       })

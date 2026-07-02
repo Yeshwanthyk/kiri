@@ -293,6 +293,7 @@ describe('KiriControl service construction', () => {
           flags: '',
           timeoutMs: 5_000,
           scope: 'screen',
+          followReplacement: true,
         },
       },
       { route: 'sessions/kill', body: { key: 'project-1:shell' } },

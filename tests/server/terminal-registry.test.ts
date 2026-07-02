@@ -147,7 +147,7 @@ describe('terminal registry', () => {
     expect(screen.bufferType).toBe('normal')
   })
 
-  it('tracks output sequence only for content writes', async () => {
+  it('tracks output sequence only for content writes', () => {
     const { registry } = createRegistry()
     const session = registerSession(registry)
 
@@ -428,7 +428,7 @@ describe('terminal registry', () => {
     expect(registry.sessions.has(session.key)).toBe(false)
   })
 
-  it('exit notifies attached and pending sockets and removes the session', async () => {
+  it('exit notifies attached and pending sockets without closing key subscribers', async () => {
     const { registry } = createRegistry()
     const session = registerSession(registry)
     const attached = socket(1)
@@ -441,10 +441,33 @@ describe('terminal registry', () => {
 
     const attachedFrames = sentFrames(attached)
     expect(attachedFrames.at(-1)).toEqual({ type: 'exit', message: '[exited]' })
-    expect(attached.close).toHaveBeenCalled()
+    expect(attached.close).not.toHaveBeenCalled()
     expect(sentFrames(pending)).toEqual([{ type: 'exit', message: '[exited]' }])
-    expect(pending.close).toHaveBeenCalled()
+    expect(pending.close).not.toHaveBeenCalled()
     expect(registry.sessions.has(session.key)).toBe(false)
+  })
+
+  it('keeps subscribers across exit and emits replaced plus a fresh snapshot on respawn', async () => {
+    const { registry } = createRegistry()
+    const first = registerSession(registry, { banner: 'first\r\n' })
+    const client = socket(1)
+    registry.attach(first, client)
+    await drain(first)
+    client.send.mockClear()
+
+    registry.exit(first, '[exited]')
+    const second = registerSession(registry, { banner: 'second\r\n' })
+    registry.append(second, 'after-respawn')
+    registry.broadcast(second, 'after-respawn')
+    await drain(second)
+
+    const frames = sentFrames(client)
+    expect(frames[0]).toEqual({ type: 'exit', message: '[exited]' })
+    expect(frames[1]).toEqual({ type: 'replaced', generation: 2 })
+    expect(frames[2]).toMatchObject({ type: 'snapshot', generation: 2, cols: 80, rows: 24 })
+    expect(frames[2]?.type === 'snapshot' ? frames[2].data : '').toContain('second')
+    expect(frames[3]).toEqual({ type: 'data', data: 'after-respawn' })
+    expect(client.close).not.toHaveBeenCalled()
   })
 
   it('closeAgentRuntime and closeAll cleanup sessions without touching shell-only keys accidentally', () => {

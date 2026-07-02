@@ -377,7 +377,9 @@ export const terminalTargetSchema = z.object({
 })
 export type TerminalTarget = z.infer<typeof terminalTargetSchema>
 
-export const terminalReadInputSchema = terminalTargetSchema
+export const terminalReadInputSchema = terminalTargetSchema.extend({
+  cursor: z.string().trim().min(1).optional(),
+})
 export type TerminalReadInput = z.infer<typeof terminalReadInputSchema>
 
 export const terminalKeysInputSchema = terminalTargetSchema.extend({
@@ -393,6 +395,7 @@ export const terminalWaitForInputSchema = terminalTargetSchema.extend({
   flags: z.string().regex(/^[gimsuy]*$/).default(''),
   timeoutMs: z.number().int().positive().max(600_000).default(30_000),
   scope: z.enum(['screen', 'output']).default('screen'),
+  followReplacement: z.boolean().optional(),
 })
 export type TerminalWaitForInput = z.infer<typeof terminalWaitForInputSchema>
 
@@ -445,8 +448,10 @@ export const terminalServerFrameSchema = z.discriminatedUnion('type', [
     data: z.string(),
     cols: z.number().int().positive(),
     rows: z.number().int().positive(),
+    generation: z.number().int().nonnegative().optional(),
   }),
   z.object({ type: z.literal('data'), data: z.string() }),
+  z.object({ type: z.literal('replaced'), generation: z.number().int().nonnegative() }),
   z.object({ type: z.literal('exit'), message: z.string() }),
 ])
 export type TerminalServerFrame = z.infer<typeof terminalServerFrameSchema>

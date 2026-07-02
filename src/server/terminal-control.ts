@@ -16,6 +16,9 @@ export type ControlRouteResult = {
 }
 
 const sessionKeySchema = z.object({ key: z.string().min(1) })
+const sessionReadSchema = sessionKeySchema.extend({
+  cursor: z.string().min(1).optional(),
+})
 const sessionKeyPrefixSchema = z.object({ keyPrefix: z.string().min(1) })
 
 const sessionInputSchema = z.object({
@@ -36,6 +39,7 @@ const waitForSchema = z.object({
   flags: z.string().regex(/^[gimsuy]*$/).default(''),
   timeoutMs: z.number().int().positive().max(600_000).default(30_000),
   scope: z.enum(['screen', 'output']).default('screen'),
+  followReplacement: z.boolean().default(true),
 })
 
 export const waitTargetSchema = z.object({
@@ -112,12 +116,13 @@ export async function runWaitTargets(
         pattern: new RegExp(target.pattern, target.flags),
         timeoutMs: options.timeoutMs,
         scope: target.scope,
+        followReplacement: true,
         signal: controller.signal,
       }).then((result) => ({
         key: target.key,
         ...(target.label === undefined ? {} : { label: target.label }),
         match: result.match,
-        tail: readScreenTail(registry, session),
+        tail: readScreenTail(registry, registry.sessions.get(target.key) ?? session),
       })))
     }
     if (target.idleMs !== undefined) {
@@ -180,6 +185,7 @@ export async function handleSessionControlRoute(
       mode: session.mode,
       label: session.label,
       cwd: session.cwd,
+      generation: session.generation,
       cols: session.cols,
       rows: session.rows,
       attachedClients: session.sockets.size,
@@ -189,11 +195,19 @@ export async function handleSessionControlRoute(
   }
 
   if (route === 'POST /api/sessions/read') {
-    const input = sessionKeySchema.parse(body)
+    const input = sessionReadSchema.parse(body)
     const session = registry.sessions.get(input.key)
     if (!session) return { status: 404, body: { error: `No session ${input.key}` } }
     await drained(session)
-    return { status: 200, body: { screen: registry.readScreen(session) } }
+    return {
+      status: 200,
+      body: {
+        screen: registry.readScreen(session),
+        generation: session.generation,
+        cursor: registry.cursor(session),
+        output: registry.outputSince(session, input.cursor),
+      },
+    }
   }
 
   if (route === 'POST /api/sessions/snapshot') {
@@ -201,7 +215,10 @@ export async function handleSessionControlRoute(
     const session = registry.sessions.get(input.key)
     if (!session) return { status: 404, body: { error: `No session ${input.key}` } }
     await drained(session)
-    return { status: 200, body: { snapshot: registry.snapshot(session) } }
+    return {
+      status: 200,
+      body: { snapshot: registry.snapshot(session), generation: session.generation },
+    }
   }
 
   if (route === 'POST /api/sessions/input') {
@@ -235,10 +252,16 @@ export async function handleSessionControlRoute(
         pattern: new RegExp(input.pattern, input.flags),
         timeoutMs: input.timeoutMs,
         scope: input.scope,
+        followReplacement: input.followReplacement,
       })
       return {
         status: 200,
-        body: { matched: true, match: result.match, elapsedMs: Date.now() - startedAt },
+        body: {
+          matched: true,
+          match: result.match,
+          generation: registry.sessions.get(input.key)?.generation ?? session.generation,
+          elapsedMs: Date.now() - startedAt,
+        },
       }
     } catch {
       return { status: 200, body: { matched: false, elapsedMs: Date.now() - startedAt } }
@@ -289,10 +312,10 @@ export function isControlRequestAuthorized(request: IncomingMessage, token: stri
 }
 
 export async function readControlRequestBody(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = []
+  const chunks: Buffer<ArrayBufferLike>[] = []
   let total = 0
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+  for await (const chunk of request as AsyncIterable<Buffer | string>) {
+    const buffer = Buffer.from(chunk)
     total += buffer.length
     if (total > 10_000_000) throw new Error('Request body too large')
     chunks.push(buffer)

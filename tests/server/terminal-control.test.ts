@@ -51,6 +51,65 @@ function drain(session: TerminalRegistrySession) {
   })
 }
 
+describe('sessions/read and wait-for control routes', () => {
+  it('returns generation, cursor, and incremental output for reads', async () => {
+    const { registry } = createRegistry()
+    const session = register(registry, 'a:runtime')
+    registry.append(session, 'first\r\n')
+    await drain(session)
+
+    const initial = await handleSessionControlRoute('POST /api/sessions/read', {
+      key: 'a:runtime',
+    }, registry)
+    expect(initial?.body).toMatchObject({
+      generation: 1,
+      output: '',
+    })
+    const cursor = initial && typeof initial.body === 'object' && initial.body !== null &&
+      'cursor' in initial.body && typeof initial.body.cursor === 'string'
+      ? initial.body.cursor
+      : null
+    if (!cursor) throw new Error('expected read cursor')
+
+    registry.append(session, 'second\r\n')
+    await drain(session)
+    const next = await handleSessionControlRoute('POST /api/sessions/read', {
+      key: 'a:runtime',
+      cursor,
+    }, registry)
+
+    expect(next?.body).toMatchObject({
+      generation: 1,
+      output: 'second\r\n',
+    })
+  })
+
+  it('wait-for follows a replacement for the same key', async () => {
+    const { registry } = createRegistry()
+    const first = register(registry, 'a:runtime')
+    const pending = handleSessionControlRoute('POST /api/sessions/wait-for', {
+      key: 'a:runtime',
+      pattern: 'ready-after-respawn',
+      timeoutMs: 5_000,
+      followReplacement: true,
+    }, registry)
+
+    registry.exit(first, '[exited]')
+    const second = register(registry, 'a:runtime')
+    registry.append(second, 'ready-after-respawn\r\n')
+    await drain(second)
+
+    await expect(pending).resolves.toMatchObject({
+      status: 200,
+      body: {
+        matched: true,
+        match: 'ready-after-respawn',
+        generation: 2,
+      },
+    })
+  })
+})
+
 describe('sessions/wait-any control route', () => {
   it('any-quorum resolves on the first match and releases the losing waits', async () => {
     const { registry } = createRegistry()

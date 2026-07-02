@@ -84,7 +84,6 @@ export function TerminalPanel({
   const toggleFocusKeyRef = React.useRef(toggleFocusKey)
   const typographyRef = React.useRef(typography)
   const transcriptEnabledRef = React.useRef(false)
-  const previousVisibleRef = React.useRef(visible)
   const debugEnabledRef = React.useRef(false)
   const replayBytesRef = React.useRef(0)
   const firstPayloadSeenRef = React.useRef(false)
@@ -96,7 +95,6 @@ export function TerminalPanel({
   })
   const [status, setStatus] = React.useState('Connecting')
   const [transcript, setTranscript] = React.useState<string | null>(null)
-  const [connectionGeneration, setConnectionGeneration] = React.useState(0)
   const [terminalBufferType, setTerminalBufferType] = React.useState<'normal' | 'alternate'>('normal')
   const [debugSnapshot, setDebugSnapshot] = React.useState<TerminalDebugSnapshot | null>(null)
 
@@ -131,15 +129,6 @@ export function TerminalPanel({
     if (!visible) return
     fitAddonRef.current?.fit()
   }, [visible])
-
-  React.useEffect(() => {
-    const wasVisible = previousVisibleRef.current
-    previousVisibleRef.current = visible
-    if (!wasVisible && visible && status === 'Closed') {
-      setStatus('Connecting')
-      setConnectionGeneration((generation) => generation + 1)
-    }
-  }, [status, visible])
 
   React.useEffect(() => {
     if (focusRequest === 0 || !visible) return
@@ -180,8 +169,6 @@ export function TerminalPanel({
     let pendingServerBytes = 0
     let writeFrame: number | null = null
     let debugFrame: number | null = null
-    let reconnectTimer: number | null = null
-    let receivedExitFrame = false
     const terminalDisposables: TerminalDisposable[] = []
 
     function captureDebugSnapshot() {
@@ -249,8 +236,12 @@ export function TerminalPanel({
         appendTranscript(frame.data)
         return
       }
-      receivedExitFrame = true
-      setStatus('Closed')
+      if (frame.type === 'replaced') {
+        setStatus('Connected')
+        appendTranscript(`\r\n[kiri terminal replaced: generation ${frame.generation}]\r\n`)
+        return
+      }
+      setStatus('Offline')
       enqueueWrite(frame.message)
       appendTranscript(frame.message)
     }
@@ -389,11 +380,6 @@ export function TerminalPanel({
           if (!disposed) {
             setStatus('Closed')
             appendTranscript('\r\n[kiri terminal socket closed]\r\n')
-            if (mode === 'runtime' && receivedExitFrame) {
-              reconnectTimer = window.setTimeout(() => {
-                if (!disposed) setConnectionGeneration((generation) => generation + 1)
-              }, 1500)
-            }
           }
         }
         socket.onerror = () => {
@@ -436,7 +422,6 @@ export function TerminalPanel({
       socket?.close()
       if (writeFrame !== null) window.cancelAnimationFrame(writeFrame)
       if (debugFrame !== null) window.cancelAnimationFrame(debugFrame)
-      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
       resizeObserver?.disconnect()
       themeObserver?.disconnect()
       for (const disposable of terminalDisposables) {
@@ -449,7 +434,7 @@ export function TerminalPanel({
       debugEnabledRef.current = false
       term?.dispose()
     }
-  }, [agent.id, connectionGeneration, mode, project.cwd, termId])
+  }, [agent.id, mode, project.cwd, termId])
 
   const label = mode === 'runtime' ? 'Agent terminal' : 'Shell terminal'
   const toggleFocusLabel = `Toggle terminal focus (Shift+${formatTerminalKey(toggleFocusKey)})`

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Effect } from 'effect'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { WebSocket, type RawData } from 'ws'
 import {
   closeTerminalServerForTests,
   ensureTerminalServer,
@@ -425,6 +426,69 @@ describe('terminal server', () => {
     }
   })
 
+  it('keeps an attached websocket subscribed across runtime respawn', async () => {
+    const exitHandlers: Array<(event: { exitCode: number; signal?: number }) => void> = []
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'pi',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake',
+        args: [],
+        cwd: '/tmp/project',
+        env: process.env,
+        label: 'pi',
+      }),
+      spawnPty: () => ({
+        write: vi.fn(),
+        resize: vi.fn(),
+        kill: vi.fn(),
+        onData: vi.fn(),
+        onExit: vi.fn((handler: (event: { exitCode: number; signal?: number }) => void) => {
+          exitHandlers.push(handler)
+        }),
+      } as never),
+    })
+
+    let socket: WebSocket | null = null
+    try {
+      const info = await service.ensure()
+      socket = new WebSocket(
+        `ws://${info.host}:${info.port}${info.path}?token=${info.token}&agentId=agent-1&mode=runtime`,
+      )
+      const frames = collectFrames(socket)
+      await frames.opened
+
+      await expect(frames.next()).resolves.toMatchObject({
+        type: 'snapshot',
+        generation: 1,
+      })
+
+      exitHandlers[0]?.({ exitCode: 0 })
+      await expect(frames.next()).resolves.toEqual({
+        type: 'exit',
+        message: '\r\n[kiri terminal exited: 0]\r\n',
+      })
+
+      await service.spawnAgentRuntime({ agentId: 'agent-1' })
+      await expect(frames.next()).resolves.toEqual({ type: 'replaced', generation: 2 })
+      await expect(frames.next()).resolves.toMatchObject({
+        type: 'snapshot',
+        generation: 2,
+      })
+      expect(socket.readyState).toBe(WebSocket.OPEN)
+    } finally {
+      socket?.close()
+      await service.close()
+    }
+  })
+
   it('provides a scoped Effect service layer and closes resources after scope exit', async () => {
     const info = await Effect.runPromise(Effect.scoped(
       Effect.gen(function* () {
@@ -459,6 +523,42 @@ function listen(server: Server, port = 0) {
       resolve(address.port)
     })
   })
+}
+
+function collectFrames(socket: WebSocket) {
+  const pending: unknown[] = []
+  const waiters: Array<(frame: unknown) => void> = []
+  const opened = new Promise<void>((resolve, reject) => {
+    socket.once('open', resolve)
+    socket.once('error', reject)
+  })
+  socket.on('message', (raw) => {
+    const frame: unknown = JSON.parse(rawDataToString(raw))
+    const waiter = waiters.shift()
+    if (waiter) {
+      waiter(frame)
+      return
+    }
+    pending.push(frame)
+  })
+  return {
+    opened,
+    next: () => new Promise<unknown>((resolve) => {
+      const frame = pending.shift()
+      if (frame !== undefined) {
+        resolve(frame)
+        return
+      }
+      waiters.push(resolve)
+    }),
+  }
+}
+
+function rawDataToString(raw: RawData) {
+  if (typeof raw === 'string') return raw
+  if (Array.isArray(raw)) return Buffer.concat(raw).toString('utf8')
+  if (Buffer.isBuffer(raw)) return raw.toString('utf8')
+  return Buffer.from(raw).toString('utf8')
 }
 
 function close(server: Server) {

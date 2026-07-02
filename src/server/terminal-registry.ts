@@ -43,11 +43,27 @@ type PendingAttach = {
   readonly buffered: string[]
 }
 
+type TerminalRegistryKeyState = {
+  readonly key: string
+  generation: number
+  readonly sockets: Set<TerminalRegistrySocket>
+  readonly pendingAttaches: PendingAttach[]
+  readonly screenListeners: Set<() => void>
+  replacement: ReplacementReplay | null
+}
+
+type ReplacementReplay = {
+  readonly session: TerminalRegistrySession
+  readonly sockets: Set<TerminalRegistrySocket>
+  readonly buffered: Map<TerminalRegistrySocket, string[]>
+}
+
 export type TerminalRegistrySession = {
   readonly key: string
   readonly cwd: string
   readonly mode: TerminalMode
   readonly label: string
+  readonly state: TerminalRegistryKeyState
   readonly proc: TerminalRegistryProc
   readonly sockets: Set<TerminalRegistrySocket>
   readonly headless: HeadlessTerminal
@@ -57,7 +73,9 @@ export type TerminalRegistrySession = {
   readonly recentOutputChunks: string[]
   readonly screenListeners: Set<() => void>
   recentOutputBytes: number
+  recentOutputStartSeq: number
   outputSeq: number
+  generation: number
   cols: number
   rows: number
   paused: boolean
@@ -96,6 +114,7 @@ const defaultMaxRecentOutputBytes = 64_000
 
 export function makeTerminalRegistry(input: TerminalRegistryInput) {
   const sessions = new Map<string, TerminalRegistrySession>()
+  const keyStates = new Map<string, TerminalRegistryKeyState>()
   const timers = input.timers ?? defaultTimers
   const scrollback = input.scrollback ?? defaultScrollback
   const highWatermark = input.highWatermarkBytes ?? defaultHighWatermarkBytes
@@ -108,9 +127,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   // shell targeting stay stable.
   function sessionKey(config: TerminalRegistryLaunchConfig, mode: TerminalMode, termId = 'main') {
     if (mode !== 'shell') return `${config.id}:runtime`
-    return termId === 'main'
-      ? `${config.projectId}:shell`
-      : `${config.projectId}:shell:${termId}`
+    return termId === 'main' ? `${config.projectId}:shell` : `${config.projectId}:shell:${termId}`
   }
 
   function getReusable(
@@ -122,6 +139,11 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   ) {
     const key = sessionKey(config, mode, termId)
     const existing = sessions.get(key)
+    if (existing?.exited) {
+      deleteOwnedSession(existing)
+      maybeDeleteKeyState(existing.state)
+      return null
+    }
     if (existing && existing.cwd === config.cwd) {
       resize(existing, cols, rows)
       return existing
@@ -140,6 +162,10 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     readonly rows: number
     readonly banner?: string
   }) {
+    const state = stateFor(inputSession.key)
+    const isReplacement = state.generation > 0
+    state.generation += 1
+    state.replacement = null
     const headless = new HeadlessTerminalCtor({
       cols: inputSession.cols,
       rows: inputSession.rows,
@@ -155,16 +181,19 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       cwd: inputSession.cwd,
       mode: inputSession.mode,
       label: inputSession.label,
+      state,
       proc: inputSession.proc,
-      sockets: new Set(),
+      sockets: state.sockets,
       headless,
       serializer,
-      pendingAttaches: [],
+      pendingAttaches: state.pendingAttaches,
       outstandingBytes: new Map(),
       recentOutputChunks: [],
       screenListeners: new Set(),
       recentOutputBytes: 0,
+      recentOutputStartSeq: 1,
       outputSeq: 0,
+      generation: state.generation,
       cols: inputSession.cols,
       rows: inputSession.rows,
       paused: false,
@@ -173,6 +202,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     }
     sessions.set(session.key, session)
     if (inputSession.banner) append(session, inputSession.banner)
+    if (isReplacement) publishReplacement(session)
     return session
   }
 
@@ -183,7 +213,8 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   // snapshot, preserving exact ordering without duplication.
   function attach(session: TerminalRegistrySession, socket: TerminalRegistrySocket) {
     if (session.exited) {
-      socket.close()
+      session.state.sockets.add(socket)
+      maybeDeleteKeyState(session.state)
       return
     }
     if (session.idleTimer) {
@@ -202,6 +233,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
         data: session.serializer.serialize(),
         cols: session.cols,
         rows: session.rows,
+        generation: session.generation,
       })
       session.sockets.add(socket)
       session.outstandingBytes.set(socket, 0)
@@ -212,11 +244,26 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   }
 
   function detach(session: TerminalRegistrySession, socket: TerminalRegistrySocket) {
-    session.sockets.delete(socket)
-    session.outstandingBytes.delete(socket)
-    removePendingAttach(session, socket)
-    maybeResume(session)
-    scheduleIdleKill(session)
+    detachKey(session.key, socket)
+  }
+
+  function detachKey(key: string, socket: TerminalRegistrySocket) {
+    const state = keyStates.get(key)
+    if (!state) return
+    state.sockets.delete(socket)
+    removePendingAttachFromState(state, socket)
+    const replacement = state.replacement
+    if (replacement) {
+      replacement.sockets.delete(socket)
+      replacement.buffered.delete(socket)
+    }
+    const session = sessions.get(key)
+    if (session) {
+      session.outstandingBytes.delete(socket)
+      maybeResume(session)
+      scheduleIdleKill(session)
+    }
+    maybeDeleteKeyState(state)
   }
 
   function scheduleIdleKill(session: TerminalRegistrySession) {
@@ -236,6 +283,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       session.idleTimer = null
     }
     deleteOwnedSession(session)
+    closeKeyState(session.state)
     session.proc.kill()
     disposeEmulator(session)
   }
@@ -244,6 +292,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     if (!data) return
     session.headless.write(data, () => {
       for (const listener of session.screenListeners) listener()
+      for (const listener of session.state.screenListeners) listener()
     })
     session.recentOutputChunks.push(data)
     session.recentOutputBytes += data.length
@@ -253,12 +302,18 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     ) {
       const removed = session.recentOutputChunks.shift() ?? ''
       session.recentOutputBytes -= removed.length
+      session.recentOutputStartSeq += 1
     }
     session.outputSeq += 1
   }
 
   function broadcast(session: TerminalRegistrySession, data: string) {
+    const replacement = session.state.replacement
     for (const socket of session.sockets) {
+      if (replacement?.session === session && replacement.sockets.has(socket)) {
+        replacement.buffered.get(socket)?.push(data)
+        continue
+      }
       sendData(session, socket, data)
     }
     for (const pending of session.pendingAttaches) {
@@ -271,6 +326,11 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     if (outstanding === undefined) return
     session.outstandingBytes.set(socket, Math.max(0, outstanding - bytes))
     maybeResume(session)
+  }
+
+  function ackKey(key: string, socket: TerminalRegistrySocket, bytes: number) {
+    const session = sessions.get(key)
+    if (session && !session.exited) ack(session, socket, bytes)
   }
 
   function resize(session: TerminalRegistrySession, cols: number, rows: number) {
@@ -302,22 +362,47 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     }
   }
 
+  function cursor(session: TerminalRegistrySession) {
+    return `${session.generation}:${session.outputSeq}`
+  }
+
+  function outputSince(session: TerminalRegistrySession, cursorValue: string | undefined) {
+    if (!cursorValue) return ''
+    const parsed = /^(\d+):(\d+)$/.exec(cursorValue)
+    if (!parsed) return session.recentOutputChunks.join('')
+    const generation = Number(parsed[1])
+    const seq = Number(parsed[2])
+    if (generation !== session.generation) return session.recentOutputChunks.join('')
+    const offset = Math.max(0, seq - session.recentOutputStartSeq + 1)
+    return session.recentOutputChunks.slice(offset).join('')
+  }
+
   // Resolves once `pattern` matches the visible screen ('screen' scope) or the
   // recent raw output window ('output' scope), or rejects on timeout or abort.
   // Matching re-runs after every parsed output chunk. The abort signal lets
   // multiplexed waits (wait-any) release their listeners as soon as another
   // session wins the race.
-  function waitForScreen(session: TerminalRegistrySession, options: {
-    readonly pattern: RegExp
-    readonly timeoutMs: number
-    readonly scope?: 'screen' | 'output'
-    readonly signal?: AbortSignal
-  }) {
+  function waitForScreen(
+    session: TerminalRegistrySession,
+    options: {
+      readonly pattern: RegExp
+      readonly timeoutMs: number
+      readonly scope?: 'screen' | 'output'
+      readonly followReplacement?: boolean
+      readonly signal?: AbortSignal
+    },
+  ) {
     const scope = options.scope ?? 'screen'
-    const matchTarget = () =>
-      scope === 'screen'
-        ? readScreen(session).lines.join('\n')
-        : session.recentOutputChunks.join('')
+    const listenerSet = options.followReplacement
+      ? session.state.screenListeners
+      : session.screenListeners
+    const matchTarget = () => {
+      const target = options.followReplacement ? sessions.get(session.key) : session
+      if (!target || target.exited) return ''
+      return scope === 'screen'
+        ? readScreen(target).lines.join('\n')
+        : target.recentOutputChunks.join('')
+    }
     return new Promise<{ match: string }>((resolve, reject) => {
       if (options.signal?.aborted) {
         reject(new Error(`Wait aborted for ${session.key}`))
@@ -342,12 +427,12 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       }, options.timeoutMs)
       function settle() {
         settled = true
-        session.screenListeners.delete(listener)
+        listenerSet.delete(listener)
         timers.clearTimeout(timer)
         options.signal?.removeEventListener('abort', onAbort)
       }
       options.signal?.addEventListener('abort', onAbort, { once: true })
-      session.screenListeners.add(listener)
+      listenerSet.add(listener)
       listener()
     })
   }
@@ -356,11 +441,14 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   // (measured from this call or the last output, whichever is later), rejects
   // on timeout/abort. Exited sessions are immediately idle. This is the
   // "worker went quiet" primitive behind idle-based wakes.
-  function waitForIdle(session: TerminalRegistrySession, options: {
-    readonly settleMs: number
-    readonly timeoutMs: number
-    readonly signal?: AbortSignal
-  }) {
+  function waitForIdle(
+    session: TerminalRegistrySession,
+    options: {
+      readonly settleMs: number
+      readonly timeoutMs: number
+      readonly signal?: AbortSignal
+    },
+  ) {
     return new Promise<{ quietMs: number }>((resolve, reject) => {
       if (options.signal?.aborted) {
         reject(new Error(`Wait aborted for ${session.key}`))
@@ -408,6 +496,7 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
   }
 
   function exit(session: TerminalRegistrySession, message: string) {
+    if (session.exited || sessions.get(session.key) !== session) return
     session.exited = true
     if (session.idleTimer) {
       timers.clearTimeout(session.idleTimer)
@@ -417,15 +506,15 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     const frame: TerminalServerFrame = { type: 'exit', message }
     for (const socket of session.sockets) {
       if (socket.readyState === input.socketOpenState) sendFrame(socket, frame)
-      socket.close()
     }
     for (const pending of session.pendingAttaches) {
       if (pending.socket.readyState === input.socketOpenState) sendFrame(pending.socket, frame)
-      pending.socket.close()
+      session.state.sockets.add(pending.socket)
     }
     session.pendingAttaches.length = 0
     deleteOwnedSession(session)
     disposeEmulator(session)
+    maybeDeleteKeyState(session.state)
   }
 
   function closeAgentRuntime(agentId: string) {
@@ -438,6 +527,8 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
       kill(session)
     }
     sessions.clear()
+    for (const state of Array.from(keyStates.values())) closeKeyState(state)
+    keyStates.clear()
   }
 
   return {
@@ -447,14 +538,18 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     register,
     attach,
     detach,
+    detachKey,
     scheduleIdleKill,
     kill,
     append,
     broadcast,
     ack,
+    ackKey,
     resize,
     snapshot,
     readScreen,
+    cursor,
+    outputSince,
     waitForScreen,
     waitForIdle,
     exit,
@@ -486,9 +581,12 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     session.proc.resume?.()
   }
 
-  function removePendingAttach(session: TerminalRegistrySession, socket: TerminalRegistrySocket) {
-    const index = session.pendingAttaches.findIndex((pending) => pending.socket === socket)
-    if (index !== -1) session.pendingAttaches.splice(index, 1)
+  function removePendingAttachFromState(
+    state: TerminalRegistryKeyState,
+    socket: TerminalRegistrySocket,
+  ) {
+    const index = state.pendingAttaches.findIndex((pending) => pending.socket === socket)
+    if (index !== -1) state.pendingAttaches.splice(index, 1)
   }
 
   function disposeEmulator(session: TerminalRegistrySession) {
@@ -500,6 +598,69 @@ export function makeTerminalRegistry(input: TerminalRegistryInput) {
     if (sessions.get(session.key) === session) {
       sessions.delete(session.key)
     }
+  }
+
+  function stateFor(key: string) {
+    const existing = keyStates.get(key)
+    if (existing) return existing
+    const state: TerminalRegistryKeyState = {
+      key,
+      generation: 0,
+      sockets: new Set(),
+      pendingAttaches: [],
+      screenListeners: new Set(),
+      replacement: null,
+    }
+    keyStates.set(key, state)
+    return state
+  }
+
+  function publishReplacement(session: TerminalRegistrySession) {
+    const replay: ReplacementReplay = {
+      session,
+      sockets: new Set(session.state.sockets),
+      buffered: new Map(Array.from(session.state.sockets, (socket) => [socket, []])),
+    }
+    session.state.replacement = replay
+    session.headless.write('', () => {
+      if (session.state.replacement !== replay) return
+      for (const socket of replay.sockets) {
+        if (socket.readyState !== input.socketOpenState) continue
+        sendFrame(socket, { type: 'replaced', generation: session.generation })
+        sendFrame(socket, {
+          type: 'snapshot',
+          data: session.serializer.serialize(),
+          cols: session.cols,
+          rows: session.rows,
+          generation: session.generation,
+        })
+        session.outstandingBytes.set(socket, 0)
+        for (const chunk of replay.buffered.get(socket) ?? []) {
+          sendData(session, socket, chunk)
+        }
+      }
+      session.state.replacement = null
+      for (const listener of session.state.screenListeners) listener()
+    })
+  }
+
+  function maybeDeleteKeyState(state: TerminalRegistryKeyState) {
+    if (sessions.has(state.key)) return
+    if (state.sockets.size > 0) return
+    if (state.pendingAttaches.length > 0) return
+    if (state.screenListeners.size > 0) return
+    if (state.replacement) return
+    keyStates.delete(state.key)
+  }
+
+  function closeKeyState(state: TerminalRegistryKeyState) {
+    for (const socket of state.sockets) socket.close()
+    for (const pending of state.pendingAttaches) pending.socket.close()
+    state.sockets.clear()
+    state.pendingAttaches.length = 0
+    state.screenListeners.clear()
+    state.replacement = null
+    keyStates.delete(state.key)
   }
 }
 

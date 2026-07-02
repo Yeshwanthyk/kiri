@@ -424,14 +424,15 @@ async function handleTerminalConnection(
     return
   }
 
-  let session: TerminalRegistrySession
+  let key: string
   try {
     const config = runtime.dependencies.getAgentLaunchConfig(agentId)
     const mode = parseTerminalMode(query.mode)
     const cols = positiveInt(query.cols, 100)
     const rows = positiveInt(query.rows, 30)
     const termId = parseTermId(query.termId)
-    session = await dedupedGetOrCreateTerminalSession(runtime, config, mode, cols, rows, termId)
+    key = runtime.registry.sessionKey(config, mode, termId)
+    const session = await dedupedGetOrCreateTerminalSession(runtime, config, mode, cols, rows, termId)
     attachTerminalSocket(runtime, session, socket)
   } catch (error) {
     closeWithReason(socket, error instanceof Error ? error.message : String(error))
@@ -441,19 +442,20 @@ async function handleTerminalConnection(
   socket.on('message', (raw) => {
     const message = parseClientMessage(raw)
     if (!message) return
+    const session = runtime.registry.sessions.get(key)
     if (message.type === 'input') {
-      session.proc.write(message.data)
+      if (session && !session.exited) session.proc.write(message.data)
       return
     }
     if (message.type === 'ack') {
-      runtime.registry.ack(session, socket, message.bytes)
+      runtime.registry.ackKey(key, socket, message.bytes)
       return
     }
-    runtime.registry.resize(session, message.cols, message.rows)
+    if (session && !session.exited) runtime.registry.resize(session, message.cols, message.rows)
   })
 
   socket.on('close', () => {
-    detachTerminalSocket(runtime, session, socket)
+    detachTerminalSocket(runtime, key, socket)
   })
 }
 
@@ -569,10 +571,10 @@ function attachTerminalSocket(
 
 function detachTerminalSocket(
   runtime: TerminalServerRuntime,
-  session: TerminalRegistrySession,
+  key: string,
   socket: WebSocket,
 ) {
-  runtime.registry.detach(session, socket)
+  runtime.registry.detachKey(key, socket)
 }
 
 function listen(server: Server, port: number, host: string, wss: WebSocketServer) {
