@@ -114,6 +114,12 @@ function runGit(cwd: string, args: string[]) {
   })
 }
 
+function e2eSessionDir(agentId: string) {
+  const sessionDir = resolve(projectRoot, '.kiri-e2e-sessions', agentId)
+  mkdirSync(sessionDir, { recursive: true })
+  return sessionDir
+}
+
 test('empty workspace starts with an add-project path', async ({ page }) => {
   await expect(page.getByTestId('empty-project-state')).toHaveAttribute('data-hydrated', 'true')
   await page.getByTestId('empty-add-project').click()
@@ -670,7 +676,8 @@ test('codex runtime runs through app-server harness', async ({ page }, testInfo)
   await expect(page.getByTestId('chat-panel')).toContainText('src/kiri-file-operation-e2e.tmp')
 
   const requests = fakeCodexServer.requests as CodexHarnessRequest[]
-  expect(requests.some((request) => request.method === 'initialize')).toBe(true)
+  // The serial suite can initialize the shared app-server connection before
+  // this test resets the per-test request log.
   expect(requests.some((request) => request.method === 'thread/start')).toBe(true)
   expect(requests.some((request) => request.method === 'turn/start')).toBe(true)
   const firstReadWithTurnsIndex = requests.findIndex((request) => (
@@ -944,7 +951,9 @@ test('terminal focus key toggles out and back into a terminal chat session', asy
   await page.goto('/')
   await createSession(page, title, 'codex', 'low', 'terminal')
 
-  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
+  await expect(page.getByTestId('terminal-panel')).toHaveAttribute('data-terminal-status', 'Connected', {
+    timeout: 10_000,
+  })
   const terminalInput = page
     .getByTestId('terminal-panel')
     .getByRole('textbox', { name: 'Terminal input' })
@@ -966,8 +975,10 @@ test('codex terminal interface resumes after the PTY exits', async ({ page, isMo
   await page.goto('/')
   await createSession(page, title, 'codex', 'low', 'terminal')
 
-  await expect(page.getByTestId('terminal-panel')).toContainText('Connected', { timeout: 10_000 })
-  await expect(page.getByTestId('terminal-panel')).toContainText('Agent terminal')
+  await expect(page.getByTestId('terminal-panel')).toHaveAttribute('data-terminal-status', 'Connected', {
+    timeout: 10_000,
+  })
+  await expect(page.getByTestId('terminal-panel')).toHaveAttribute('data-terminal-mode', 'runtime')
   await expect(page.getByTestId('terminal-transcript')).toContainText('mode:fresh')
   const freshTranscript = await page.getByTestId('terminal-transcript').textContent()
   const sessionId = freshTranscript?.match(/session:(fake-session-[^\s]+)/)?.[1]
@@ -988,10 +999,6 @@ test('codex terminal interface resumes after the PTY exits', async ({ page, isMo
   await page.keyboard.type('exit')
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('terminal-transcript')).toContainText('bye session:')
-
-  await openTerminalResource(page)
-  await expect(page.getByTestId('terminal-panel')).toContainText('Shell terminal')
-  await openAgentResource(page, title)
   await expect(page.getByTestId('terminal-transcript')).toContainText('mode:resume')
   await expect(page.getByTestId('terminal-transcript')).toContainText(`session:${sessionId}`)
 
@@ -1003,6 +1010,25 @@ test('codex terminal interface resumes after the PTY exits', async ({ page, isMo
   await page.keyboard.type('state')
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('terminal-transcript')).toContainText(`state:alpha:session:${sessionId}:mode:resume`)
+
+  await page.keyboard.type('remember beta')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`remembered:beta:session:${sessionId}`)
+  await page.keyboard.type('exit')
+  await page.keyboard.press('Enter')
+  await expect.poll(async () => {
+    const text = await page.getByTestId('terminal-transcript').textContent()
+    return text?.match(/fake-codex-terminal mode:resume/g)?.length ?? 0
+  }).toBeGreaterThanOrEqual(2)
+  await terminalInput.click()
+  await page.keyboard.type('state')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`state:beta:session:${sessionId}:mode:resume`)
+
+  await openTerminalResource(page)
+  await expect(page.getByTestId('terminal-panel')).toContainText('Shell terminal')
+  await openAgentResource(page, title)
+  await expect(page.getByTestId('terminal-transcript')).toContainText(`state:beta:session:${sessionId}:mode:resume`)
 })
 
 test('selected agent detail loads chat and local drafts', async ({ page, isMobile }) => {
@@ -1029,9 +1055,9 @@ test('selected agent detail loads chat and local drafts', async ({ page, isMobil
   await expect(page.getByTestId('chat-panel')).toContainText('seeded detail assistant tail')
 
   await page.getByTestId('chat-input').fill('local unsent draft')
-  await page.getByRole('button', { name: 'Other Session' }).click()
+  await openAgentResource(page, 'Other Session')
   await expect(page.getByTestId('chat-input')).toHaveValue('')
-  await page.getByRole('button', { name: 'Detail Session' }).click()
+  await openAgentResource(page, 'Detail Session')
   await expect(page.getByTestId('chat-input')).toHaveValue('local unsent draft')
   await expect(page.evaluate(() => sessionStorage.getItem('kiri:chat-drafts:v1')))
     .resolves.toContain(detailAgentId)
@@ -1071,9 +1097,7 @@ test('escape leaves chat composer so board keymaps work', async ({ page, isMobil
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('chat-input')).not.toBeFocused()
 
-  await page.keyboard.down('Shift')
-  await page.keyboard.press('KeyJ')
-  await page.keyboard.up('Shift')
+  await pressShiftKeyFromFocus(page, 'KeyL')
   await expect(page.getByTestId('selected-project')).not.toHaveText(firstProject ?? '')
 })
 
@@ -1175,6 +1199,7 @@ test('mobile shell visual snapshot', async ({ page, isMobile }) => {
 test('settings theme visual snapshot', async ({ page, isMobile }) => {
   test.skip(isMobile, 'desktop settings snapshot only')
 
+  await page.setViewportSize({ width: 1440, height: 3000 })
   await page.goto('/')
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-hydrated', 'true')
   await openSettingsPage(page)
@@ -1182,7 +1207,7 @@ test('settings theme visual snapshot', async ({ page, isMobile }) => {
   await page.getByTestId('theme-card-tokyonight').click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'tokyonight')
   await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark')
-  await expect(page.getByTestId('settings-page')).toHaveScreenshot('settings-theme-tokyonight-dark.png', {
+  await expect(page).toHaveScreenshot('settings-theme-tokyonight-dark.png', {
     animations: 'disabled',
   })
 })
@@ -1266,14 +1291,11 @@ test('launcher, confirm, and settings controls expose accessible states', async 
   await expect(startSessionButton).toBeFocused()
 
   await createSession(page, title)
-  const removeSessionButton = page.getByTestId('remove-session')
-  if (isMobile) {
-    await pressShiftKey(page, 'KeyX')
-  } else {
-    await removeSessionButton.focus()
-    await expect(removeSessionButton).toBeFocused()
-    await removeSessionButton.click()
-  }
+  await openAgentResource(page, title)
+  const closeResourceButton = page.getByRole('button', { name: `Close ${title}` })
+  await closeResourceButton.focus()
+  await expect(closeResourceButton).toBeFocused()
+  await closeResourceButton.click()
   const confirm = page.getByTestId('confirm-dialog')
   await expect(confirm).toHaveAttribute('role', 'alertdialog')
   await expect(confirm).toContainText(title)
@@ -1284,9 +1306,7 @@ test('launcher, confirm, and settings controls expose accessible states', async 
   await expect(page.getByTestId('confirm-dialog-confirm')).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(confirm).toBeHidden()
-  if (!isMobile) {
-    await expect(removeSessionButton).toBeFocused()
-  }
+  await expect(closeResourceButton).toBeFocused()
 
   await openSettingsPage(page)
   const themeModeTabs = page.getByRole('tablist', { name: 'Theme mode' })
@@ -1557,6 +1577,7 @@ function seedSessionWithDetail(input: {
   const escapedMessage = input.messageText.replaceAll("'", "''")
   const timestamp = new Date().toISOString()
   const threadId = `${input.agentId}-thread`
+  const sessionDir = e2eSessionDir(input.agentId)
   writeFileSync(detailFixturePath, 'export const detail = true\n')
   const database = new DatabaseSync(testDbPath)
   database.exec(`
@@ -1568,7 +1589,7 @@ function seedSessionWithDetail(input: {
     VALUES (
       '${input.agentId}', 'e2e-kiri', '${input.slot}', '${escapedTitle}',
       'pi', 'openai-codex/gpt-5.5', 'idle',
-      '${projectRoot.replaceAll("'", "''")}', NULL, ${input.position ?? 0}
+      '${sessionDir.replaceAll("'", "''")}', NULL, ${input.position ?? 0}
     );
     INSERT INTO threads (id, agent_id, active, preview, message_count, updated_at)
     VALUES ('${threadId}', '${input.agentId}', 1, '${escapedMessage}', 1, '${timestamp}');
@@ -1594,6 +1615,7 @@ function seedChatTimelineSession(input: {
   const database = new DatabaseSync(testDbPath)
   const threadId = `${input.agentId}-thread`
   const timestamp = new Date(Date.UTC(2026, 4, 12, 12, 0, 0))
+  const sessionDir = e2eSessionDir(input.agentId)
   const insertAgent = database.prepare(`
     INSERT INTO agent_slots (
       id, project_id, slot, title, runtime, model, status,
@@ -1612,7 +1634,7 @@ function seedChatTimelineSession(input: {
 
   try {
     database.exec('BEGIN')
-    insertAgent.run(input.agentId, input.slot, input.title, projectRoot)
+    insertAgent.run(input.agentId, input.slot, input.title, sessionDir)
     insertThread.run(
       threadId,
       input.agentId,
@@ -1647,6 +1669,7 @@ function seedLargeSessionWithDetail(input: {
   const database = new DatabaseSync(testDbPath)
   const threadId = `${input.agentId}-thread`
   const timestamp = new Date().toISOString()
+  const sessionDir = e2eSessionDir(input.agentId)
   const insertAgent = database.prepare(`
     INSERT INTO agent_slots (
       id, project_id, slot, title, runtime, model, status,
@@ -1664,7 +1687,7 @@ function seedLargeSessionWithDetail(input: {
   `)
   try {
     database.exec('BEGIN')
-    insertAgent.run(input.agentId, input.slot, input.title, projectRoot)
+    insertAgent.run(input.agentId, input.slot, input.title, sessionDir)
     insertThread.run(
       threadId,
       input.agentId,

@@ -27,6 +27,7 @@ type TerminalDisposable = { dispose: () => void }
 const wheelDeltaLine = 1
 const wheelDeltaPage = 2
 const terminalScrollbackRows = 10_000
+const runtimeReconnectCrashWindowMs = 2_000
 
 type TerminalDebugSnapshot = {
   readonly bufferType: 'normal' | 'alternate'
@@ -168,7 +169,13 @@ export function TerminalPanel({
     let pendingWrite = ''
     let pendingServerBytes = 0
     let writeFrame: number | null = null
+    let writeInFlight = 0
+    let outputGeneration = 0
     let debugFrame: number | null = null
+    let reconnectTimer: number | null = null
+    let activeTerminalConfig: TerminalConfig | null = null
+    let runtimeReconnectStartedAt = 0
+    let runtimeReconnectSawInput = true
     const terminalDisposables: TerminalDisposable[] = []
 
     function captureDebugSnapshot() {
@@ -206,7 +213,13 @@ export function TerminalPanel({
         const ackBytes = pendingServerBytes
         pendingWrite = ''
         pendingServerBytes = 0
-        term?.write(chunk, () => {
+        const currentTerm = term
+        if (!currentTerm) return
+        writeInFlight += 1
+        const writeGeneration = outputGeneration
+        currentTerm.write(chunk, () => {
+          writeInFlight = Math.max(0, writeInFlight - 1)
+          if (writeGeneration !== outputGeneration) return
           // Flow control: tell the server how many of its bytes were applied so
           // it can resume a paused PTY once this client catches up.
           if (ackBytes > 0 && socket?.readyState === WebSocket.OPEN) {
@@ -244,6 +257,59 @@ export function TerminalPanel({
       setStatus('Offline')
       enqueueWrite(frame.message)
       appendTranscript(frame.message)
+      reconnectRuntimeTerminal()
+    }
+
+    function reconnectRuntimeTerminal() {
+      if (mode !== 'runtime' || reconnectTimer !== null) return
+      const now = window.performance.now()
+      const reconnectDelay =
+        !runtimeReconnectSawInput &&
+        runtimeReconnectStartedAt > 0 &&
+        now - runtimeReconnectStartedAt < runtimeReconnectCrashWindowMs
+          ? runtimeReconnectCrashWindowMs - (now - runtimeReconnectStartedAt)
+          : 0
+      const terminalConfig = activeTerminalConfig
+      if (!terminalConfig || !term) return
+      runtimeReconnectSawInput = false
+      clearPendingServerWrite()
+      if (socket) {
+        socket.onopen = null
+        socket.onmessage = null
+        socket.onclose = null
+        socket.onerror = null
+        socket.close()
+        socket = null
+      }
+      setStatus('Reconnecting')
+      appendTranscript('\r\n[kiri terminal reconnecting]\r\n')
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null
+        openSocketAfterPendingWrites(terminalConfig)
+      }, reconnectDelay)
+    }
+
+    function clearPendingServerWrite() {
+      outputGeneration += 1
+      pendingWrite = ''
+      pendingServerBytes = 0
+      if (writeFrame !== null) {
+        window.cancelAnimationFrame(writeFrame)
+        writeFrame = null
+      }
+    }
+
+    function openSocketAfterPendingWrites(terminalConfig: TerminalConfig) {
+      if (disposed || !term) return
+      if (writeInFlight > 0) {
+        reconnectTimer = window.setTimeout(() => {
+          reconnectTimer = null
+          openSocketAfterPendingWrites(terminalConfig)
+        }, 16)
+        return
+      }
+      runtimeReconnectStartedAt = window.performance.now()
+      openSocket(terminalConfig)
     }
 
     function recordTerminalPayload(data: string) {
@@ -262,6 +328,46 @@ export function TerminalPanel({
     function appendTranscript(data: string) {
       if (!transcriptEnabledRef.current) return
       appendTerminalTranscript(setTranscript, data)
+    }
+
+    function openSocket(terminalConfig: TerminalConfig) {
+      if (!term) return
+      const url = terminalWebSocketUrl(terminalConfig, agent.id, term.cols, term.rows, termId)
+      const nextSocket = new WebSocket(url)
+      socket = nextSocket
+      nextSocket.onopen = () => {
+        if (!term || socket !== nextSocket) return
+        setStatus('Connected')
+        nextSocket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+        // The screen content arrives via the snapshot frame; the banner is
+        // transcript-only so the snapshot reset does not wipe it.
+        const banner = mode === 'runtime'
+          ? `kiri agent terminal · ${terminalConfig.runtime} · ${terminalConfig.model} · ${project.cwd}\r\n\r\n`
+          : `kiri shell terminal · ${project.cwd}\r\n\r\n`
+        appendTranscript(banner)
+      }
+      nextSocket.onmessage = (event) => {
+        if (socket !== nextSocket) return
+        if (typeof event.data !== 'string') return
+        const frame = parseServerFrame(event.data)
+        if (frame) {
+          handleServerFrame(frame)
+          return
+        }
+        // Unframed payloads (e.g. older servers) are written through as-is.
+        recordTerminalPayload(event.data)
+        enqueueWrite(event.data)
+        appendTranscript(event.data)
+      }
+      nextSocket.onclose = () => {
+        if (!disposed && socket === nextSocket) {
+          setStatus('Closed')
+          appendTranscript('\r\n[kiri terminal socket closed]\r\n')
+        }
+      }
+      nextSocket.onerror = () => {
+        if (!disposed && socket === nextSocket) setStatus('Connection failed')
+      }
     }
 
     async function connect() {
@@ -290,6 +396,7 @@ export function TerminalPanel({
           getTerminalConfigRef.current({ data: { agentId: agent.id, mode } }),
         ])
         if (disposed) return
+        activeTerminalConfig = terminalConfig
 
         const typographyOptions = terminalTypographyOptions(typographyRef.current)
         term = new Terminal({
@@ -351,42 +458,10 @@ export function TerminalPanel({
         })
         resizeObserver.observe(host)
 
-        const url = terminalWebSocketUrl(terminalConfig, agent.id, term.cols, term.rows, termId)
-        socket = new WebSocket(url)
-        socket.onopen = () => {
-          if (!term || !socket) return
-          setStatus('Connected')
-          socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-          // The screen content arrives via the snapshot frame; the banner is
-          // transcript-only so the snapshot reset does not wipe it.
-          const banner = mode === 'runtime'
-            ? `kiri agent terminal · ${terminalConfig.runtime} · ${terminalConfig.model} · ${project.cwd}\r\n\r\n`
-            : `kiri shell terminal · ${project.cwd}\r\n\r\n`
-          appendTranscript(banner)
-        }
-        socket.onmessage = (event) => {
-          if (typeof event.data !== 'string') return
-          const frame = parseServerFrame(event.data)
-          if (frame) {
-            handleServerFrame(frame)
-            return
-          }
-          // Unframed payloads (e.g. older servers) are written through as-is.
-          recordTerminalPayload(event.data)
-          enqueueWrite(event.data)
-          appendTranscript(event.data)
-        }
-        socket.onclose = () => {
-          if (!disposed) {
-            setStatus('Closed')
-            appendTranscript('\r\n[kiri terminal socket closed]\r\n')
-          }
-        }
-        socket.onerror = () => {
-          if (!disposed) setStatus('Connection failed')
-        }
+        openSocket(terminalConfig)
         terminalDisposables.push(
           term.onData((data) => {
+            if (mode === 'runtime') runtimeReconnectSawInput = true
             if (socket?.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify({ type: 'input', data }))
             }
@@ -422,6 +497,7 @@ export function TerminalPanel({
       socket?.close()
       if (writeFrame !== null) window.cancelAnimationFrame(writeFrame)
       if (debugFrame !== null) window.cancelAnimationFrame(debugFrame)
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
       resizeObserver?.disconnect()
       themeObserver?.disconnect()
       for (const disposable of terminalDisposables) {
