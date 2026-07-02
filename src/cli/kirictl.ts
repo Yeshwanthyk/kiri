@@ -27,6 +27,10 @@ import {
   handleClaudeHook,
   type ClaudeHookEvent,
 } from '~/server/claude-hook-handler'
+import {
+  buildTerminalShimArgsScript,
+  parseTerminalShimRuntime,
+} from '~/server/terminal-shim'
 
 const version = '0.1.0'
 
@@ -197,6 +201,17 @@ const termWaitForCommand = Command.make(
     runTermOperation('terminal.wait-for', { agentId, mode, pattern, timeoutMs: timeout, scope }),
 ).pipe(Command.withDescription('Wait until a regex matches the terminal'))
 
+const termShimArgsCommand = Command.make(
+  'shim-args',
+  { runtime: Args.text({ name: 'runtime' }) },
+  ({ runtime }) =>
+    Effect.sync(() => {
+      const parsed = parseTerminalShimRuntime(runtime)
+      if (!parsed) throw new Error(`Unsupported shim runtime: ${runtime}`)
+      console.log(buildTerminalShimArgsScript({ runtime: parsed, env: process.env }))
+    }),
+).pipe(Command.withDescription('Internal argv injection for shell PATH shims'))
+
 function runTermOperation(operation: string, params: Record<string, unknown>) {
   return Effect.gen(function* () {
     const control = yield* KiriControl
@@ -216,6 +231,7 @@ const termCommand = Command.make('term', {}).pipe(
     termInputCommand,
     termKeysCommand,
     termWaitForCommand,
+    termShimArgsCommand,
   ]),
 )
 

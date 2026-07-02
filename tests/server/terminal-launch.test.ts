@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { delimiter, join, resolve } from 'node:path'
 import { Effect } from 'effect'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { makeRuntimeBinariesService, RuntimeBinaryError } from '~/server/runtime-binaries'
@@ -581,12 +581,34 @@ describe('buildTerminalProcessLaunch', () => {
     ])
   })
 
-  it('keeps shell mode as a separate terminal profile', () => {
-    const launch = buildTerminalProcessLaunch(launchConfig('claude'), 'shell', shell)
+  it('keeps shell mode project-scoped and prepends the terminal shim path', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'kiri-shell-home-'))
+    const service = makeTerminalLaunchService({
+      runtimeBinaries: makeRuntimeBinariesService({
+        getEnv: () => ({ PATH: '/usr/bin', KIRI_MCP_BIN: '/tmp/bin/kiri-mcp' }),
+        getHomeDir: () => home,
+        exists: () => false,
+      }),
+      getEnv: () => ({ PATH: '/usr/bin', KIRI_MCP_BIN: '/tmp/bin/kiri-mcp' }),
+      getHomeDir: () => home,
+      exists: () => false,
+      getProcessCwd: () => '/repo',
+      getExecPath: () => '/node',
+      getResourcesPath: () => undefined,
+    })
+
+    const launch = await Effect.runPromise(service.buildProcessLaunch({
+      config: launchConfig('claude'),
+      mode: 'shell',
+      shell,
+    }))
+    const shimDir = join(home, '.kiri/shim/bin')
 
     expect(launch.command).toBe('/bin/zsh')
     expect(launch.args).toEqual(['-l', '-i'])
     expect(launch.label).toBe('shell')
+    expect(launch.env.PATH?.split(delimiter)[0]).toBe(shimDir)
+    expect(readFileSync(join(shimDir, 'codex'), 'utf8')).toContain("'term' 'shim-args'")
     expect(launch.env.KIRI_PROJECT_CWD).toBe('/tmp/project')
     expect(launch.env.KIRI_AGENT_ID).toBeUndefined()
     expect(launch.env.KIRI_RUNTIME).toBeUndefined()
@@ -643,6 +665,7 @@ describe('buildTerminalProcessLaunch', () => {
   })
 
   it('preserves Codex, Pi, and shell launch behavior through the injected service', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'kiri-service-home-'))
     const env = {
       PATH: '/bin',
       KIRI_CODEX_BIN: '/injected/codex',
@@ -653,11 +676,11 @@ describe('buildTerminalProcessLaunch', () => {
     const service = makeTerminalLaunchService({
       runtimeBinaries: makeRuntimeBinariesService({
         getEnv: () => env,
-        getHomeDir: () => '/injected/home',
+        getHomeDir: () => home,
         exists: () => false,
       }),
       getEnv: () => env,
-      getHomeDir: () => '/injected/home',
+      getHomeDir: () => home,
       exists: () => false,
       getProcessCwd: () => '/repo',
       getExecPath: () => '/node',
@@ -702,6 +725,7 @@ describe('buildTerminalProcessLaunch', () => {
     expect(shellLaunch.args).toEqual(['-l', '-i'])
     expect(shellLaunch.env.KIRI_AGENT_ID).toBeUndefined()
     expect(shellLaunch.env.KIRI_PROJECT_CWD).toBe('/tmp/project')
+    expect(shellLaunch.env.PATH?.split(delimiter)[0]).toBe(join(home, '.kiri/shim/bin'))
   })
 
   it('wraps injected runtime binary failures as terminal launch errors', async () => {

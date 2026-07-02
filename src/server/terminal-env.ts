@@ -1,3 +1,10 @@
+import { delimiter } from 'node:path'
+import {
+  installTerminalShims,
+  type KiriMcpServerConfig,
+  type KirictlInvocation,
+} from './terminal-shim'
+
 export function commonTerminalEnv() {
   return {
     TERM: 'xterm-256color',
@@ -12,4 +19,25 @@ export function removeColorDisablingEnv(env: NodeJS.ProcessEnv) {
   delete env.NO_COLOR
   delete env.NODE_DISABLE_COLORS
   return env
+}
+
+export function withTerminalShimPath(
+  env: NodeJS.ProcessEnv,
+  input: {
+    readonly homeDir: string
+    readonly baseInvocation: KirictlInvocation
+    readonly mcpConfig: KiriMcpServerConfig
+  },
+) {
+  let binDir: string
+  try {
+    binDir = installTerminalShims(input).binDir
+  } catch {
+    return env
+  }
+  const entries = [binDir, ...(env.PATH ?? '').split(delimiter).filter(Boolean)]
+  return {
+    ...env,
+    PATH: Array.from(new Set(entries)).join(delimiter),
+  }
 }

@@ -11,8 +11,16 @@ import {
 } from './runtime-binaries'
 export { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
-import { commonTerminalEnv, removeColorDisablingEnv } from './terminal-env'
+import { commonTerminalEnv, removeColorDisablingEnv, withTerminalShimPath } from './terminal-env'
 import { readCodexTerminalResumeId } from './codex-terminal-session'
+import {
+  claudeHookSettings,
+  codexKiriConfigArgs,
+  codexSessionStartHookArgs,
+  kirictlCommand,
+  type KiriMcpServerConfig,
+  type KirictlInvocation,
+} from './terminal-shim'
 
 export type TerminalAgentLaunchConfig = {
   id: string
@@ -75,17 +83,6 @@ type TerminalLaunchContext = {
   readonly execPath: string
   readonly resourcesPath?: string
   readonly runtimeBinaries: RuntimeBinariesApi
-}
-
-type KiriMcpServerConfig = {
-  readonly type: 'stdio'
-  readonly command: string
-  readonly args?: readonly string[]
-}
-
-type KirictlInvocation = {
-  readonly command: string
-  readonly args: readonly string[]
 }
 
 const codexHookSupportTtlMs = 60 * 60_000
@@ -237,28 +234,17 @@ function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunch
   })
 }
 
-type ClaudeHookConfigEntry = {
-  readonly matcher?: string
-  readonly hooks: readonly [{
-    readonly type: 'command'
-    readonly command: string
-    readonly async: true
-  }]
-}
-
 function writeClaudeHookSettings(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
   return Effect.gen(function* () {
-  const settings = {
-    hooks: {
-      SessionStart: [yield* claudeHookConfigEntry(context, 'session-start')],
-      UserPromptSubmit: [yield* claudeHookConfigEntry(context, 'user-prompt-submit')],
-      Stop: [yield* claudeHookConfigEntry(context, 'stop')],
-      SessionEnd: [yield* claudeHookConfigEntry(context, 'session-end')],
-      PreToolUse: [yield* claudeHookConfigEntry(context, 'pre-tool-use', 'AskUserQuestion|ExitPlanMode')],
-      PermissionRequest: [yield* claudeHookConfigEntry(context, 'permission-request')],
-      PostToolUse: [yield* claudeHookConfigEntry(context, 'post-tool-use', 'TodoWrite')],
-    },
-  }
+  const settings = claudeHookSettings({
+    SessionStart: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'session-start'])),
+    UserPromptSubmit: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'user-prompt-submit'])),
+    Stop: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'stop'])),
+    SessionEnd: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'session-end'])),
+    PreToolUse: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'pre-tool-use'])),
+    PermissionRequest: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'permission-request'])),
+    PostToolUse: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'post-tool-use'])),
+  })
   const settingsPath = join(config.sessionDir, 'claude-hooks-settings.json')
   return yield* Effect.try({
     try: () => {
@@ -271,25 +257,6 @@ function writeClaudeHookSettings(config: TerminalAgentLaunchConfig, context: Ter
       cause: error,
     }),
   })
-  })
-}
-
-function claudeHookConfigEntry(
-  context: TerminalLaunchContext,
-  event: string,
-  matcher?: string,
-): Effect.Effect<ClaudeHookConfigEntry, RuntimeBinaryError> {
-  return Effect.gen(function* () {
-  const invocation = yield* resolveKirictlInvocation(context, ['claude-hook', event])
-  const command = [invocation.command, ...invocation.args].map(shellQuote).join(' ')
-  return {
-    ...(matcher ? { matcher } : {}),
-    hooks: [{
-      type: 'command' as const,
-      command,
-      async: true as const,
-    }],
-  }
   })
 }
 
@@ -409,60 +376,6 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
   })
 }
 
-function codexSessionStartHookArgs(invocation: KirictlInvocation) {
-  const command = codexSessionStartHookCommand(invocation)
-  return [
-    '--enable',
-    'hooks',
-    '--dangerously-bypass-hook-trust',
-    '--config',
-    `hooks.SessionStart=[{hooks=[{type="command",command=${tomlString(command)},timeout=5}]}]`,
-  ]
-}
-
-function codexSessionStartHookCommand(invocation: KirictlInvocation) {
-  const command = [invocation.command, ...invocation.args].map(shellQuote).join(' ')
-  const script = `f="$(mktemp -t kiri-codex-hook)"; cat > "$f"; (${command} --stdin-file "$f" >> /tmp/kiri-codex-hook.log 2>&1; rm -f "$f") & printf '{}'`
-  return `/bin/sh -c ${shellQuote(script)}`
-}
-
-function codexKiriConfigArgs(agentId: string, config: KiriMcpServerConfig) {
-  // Keep Codex config ephemeral: do not write ~/.codex/config.toml or clobber notify.
-  const args = [
-    '--config',
-    `developer_instructions=${tomlString(codexKiriTerminalPrompt(agentId))}`,
-    '--config',
-    `mcp_servers.kiri.command=${tomlString(config.command)}`,
-  ]
-  if (config.args?.length) {
-    args.push(
-      '--config',
-      `mcp_servers.kiri.args=${tomlStringArray(config.args)}`,
-    )
-  }
-  return args
-}
-
-function codexKiriTerminalPrompt(agentId: string) {
-  return [
-    'Kiri integration:',
-    `- This terminal Codex session is Kiri session ${agentId}.`,
-    `- Keep the Kiri session title accurate. When the title is generic, stale, or the current work changes, call kiri_do with operation "session.rename" and params {"agentId":"${agentId}","title":"Short action title"}.`,
-    '- Use Kiri MCP operations through kiri_get and kiri_do; there are no separate kiri_rename_session, kiri_list_projects, or kiri_list_sessions tools.',
-  ].join('\n')
-}
-
-function tomlString(value: string) {
-  return JSON.stringify(value)
-}
-
-function tomlStringArray(values: readonly string[]) {
-  return `[${values.map(tomlString).join(', ')}]`
-}
-
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`
-}
 
 function preferSourceKirictl(context: TerminalLaunchContext) {
   return context.env.KIRI_PREFER_SOURCE_CLI === '1' || context.env.NODE_ENV === 'test'
@@ -553,10 +466,15 @@ function baseTerminalEnv(
 
 function shellTerminalEnv(cwd: string, context: TerminalLaunchContext) {
   return Effect.gen(function* () {
-  return removeColorDisablingEnv(yield* context.runtimeBinaries.processEnv({
+  const env = removeColorDisablingEnv(yield* context.runtimeBinaries.processEnv({
     ...commonTerminalEnv(),
     KIRI_PROJECT_CWD: cwd,
   }))
+  return withTerminalShimPath(env, {
+    homeDir: context.homeDir,
+    baseInvocation: yield* resolveKirictlInvocation(context, []),
+    mcpConfig: yield* buildKiriMcpServerConfig(context),
+  })
   })
 }
 
