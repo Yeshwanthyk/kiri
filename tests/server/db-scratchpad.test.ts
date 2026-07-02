@@ -71,7 +71,7 @@ describe('scratchpad repository', () => {
       expect(listScratchpadBlockTriggers(database, projectBlockId)).toEqual([{
         blockId: projectBlockId,
         agentId: 'agent-1',
-        triggeredAt: expect.any(String),
+        triggeredAt: getScratchpadBlock(database, projectBlockId)?.triggeredAt,
       }])
 
       database

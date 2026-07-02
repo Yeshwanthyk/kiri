@@ -50,8 +50,8 @@ describe('knowledge repository', () => {
       expect(seen).toMatchObject({
         id: created.id,
         seenCount: 1,
-        lastSeenAt: expect.any(String),
       })
+      expect(typeof seen.lastSeenAt).toBe('string')
 
       expect(listKnowledgeEntries(database, { projectId }).map((entry) => entry.id))
         .toEqual([created.id])
