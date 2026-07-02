@@ -5,9 +5,12 @@ use std::{
     net::TcpStream,
     path::{Path, PathBuf},
     process::Command,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tungstenite::{connect, Message};
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn websocket_sends_snapshot_and_streams_shell_output() {
@@ -17,6 +20,11 @@ fn websocket_sends_snapshot_and_streams_shell_output() {
 #[test]
 fn control_routes_read_input_resize_and_kill_shell_session() {
     with_daemon(run_control_smoke);
+}
+
+#[test]
+fn wait_routes_match_screen_output_and_idle_targets() {
+    with_daemon(run_wait_smoke);
 }
 
 fn with_daemon(run: impl FnOnce(&Path) -> Result<(), String>) {
@@ -219,12 +227,256 @@ fn run_control_smoke(state_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn run_wait_smoke(state_dir: &Path) -> Result<(), String> {
+    let record = wait_record(state_dir)?;
+    post_upsert(&record, state_dir)?;
+    let url = format!(
+        "ws://{}:{}{}?agentId=agent-t1&mode=shell&cols=80&rows=24&token={}",
+        record["host"].as_str().unwrap(),
+        record["port"].as_u64().unwrap(),
+        record["path"].as_str().unwrap(),
+        record["token"].as_str().unwrap()
+    );
+    let (mut socket, _) = connect(&url).map_err(|error| error.to_string())?;
+    let snapshot = read_json_frame(&mut socket, Duration::from_secs(5))?;
+    assert_eq!(snapshot["type"], "snapshot");
+
+    http_json(
+        &record,
+        "POST",
+        "/api/sessions/input",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "data": "printf 'wait-screen-%s\\n' ok",
+            "keys": ["enter"]
+        })),
+    )?;
+    let waited = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "pattern": "WAIT-SCREEN-ok",
+            "flags": "i",
+            "timeoutMs": 5000
+        })),
+    )?;
+    assert_eq!(waited["matched"], true);
+    assert_eq!(waited["match"], "wait-screen-ok");
+
+    let output_waited = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "pattern": "printf 'wait-screen",
+            "scope": "output",
+            "timeoutMs": 5000
+        })),
+    )?;
+    assert_eq!(output_waited["matched"], true);
+
+    let missing_any = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-any",
+        Some(json!({
+            "targets": [
+                { "key": "missing:shell", "pattern": "never" },
+                { "key": "proj-t1:shell", "label": "Shell", "pattern": "wait-screen-ok" }
+            ],
+            "timeoutMs": 5000,
+            "quorum": "any"
+        })),
+    )?;
+    assert_eq!(missing_any["matched"], true);
+    assert_eq!(missing_any["matches"][0]["key"], "proj-t1:shell");
+    assert_eq!(missing_any["matches"][0]["label"], "Shell");
+    assert_eq!(missing_any["missing"][0], "missing:shell");
+
+    let multi_ready_any = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-any",
+        Some(json!({
+            "targets": [
+                { "key": "proj-t1:shell", "pattern": "wait-screen-ok" },
+                { "key": "proj-t1:shell", "pattern": "wait-screen" }
+            ],
+            "timeoutMs": 5000,
+            "quorum": "any"
+        })),
+    )?;
+    assert_eq!(multi_ready_any["matched"], true);
+    assert_eq!(multi_ready_any["matches"].as_array().unwrap().len(), 1);
+
+    post_upsert_agent(&record, "agent-t2", "proj-t2", state_dir)?;
+    let second_url = format!(
+        "ws://{}:{}{}?agentId=agent-t2&mode=shell&cols=80&rows=24&token={}",
+        record["host"].as_str().unwrap(),
+        record["port"].as_u64().unwrap(),
+        record["path"].as_str().unwrap(),
+        record["token"].as_str().unwrap()
+    );
+    let (mut second_socket, _) = connect(&second_url).map_err(|error| error.to_string())?;
+    let second_snapshot = read_json_frame(&mut second_socket, Duration::from_secs(5))?;
+    assert_eq!(second_snapshot["type"], "snapshot");
+    http_json(
+        &record,
+        "POST",
+        "/api/sessions/input",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "data": "printf 'first-live-winner\\n'",
+            "keys": ["enter"]
+        })),
+    )?;
+    poll_read_contains(&record, None, "first-live-winner")?;
+    std::thread::sleep(Duration::from_millis(80));
+    http_json(
+        &record,
+        "POST",
+        "/api/sessions/input",
+        Some(json!({
+            "key": "proj-t2:shell",
+            "data": "printf 'second-live-winner\\n'",
+            "keys": ["enter"]
+        })),
+    )?;
+    poll_read_key_contains(&record, "proj-t2:shell", None, "second-live-winner")?;
+    let two_live_any = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-any",
+        Some(json!({
+            "targets": [
+                { "key": "proj-t2:shell", "pattern": "second-live-winner" },
+                { "key": "proj-t1:shell", "pattern": "first-live-winner" }
+            ],
+            "timeoutMs": 5000,
+            "quorum": "any"
+        })),
+    )?;
+    assert_eq!(two_live_any["matched"], true);
+    assert_eq!(two_live_any["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(two_live_any["matches"][0]["key"], "proj-t1:shell");
+    let _ = second_socket.close(None);
+
+    let all_wait = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-any",
+        Some(json!({
+            "targets": [
+                { "key": "proj-t1:shell", "pattern": "wait-screen-ok" },
+                { "key": "proj-t1:shell", "idleMs": 250 }
+            ],
+            "timeoutMs": 5000,
+            "quorum": "all"
+        })),
+    )?;
+    assert_eq!(all_wait["matched"], true);
+    assert_eq!(all_wait["matches"].as_array().unwrap().len(), 2);
+    assert!(all_wait["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["idle"] == true));
+
+    let timeout = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "pattern": "definitely-not-present",
+            "timeoutMs": 250
+        })),
+    )?;
+    assert_eq!(timeout["matched"], false);
+
+    http_json(
+        &record,
+        "POST",
+        "/api/sessions/input",
+        Some(json!({ "key": "proj-t1:shell", "data": "exit\r" })),
+    )?;
+    poll_session_exited(&record, "proj-t1:shell")?;
+    let dead_wait = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "pattern": "wait-screen-ok",
+            "timeoutMs": 500
+        })),
+    )?;
+    assert_eq!(dead_wait["matched"], false);
+    let _ = socket.close(None);
+
+    let (mut replacement_socket, _) = connect(&url).map_err(|error| error.to_string())?;
+    let replacement_snapshot = read_json_frame(&mut replacement_socket, Duration::from_secs(5))?;
+    assert_eq!(replacement_snapshot["generation"], 1);
+    http_json(
+        &record,
+        "POST",
+        "/api/sessions/input",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "data": "printf 'replacement-wait-%s\\n' ok",
+            "keys": ["enter"]
+        })),
+    )?;
+    let replacement_wait = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "pattern": "replacement-wait-ok",
+            "timeoutMs": 5000
+        })),
+    )?;
+    assert_eq!(replacement_wait["matched"], true);
+    let _ = replacement_socket.close(None);
+    Ok(())
+}
+
+fn poll_session_exited(record: &Value, key: &str) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        let sessions = http_json(record, "GET", "/api/sessions", None)?;
+        if sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|session| session["key"] == key && session["exited"] == true)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!("timed out waiting for session {key} to exit"))
+}
+
 fn poll_read_contains(record: &Value, cursor: Option<&str>, needle: &str) -> Result<Value, String> {
+    poll_read_key_contains(record, "proj-t1:shell", cursor, needle)
+}
+
+fn poll_read_key_contains(
+    record: &Value,
+    key: &str,
+    cursor: Option<&str>,
+    needle: &str,
+) -> Result<Value, String> {
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline {
         let body = match cursor {
-            Some(cursor) => json!({ "key": "proj-t1:shell", "cursor": cursor }),
-            None => json!({ "key": "proj-t1:shell" }),
+            Some(cursor) => json!({ "key": key, "cursor": cursor }),
+            None => json!({ "key": key }),
         };
         let read = http_json(record, "POST", "/api/sessions/read", Some(body))?;
         if read.to_string().contains(needle) {
@@ -253,10 +505,19 @@ fn poll_read_buffer_type(record: &Value, buffer_type: &str) -> Result<Value, Str
 }
 
 fn post_upsert(record: &Value, state_dir: &Path) -> Result<(), String> {
+    post_upsert_agent(record, "agent-t1", "proj-t1", state_dir)
+}
+
+fn post_upsert_agent(
+    record: &Value,
+    agent_id: &str,
+    project_id: &str,
+    state_dir: &Path,
+) -> Result<(), String> {
     let body = json!({
         "config": {
-            "id": "agent-t1",
-            "projectId": "proj-t1",
+            "id": agent_id,
+            "projectId": project_id,
             "runtime": "codex",
             "sessionDir": state_dir,
             "sessionFile": null,
@@ -376,7 +637,11 @@ fn temp_state_dir() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("kiri-termd-ws-{id}"));
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!(
+        "kiri-termd-ws-{}-{id}-{counter}",
+        std::process::id()
+    ));
     fs::create_dir_all(&path).expect("temp state dir should be created");
     path
 }
