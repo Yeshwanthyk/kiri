@@ -97,6 +97,15 @@ impl Grid {
         self.rows
     }
 
+    #[cfg_attr(test, allow(dead_code))]
+    pub fn buffer_type(&self) -> &'static str {
+        if self.alt_screen {
+            "alternate"
+        } else {
+            "normal"
+        }
+    }
+
     pub fn serialize_ansi(&self) -> String {
         let mut output = String::from("\x1b[H\x1b[0m");
         let mut attr = DEFAULT_ATTR;

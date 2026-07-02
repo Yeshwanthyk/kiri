@@ -25,7 +25,7 @@ use std::{
     path::PathBuf,
     process,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -39,25 +39,39 @@ use tracing::{error, warn};
 
 const DAEMON_PATH: &str = "/terminal";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const MAX_RECENT_OUTPUT_BYTES: usize = 64_000;
 
 #[derive(Clone)]
 struct AppState {
     token: String,
     sessions: Arc<RwLock<HashMap<String, Arc<Session>>>>,
+    generations: Arc<RwLock<HashMap<String, u64>>>,
     launch_configs: Arc<RwLock<HashMap<String, LaunchConfig>>>,
 }
 
 struct Session {
     key: String,
+    mode: String,
+    label: String,
+    cwd: String,
     cols: Mutex<u16>,
     rows: Mutex<u16>,
     grid: Mutex<Grid>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
-    _child: Mutex<Box<dyn Child + Send + Sync>>,
+    child: Mutex<Box<dyn Child + Send + Sync>>,
     exited: AtomicBool,
+    generation: AtomicU64,
     output_seq: AtomicU64,
+    recent_output: Mutex<Vec<OutputChunk>>,
+    attached_clients: AtomicUsize,
     tx: broadcast::Sender<SessionEvent>,
+}
+
+#[derive(Clone)]
+struct OutputChunk {
+    seq: u64,
+    data: String,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +130,37 @@ struct UpsertAgentRequest {
     config: LaunchConfig,
 }
 
+#[derive(Deserialize)]
+struct SessionKeyRequest {
+    key: String,
+}
+
+#[derive(Deserialize)]
+struct SessionReadRequest {
+    key: String,
+    cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SessionInputRequest {
+    key: String,
+    data: Option<String>,
+    keys: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct SessionResizeRequest {
+    key: String,
+    cols: u16,
+    rows: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionKillPrefixRequest {
+    key_prefix: String,
+}
+
 #[derive(Serialize)]
 struct DaemonRecord {
     pid: u32,
@@ -149,11 +194,19 @@ async fn main() -> Result<()> {
     let state = AppState {
         token: token.clone(),
         sessions: Arc::new(RwLock::new(HashMap::new())),
+        generations: Arc::new(RwLock::new(HashMap::new())),
         launch_configs: Arc::new(RwLock::new(HashMap::new())),
     };
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/agents/upsert", post(upsert_agent))
+        .route("/api/sessions", get(list_sessions))
+        .route("/api/sessions/read", post(read_session))
+        .route("/api/sessions/snapshot", post(snapshot_session))
+        .route("/api/sessions/input", post(input_session))
+        .route("/api/sessions/resize", post(resize_session))
+        .route("/api/sessions/kill", post(kill_session))
+        .route("/api/sessions/kill-prefix", post(kill_prefix))
         .route(DAEMON_PATH, get(terminal_ws))
         .with_state(state.clone());
     let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -214,6 +267,170 @@ async fn upsert_agent(
     Json(serde_json::json!({ "ok": true })).into_response()
 }
 
+async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    let sessions = state.sessions.read().await;
+    let mut payload = Vec::with_capacity(sessions.len());
+    for session in sessions.values() {
+        let cols = *session.cols.lock().await;
+        let rows = *session.rows.lock().await;
+        payload.push(serde_json::json!({
+            "key": session.key,
+            "mode": session.mode,
+            "label": session.label,
+            "cwd": session.cwd,
+            "generation": session.generation.load(Ordering::SeqCst),
+            "cols": cols,
+            "rows": rows,
+            "attachedClients": session.attached_clients.load(Ordering::SeqCst),
+            "exited": session.exited.load(Ordering::SeqCst),
+        }));
+    }
+    Json(serde_json::json!({ "sessions": payload })).into_response()
+}
+
+async fn read_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SessionReadRequest>,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    let Some(session) = session_by_key(&state, &body.key).await else {
+        return not_found(format!("No session {}", body.key));
+    };
+    let screen = {
+        let grid = session.grid.lock().await;
+        let screen = grid.read_screen();
+        let buffer_type = grid.buffer_type();
+        serde_json::json!({
+            "lines": screen.lines,
+            "cursorX": screen.cursor_x,
+            "cursorY": screen.cursor_y,
+            "cols": screen.cols,
+            "rows": screen.rows,
+            "bufferType": buffer_type,
+        })
+    };
+    let generation = session.generation.load(Ordering::SeqCst);
+    Json(serde_json::json!({
+        "screen": screen,
+        "generation": generation,
+        "cursor": cursor_for(&session),
+        "output": output_since(&session, body.cursor.as_deref()).await,
+    }))
+    .into_response()
+}
+
+async fn snapshot_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SessionKeyRequest>,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    let Some(session) = session_by_key(&state, &body.key).await else {
+        return not_found(format!("No session {}", body.key));
+    };
+    let snapshot = session.grid.lock().await.serialize_ansi();
+    Json(serde_json::json!({
+        "snapshot": snapshot,
+        "generation": session.generation.load(Ordering::SeqCst),
+    }))
+    .into_response()
+}
+
+async fn input_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SessionInputRequest>,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    let Some(session) = session_by_key(&state, &body.key).await else {
+        return not_found(format!("No live session {}", body.key));
+    };
+    if session.exited.load(Ordering::SeqCst) {
+        return not_found(format!("No live session {}", body.key));
+    }
+    let mut data = body.data.unwrap_or_default();
+    if let Some(keys) = body.keys {
+        match encode_terminal_keys(&keys) {
+            Ok(encoded) => data.push_str(&encoded),
+            Err(error) => return bad_request(error),
+        }
+    }
+    if !data.is_empty() {
+        if let Err(error) = write_session_input(&session, &data).await {
+            return server_error(error.to_string());
+        }
+    }
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+async fn resize_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SessionResizeRequest>,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    let Some(session) = session_by_key(&state, &body.key).await else {
+        return not_found(format!("No live session {}", body.key));
+    };
+    if session.exited.load(Ordering::SeqCst) {
+        return not_found(format!("No live session {}", body.key));
+    }
+    if let Err(error) = resize_session_to(&session, body.cols, body.rows).await {
+        return server_error(error.to_string());
+    }
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+async fn kill_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SessionKeyRequest>,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    if let Some(session) = session_by_key(&state, &body.key).await {
+        kill_session_process(&state, &session).await;
+    }
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+async fn kill_prefix(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SessionKillPrefixRequest>,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    let sessions = state.sessions.read().await;
+    let targets: Vec<_> = sessions
+        .values()
+        .filter(|session| {
+            session.key == body.key_prefix
+                || session.key.starts_with(&format!("{}:", body.key_prefix))
+        })
+        .cloned()
+        .collect();
+    drop(sessions);
+    for session in &targets {
+        kill_session_process(&state, session).await;
+    }
+    Json(serde_json::json!({ "ok": true, "killed": targets.len() })).into_response()
+}
+
 async fn terminal_ws(
     State(state): State<AppState>,
     Query(query): Query<TerminalQuery>,
@@ -238,15 +455,15 @@ async fn handle_socket(state: AppState, query: TerminalQuery, socket: WebSocket)
             return;
         }
     };
-
     let mut stream = BroadcastStream::new(session.tx.subscribe());
-    let (cols, rows, snapshot, snapshot_seq) = {
+    let (cols, rows, snapshot, snapshot_seq, generation) = {
         let grid = session.grid.lock().await;
         let cols = grid.cols() as u16;
         let rows = grid.rows() as u16;
         let snapshot = grid.serialize_ansi();
         let snapshot_seq = session.output_seq.load(Ordering::SeqCst);
-        (cols, rows, snapshot, snapshot_seq)
+        let generation = session.generation.load(Ordering::SeqCst);
+        (cols, rows, snapshot, snapshot_seq, generation)
     };
     let (mut sender, mut receiver) = socket.split();
     if sender
@@ -254,13 +471,14 @@ async fn handle_socket(state: AppState, query: TerminalQuery, socket: WebSocket)
             data: snapshot,
             cols,
             rows,
-            generation: 0,
+            generation,
         })))
         .await
         .is_err()
     {
         return;
     }
+    session.attached_clients.fetch_add(1, Ordering::SeqCst);
 
     let output_task = tokio::spawn(async move {
         while let Some(event) = stream.next().await {
@@ -295,26 +513,12 @@ async fn handle_socket(state: AppState, query: TerminalQuery, socket: WebSocket)
         };
         match frame {
             ClientFrame::Input { data } => {
-                let mut writer = session.writer.lock().await;
-                if writer.write_all(data.as_bytes()).is_err() {
+                if write_session_input(&session, &data).await.is_err() {
                     break;
                 }
-                let _ = writer.flush();
             }
             ClientFrame::Resize { cols, rows } => {
-                *session.cols.lock().await = cols;
-                *session.rows.lock().await = rows;
-                session
-                    .grid
-                    .lock()
-                    .await
-                    .resize(usize::from(cols), usize::from(rows));
-                if let Err(error) = session.master.lock().await.resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                }) {
+                if let Err(error) = resize_session_to(&session, cols, rows).await {
                     warn!("failed to resize pty for {}: {error}", session.key);
                 }
             }
@@ -323,6 +527,7 @@ async fn handle_socket(state: AppState, query: TerminalQuery, socket: WebSocket)
             }
         }
     }
+    session.attached_clients.fetch_sub(1, Ordering::SeqCst);
     output_task.abort();
 }
 
@@ -354,12 +559,14 @@ async fn get_or_spawn_session(state: &AppState, query: &TerminalQuery) -> Result
                 .map(|cwd| cwd.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| ".".to_string())
         });
+    let generation = next_generation(state, &key).await;
     let (session, reader) = spawn_shell_session(
         key.clone(),
         query.mode.clone(),
         cwd,
         query.cols.unwrap_or(80),
         query.rows.unwrap_or(24),
+        generation,
     )?;
     let session = Arc::new(session);
     start_reader(session.clone(), reader);
@@ -373,6 +580,7 @@ fn spawn_shell_session(
     cwd: String,
     cols: u16,
     rows: u16,
+    generation: u64,
 ) -> Result<(Session, Box<dyn Read + Send>)> {
     if mode != "shell" {
         anyhow::bail!("kiri-termd P0 supports shell sessions only")
@@ -408,14 +616,20 @@ fn spawn_shell_session(
     Ok((
         Session {
             key,
+            mode,
+            label: "shell".to_string(),
+            cwd,
             cols: Mutex::new(cols),
             rows: Mutex::new(rows),
             grid: Mutex::new(Grid::new(usize::from(cols), usize::from(rows))),
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
-            _child: Mutex::new(child),
+            child: Mutex::new(child),
             exited: AtomicBool::new(false),
+            generation: AtomicU64::new(generation),
             output_seq: AtomicU64::new(0),
+            recent_output: Mutex::new(Vec::new()),
+            attached_clients: AtomicUsize::new(0),
             tx,
         },
         reader,
@@ -440,6 +654,7 @@ fn start_reader(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                             session.output_seq.fetch_add(1, Ordering::SeqCst) + 1
                         };
                         if !text.is_empty() {
+                            push_recent_output(&session, seq, text.clone()).await;
                             let _ = session.tx.send(SessionEvent::Data { seq, data: text });
                         }
                     });
@@ -455,6 +670,203 @@ fn start_reader(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
             message: "terminal process exited".to_string(),
         });
     });
+}
+
+async fn session_by_key(state: &AppState, key: &str) -> Option<Arc<Session>> {
+    state.sessions.read().await.get(key).cloned()
+}
+
+async fn write_session_input(session: &Session, data: &str) -> Result<()> {
+    let mut writer = session.writer.lock().await;
+    writer
+        .write_all(data.as_bytes())
+        .context("failed to write terminal input")?;
+    writer.flush().context("failed to flush terminal input")
+}
+
+async fn resize_session_to(session: &Session, cols: u16, rows: u16) -> Result<()> {
+    *session.cols.lock().await = cols;
+    *session.rows.lock().await = rows;
+    session
+        .grid
+        .lock()
+        .await
+        .resize(usize::from(cols), usize::from(rows));
+    session
+        .master
+        .lock()
+        .await
+        .resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .context("failed to resize pty")
+}
+
+async fn kill_session_process(state: &AppState, session: &Session) {
+    session.exited.store(true, Ordering::SeqCst);
+    let _ = session.child.lock().await.kill();
+    let _ = session.tx.send(SessionEvent::Exit {
+        message: "terminal process exited".to_string(),
+    });
+    remove_session_from_registry(state, &session.key).await;
+}
+
+async fn remove_session_from_registry(state: &AppState, key: &str) {
+    state.sessions.write().await.remove(key);
+}
+
+async fn next_generation(state: &AppState, key: &str) -> u64 {
+    let mut generations = state.generations.write().await;
+    let generation = generations.entry(key.to_string()).or_insert(0);
+    let current = *generation;
+    *generation = generation.saturating_add(1);
+    current
+}
+
+async fn push_recent_output(session: &Session, seq: u64, data: String) {
+    let mut output = session.recent_output.lock().await;
+    output.push(OutputChunk { seq, data });
+    trim_recent_output(&mut output);
+}
+
+fn trim_recent_output(output: &mut Vec<OutputChunk>) {
+    let mut total: usize = output.iter().map(|chunk| chunk.data.len()).sum();
+    while output.len() > 1 && total > MAX_RECENT_OUTPUT_BYTES {
+        let removed = output.remove(0);
+        total = total.saturating_sub(removed.data.len());
+    }
+}
+
+async fn output_since(session: &Session, cursor: Option<&str>) -> String {
+    let Some(cursor) = cursor else {
+        return String::new();
+    };
+    let generation = session.generation.load(Ordering::SeqCst);
+    let after_seq = match parse_cursor(cursor) {
+        Some((cursor_generation, seq)) if cursor_generation == generation => Some(seq),
+        _ => None,
+    };
+    session
+        .recent_output
+        .lock()
+        .await
+        .iter()
+        .filter(|chunk| after_seq.map_or(true, |seq| chunk.seq > seq))
+        .map(|chunk| chunk.data.as_str())
+        .collect()
+}
+
+fn cursor_for(session: &Session) -> String {
+    format!(
+        "{}:{}",
+        session.generation.load(Ordering::SeqCst),
+        session.output_seq.load(Ordering::SeqCst)
+    )
+}
+
+fn parse_cursor(cursor: &str) -> Option<(u64, u64)> {
+    let (generation, seq) = cursor.split_once(':')?;
+    Some((generation.parse().ok()?, seq.parse().ok()?))
+}
+
+fn encode_terminal_keys(keys: &[String]) -> std::result::Result<String, String> {
+    keys.iter().map(|key| encode_terminal_key(key)).collect()
+}
+
+fn encode_terminal_key(key: &str) -> std::result::Result<String, String> {
+    let normalized = key.trim().to_ascii_lowercase();
+    let encoded = match normalized.as_str() {
+        "enter" | "return" => "\r",
+        "tab" => "\t",
+        "escape" | "esc" => "\x1b",
+        "backspace" => "\x7f",
+        "space" => " ",
+        "up" => "\x1b[A",
+        "down" => "\x1b[B",
+        "right" => "\x1b[C",
+        "left" => "\x1b[D",
+        "home" => "\x1b[H",
+        "end" => "\x1b[F",
+        "pageup" => "\x1b[5~",
+        "pagedown" => "\x1b[6~",
+        "insert" => "\x1b[2~",
+        "delete" => "\x1b[3~",
+        "f1" => "\x1bOP",
+        "f2" => "\x1bOQ",
+        "f3" => "\x1bOR",
+        "f4" => "\x1bOS",
+        "f5" => "\x1b[15~",
+        "f6" => "\x1b[17~",
+        "f7" => "\x1b[18~",
+        "f8" => "\x1b[19~",
+        "f9" => "\x1b[20~",
+        "f10" => "\x1b[21~",
+        "f11" => "\x1b[23~",
+        "f12" => "\x1b[24~",
+        _ => {
+            if let Some(chord) = normalized
+                .strip_prefix("c-")
+                .or_else(|| normalized.strip_prefix("ctrl-"))
+            {
+                let mut chars = chord.chars();
+                if let (Some(ch), None) = (chars.next(), chars.next()) {
+                    if ch.is_ascii_lowercase() || matches!(ch, '[' | '\\' | ']' | '^' | '_') {
+                        return Ok(((ch as u8 % 32) as char).to_string());
+                    }
+                }
+            }
+            return Err(format!("Unknown terminal key: {key:?}"));
+        }
+    };
+    Ok(encoded.to_string())
+}
+
+fn unauthorized_response(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Option<axum::response::Response> {
+    if authorized(
+        &state.token,
+        headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+    ) {
+        return None;
+    }
+    Some(
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Unauthorized" })),
+        )
+            .into_response(),
+    )
+}
+
+fn not_found(message: String) -> axum::response::Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": message })),
+    )
+        .into_response()
+}
+
+fn bad_request(message: String) -> axum::response::Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": message })),
+    )
+        .into_response()
+}
+
+fn server_error(message: String) -> axum::response::Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": message })),
+    )
+        .into_response()
 }
 
 fn session_key(query: &TerminalQuery, config: Option<&LaunchConfig>) -> String {
@@ -602,4 +1014,29 @@ fn epoch_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recent_output_trimming_keeps_latest_large_chunk() {
+        let mut output = vec![
+            OutputChunk {
+                seq: 1,
+                data: "old".to_string(),
+            },
+            OutputChunk {
+                seq: 2,
+                data: "x".repeat(MAX_RECENT_OUTPUT_BYTES + 1),
+            },
+        ];
+
+        trim_recent_output(&mut output);
+
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].seq, 2);
+        assert_eq!(output[0].data.len(), MAX_RECENT_OUTPUT_BYTES + 1);
+    }
 }
