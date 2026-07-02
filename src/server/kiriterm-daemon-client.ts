@@ -179,13 +179,16 @@ function spawnDaemonProcess(stateDir: string) {
   child.unref()
 }
 
-function resolveDaemonLaunch(): {
+export function resolveDaemonLaunch(): {
   command: string
   args: string[]
   env: Record<string, string>
 } {
   const override = process.env.KIRI_TERM_DAEMON_BIN?.trim()
   if (override) return { command: override, args: ['term', 'daemon'], env: {} }
+  if (process.env.KIRI_TERM_CORE === 'rust') {
+    return { command: resolveRustDaemonBinary(), args: [], env: {} }
+  }
 
   const builtCli = resolve(process.cwd(), 'dist/cli/kirictl.mjs')
   if (existsSync(builtCli)) {
@@ -202,6 +205,15 @@ function resolveDaemonLaunch(): {
     args: ['exec', 'tsx', resolve(process.cwd(), 'src/cli/kirictl.ts'), 'term', 'daemon'],
     env: {},
   }
+}
+
+function resolveRustDaemonBinary() {
+  const binaryName = process.platform === 'win32' ? 'kiri-termd.exe' : 'kiri-termd'
+  const packaged = resolve(process.resourcesPath ?? process.cwd(), 'bin', binaryName)
+  if (existsSync(packaged)) return packaged
+  const dist = resolve(process.cwd(), 'dist/bin', binaryName)
+  if (existsSync(dist)) return dist
+  return resolve(process.cwd(), 'target/debug', binaryName)
 }
 
 function isCodexLaunch(value: unknown): value is KiritermCodexLaunch {
