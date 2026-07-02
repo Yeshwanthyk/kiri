@@ -1,6 +1,6 @@
 import type { RuntimeKind, TerminalMode } from '~/lib/contracts'
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Context, Data, Effect, Either, Layer } from 'effect'
@@ -191,6 +191,8 @@ function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunch
     '--dangerously-skip-permissions',
     '--mcp-config',
     yield* buildKiriMcpConfigJson(context),
+    '--settings',
+    yield* writeClaudeHookSettings(config, context),
     '--append-system-prompt',
     claudeKiriTerminalPrompt(config.id),
   ]
@@ -231,6 +233,62 @@ function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunch
     env,
     label: 'claude',
     initialTerminalInput,
+  }
+  })
+}
+
+type ClaudeHookConfigEntry = {
+  readonly matcher?: string
+  readonly hooks: readonly [{
+    readonly type: 'command'
+    readonly command: string
+    readonly async: true
+  }]
+}
+
+function writeClaudeHookSettings(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
+  return Effect.gen(function* () {
+  const settings = {
+    hooks: {
+      SessionStart: [yield* claudeHookConfigEntry(context, 'session-start')],
+      UserPromptSubmit: [yield* claudeHookConfigEntry(context, 'user-prompt-submit')],
+      Stop: [yield* claudeHookConfigEntry(context, 'stop')],
+      SessionEnd: [yield* claudeHookConfigEntry(context, 'session-end')],
+      PreToolUse: [yield* claudeHookConfigEntry(context, 'pre-tool-use', 'AskUserQuestion|ExitPlanMode')],
+      PermissionRequest: [yield* claudeHookConfigEntry(context, 'permission-request')],
+      PostToolUse: [yield* claudeHookConfigEntry(context, 'post-tool-use', 'TodoWrite')],
+    },
+  }
+  const settingsPath = join(config.sessionDir, 'claude-hooks-settings.json')
+  return yield* Effect.try({
+    try: () => {
+      mkdirSync(config.sessionDir, { recursive: true })
+      writeFileSync(settingsPath, `${globalThis.JSON.stringify(settings, null, 2)}\n`)
+      return settingsPath
+    },
+    catch: (error) => new TerminalLaunchError({
+      message: 'Failed to write Claude hook settings',
+      cause: error,
+    }),
+  })
+  })
+}
+
+function claudeHookConfigEntry(
+  context: TerminalLaunchContext,
+  event: string,
+  matcher?: string,
+): Effect.Effect<ClaudeHookConfigEntry, RuntimeBinaryError> {
+  return Effect.gen(function* () {
+  const invocation = yield* resolveKirictlInvocation(context, ['claude-hook', event])
+  const command = [invocation.command, ...invocation.args].map(shellQuote).join(' ')
+  return {
+    ...(matcher ? { matcher } : {}),
+    hooks: [{
+      type: 'command' as const,
+      command,
+      async: true as const,
+    }],
   }
   })
 }

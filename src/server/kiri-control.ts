@@ -6,6 +6,10 @@ import type {
   AgentDetail,
   AgentEvent,
   AgentPromptInput,
+  AgentStatus,
+  AgentTask,
+  AgentStatusSetInput,
+  AgentTasksReplaceInput,
   CreateWorkflowRunInput,
   KiriSettings,
   KnowledgeAddInput,
@@ -44,8 +48,10 @@ import {
   listScratchpadBlocks,
   listProjectSummaries,
   listSessionSummaries,
+  replaceAgentTasks,
   renameSessionSummary,
   restoreSessionSummary,
+  setAgentStatus,
   startSessionSummary,
   unhideProjectSummary,
   queueAgentTerminalInput,
@@ -189,6 +195,16 @@ export type KiriControlApi = {
     readonly agentId: string
     readonly mode: 'prompt' | 'steer'
   }>
+  readonly setAgentStatus: (input: AgentStatusSetInput) => ControlEffect<{
+    readonly agentId: string
+    readonly status: AgentStatus
+  }>
+  readonly replaceAgentTasks: (input: AgentTasksReplaceInput) => ControlEffect<{
+    readonly agentId: string
+    readonly source: AgentTask['source']
+    readonly tasks: readonly AgentTask[]
+    readonly updatedAt?: string
+  }>
   readonly terminalInput: (input: TerminalInput) => ControlEffect<{
     readonly accepted: true
     readonly agentId: string
@@ -256,6 +272,8 @@ export type KiriControlDependencies = {
   readonly restoreSessionSummary: (input: RestoreSessionInput) => SessionSummary
   readonly promptAgent: typeof promptAgent
   readonly steerAgent: typeof steerAgent
+  readonly setAgentStatus: typeof setAgentStatus
+  readonly replaceAgentTasks: typeof replaceAgentTasks
   // How long agent.prompt waits for validation rejections before detaching
   // from the turn; the turn itself keeps running in the background.
   readonly agentPromptAcceptanceWindowMs?: number
@@ -304,6 +322,8 @@ const liveKiriControlDependencies: KiriControlDependencies = {
   restoreSessionSummary,
   promptAgent,
   steerAgent,
+  setAgentStatus,
+  replaceAgentTasks,
   queueAgentTerminalInput,
   pasteAgentRuntimeTerminal,
   getAgentLaunchConfig,
@@ -462,6 +482,28 @@ export function makeKiriControl(
           kind: 'agentPrompt' as const,
           ...delivery,
         },
+      }
+    },
+  )
+
+  const setAgentStatusEffect = Effect.fn('KiriControl.setAgentStatus')(
+    function* (input: AgentStatusSetInput) {
+      yield* fromSync(() => dependencies.setAgentStatus(input.agentId, input.status))
+      return {
+        agentId: input.agentId,
+        status: input.status,
+      }
+    },
+  )
+
+  const replaceAgentTasksEffect = Effect.fn('KiriControl.replaceAgentTasks')(
+    function* (input: AgentTasksReplaceInput) {
+      yield* fromSync(() => dependencies.replaceAgentTasks(input))
+      return {
+        agentId: input.agentId,
+        source: input.source,
+        tasks: input.tasks,
+        ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
       }
     },
   )
@@ -769,6 +811,8 @@ export function makeKiriControl(
     deleteSession: deleteSessionEffect,
     restoreSession: restoreSessionEffect,
     agentPrompt: agentPromptEffect,
+    setAgentStatus: setAgentStatusEffect,
+    replaceAgentTasks: replaceAgentTasksEffect,
     terminalInput: terminalInputEffect,
     terminalRead: terminalReadEffect,
     terminalList: terminalListEffect,
@@ -907,20 +951,18 @@ function workflowTitle(run: unknown): string | null {
 }
 
 function workflowActiveAgents(run: unknown): WorkflowAwaitAgent[] {
-  if (!run || typeof run !== 'object' || !('items' in run) || !Array.isArray(run.items)) {
-    return []
-  }
+  const source = recordValue(run)
+  const items = source && Array.isArray(source.items) ? source.items : []
   const agents: WorkflowAwaitAgent[] = []
-  for (const item of run.items) {
-    if (!item || typeof item !== 'object') continue
-    const agentId = 'activeAgentId' in item && typeof item.activeAgentId === 'string'
-      ? item.activeAgentId
-      : null
+  for (const value of items) {
+    const item = recordValue(value)
+    if (!item) continue
+    const agentId = stringField(item, 'activeAgentId')
     if (!agentId) continue
     agents.push({
       agentId,
-      itemId: 'id' in item && typeof item.id === 'string' ? item.id : '',
-      title: 'title' in item && typeof item.title === 'string' ? item.title : '',
+      itemId: stringField(item, 'id') ?? '',
+      title: stringField(item, 'title') ?? '',
     })
   }
   return agents
@@ -932,27 +974,29 @@ function resolveWorkflowAwaitPayload(payload: unknown, agents: readonly Workflow
   let elapsedMs: number | undefined
   const matches: Array<WorkflowAwaitAgent & { match: string; idle: boolean; tail: string[] }> = []
   const missing: string[] = []
-  if (payload && typeof payload === 'object') {
-    if ('matched' in payload && typeof payload.matched === 'boolean') matched = payload.matched
-    if ('elapsedMs' in payload && typeof payload.elapsedMs === 'number') elapsedMs = payload.elapsedMs
-    if ('matches' in payload && Array.isArray(payload.matches)) {
-      for (const candidate of payload.matches) {
-        if (!candidate || typeof candidate !== 'object') continue
-        const key = 'key' in candidate && typeof candidate.key === 'string' ? candidate.key : null
+  const source = recordValue(payload)
+  if (source) {
+    if (typeof source.matched === 'boolean') matched = source.matched
+    if (typeof source.elapsedMs === 'number') elapsedMs = source.elapsedMs
+    if (Array.isArray(source.matches)) {
+      for (const value of source.matches) {
+        const candidate = recordValue(value)
+        if (!candidate) continue
+        const key = stringField(candidate, 'key')
         const agent = key ? byKey.get(key) : undefined
         if (!agent) continue
         matches.push({
           ...agent,
-          match: 'match' in candidate && typeof candidate.match === 'string' ? candidate.match : '',
-          idle: 'idle' in candidate && candidate.idle === true,
-          tail: 'tail' in candidate && Array.isArray(candidate.tail)
+          match: stringField(candidate, 'match') ?? '',
+          idle: candidate.idle === true,
+          tail: Array.isArray(candidate.tail)
             ? candidate.tail.filter((line: unknown): line is string => typeof line === 'string')
             : [],
         })
       }
     }
-    if ('missing' in payload && Array.isArray(payload.missing)) {
-      for (const key of payload.missing) {
+    if (Array.isArray(source.missing)) {
+      for (const key of source.missing) {
         if (typeof key !== 'string') continue
         missing.push(byKey.get(key)?.agentId ?? key)
       }
@@ -965,4 +1009,15 @@ function resolveWorkflowAwaitPayload(payload: unknown, agents: readonly Workflow
     agents: agents.length,
     ...(elapsedMs === undefined ? {} : { elapsedMs }),
   }
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function stringField(value: Record<string, unknown>, field: string) {
+  const candidate = value[field]
+  return typeof candidate === 'string' ? candidate : undefined
 }

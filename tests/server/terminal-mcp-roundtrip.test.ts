@@ -58,6 +58,8 @@ function dependencies(handle: KiritermDaemonHandle): KiriControlDependencies {
     restoreSessionSummary: () => notUsed('restoreSessionSummary'),
     promptAgent: () => notUsed('promptAgent'),
     steerAgent: () => notUsed('steerAgent'),
+    setAgentStatus: () => notUsed('setAgentStatus'),
+    replaceAgentTasks: () => notUsed('replaceAgentTasks'),
     queueAgentTerminalInput: () => undefined,
     pasteAgentRuntimeTerminal: (input) =>
       Promise.resolve({ agentId: input.agentId, mode: 'runtime' as const }),

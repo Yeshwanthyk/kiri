@@ -135,6 +135,20 @@ export const agentTaskSchema = z.object({
 })
 export type AgentTask = z.infer<typeof agentTaskSchema>
 
+export const agentStatusSetInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  status: agentStatusSchema,
+})
+export type AgentStatusSetInput = z.infer<typeof agentStatusSetInputSchema>
+
+export const agentTasksReplaceInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  source: runtimeKindSchema,
+  tasks: z.array(agentTaskSchema),
+  updatedAt: z.string().optional(),
+})
+export type AgentTasksReplaceInput = z.infer<typeof agentTasksReplaceInputSchema>
+
 const agentDetailPageSchema = z.object({
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
@@ -638,6 +652,8 @@ export const kiriWriteOperations = [
   'session.archive',
   'session.restore',
   'agent.prompt',
+  'agent.status.set',
+  'agent.tasks.replace',
   'terminal.input',
   'terminal.keys',
   'terminal.wait-for',

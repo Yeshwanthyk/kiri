@@ -23,6 +23,10 @@ import {
   runKiritermDaemon,
 } from '~/server/kiriterm-daemon'
 import { handleCodexSessionStartHook } from '~/server/codex-hook-handler'
+import {
+  handleClaudeHook,
+  type ClaudeHookEvent,
+} from '~/server/claude-hook-handler'
 
 const version = '0.1.0'
 
@@ -91,6 +95,27 @@ const codexHookSessionStartCommand = Command.make('session-start', { stdinFile: 
 const codexHookCommand = Command.make('codex-hook', {}).pipe(
   Command.withDescription('Internal Codex lifecycle hook handlers'),
   Command.withSubcommands([codexHookSessionStartCommand]),
+)
+
+function claudeHookEventCommand(event: ClaudeHookEvent) {
+  return Command.make(event, {}, () =>
+    Effect.gen(function* () {
+      const control = yield* KiriControl
+      yield* Effect.promise(() => runClaudeHook(event, control))
+    })).pipe(Command.withDescription(`Record a Claude ${event} hook event`))
+}
+
+const claudeHookCommand = Command.make('claude-hook', {}).pipe(
+  Command.withDescription('Internal Claude lifecycle hook handlers'),
+  Command.withSubcommands([
+    claudeHookEventCommand('session-start'),
+    claudeHookEventCommand('user-prompt-submit'),
+    claudeHookEventCommand('stop'),
+    claudeHookEventCommand('session-end'),
+    claudeHookEventCommand('pre-tool-use'),
+    claudeHookEventCommand('permission-request'),
+    claudeHookEventCommand('post-tool-use'),
+  ]),
 )
 
 const termDaemonCommand = Command.make('daemon', {}, () =>
@@ -198,6 +223,7 @@ export const kirictlCommand = Command.make('kirictl', {}).pipe(
   Command.withDescription('Agent-first JSON control surface for Kiri'),
   Command.withSubcommands([
     callCommand,
+    claudeHookCommand,
     codexHookCommand,
     mcpCommand,
     termCommand,
@@ -249,6 +275,26 @@ function readHookStdinFile(file: string) {
     return readFileSync(file, 'utf8')
   } finally {
     rmSync(file, { force: true })
+  }
+}
+
+async function runClaudeHook(event: ClaudeHookEvent, control: KiriControlApi) {
+  const watchdog = setTimeout(() => process.exit(0), 5_000)
+  watchdog.unref?.()
+  try {
+    const result = await handleClaudeHook({
+      event,
+      stdin: readFileSync(0, 'utf8'),
+      env: process.env,
+      runOperation: (request) => runKiriOperationWithBackendFallback(control, request),
+    })
+    if (!result.ok) {
+      console.error(`claude ${event} hook failed: ${result.reason ?? 'unknown error'}`)
+    } else if (result.reason) {
+      console.error(`claude ${event} hook: ${result.reason}`)
+    }
+  } finally {
+    clearTimeout(watchdog)
   }
 }
 

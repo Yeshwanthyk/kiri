@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Effect } from 'effect'
@@ -98,6 +98,8 @@ describe('buildTerminalProcessLaunch', () => {
           kiri: { type: 'stdio', command: '/tmp/bin/kiri-mcp' },
         },
       }),
+      '--settings',
+      '/tmp/kiri-session/claude-hooks-settings.json',
       '--append-system-prompt',
       [
         'Kiri integration:',
@@ -122,6 +124,33 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.env.KIRI_AGENT_ID).toBe('agent-1')
     expect(launch.env.KIRI_RUNTIME).toBe('claude')
     expect(launch.env.KIRI_CLAUDE_SESSION_ID).toBe(sessionId)
+  })
+
+  it('writes one Claude hook settings file for lifecycle and TodoWrite projection', () => {
+    vi.stubEnv('KIRI_CLAUDE_BIN', '/tmp/bin/claude')
+    vi.stubEnv('KIRI_MCP_BIN', '/tmp/bin/kiri-mcp')
+    const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-claude-hooks-'))
+
+    const launch = buildTerminalProcessLaunch({
+      ...launchConfig('claude'),
+      sessionDir,
+    }, 'runtime', shell)
+    const settingsPath = join(sessionDir, 'claude-hooks-settings.json')
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
+      hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string; async: boolean }> }>>
+    }
+
+    expect(launch.args.filter((arg) => arg === '--settings')).toHaveLength(1)
+    expect(launch.args).toContain(settingsPath)
+    expect(settings.hooks.SessionStart?.[0]?.hooks[0]?.command)
+      .toBe("'/tmp/bin/kiri-mcp' 'claude-hook' 'session-start'")
+    expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.async).toBe(true)
+    expect(settings.hooks.Stop?.[0]?.hooks[0]?.command)
+      .toBe("'/tmp/bin/kiri-mcp' 'claude-hook' 'stop'")
+    expect(settings.hooks.PreToolUse?.[0]?.matcher).toBe('AskUserQuestion|ExitPlanMode')
+    expect(settings.hooks.PostToolUse?.[0]?.matcher).toBe('TodoWrite')
+    expect(settings.hooks.PostToolUse?.[0]?.hooks[0]?.command)
+      .toBe("'/tmp/bin/kiri-mcp' 'claude-hook' 'post-tool-use'")
   })
 
   it('reuses the same Claude Code session id for the same Kiri session', () => {

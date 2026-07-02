@@ -2,6 +2,7 @@ import { Effect } from 'effect'
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import type {
+  AgentTask,
   KnowledgeEntry,
   KiriSettings,
   ScratchpadBlock,
@@ -144,6 +145,49 @@ describe('KiriControl service construction', () => {
     expect(result.agentId).toBe('agent-2')
     expect(result.session.id).toBe('agent-2')
     expect(calls).toEqual(['trigger:block-1:project-1'])
+  })
+
+  it('routes status and task projection writes through injected dependencies', async () => {
+    const calls: string[] = []
+    const tasks: AgentTask[] = [{
+      id: 'todo-1',
+      title: 'Wire hooks',
+      status: 'inProgress',
+      source: 'claude',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }]
+    const control = makeKiriControl(testDependencies({
+      setAgentStatus: (agentId, status) => {
+        calls.push(`status:${agentId}:${status}`)
+      },
+      replaceAgentTasks: (input) => {
+        calls.push(`tasks:${input.agentId}:${input.source}:${input.tasks.length}:${input.updatedAt}`)
+      },
+    }))
+
+    await expect(Effect.runPromise(control.setAgentStatus({
+      agentId: 'agent-1',
+      status: 'running',
+    }))).resolves.toEqual({
+      agentId: 'agent-1',
+      status: 'running',
+    })
+    await expect(Effect.runPromise(control.replaceAgentTasks({
+      agentId: 'agent-1',
+      source: 'claude',
+      tasks,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }))).resolves.toEqual({
+      agentId: 'agent-1',
+      source: 'claude',
+      tasks,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+
+    expect(calls).toEqual([
+      'status:agent-1:running',
+      'tasks:agent-1:claude:1:2026-01-01T00:00:00.000Z',
+    ])
   })
 
   it('routes workflow operations through injected dependencies', async () => {
@@ -458,6 +502,8 @@ function testDependencies(
     restoreSessionSummary: (input) => sessionSummary(input.agentId),
     promptAgent: () => Promise.resolve({}),
     steerAgent: () => Promise.resolve({}),
+    setAgentStatus: () => undefined,
+    replaceAgentTasks: () => undefined,
     queueAgentTerminalInput: () => undefined,
     pasteAgentRuntimeTerminal: (input) => Promise.resolve({ agentId: input.agentId, mode: 'runtime' as const }),
     getAgentLaunchConfig: (agentId) => ({

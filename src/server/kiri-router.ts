@@ -6,11 +6,12 @@ import {
   agentDetailInputSchema,
   listAgentEventsInputSchema,
   agentPromptInputSchema,
+  agentStatusSetInputSchema,
+  agentTasksReplaceInputSchema,
   createWorkflowRunInputSchema,
   deleteProjectInputSchema,
   deleteScratchpadBlockInputSchema,
   hideProjectInputSchema,
-  kiriOperationOptionsSchema,
   kiriOperationRequestSchema,
   kiriReadOperations,
   kiriWriteOperations,
@@ -36,7 +37,6 @@ import {
   type KiriOperation,
   type KiriOperationError,
   type KiriOperationOptions,
-  type KiriOperationRequest,
   type KiriOperationResponse,
 } from '~/lib/contracts'
 import type { KiriControlApi } from './kiri-control'
@@ -333,6 +333,12 @@ async function dispatchWriteOperation(
     case 'agent.prompt':
       result = await run(control.agentPrompt(parseParams(agentPromptInputSchema, params)))
       break
+    case 'agent.status.set':
+      result = await run(control.setAgentStatus(parseParams(agentStatusSetInputSchema, params)))
+      break
+    case 'agent.tasks.replace':
+      result = await run(control.replaceAgentTasks(parseParams(agentTasksReplaceInputSchema, params)))
+      break
     case 'terminal.input':
       result = await run(control.terminalInput(parseParams(terminalInputSchema, params)))
       break
@@ -411,7 +417,7 @@ function parseParams<SchemaType extends z.ZodTypeAny>(
 ): z.infer<SchemaType> {
   const parsed = schema.safeParse(params)
   if (parsed.success) return parsed.data
-  throw validationError(parsed.error)
+  throw new KiriOperationThrownError(validationError(parsed.error))
 }
 
 function shapeResult(value: unknown, options: KiriOperationOptions) {
@@ -462,6 +468,7 @@ function validationError(error: z.ZodError): KiriOperationError {
 }
 
 function operationError(error: unknown): KiriOperationError {
+  if (error instanceof KiriOperationThrownError) return error.operationError
   if (isOperationError(error)) return error
   return {
     code: 'FAILED',
@@ -471,4 +478,10 @@ function operationError(error: unknown): KiriOperationError {
 
 function isOperationError(error: unknown): error is KiriOperationError {
   return Boolean(error && typeof error === 'object' && 'code' in error && 'message' in error)
+}
+
+class KiriOperationThrownError extends Error {
+  constructor(readonly operationError: KiriOperationError) {
+    super(operationError.message)
+  }
 }
