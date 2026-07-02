@@ -67,6 +67,7 @@ import {
 import {
   archiveSessionRow,
   assertSessionProjectExists,
+  hardDeleteSessionRow,
   insertSessionRow,
   listSessionSummaries as listSessionSummariesFromDb,
   renameSessionRow as renameSessionRowInDb,
@@ -355,6 +356,10 @@ export function deleteSessionSummary(input: DeleteSessionInput) {
 
 function archiveSession(input: DeleteSessionInput) {
   return archiveSessionRow(getDb(), input.agentId)
+}
+
+export function hardDeleteSession(agentId: string) {
+  return hardDeleteSessionRow(getDb(), agentId)
 }
 
 export function restoreSession(input: RestoreSessionInput) {

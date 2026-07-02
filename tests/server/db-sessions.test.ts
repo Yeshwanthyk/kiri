@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -7,12 +7,36 @@ import { openKiriDatabase } from '../../src/server/db/connection'
 import { insertProject } from '../../src/server/db/projects'
 import {
   archiveSessionRow,
+  hardDeleteSessionRow,
   insertSessionRow,
   listSessionSummaries,
   renameSessionRow,
   requireSessionSummary,
   restoreSessionRow,
 } from '../../src/server/db/sessions'
+import { upsertAgentContextUsage } from '../../src/server/db/runtime-state'
+import { hydratePersistedPiSessionRows } from '../../src/server/db/session-operations'
+import {
+  recordRuntimeMessageRow,
+  recordRuntimeTimelineEventRow,
+} from '../../src/server/db/timeline-writes'
+
+function piJsonl(userText: string, assistantText: string) {
+  return [
+    JSON.stringify({
+      type: 'message',
+      id: 'user-1',
+      timestamp: '2026-01-02T00:00:00.000Z',
+      message: { role: 'user', content: userText },
+    }),
+    JSON.stringify({
+      type: 'message',
+      id: 'assistant-1',
+      timestamp: '2026-01-02T00:00:01.000Z',
+      message: { role: 'assistant', content: [{ text: assistantText }] },
+    }),
+  ].join('\n')
+}
 
 describe('session repository', () => {
   it('preserves session start, summary, archive, restore, and rename semantics', () => {
@@ -311,6 +335,99 @@ describe('session repository', () => {
 
       expect(() => restoreSessionRow(database, agentId)).toThrow('forced restore failure')
       expect(sessionPositions(database)).toEqual(archived)
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('requires sessions to be archived before hard-delete', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-hard-delete-gate-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const agentId = insertSessionRow(database, {
+        projectId,
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, 'sessions', slot),
+      })
+
+      expect(() => hardDeleteSessionRow(database, agentId)).toThrow(
+        `Session must be archived before hard-delete: ${agentId}`,
+      )
+      expect(database.prepare('SELECT id FROM agent_slots WHERE id = ?').get(agentId)).toEqual({
+        id: agentId,
+      })
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('hard-deletes archived sessions, tombstones the slot, and removes the session directory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-hard-delete-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const agentId = insertSessionRow(database, {
+        projectId,
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, 'pi-sessions', projectId, slot),
+        slotTimestampMs: () => 17,
+        slotSuffix: () => 'aaaaaa',
+      })
+      const slot = 'session-h-aaaaaa'
+      const sessionDir = join(root, 'pi-sessions', projectId, slot)
+      mkdirSync(sessionDir, { recursive: true })
+      writeFileSync(join(sessionDir, 'session.jsonl'), piJsonl('Deleted', 'Should not return'))
+      recordRuntimeMessageRow(database, {
+        agentId,
+        id: 'message-1',
+        role: 'assistant',
+        text: 'Persisted answer',
+      })
+      recordRuntimeTimelineEventRow(database, {
+        agentId,
+        kind: 'tool',
+        tone: 'tool',
+        label: 'Ran command',
+      })
+      upsertAgentContextUsage(database, { agentId, usedTokens: 10 })
+      archiveSessionRow(database, agentId)
+
+      expect(hardDeleteSessionRow(database, agentId)).toBe(agentId)
+
+      expect(database.prepare('SELECT id FROM agent_slots WHERE id = ?').get(agentId)).toBeUndefined()
+      expect(database.prepare('SELECT COUNT(*) AS count FROM threads WHERE agent_id = ?').get(agentId))
+        .toEqual({ count: 0 })
+      expect(database.prepare('SELECT COUNT(*) AS count FROM messages').get()).toEqual({ count: 0 })
+      expect(database.prepare('SELECT COUNT(*) AS count FROM timeline_events').get()).toEqual({ count: 0 })
+      expect(database.prepare('SELECT COUNT(*) AS count FROM agent_context_usage WHERE agent_id = ?').get(agentId))
+        .toEqual({ count: 0 })
+      expect(
+        database
+          .prepare('SELECT project_id AS projectId, slot FROM deleted_sessions WHERE project_id = ? AND slot = ?')
+          .get(projectId, slot),
+      ).toEqual({ projectId, slot })
+      expect(existsSync(sessionDir)).toBe(false)
+
+      mkdirSync(sessionDir, { recursive: true })
+      writeFileSync(join(sessionDir, 'session.jsonl'), piJsonl('Deleted', 'Should not return'))
+      hydratePersistedPiSessionRows(database, {
+        piSessionsDir: join(root, 'pi-sessions'),
+        defaultModel: 'test-model',
+      })
+      expect(database.prepare('SELECT id FROM agent_slots WHERE id = ?').get(agentId)).toBeUndefined()
     } finally {
       database.close()
       rmSync(root, { recursive: true, force: true })

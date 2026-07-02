@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { rmSync } from 'node:fs'
 import type { DatabaseSync } from 'node:sqlite'
 import type { RuntimeKind, SessionInterfaceMode, ThinkingLevel } from '~/lib/contracts'
 import {
@@ -194,6 +195,51 @@ export function archiveSessionRow(database: DatabaseSync, agentId: string) {
   return id
 }
 
+export function hardDeleteSessionRow(database: DatabaseSync, agentId: string) {
+  const id = agentId.trim()
+  const row = database
+    .prepare(
+      `
+        SELECT
+          id,
+          project_id AS projectId,
+          slot,
+          session_dir AS sessionDir,
+          archived_at AS archivedAt
+        FROM agent_slots
+        WHERE id = ?
+      `,
+    )
+    .get(id) as
+    | {
+        id: string
+        projectId: string
+        slot: string
+        sessionDir: string
+        archivedAt: string | null
+      }
+    | undefined
+  if (!row) throw new Error(`Session not found: ${id}`)
+  assertStartedSession(row.slot, 'hard-deleted')
+  if (!row.archivedAt) throw new Error(`Session must be archived before hard-delete: ${id}`)
+
+  withTransaction(database, () => {
+    const deletedAt = new Date().toISOString()
+    database
+      .prepare(
+        `
+          INSERT INTO deleted_sessions (project_id, slot, deleted_at)
+          VALUES (?, ?, ?)
+        `,
+      )
+      .run(row.projectId, row.slot, deletedAt)
+    database.prepare('DELETE FROM agent_slots WHERE id = ?').run(id)
+  })
+
+  removeSessionDirBestEffort(row.sessionDir, id)
+  return id
+}
+
 export function restoreSessionRow(database: DatabaseSync, agentId: string) {
   const id = agentId.trim()
   const row = database
@@ -291,7 +337,15 @@ function eventId(agentId: string, event: { readonly type: string } & Record<stri
   return `pi-event-${agentId}-${event.type}-${hash}`
 }
 
-function assertStartedSession(slot: string, action: 'removed' | 'restored' | 'renamed') {
+function removeSessionDirBestEffort(sessionDir: string, agentId: string) {
+  try {
+    rmSync(sessionDir, { recursive: true, force: true })
+  } catch (error) {
+    console.warn(`Failed to remove session directory for ${agentId}: ${sessionDir}`, error)
+  }
+}
+
+function assertStartedSession(slot: string, action: 'removed' | 'restored' | 'renamed' | 'hard-deleted') {
   if (!slot.startsWith('session-')) {
     throw new Error(`Only started sessions can be ${action}`)
   }
