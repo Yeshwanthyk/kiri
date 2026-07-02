@@ -628,6 +628,16 @@ fn run_presence_smoke(state_dir: &Path) -> Result<(), String> {
     let busy = poll_session_presence(&record, "busy")?;
     assert_eq!(busy["agent"], "claude");
     assert_eq!(busy["pid"], 42);
+    let events = http_json(
+        &record,
+        "POST",
+        "/api/presence-events",
+        Some(json!({ "afterSeq": 0 })),
+    )?;
+    assert_eq!(events["events"][0]["key"], "proj-t1:shell");
+    assert_eq!(events["events"][0]["mode"], "shell");
+    assert_eq!(events["events"][0]["event"]["event"], "busy");
+    let after_busy_seq = events["latestSeq"].as_u64().unwrap();
 
     http_json(
         &record,
@@ -639,6 +649,13 @@ fn run_presence_smoke(state_dir: &Path) -> Result<(), String> {
         })),
     )?;
     poll_session_presence_cleared(&record)?;
+    let ended = http_json(
+        &record,
+        "POST",
+        "/api/presence-events",
+        Some(json!({ "afterSeq": after_busy_seq })),
+    )?;
+    assert_eq!(ended["events"][0]["event"]["event"], "session_end");
     http_json(
         &record,
         "POST",

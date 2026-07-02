@@ -19,7 +19,7 @@ use rand::RngCore;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     env,
     fs::{self, OpenOptions},
     io::{Read, Write},
@@ -42,6 +42,7 @@ use tracing::{error, warn};
 const DAEMON_PATH: &str = "/terminal";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_RECENT_OUTPUT_BYTES: usize = 64_000;
+const MAX_PRESENCE_EVENTS: usize = 1_024;
 const DEFAULT_IDLE_KILL_MS: u64 = 5 * 60 * 1000;
 const FLOW_HIGH_WATERMARK_BYTES: usize = 256_000;
 const FLOW_LOW_WATERMARK_BYTES: usize = 64_000;
@@ -60,6 +61,7 @@ struct AppState {
     subscriptions: Arc<RwLock<HashMap<String, SubscriptionRecord>>>,
     subscription_journal_path: PathBuf,
     subscription_counter: Arc<AtomicU64>,
+    presence_events: Arc<Mutex<VecDeque<PresenceEventRecord>>>,
     restored_sessions: Arc<Mutex<HashMap<String, PersistedSession>>>,
 }
 
@@ -104,6 +106,15 @@ struct PersistedSession {
     snapshot: String,
     #[serde(rename = "savedAt")]
     saved_at: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PresenceEventRecord {
+    seq: u64,
+    key: String,
+    mode: String,
+    event: AgentPresenceEvent,
 }
 
 #[derive(Deserialize)]
@@ -260,6 +271,12 @@ struct SubscribeRequest {
     deliver: SubscribeDeliver,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PresenceEventsRequest {
+    after_seq: Option<u64>,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 struct SubscribeDeliver {
     #[serde(rename = "agentId")]
@@ -379,6 +396,7 @@ async fn main() -> Result<()> {
         subscriptions: Arc::new(RwLock::new(restored_subscriptions)),
         subscription_journal_path,
         subscription_counter: Arc::new(AtomicU64::new(0)),
+        presence_events: Arc::new(Mutex::new(VecDeque::new())),
         restored_sessions: Arc::new(Mutex::new(restored_sessions)),
     };
     rearm_pending_subscriptions(&state).await;
@@ -397,6 +415,7 @@ async fn main() -> Result<()> {
         .route("/api/sessions/wait-any", post(wait_any_session))
         .route("/api/sessions/subscribe", post(subscribe_session))
         .route("/api/subscriptions", get(list_subscriptions))
+        .route("/api/presence-events", post(list_presence_events))
         .route("/api/sessions/kill", post(kill_session))
         .route("/api/sessions/kill-prefix", post(kill_prefix))
         .route("/api/shutdown", post(shutdown_daemon))
@@ -1063,6 +1082,30 @@ async fn list_subscriptions(
     Json(serde_json::json!({ "subscriptions": payload })).into_response()
 }
 
+async fn list_presence_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PresenceEventsRequest>,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    let after_seq = body.after_seq.unwrap_or(0);
+    let journal = state.presence_events.lock().await;
+    let latest_seq = journal.back().map(|event| event.seq).unwrap_or(0);
+    let events: Vec<_> = journal
+        .iter()
+        .filter(|event| event.seq > after_seq)
+        .cloned()
+        .collect();
+    drop(journal);
+    Json(serde_json::json!({
+        "events": events,
+        "latestSeq": latest_seq,
+    }))
+    .into_response()
+}
+
 fn validate_wait_targets(targets: &[WaitTarget], quorum: &str) -> std::result::Result<(), String> {
     if targets.is_empty() || targets.len() > 32 {
         return Err("targets must contain 1..32 entries".to_string());
@@ -1423,7 +1466,7 @@ async fn get_or_spawn_session(state: &AppState, query: &TerminalQuery) -> Result
     );
     let (session, reader) = spawn_pty_session(launch, generation, restored)?;
     let session = Arc::new(session);
-    start_reader(session.clone(), reader);
+    start_reader(state.clone(), session.clone(), reader);
     sessions.insert(key, session.clone());
     Ok(session)
 }
@@ -1491,7 +1534,7 @@ async fn spawn_runtime_session(
         }
     };
     let session = Arc::new(session);
-    start_reader(session.clone(), reader);
+    start_reader(state.clone(), session.clone(), reader);
     sessions.insert(key, session.clone());
     drop(sessions);
     for input in pending.drain(..) {
@@ -1700,7 +1743,7 @@ fn spawn_pty_session(
     ))
 }
 
-fn start_reader(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
+fn start_reader(state: AppState, session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
     tokio::task::spawn_blocking(move || {
         let mut buffer = [0_u8; 8192];
         let mut pending_utf8 = Vec::new();
@@ -1714,6 +1757,7 @@ fn start_reader(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                 Ok(read) => {
                     let bytes = &buffer[..read];
                     let text = decode_utf8_chunk(&mut pending_utf8, bytes);
+                    let state = state.clone();
                     let session = session.clone();
                     tokio::runtime::Handle::current().block_on(async move {
                         let seq = {
@@ -1725,7 +1769,7 @@ fn start_reader(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                             let seq = session.output_seq.fetch_add(1, Ordering::SeqCst) + 1;
                             drop(grid);
                             for event in presence_events {
-                                record_presence_event(&session, event).await;
+                                record_presence_event(&state, &session, event).await;
                             }
                             seq
                         };
@@ -1745,7 +1789,7 @@ fn start_reader(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
             }
         }
         session.exited.store(true, Ordering::SeqCst);
-        tokio::runtime::Handle::current().block_on(clear_presence(&session));
+        tokio::runtime::Handle::current().block_on(emit_synthetic_presence_end(&state, &session));
         let _ = session.tx.send(SessionEvent::Exit {
             message: "terminal process exited".to_string(),
         });
@@ -1756,20 +1800,46 @@ async fn session_by_key(state: &AppState, key: &str) -> Option<Arc<Session>> {
     state.sessions.read().await.get(key).cloned()
 }
 
-async fn record_presence_event(session: &Session, event: AgentPresenceEvent) {
-    let AgentPresenceEvent::Status(status) = event else {
-        return;
-    };
-    let mut presence = session.presence.lock().await;
-    if status.event == "session_end" {
-        *presence = None;
-    } else {
-        *presence = Some(status);
+async fn record_presence_event(state: &AppState, session: &Session, event: AgentPresenceEvent) {
+    if let AgentPresenceEvent::Status(status) = &event {
+        let mut presence = session.presence.lock().await;
+        if status.event == "session_end" {
+            *presence = None;
+        } else {
+            *presence = Some(status.clone());
+        }
+    }
+    append_presence_event(state, session, event).await;
+}
+
+async fn append_presence_event(state: &AppState, session: &Session, event: AgentPresenceEvent) {
+    let mut events = state.presence_events.lock().await;
+    let seq = events.back().map(|event| event.seq + 1).unwrap_or(1);
+    events.push_back(PresenceEventRecord {
+        seq,
+        key: session.key.clone(),
+        mode: session.mode.clone(),
+        event,
+    });
+    while events.len() > MAX_PRESENCE_EVENTS {
+        events.pop_front();
     }
 }
 
-async fn clear_presence(session: &Session) {
-    *session.presence.lock().await = None;
+async fn emit_synthetic_presence_end(state: &AppState, session: &Session) {
+    let Some(status) = session.presence.lock().await.take() else {
+        return;
+    };
+    append_presence_event(
+        state,
+        session,
+        AgentPresenceEvent::Status(AgentPresenceStatusEvent {
+            agent: status.agent,
+            event: "session_end".to_string(),
+            pid: status.pid,
+        }),
+    )
+    .await;
 }
 
 async fn write_session_input(session: &Session, data: &str) -> Result<()> {
@@ -1805,7 +1875,7 @@ async fn kill_session_process(state: &AppState, session: &Session) {
     session.exited.store(true, Ordering::SeqCst);
     session.idle_epoch.fetch_add(1, Ordering::SeqCst);
     session.flow_control.wake();
-    clear_presence(session).await;
+    emit_synthetic_presence_end(state, session).await;
     let _ = session.child.lock().await.kill();
     let _ = session.tx.send(SessionEvent::Exit {
         message: "terminal process exited".to_string(),
@@ -1836,7 +1906,7 @@ async fn close_all_sessions(state: &AppState) {
         session.exited.store(true, Ordering::SeqCst);
         session.idle_epoch.fetch_add(1, Ordering::SeqCst);
         session.flow_control.wake();
-        clear_presence(&session).await;
+        emit_synthetic_presence_end(state, &session).await;
         let _ = session.child.lock().await.kill();
         let _ = session.tx.send(SessionEvent::Exit {
             message: "terminal process exited".to_string(),

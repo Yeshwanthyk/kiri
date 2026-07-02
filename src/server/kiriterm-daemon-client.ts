@@ -5,8 +5,10 @@ import { rememberCodexTerminalSession } from './codex-cli-sessions'
 import {
   getAgentLaunchConfig,
   requeueAgentTerminalInputs,
+  setAgentStatus,
   takeAgentTerminalInputs,
 } from './db'
+import type { AgentStatus } from '~/lib/contracts'
 import {
   acquireKiritermDaemonLock,
   checkKiritermDaemonHealth,
@@ -26,6 +28,8 @@ import type { TerminalServerApi, TerminalServerInfo } from './terminal-server'
 export type KiritermDaemonClientOptions = {
   readonly stateDir?: string
   readonly spawnTimeoutMs?: number
+  readonly presencePollIntervalMs?: number
+  readonly setAgentStatus?: (agentId: string, status: AgentStatus) => void
 }
 
 export function makeKiritermDaemonClient(
@@ -34,10 +38,20 @@ export function makeKiritermDaemonClient(
   const stateDir = options.stateDir ?? defaultKiritermStateDir()
   let record: KiritermDaemonRecord | null = null
   let ensuring: Promise<KiritermDaemonRecord> | null = null
+  let presencePoll: NodeJS.Timeout | null = null
+  let presencePollDaemon: KiritermDaemonRecord | null = null
+  let presencePollInFlight: Promise<void> | null = null
+  let presencePollEpoch = 0
+  let lastPresenceSeq = 0
+  const projectAgentStatus = options.setAgentStatus ?? setAgentStatus
 
   async function ensureDaemon(): Promise<KiritermDaemonRecord> {
-    if (record && (await checkKiritermDaemonHealth(record))) return record
+    if (record && (await checkKiritermDaemonHealth(record))) {
+      startPresencePolling(record)
+      return record
+    }
     record = null
+    stopPresencePolling()
     if (!ensuring) {
       ensuring = discoverOrSpawn().finally(() => {
         ensuring = null
@@ -50,6 +64,7 @@ export function makeKiritermDaemonClient(
     const existing = readKiritermDaemonRecord(stateDir)
     if (existing && (await checkKiritermDaemonHealth(existing))) {
       record = existing
+      startPresencePolling(existing)
       return existing
     }
     const spawnTimeoutMs = options.spawnTimeoutMs ?? 8_000
@@ -59,6 +74,7 @@ export function makeKiritermDaemonClient(
         const latest = readKiritermDaemonRecord(stateDir)
         if (latest && (await checkKiritermDaemonHealth(latest))) {
           record = latest
+          startPresencePolling(latest)
           return latest
         }
         spawnDaemonProcess(stateDir)
@@ -72,6 +88,7 @@ export function makeKiritermDaemonClient(
       const candidate = readKiritermDaemonRecord(stateDir)
       if (candidate && (await checkKiritermDaemonHealth(candidate))) {
         record = candidate
+        startPresencePolling(candidate)
         return candidate
       }
     }
@@ -161,7 +178,86 @@ export function makeKiritermDaemonClient(
     },
     // The daemon outliving the backend is the point: closing the backend's
     // client must not stop detached sessions.
-    close: () => Promise.resolve(),
+    close: () => {
+      stopPresencePolling()
+      return Promise.resolve()
+    },
+  }
+
+  function startPresencePolling(daemon: KiritermDaemonRecord) {
+    if (presencePoll && presencePollDaemon && sameDaemonRecord(presencePollDaemon, daemon)) return
+    stopPresencePolling()
+    presencePollDaemon = daemon
+    lastPresenceSeq = 0
+    presencePollEpoch += 1
+    const epoch = presencePollEpoch
+    const intervalMs = options.presencePollIntervalMs ?? 500
+    presencePoll = setInterval(() => {
+      tickPresencePolling(daemon, epoch)
+    }, intervalMs)
+    tickPresencePolling(daemon, epoch)
+  }
+
+  function stopPresencePolling() {
+    if (presencePoll) clearInterval(presencePoll)
+    presencePoll = null
+    presencePollDaemon = null
+    presencePollInFlight = null
+    presencePollEpoch += 1
+  }
+
+  function tickPresencePolling(daemon: KiritermDaemonRecord, epoch: number) {
+    if (presencePollInFlight) return
+    presencePollInFlight = pollPresenceEvents(daemon, epoch)
+      .catch(() => {})
+      .finally(() => {
+        if (presencePollEpoch === epoch) presencePollInFlight = null
+      })
+  }
+
+  async function pollPresenceEvents(daemon: KiritermDaemonRecord, epoch: number) {
+    const afterSeq = lastPresenceSeq
+    const payload = await requestRecord(daemon, 'presence-events', { afterSeq })
+    if (presencePollEpoch !== epoch || afterSeq !== lastPresenceSeq) return
+    if (!isPresenceEventsPayload(payload)) return
+    for (const event of payload.events) {
+      lastPresenceSeq = Math.max(lastPresenceSeq, event.seq)
+      if (event.mode !== 'runtime') continue
+      const agentId = runtimeAgentIdFromKey(event.key)
+      if (!agentId) continue
+      const status = agentStatusFromPresenceEvent(event.event)
+      if (!status) continue
+      projectAgentStatus(agentId, status)
+    }
+    lastPresenceSeq = Math.max(lastPresenceSeq, payload.latestSeq)
+  }
+
+  async function requestRecord(
+    daemon: KiritermDaemonRecord,
+    route: string,
+    body?: unknown,
+  ): Promise<unknown> {
+    const response = await fetch(`http://${daemon.host}:${daemon.port}/api/${route}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: {
+        authorization: `Bearer ${daemon.token}`,
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(630_000),
+    })
+    const payload: unknown = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      if (route === 'presence-events' && response.status === 404) {
+        return { events: [], latestSeq: lastPresenceSeq }
+      }
+      const message =
+        typeof payload === 'object' && payload !== null && 'error' in payload
+          ? String(payload.error)
+          : `kiriterm daemon request failed: ${route} (${response.status})`
+      throw new Error(message)
+    }
+    return payload
   }
 }
 
@@ -224,6 +320,63 @@ function isCodexLaunch(value: unknown): value is KiritermCodexLaunch {
   }
   if (!('launchedAtMs' in value) || typeof value.launchedAtMs !== 'number') return false
   return 'launchToken' in value && typeof value.launchToken === 'string'
+}
+
+type PresenceEventsPayload = {
+  readonly events: readonly PresenceEventRecord[]
+  readonly latestSeq: number
+}
+
+type PresenceEventRecord = {
+  readonly seq: number
+  readonly key: string
+  readonly mode: string
+  readonly event: unknown
+}
+
+function isPresenceEventsPayload(value: unknown): value is PresenceEventsPayload {
+  if (typeof value !== 'object' || value === null) return false
+  if (!('latestSeq' in value) || typeof value.latestSeq !== 'number') return false
+  if (!('events' in value) || !Array.isArray(value.events)) return false
+  return value.events.every((event) => (
+    typeof event === 'object' &&
+    event !== null &&
+    'seq' in event &&
+    typeof event.seq === 'number' &&
+    'key' in event &&
+    typeof event.key === 'string' &&
+    'mode' in event &&
+    typeof event.mode === 'string' &&
+    'event' in event
+  ))
+}
+
+function runtimeAgentIdFromKey(key: string) {
+  const suffix = ':runtime'
+  return key.endsWith(suffix) ? key.slice(0, -suffix.length) : null
+}
+
+function sameDaemonRecord(left: KiritermDaemonRecord, right: KiritermDaemonRecord) {
+  return left.host === right.host &&
+    left.port === right.port &&
+    left.path === right.path &&
+    left.token === right.token
+}
+
+function agentStatusFromPresenceEvent(event: unknown): AgentStatus | null {
+  if (typeof event !== 'object' || event === null || !('event' in event)) return null
+  switch (event.event) {
+    case 'busy':
+      return 'running'
+    case 'awaiting_input':
+      return 'blocked'
+    case 'session_start':
+    case 'idle':
+    case 'session_end':
+      return 'idle'
+    default:
+      return null
+  }
 }
 
 function sleep(ms: number) {

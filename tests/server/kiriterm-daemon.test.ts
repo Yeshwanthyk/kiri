@@ -365,6 +365,68 @@ describe('kiriterm daemon', () => {
     expect(healthChecks).toBeGreaterThanOrEqual(3)
   })
 
+  it('projects rust daemon presence events into runtime agent status', async () => {
+    const stateDir = tempStateDir()
+    const statuses: Array<{ agentId: string; status: string }> = []
+    const events = [
+      { seq: 1, key: 'agent-1:runtime', mode: 'runtime', event: { type: 'status', agent: 'claude', event: 'busy' } },
+      { seq: 2, key: 'agent-1:runtime', mode: 'runtime', event: { type: 'status', agent: 'claude', event: 'awaiting_input' } },
+      { seq: 3, key: 'project-1:shell', mode: 'shell', event: { type: 'status', agent: 'claude', event: 'busy' } },
+      { seq: 4, key: 'agent-1:runtime', mode: 'runtime', event: { type: 'status', agent: 'claude', event: 'session_end' } },
+    ]
+    const server = createServer((request, response) => {
+      if (request.url === '/api/health') {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ ok: true }))
+        return
+      }
+      if (request.url === '/api/presence-events') {
+        let body = ''
+        request.on('data', (chunk) => {
+          body += String(chunk)
+        })
+        request.on('end', () => {
+          const afterSeq = JSON.parse(body || '{}').afterSeq ?? 0
+          response.writeHead(200, { 'content-type': 'application/json' })
+          response.end(JSON.stringify({
+            events: events.filter((event) => event.seq > afterSeq),
+            latestSeq: events.at(-1)?.seq ?? 0,
+          }))
+        })
+        return
+      }
+      response.writeHead(404).end()
+    })
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())))
+    const port = await listen(server)
+    writeFileSync(join(stateDir, 'daemon.json'), JSON.stringify({
+      pid: process.pid,
+      host: '127.0.0.1',
+      port,
+      path: '/terminal',
+      token: 'token',
+      version: 'test',
+      startedAt: '2026-01-01T00:00:00.000Z',
+    }))
+
+    const client = makeKiritermDaemonClient({
+      stateDir,
+      spawnTimeoutMs: 1_000,
+      presencePollIntervalMs: 10,
+      setAgentStatus: (agentId, status) => {
+        statuses.push({ agentId, status })
+      },
+    })
+    cleanups.push(() => client.close())
+
+    await client.ensure()
+    await expect.poll(() => statuses, { timeout: 2_000 }).toEqual([
+      { agentId: 'agent-1', status: 'running' },
+      { agentId: 'agent-1', status: 'blocked' },
+      { agentId: 'agent-1', status: 'idle' },
+    ])
+  })
+
   it('delivers wake subscriptions into a runtime session over the control api', async () => {
     const stateDir = tempStateDir()
     useFakeCodexTerminal(stateDir)
