@@ -30,10 +30,26 @@ type PiHydrationStamp = {
   readonly size: number
 }
 
+type PiProjectSessionRootCache = {
+  readonly mtimeMs: number
+  readonly slots: readonly string[]
+}
+
+type PersistedPiSessionAgent = {
+  readonly id: string
+  readonly projectId: string
+  readonly slot: string
+  readonly sessionDir: string
+  readonly sessionFile: string | null
+  readonly archivedAt: string | null
+}
+
 const piHydrationStamps = new Map<string, PiHydrationStamp>()
+const piProjectSessionRootCache = new Map<string, PiProjectSessionRootCache>()
 
 export function clearPiHydrationStamps() {
   piHydrationStamps.clear()
+  piProjectSessionRootCache.clear()
 }
 
 export function resetSessionRows(database: DatabaseSync, agentId: string) {
@@ -163,8 +179,17 @@ export function hydratePersistedPiSessionRows(
   input: {
     readonly piSessionsDir: string
     readonly defaultModel: string
+    readonly onlyAgentId?: string
   },
 ) {
+  if (input.onlyAgentId) {
+    hydratePersistedPiSessionByAgentId(database, {
+      agentId: input.onlyAgentId,
+      defaultModel: input.defaultModel,
+    })
+    return
+  }
+
   const projects = database
     .prepare('SELECT id FROM projects ORDER BY position ASC')
     .all()
@@ -180,79 +205,125 @@ export function hydratePersistedPiSessionRows(
         .map((row) => deletedSessionDbRowSchema.parse(row).slot),
     )
 
-    const slots = readdirSync(projectSessionRoot, { withFileTypes: true })
-      .flatMap((entry) =>
-        entry.isDirectory() && entry.name.startsWith('session-') && !deletedSlots.has(entry.name)
-          ? [entry.name]
-          : [],
-      )
-      .sort()
+    const slots = projectSessionSlots(projectSessionRoot)
+      .filter((slot) => !deletedSlots.has(slot))
 
     for (const slot of slots) {
       const sessionDir = join(projectSessionRoot, slot)
       const id = `${project.id}-${slot}`
-      const existing = database
-        .prepare(
-          `
-            SELECT
-              id,
-              slot,
-              session_dir AS sessionDir,
-              session_file AS sessionFile
-            FROM agent_slots
-            WHERE id = ?
-          `,
-        )
-        .get(id)
-      const existingAgent = existing
-        ? persistedSessionDbRowSchema.parse(existing)
-        : undefined
-      const sessionFile = activePiSessionFile(sessionDir, existingAgent?.sessionFile)
-      const stamp = sessionFile ? statSessionFile(sessionFile) : undefined
-      if (
-        existingAgent &&
-        stamp &&
-        sameHydrationStamp(piHydrationStamps.get(id), stamp)
-      ) {
-        continue
-      }
-      const projection = sessionFile ? safeProjectPiSessionFile(sessionFile) : undefined
-      const agent = existingAgent ??
-        createPersistedSessionAgent(database, {
-          id,
-          projectId: project.id,
-          slot,
-          title: sessionTitle(projection?.preview, slot),
-          model: input.defaultModel,
-          sessionDir,
-          sessionFile,
-        })
-
-      if (sessionFile && !agent.sessionFile) {
-        database
-          .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
-          .run(sessionFile, id)
-      }
-      const threadId = ensureThreadForAgent(database, id, projection)
-      if (projection) {
-        hydrateProjectionMessages(database, id, projection)
-        replaceAgentTasksForThread(database, {
-          threadId,
-          source: 'pi',
-          tasks: projection.tasks,
-          updatedAt: projection.updatedAt ?? new Date().toISOString(),
-        })
-      }
-      if (projection?.messages.length) {
-        upsertAgentContextUsage(database, {
-          agentId: id,
-          usedTokens: projection.contextUsedTokens,
-          sessionFile,
-          updatedAt: projection.updatedAt,
-        })
-      }
-      if (stamp && projection) piHydrationStamps.set(id, stamp)
+      hydratePersistedPiSession(database, {
+        id,
+        projectId: project.id,
+        slot,
+        sessionDir,
+        defaultModel: input.defaultModel,
+      })
     }
+  }
+}
+
+function hydratePersistedPiSessionByAgentId(
+  database: DatabaseSync,
+  input: {
+    readonly agentId: string
+    readonly defaultModel: string
+  },
+) {
+  const existingAgent = readPersistedPiSessionAgent(database, input.agentId)
+  if (!existingAgent || existingAgent.archivedAt !== null) return
+  hydratePersistedPiSession(database, {
+    id: existingAgent.id,
+    projectId: existingAgent.projectId,
+    slot: existingAgent.slot,
+    sessionDir: existingAgent.sessionDir,
+    defaultModel: input.defaultModel,
+    existingAgent,
+  })
+}
+
+function hydratePersistedPiSession(
+  database: DatabaseSync,
+  input: {
+    readonly id: string
+    readonly projectId: string
+    readonly slot: string
+    readonly sessionDir: string
+    readonly defaultModel: string
+    readonly existingAgent?: PersistedPiSessionAgent
+  },
+) {
+  const existingAgent = input.existingAgent ?? readPersistedPiSessionAgent(database, input.id)
+  if (existingAgent?.archivedAt !== null && existingAgent?.archivedAt !== undefined) return
+  const sessionFile = activePiSessionFile(input.sessionDir, existingAgent?.sessionFile)
+  const stamp = sessionFile ? statSessionFile(sessionFile) : undefined
+  if (
+    existingAgent &&
+    stamp &&
+    sameHydrationStamp(piHydrationStamps.get(input.id), stamp)
+  ) {
+    return
+  }
+  const projection = sessionFile ? safeProjectPiSessionFile(sessionFile) : undefined
+  const agent = existingAgent ??
+    createPersistedSessionAgent(database, {
+      id: input.id,
+      projectId: input.projectId,
+      slot: input.slot,
+      title: sessionTitle(projection?.preview, input.slot),
+      model: input.defaultModel,
+      sessionDir: input.sessionDir,
+      sessionFile,
+    })
+
+  if (sessionFile && !agent.sessionFile) {
+    database
+      .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
+      .run(sessionFile, input.id)
+  }
+  const threadId = ensureThreadForAgent(database, input.id, projection)
+  if (projection) {
+    hydrateProjectionMessages(database, input.id, projection)
+    replaceAgentTasksForThread(database, {
+      threadId,
+      source: 'pi',
+      tasks: projection.tasks,
+      updatedAt: projection.updatedAt ?? new Date().toISOString(),
+    })
+  }
+  if (projection?.messages.length) {
+    upsertAgentContextUsage(database, {
+      agentId: input.id,
+      usedTokens: projection.contextUsedTokens,
+      sessionFile,
+      updatedAt: projection.updatedAt,
+    })
+  }
+  if (stamp && projection) piHydrationStamps.set(input.id, stamp)
+}
+
+function readPersistedPiSessionAgent(database: DatabaseSync, agentId: string) {
+  const row = database
+    .prepare(
+      `
+        SELECT
+          id,
+          project_id AS projectId,
+          slot,
+          session_dir AS sessionDir,
+          session_file AS sessionFile,
+          archived_at AS archivedAt
+        FROM agent_slots
+        WHERE id = ?
+          AND runtime = 'pi'
+      `,
+    )
+    .get(agentId)
+  if (!row) return undefined
+  const extra = row as { projectId: string; archivedAt: string | null }
+  return {
+    ...persistedSessionDbRowSchema.parse(row),
+    projectId: extra.projectId,
+    archivedAt: extra.archivedAt,
   }
 }
 
@@ -260,6 +331,31 @@ function statSessionFile(path: string): PiHydrationStamp | undefined {
   try {
     const stats = statSync(path)
     return { sessionFile: path, mtimeMs: stats.mtimeMs, size: stats.size }
+  } catch {
+    return undefined
+  }
+}
+
+function projectSessionSlots(projectSessionRoot: string) {
+  const mtimeMs = statProjectSessionRoot(projectSessionRoot)
+  if (mtimeMs === undefined) {
+    piProjectSessionRootCache.delete(projectSessionRoot)
+    return []
+  }
+  const cached = piProjectSessionRootCache.get(projectSessionRoot)
+  if (cached?.mtimeMs === mtimeMs) return [...cached.slots]
+
+  const slots = readdirSync(projectSessionRoot, { withFileTypes: true })
+    .flatMap((entry) => entry.isDirectory() && entry.name.startsWith('session-') ? [entry.name] : [])
+    .sort()
+  piProjectSessionRootCache.set(projectSessionRoot, { mtimeMs, slots })
+  return slots
+}
+
+function statProjectSessionRoot(path: string) {
+  try {
+    const stats = statSync(path)
+    return stats.isDirectory() ? stats.mtimeMs : undefined
   } catch {
     return undefined
   }

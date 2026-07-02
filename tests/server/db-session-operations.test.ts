@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -231,6 +231,61 @@ describe('session operations repository', () => {
     }
   })
 
+  it('hydrates only the requested Pi agent when scoped by agent id', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-hydrate-scoped-'))
+    const firstCwd = join(root, 'project-one')
+    const secondCwd = join(root, 'project-two')
+    mkdirSync(firstCwd)
+    mkdirSync(secondCwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const firstProjectId = insertProject(database, { name: 'Project One', cwd: firstCwd })
+      const secondProjectId = insertProject(database, { name: 'Project Two', cwd: secondCwd })
+      const agentId = insertSessionRow(database, {
+        projectId: firstProjectId,
+        runtime: 'pi',
+        interfaceMode: 'gui',
+        model: 'test-model',
+        sessionDirForSlot: (slot) => join(root, 'pi-sessions', firstProjectId, slot),
+        slotTimestampMs: () => 10,
+        slotSuffix: () => 'aaaaaa',
+      })
+      const firstSessionFile = join(root, 'pi-sessions', firstProjectId, 'session-a-aaaaaa', 'first.jsonl')
+      mkdirSync(join(root, 'pi-sessions', firstProjectId, 'session-a-aaaaaa'), { recursive: true })
+      writeFileSync(firstSessionFile, piJsonl('Scoped', 'Hydrated scoped answer'))
+      const otherSlot = 'session-b-bbbbbb'
+      const otherDir = join(root, 'pi-sessions', secondProjectId, otherSlot)
+      mkdirSync(otherDir, { recursive: true })
+      writeFileSync(join(otherDir, 'other.jsonl'), piJsonl('Other', 'Should not hydrate'))
+
+      hydratePersistedPiSessionRows(database, {
+        piSessionsDir: join(root, 'pi-sessions'),
+        defaultModel: 'test-model',
+        onlyAgentId: agentId,
+      })
+
+      expect(
+        database
+          .prepare(
+            `
+              SELECT m.text
+              FROM messages m
+              INNER JOIN threads t ON t.id = m.thread_id
+              WHERE t.agent_id = ? AND m.role = 'assistant'
+            `,
+          )
+          .get(agentId),
+      ).toEqual({ text: 'Hydrated scoped answer' })
+      expect(
+        database.prepare('SELECT id FROM agent_slots WHERE id = ?').get(`${secondProjectId}-${otherSlot}`),
+      ).toBeUndefined()
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('skips persisted Pi hydration when the session file is unchanged', () => {
     const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-hydrate-cache-'))
     const cwd = join(root, 'project')
@@ -264,6 +319,47 @@ describe('session operations repository', () => {
       expect(
         database.prepare('SELECT text FROM messages WHERE id = ?').get('sentinel-message'),
       ).toEqual({ text: 'keep me' })
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uses the cached project slot list when the project session root is unchanged', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-hydrate-root-cache-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const projectSessionRoot = join(root, 'pi-sessions', projectId)
+      const firstSlot = 'session-a-aaaaaa'
+      const firstDir = join(projectSessionRoot, firstSlot)
+      const cachedRootTimeSeconds = 1_700_000_000
+      mkdirSync(firstDir, { recursive: true })
+      writeFileSync(join(firstDir, 'first.jsonl'), piJsonl('First', 'First answer'))
+      utimesSync(projectSessionRoot, cachedRootTimeSeconds, cachedRootTimeSeconds)
+
+      hydratePersistedPiSessionRows(database, {
+        piSessionsDir: join(root, 'pi-sessions'),
+        defaultModel: 'test-model',
+      })
+
+      const secondSlot = 'session-b-bbbbbb'
+      const secondDir = join(projectSessionRoot, secondSlot)
+      mkdirSync(secondDir, { recursive: true })
+      writeFileSync(join(secondDir, 'second.jsonl'), piJsonl('Second', 'Should wait'))
+      utimesSync(projectSessionRoot, cachedRootTimeSeconds, cachedRootTimeSeconds)
+
+      hydratePersistedPiSessionRows(database, {
+        piSessionsDir: join(root, 'pi-sessions'),
+        defaultModel: 'test-model',
+      })
+
+      expect(
+        database.prepare('SELECT id FROM agent_slots WHERE id = ?').get(`${projectId}-${secondSlot}`),
+      ).toBeUndefined()
     } finally {
       database.close()
       rmSync(root, { recursive: true, force: true })

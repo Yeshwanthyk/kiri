@@ -226,7 +226,7 @@ function readModelRefreshDisabled(env: NodeJS.ProcessEnv) {
 
 export function getAgentDetail(input: { agentId: string; limit?: number; offset?: number }): AgentDetail {
   const database = getDb()
-  hydratePersistedPiSessions(database)
+  hydratePersistedPiSessions(database, input.agentId)
   const agentId = input.agentId.trim()
   if (agentRuntime(database, agentId) === 'claude') {
     hydrateClaudeSession(database, agentId)
@@ -682,10 +682,11 @@ function runtimeSessionDir(runtime: string, projectId: string, slot: string) {
   return runtimeSessionDirPath(getKiriConfig(), runtime, projectId, slot)
 }
 
-function hydratePersistedPiSessions(database: DatabaseSync) {
+function hydratePersistedPiSessions(database: DatabaseSync, agentId?: string) {
   const piSettings = getRuntimeSettings('pi')
   hydratePersistedPiSessionRows(database, {
     piSessionsDir: getKiriConfig().piSessionsDir,
     defaultModel: piSettings.defaultModel,
+    onlyAgentId: agentId,
   })
 }
