@@ -38,6 +38,8 @@ export function refreshReadModelEntries(
   return refreshReadModelEntriesIfChanged(database, input).entries
 }
 
+// As of plan 015, read_model_entries has no readers in app code or the MCP surface.
+// If that remains true, remove this write path instead of paying it on mutations.
 export function refreshReadModelEntriesIfChanged(
   database: DatabaseSync,
   input: {

@@ -52,7 +52,7 @@ describe('runtime commands', () => {
 
       expect(error).toBeInstanceOf(RuntimeCommandError)
       if (error instanceof RuntimeCommandError) {
-        expect(error.message).toBe('claude agents do not support /new yet')
+        expect(error.message).toBe('Claude sessions run in terminal mode only')
       }
     }),
   )
@@ -130,7 +130,7 @@ describe('runtime commands', () => {
       ctor: z.string(),
       isError: z.literal(true),
       isRuntimeCommandError: z.literal(true),
-      message: z.literal('claude agents do not support /new yet'),
+      message: z.literal('Claude sessions run in terminal mode only'),
     }).parse(output))
 
     expect(result.ctor).toBe('RuntimeCommandError')

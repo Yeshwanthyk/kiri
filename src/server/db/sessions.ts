@@ -6,6 +6,7 @@ import {
   idDbRowSchema,
   sessionSummaryDbRowSchema,
 } from './schema'
+import { forgetPiHydrationStamp } from './session-operations'
 import { withTransaction } from './transaction'
 
 type SessionSummaryInput = {
@@ -156,6 +157,7 @@ export function insertSessionRow(database: DatabaseSync, input: InsertSessionInp
     })
   })
 
+  forgetPiHydrationStamp(id)
   return id
 }
 
@@ -192,6 +194,7 @@ export function archiveSessionRow(database: DatabaseSync, agentId: string) {
     }
   })
 
+  forgetPiHydrationStamp(id)
   return id
 }
 
@@ -236,6 +239,7 @@ export function hardDeleteSessionRow(database: DatabaseSync, agentId: string) {
     database.prepare('DELETE FROM agent_slots WHERE id = ?').run(id)
   })
 
+  forgetPiHydrationStamp(id)
   removeSessionDirBestEffort(row.sessionDir, id)
   return id
 }

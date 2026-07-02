@@ -171,10 +171,10 @@ function requireCapability<K extends keyof ProviderRuntimeAdapter>(
 
 function unsupportedCapabilityMessage(
   runtime: RuntimeKind,
-  key: keyof ProviderRuntimeAdapter,
+  _key: keyof ProviderRuntimeAdapter,
   unsupported: string,
 ) {
-  if ((runtime === 'claude' || runtime === 'opencode') && key === 'prompt') {
+  if (runtime === 'claude' || runtime === 'opencode') {
     return `${runtimeDisplayName(runtime)} sessions run in terminal mode only`
   }
   return `${runtime} agents do not support ${unsupported}`

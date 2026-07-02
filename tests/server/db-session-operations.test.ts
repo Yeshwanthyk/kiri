@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { openKiriDatabase } from '../../src/server/db/connection'
 import { insertProject } from '../../src/server/db/projects'
-import { insertSessionRow } from '../../src/server/db/sessions'
+import { archiveSessionRow, insertSessionRow, restoreSessionRow } from '../../src/server/db/sessions'
 import {
   clearPiHydrationStamps,
   createForkedSessionRow,
@@ -319,6 +319,47 @@ describe('session operations repository', () => {
       expect(
         database.prepare('SELECT text FROM messages WHERE id = ?').get('sentinel-message'),
       ).toEqual({ text: 'keep me' })
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('forgets Pi hydration stamps when a session is archived', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-hydrate-archive-forget-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const slot = 'session-a-aaaaaa'
+      const sessionDir = join(root, 'pi-sessions', projectId, slot)
+      const agentId = `${projectId}-${slot}`
+      mkdirSync(sessionDir, { recursive: true })
+      writeFileSync(join(sessionDir, 'session.jsonl'), piJsonl('Resume me', 'Hydrated answer'))
+
+      hydratePersistedPiSessionRows(database, {
+        piSessionsDir: join(root, 'pi-sessions'),
+        defaultModel: 'test-model',
+      })
+      const thread = database
+        .prepare('SELECT id FROM threads WHERE agent_id = ? AND active = 1')
+        .get(agentId) as { id: string }
+      database
+        .prepare('INSERT INTO messages (id, thread_id, role, text, timestamp) VALUES (?, ?, ?, ?, ?)')
+        .run('sentinel-message', thread.id, 'assistant', 'delete me', '2026-01-02T00:00:02.000Z')
+
+      archiveSessionRow(database, agentId)
+      restoreSessionRow(database, agentId)
+      hydratePersistedPiSessionRows(database, {
+        piSessionsDir: join(root, 'pi-sessions'),
+        defaultModel: 'test-model',
+        onlyAgentId: agentId,
+      })
+
+      expect(database.prepare('SELECT text FROM messages WHERE id = ?').get('sentinel-message'))
+        .toBeUndefined()
     } finally {
       database.close()
       rmSync(root, { recursive: true, force: true })

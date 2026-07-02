@@ -29,7 +29,6 @@ try {
     projectId: 'runtime-public',
     runtime: 'claude',
     interfaceMode: 'terminal',
-    model: 'claude-sonnet-4-5',
     thinkingLevel: 'medium',
   })
 

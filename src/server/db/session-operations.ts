@@ -52,6 +52,10 @@ export function clearPiHydrationStamps() {
   piProjectSessionRootCache.clear()
 }
 
+export function forgetPiHydrationStamp(agentId: string) {
+  piHydrationStamps.delete(agentId)
+}
+
 export function resetSessionRows(database: DatabaseSync, agentId: string) {
   const id = agentId.trim()
   const thread = database
@@ -71,7 +75,7 @@ export function resetSessionRows(database: DatabaseSync, agentId: string) {
     database
       .prepare("UPDATE agent_slots SET status = 'idle', session_file = NULL WHERE id = ?")
       .run(id)
-    piHydrationStamps.delete(id)
+    forgetPiHydrationStamp(id)
   })
 }
 

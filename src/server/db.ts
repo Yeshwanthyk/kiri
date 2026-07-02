@@ -206,6 +206,8 @@ export function getWorkspaceRevision() {
   })
 }
 
+// As of plan 015, read_model_entries has no readers in app code or kiri-control/router.
+// If that remains true, remove this refresh path instead of paying it on mutations.
 export function refreshReadModels() {
   if (readModelRefreshDisabled(process.env)) return []
   const database = getDb()
