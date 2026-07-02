@@ -27,7 +27,7 @@ use std::{
     process,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc,
+        Arc, Condvar, Mutex as StdMutex, Weak,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -43,6 +43,8 @@ const DAEMON_PATH: &str = "/terminal";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_RECENT_OUTPUT_BYTES: usize = 64_000;
 const DEFAULT_IDLE_KILL_MS: u64 = 5 * 60 * 1000;
+const FLOW_HIGH_WATERMARK_BYTES: usize = 256_000;
+const FLOW_LOW_WATERMARK_BYTES: usize = 64_000;
 
 #[derive(Clone)]
 struct AppState {
@@ -75,6 +77,8 @@ struct Session {
     recent_output: Mutex<Vec<OutputChunk>>,
     attached_clients: AtomicUsize,
     idle_epoch: AtomicU64,
+    flow_control: FlowControl,
+    client_flows: StdMutex<Vec<Weak<ClientFlow>>>,
     tx: broadcast::Sender<SessionEvent>,
 }
 
@@ -224,6 +228,20 @@ struct LiveWaitTarget {
 struct ReadyWaitMatch {
     payload: serde_json::Value,
     order_ms: u64,
+}
+
+struct FlowControl {
+    state: StdMutex<FlowControlState>,
+    ready: Condvar,
+}
+
+struct FlowControlState {
+    paused_clients: usize,
+}
+
+struct ClientFlow {
+    outstanding: AtomicUsize,
+    paused: AtomicBool,
 }
 
 struct PatternMatcher {
@@ -764,6 +782,10 @@ async fn handle_socket(state: AppState, query: TerminalQuery, socket: WebSocket)
     }
     session.idle_epoch.fetch_add(1, Ordering::SeqCst);
     session.attached_clients.fetch_add(1, Ordering::SeqCst);
+    let client_flow = Arc::new(ClientFlow::new());
+    session
+        .flow_control
+        .register_client(&session.client_flows, Arc::downgrade(&client_flow));
 
     let output_task = tokio::spawn(async move {
         while let Some(event) = stream.next().await {
@@ -808,14 +830,17 @@ async fn handle_socket(state: AppState, query: TerminalQuery, socket: WebSocket)
                 }
             }
             ClientFrame::Ack { bytes } => {
-                let _ = bytes;
+                session
+                    .flow_control
+                    .ack_from_client(&client_flow, bytes as usize);
             }
         }
     }
+    output_task.abort();
+    session.flow_control.release_client(&client_flow);
     if session.attached_clients.fetch_sub(1, Ordering::SeqCst) == 1 {
         schedule_idle_kill(state, session.clone());
     }
-    output_task.abort();
 }
 
 async fn get_or_spawn_session(state: &AppState, query: &TerminalQuery) -> Result<Arc<Session>> {
@@ -927,6 +952,8 @@ fn spawn_shell_session(
             recent_output: Mutex::new(Vec::new()),
             attached_clients: AtomicUsize::new(0),
             idle_epoch: AtomicU64::new(0),
+            flow_control: FlowControl::new(),
+            client_flows: StdMutex::new(Vec::new()),
             tx,
         },
         reader,
@@ -938,6 +965,10 @@ fn start_reader(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
         let mut buffer = [0_u8; 8192];
         let mut pending_utf8 = Vec::new();
         loop {
+            session.flow_control.wait_until_ready(&session.exited);
+            if session.exited.load(Ordering::SeqCst) {
+                break;
+            }
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
@@ -954,6 +985,9 @@ fn start_reader(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                             session.output_seq.fetch_add(1, Ordering::SeqCst) + 1
                         };
                         if !text.is_empty() {
+                            session
+                                .flow_control
+                                .reserve_for_clients(&session.client_flows, text.len());
                             push_recent_output(&session, seq, text.clone()).await;
                             let _ = session.tx.send(SessionEvent::Data { seq, data: text });
                         }
@@ -1008,6 +1042,7 @@ async fn resize_session_to(session: &Session, cols: u16, rows: u16) -> Result<()
 async fn kill_session_process(state: &AppState, session: &Session) {
     session.exited.store(true, Ordering::SeqCst);
     session.idle_epoch.fetch_add(1, Ordering::SeqCst);
+    session.flow_control.wake();
     let _ = session.child.lock().await.kill();
     let _ = session.tx.send(SessionEvent::Exit {
         message: "terminal process exited".to_string(),
@@ -1037,6 +1072,7 @@ async fn close_all_sessions(state: &AppState) {
     for session in sessions {
         session.exited.store(true, Ordering::SeqCst);
         session.idle_epoch.fetch_add(1, Ordering::SeqCst);
+        session.flow_control.wake();
         let _ = session.child.lock().await.kill();
         let _ = session.tx.send(SessionEvent::Exit {
             message: "terminal process exited".to_string(),
@@ -1541,6 +1577,102 @@ impl DaemonLock {
                 anyhow::bail!("kiriterm daemon is already starting")
             }
             Err(error) => Err(error).context("failed to acquire daemon lock"),
+        }
+    }
+}
+
+impl FlowControl {
+    fn new() -> Self {
+        Self {
+            state: StdMutex::new(FlowControlState { paused_clients: 0 }),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn wait_until_ready(&self, exited: &AtomicBool) {
+        let mut state = self.state.lock().expect("flow-control mutex poisoned");
+        while state.paused_clients > 0 && !exited.load(Ordering::SeqCst) {
+            state = self.ready.wait(state).expect("flow-control mutex poisoned");
+        }
+    }
+
+    fn register_client(&self, clients: &StdMutex<Vec<Weak<ClientFlow>>>, client: Weak<ClientFlow>) {
+        clients
+            .lock()
+            .expect("client-flow registry mutex poisoned")
+            .push(client);
+    }
+
+    fn reserve_for_clients(&self, clients: &StdMutex<Vec<Weak<ClientFlow>>>, bytes: usize) {
+        let mut clients = clients.lock().expect("client-flow registry mutex poisoned");
+        clients.retain(|client| {
+            if let Some(client) = client.upgrade() {
+                self.add_outstanding(&client, bytes);
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    fn add_outstanding(&self, client: &ClientFlow, bytes: usize) {
+        let outstanding = client.outstanding.fetch_add(bytes, Ordering::SeqCst) + bytes;
+        if outstanding > FLOW_HIGH_WATERMARK_BYTES && !client.paused.swap(true, Ordering::SeqCst) {
+            self.state
+                .lock()
+                .expect("flow-control mutex poisoned")
+                .paused_clients += 1;
+        }
+    }
+
+    fn ack_from_client(&self, client: &ClientFlow, bytes: usize) {
+        let mut current = client.outstanding.load(Ordering::SeqCst);
+        loop {
+            let next = current.saturating_sub(bytes);
+            match client.outstanding.compare_exchange(
+                current,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    if next < FLOW_LOW_WATERMARK_BYTES
+                        && client.paused.swap(false, Ordering::SeqCst)
+                    {
+                        self.resume_one_paused_client();
+                    }
+                    return;
+                }
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    fn release_client(&self, client: &ClientFlow) {
+        client.outstanding.store(0, Ordering::SeqCst);
+        if client.paused.swap(false, Ordering::SeqCst) {
+            self.resume_one_paused_client();
+        }
+    }
+
+    fn resume_one_paused_client(&self) {
+        {
+            let mut state = self.state.lock().expect("flow-control mutex poisoned");
+            state.paused_clients = state.paused_clients.saturating_sub(1);
+        }
+        self.ready.notify_all();
+    }
+
+    fn wake(&self) {
+        self.ready.notify_all();
+    }
+}
+
+impl ClientFlow {
+    fn new() -> Self {
+        Self {
+            outstanding: AtomicUsize::new(0),
+            paused: AtomicBool::new(false),
         }
     }
 }

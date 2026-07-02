@@ -28,6 +28,11 @@ fn wait_routes_match_screen_output_and_idle_targets() {
 }
 
 #[test]
+fn websocket_flow_control_pauses_until_client_ack() {
+    with_daemon(run_flow_control_smoke);
+}
+
+#[test]
 fn shutdown_route_stops_daemon_and_removes_record() {
     let state_dir = temp_state_dir();
     let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
@@ -492,6 +497,74 @@ fn run_wait_smoke(state_dir: &Path) -> Result<(), String> {
     assert_eq!(replacement_wait["matched"], true);
     let _ = replacement_socket.close(None);
     Ok(())
+}
+
+fn run_flow_control_smoke(state_dir: &Path) -> Result<(), String> {
+    let record = wait_record(state_dir)?;
+    post_upsert(&record, state_dir)?;
+    let url = format!(
+        "ws://{}:{}{}?agentId=agent-t1&mode=shell&cols=80&rows=24&token={}",
+        record["host"].as_str().unwrap(),
+        record["port"].as_u64().unwrap(),
+        record["path"].as_str().unwrap(),
+        record["token"].as_str().unwrap()
+    );
+    let (mut socket, _) = connect(&url).map_err(|error| error.to_string())?;
+    assert_eq!(
+        read_json_frame(&mut socket, Duration::from_secs(5))?["type"],
+        "snapshot"
+    );
+    socket
+        .send(Message::Text(
+            json!({
+                "type": "input",
+                "data": "i=0; while [ $i -lt 30000 ]; do printf 'flow-%05d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n' \"$i\"; i=$((i+1)); done; printf 'flow-control-end\\n'\r"
+            })
+            .to_string(),
+        ))
+        .map_err(|error| error.to_string())?;
+
+    let mut unacked_bytes = 0_usize;
+    while unacked_bytes <= 256_000 {
+        let frame = read_json_frame(&mut socket, Duration::from_secs(8))?;
+        if frame["type"] == "data" {
+            unacked_bytes += frame["data"].as_str().unwrap_or("").len();
+        }
+    }
+    let paused_read = http_json(
+        &record,
+        "POST",
+        "/api/sessions/read",
+        Some(json!({ "key": "proj-t1:shell" })),
+    )?;
+    assert!(
+        !paused_read.to_string().contains("flow-control-end"),
+        "reader should pause before draining the whole command without ACK"
+    );
+
+    socket
+        .send(Message::Text(
+            json!({ "type": "ack", "bytes": unacked_bytes }).to_string(),
+        ))
+        .map_err(|error| error.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        let frame = read_json_frame(&mut socket, Duration::from_secs(1))?;
+        if frame["type"] != "data" {
+            continue;
+        }
+        let data = frame["data"].as_str().unwrap_or("");
+        socket
+            .send(Message::Text(
+                json!({ "type": "ack", "bytes": data.len() }).to_string(),
+            ))
+            .map_err(|error| error.to_string())?;
+        if data.contains("flow-control-end") {
+            let _ = socket.close(None);
+            return Ok(());
+        }
+    }
+    Err("timed out waiting for flow-control-end after ACK".to_string())
 }
 
 fn run_shutdown_smoke(state_dir: &Path, child: &mut std::process::Child) -> Result<(), String> {
