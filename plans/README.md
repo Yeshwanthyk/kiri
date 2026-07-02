@@ -64,6 +64,107 @@ MCP polling/divergence at the source; schedule as a deliberate follow-up.
   dedup). Do 010 first unless committing to 011 immediately.
 - 009 is independent of 010/011 (different subsystem).
 
+## Session / terminal / codex reliability audit (2026-07-01)
+
+A dedicated audit of the flows behind "spawning new terminals is buggy, codex
+threads don't map, threads respawn, long-running sessions break, sessions/
+projects respawn on switch." Six parallel research passes (session lifecycle,
+codex thread mapping, terminal/daemon, project moves, browser, and the
+scratchpad/knowledge/todos/hooks/titles feature surface) plus a study of the
+**cmux** project (`github.com/manaflow-ai/cmux`) for how it uses agent hooks to
+make Codex/Claude session detection deterministic. Category: bugfix +
+architecture + feature. These are larger and more numerous than the perf audit
+above; work them by priority, not strictly in number order.
+
+| Plan | Title | Priority | Effort | Risk | Depends on | Status |
+|---|---|---|---|---|---|---|
+| [012](012-terminal-daemon-pty-lifecycle.md) | Stop killing & double-spawning long-running PTYs (runtime idle-kill, WS-attach dedup gap in 010, cross-process daemon lock, daemon RAM/disk leaks) | P1 | M | MED | soft: 010/011 | TODO |
+| [013](013-codex-thread-mapping-correctness.md) | Codex thread mapping: clear bindings on reset, re-register on steer, subagent-hook guard, concurrent same-cwd cross-map, fragile respawn classifier | P1 | M | MED | soft: 014 | TODO |
+| [014](014-agent-hooks-tightening.md) | Agent hooks tightening (cmux-informed): codex resume re-bind, fire-and-forget hooks, full Claude `--settings` hook bundle, PATH-shim wrappers, pid-anchored transcript | P1 | L | MED | — | TODO |
+| [015](015-session-state-machine-hardening.md) | Session state machine: stuck `blocked` / dead `answerQuestion`, archive-vs-in-flight-turn race, per-read FS-walk cost, no hard-delete growth | P2 | M | MED | — | TODO |
+| [016](016-browser-resource-lifecycle.md) | Browser resource lifecycle: hide-don't-destroy across project/dialog switch, DOM overlays behind native view, focus handoff | P1 | M | MED | pairs with 009 | TODO |
+| [017](017-todos-titles-scratchpad-knowledge.md) | Deterministic auto-titles, TodoWrite capture + cross-session todo view, scratchpad titles, knowledge UI/CRUD/RAG | P1 | L | MED | 014 (hook signals) | TODO |
+| [018](018-workspace-project-switch-move.md) | Workspace hygiene: project-delete shell PTY leak, positional "selected" drift, hide drops tab layout; scopes why real cross-project "move" doesn't exist | P2 | M | MED | coord 012/015/016 | TODO |
+
+Order and dependencies:
+- **012, 013, 014 are the P1 core** of the codex/terminal reliability story and
+  reinforce each other. **014 is load-bearing**: its deterministic hook signals
+  (resume re-bind, fire-and-forget, pid-anchored transcript) are the *principled*
+  fix for several 013 items (subagent-hook clobber, concurrent cross-map) and the
+  signal source for 017 (titles/todos). 013 also ships tactical DB/in-memory fixes
+  that stand alone. Either can start; if doing both, land 014's resume re-bind
+  before 013's reset-cleanup so they compose.
+- **A-KILL is the highest-leverage single fix**: the embedded terminal server
+  idle-kills *runtime* PTYs 5 min after you switch away from a session (only the
+  opt-in daemon excludes runtime). It is the amplifier that forces every fragile
+  resume/respawn path constantly — 012 owns it and it unblocks the felt pain in
+  013/016/018. Do it first.
+- **016 pairs with 009**: 009's chord forwarding + 016's focus handoff and
+  overlay-bounds-hide are the same browser-focus story; sequence them together.
+  016's E1.1 additionally covers the project-*hide* case only after 018's
+  Step 3 (H5) lands — `resourcesByProject` is built from visible projects
+  only (correction from the 2026-07-02 re-audit; see both plans' text).
+- **017 depends on 014** for reliable todo/title signals (Claude has zero hooks
+  today, so TodoWrite is never captured and titles rely on the model choosing to
+  call `session.rename`). 017's knowledge UI/CRUD is independent and can ship
+  anytime.
+- **018** is mostly independent P2 hygiene; coordinate its delete-ordering step
+  with 015's archive-path fix, and it explicitly defers the "move a session
+  between projects" feature (the id is `${projectId}-${slot}` and immutable across
+  6+ tables/keys — a schema-level project, not a bugfix).
+
+The cmux hooks study (why per-invocation PATH-shim wrappers + a full lifecycle
+hook set beat Kiri's current single blocking codex `SessionStart` hook and its
+zero Claude hooks) is written up inline in plan 014's "Why this matters".
+
+## Supacode / zmx terminal study (2026-07-02)
+
+Question asked: can Kiri use the terminal supacode
+(`github.com/supabitapp/supacode`) uses, instead of xterm? **Answer: no for
+the emulator, yes for the persistence layer.** Supacode embeds Ghostty
+natively (GhosttyKit / `ghostty_surface_t` into AppKit `NSView`s, Metal,
+plus local Ghostty patches) — there is no Electron/DOM path for that, and
+Kiri's server additionally depends on `@xterm/headless` + `SerializeAddon`
+as the source of truth for scrollback restore, `terminal.read`, `wait-for`,
+and wake delivery, so xterm would remain server-side even after a renderer
+swap. The two adoptable techniques became plans 019 and 020. Neat twist:
+zmx's in-daemon emulator IS `ghostty-vt` — adopting it (plan 020) brings
+Ghostty's VT engine into Kiri as the durable session-state keeper, just not
+as the renderer.
+
+The same session re-audited plans 012–018 against HEAD (`1fa5160`) with
+parallel codex drift auditors; all seven survived with corrections folded
+into their text: 012 (daemon writes runtime snapshots nothing reads — now
+eliminated at the source), 013 (`requireUnique` short-circuit analysis;
+review-path generation race; hook-handler write order), 014 (PATH is
+*prepended*, shim-ordering caution), 015 (archive guard extended to the full
+projection surface), 016 (`resourcesByProject` is visible-projects-only —
+soft dep on 018 H5), 018 (H4 must reconcile with the client's localStorage
+selection restore; H6 partially documented already). One auditor finding was
+rejected: `task-progress.tsx`'s remount key omitting task status is
+intentional (preserves expanded UI state), not a bug.
+
+Ship-gate review on 2026-07-02 added two executor-safety corrections:
+012's spawn singleflight must resize joined callers to their requested
+`cols`/`rows` and test mismatched geometry; 014 owns Claude hook writers,
+`kirictl claude-hook`, and `agent.tasks.replace`, while 017 only consumes the
+resulting Claude task rows.
+
+| Plan | Title | Priority | Effort | Risk | Depends on | Status |
+|---|---|---|---|---|---|---|
+| [019](019-osc-agent-presence.md) | Terminal-stream agent presence via OSC 3008: hooks `printf` to their own tty, the server-side headless xterm parses per-PTY (deterministic status, zero process spawn, SSH-safe, supacode-format-compatible) | P2 | M | MED | soft: 014 (hook registration), 011 (daemon-mode delivery) | TODO |
+| [020](020-zmx-durable-terminal-sessions.md) | Durable terminal sessions via zmx (evaluate + prototype): wrap PTY launches in `zmx attach` so agents survive backend restart/crash; would supersede the kiriterm daemon on GO | P2 | L | MED-HIGH | coord 010/011/012 — land 012's A-KILL regardless | TODO |
+
+- **020 is the strategic track, 012 the tactical one.** 012 is small and
+  relieves pain now; run 020's spike after (or alongside, different files).
+  If 020's decision gate is GO, a follow-up plan retires the kiriterm daemon
+  and 012's daemon-only steps (3/5/6).
+- **019 complements 014** rather than replacing it: OSC becomes the transport
+  for the small, frequent status events; `kirictl` remains for SessionStart
+  resume-binding and TodoWrite payloads. Per-PTY attribution also covers the
+  hand-typed invocations 014 Step 4's shim explicitly cannot bind, and picks
+  up presence from supacode-installed hooks for free.
+
 ## Findings considered and rejected
 
 Recorded so future audits don't re-litigate them:
