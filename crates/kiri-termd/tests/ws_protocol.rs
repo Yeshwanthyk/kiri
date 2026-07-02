@@ -59,6 +59,23 @@ fn persisted_shell_snapshot_restores_after_daemon_restart() {
     result.expect("restart restore smoke should pass");
 }
 
+#[test]
+fn detached_shell_session_is_idle_killed_after_timeout() {
+    let state_dir = temp_state_dir();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", &state_dir)
+        .env("KIRI_TERM_IDLE_KILL_MS", "250")
+        .spawn()
+        .expect("kiri-termd should spawn");
+
+    let result = run_idle_kill_smoke(&state_dir);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&state_dir);
+
+    result.expect("idle kill smoke should pass");
+}
+
 fn with_daemon(run: impl FnOnce(&Path) -> Result<(), String>) {
     let state_dir = temp_state_dir();
     let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
@@ -578,6 +595,45 @@ fn run_restart_restore_smoke(
     let _ = second.kill();
     let _ = second.wait();
     second_result
+}
+
+fn run_idle_kill_smoke(state_dir: &Path) -> Result<(), String> {
+    let record = wait_record(state_dir)?;
+    post_upsert(&record, state_dir)?;
+    let url = format!(
+        "ws://{}:{}{}?agentId=agent-t1&mode=shell&cols=80&rows=24&token={}",
+        record["host"].as_str().unwrap(),
+        record["port"].as_u64().unwrap(),
+        record["path"].as_str().unwrap(),
+        record["token"].as_str().unwrap()
+    );
+    let (mut socket, _) = connect(&url).map_err(|error| error.to_string())?;
+    assert_eq!(
+        read_json_frame(&mut socket, Duration::from_secs(5))?["type"],
+        "snapshot"
+    );
+    socket.close(None).map_err(|error| error.to_string())?;
+
+    std::thread::sleep(Duration::from_millis(125));
+    let (mut reattached, _) = connect(&url).map_err(|error| error.to_string())?;
+    assert_eq!(
+        read_json_frame(&mut reattached, Duration::from_secs(5))?["type"],
+        "snapshot"
+    );
+    std::thread::sleep(Duration::from_millis(350));
+    let still_live = http_json(&record, "GET", "/api/sessions", None)?;
+    assert_eq!(still_live["sessions"].as_array().unwrap().len(), 1);
+    reattached.close(None).map_err(|error| error.to_string())?;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let sessions = http_json(&record, "GET", "/api/sessions", None)?;
+        if sessions["sessions"].as_array().unwrap().is_empty() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err("detached shell session was not idle-killed".to_string())
 }
 
 fn wait_child_exit_and_record_removed(

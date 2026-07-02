@@ -42,12 +42,14 @@ use tracing::{error, warn};
 const DAEMON_PATH: &str = "/terminal";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_RECENT_OUTPUT_BYTES: usize = 64_000;
+const DEFAULT_IDLE_KILL_MS: u64 = 5 * 60 * 1000;
 
 #[derive(Clone)]
 struct AppState {
     token: String,
     record_path: PathBuf,
     sessions_dir: PathBuf,
+    idle_kill_ms: u64,
     shutdown: CancellationToken,
     sessions: Arc<RwLock<HashMap<String, Arc<Session>>>>,
     generations: Arc<RwLock<HashMap<String, u64>>>,
@@ -72,6 +74,7 @@ struct Session {
     last_output_at_ms: AtomicU64,
     recent_output: Mutex<Vec<OutputChunk>>,
     attached_clients: AtomicUsize,
+    idle_epoch: AtomicU64,
     tx: broadcast::Sender<SessionEvent>,
 }
 
@@ -266,6 +269,7 @@ async fn main() -> Result<()> {
         token: token.clone(),
         record_path: state_dir.join("daemon.json"),
         sessions_dir,
+        idle_kill_ms: idle_kill_ms(),
         shutdown: shutdown.clone(),
         sessions: Arc::new(RwLock::new(HashMap::new())),
         generations: Arc::new(RwLock::new(HashMap::new())),
@@ -758,6 +762,7 @@ async fn handle_socket(state: AppState, query: TerminalQuery, socket: WebSocket)
     {
         return;
     }
+    session.idle_epoch.fetch_add(1, Ordering::SeqCst);
     session.attached_clients.fetch_add(1, Ordering::SeqCst);
 
     let output_task = tokio::spawn(async move {
@@ -807,7 +812,9 @@ async fn handle_socket(state: AppState, query: TerminalQuery, socket: WebSocket)
             }
         }
     }
-    session.attached_clients.fetch_sub(1, Ordering::SeqCst);
+    if session.attached_clients.fetch_sub(1, Ordering::SeqCst) == 1 {
+        schedule_idle_kill(state, session.clone());
+    }
     output_task.abort();
 }
 
@@ -919,6 +926,7 @@ fn spawn_shell_session(
             last_output_at_ms: AtomicU64::new(epoch_ms() as u64),
             recent_output: Mutex::new(Vec::new()),
             attached_clients: AtomicUsize::new(0),
+            idle_epoch: AtomicU64::new(0),
             tx,
         },
         reader,
@@ -999,6 +1007,7 @@ async fn resize_session_to(session: &Session, cols: u16, rows: u16) -> Result<()
 
 async fn kill_session_process(state: &AppState, session: &Session) {
     session.exited.store(true, Ordering::SeqCst);
+    session.idle_epoch.fetch_add(1, Ordering::SeqCst);
     let _ = session.child.lock().await.kill();
     let _ = session.tx.send(SessionEvent::Exit {
         message: "terminal process exited".to_string(),
@@ -1006,10 +1015,28 @@ async fn kill_session_process(state: &AppState, session: &Session) {
     remove_session_from_registry(state, &session.key).await;
 }
 
+fn schedule_idle_kill(state: AppState, session: Arc<Session>) {
+    if session.mode != "shell" || session.exited.load(Ordering::SeqCst) {
+        return;
+    }
+    let epoch = session.idle_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(state.idle_kill_ms)).await;
+        if session.idle_epoch.load(Ordering::SeqCst) != epoch
+            || session.attached_clients.load(Ordering::SeqCst) != 0
+            || session.exited.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        kill_session_process(&state, &session).await;
+    });
+}
+
 async fn close_all_sessions(state: &AppState) {
     let sessions: Vec<_> = state.sessions.read().await.values().cloned().collect();
     for session in sessions {
         session.exited.store(true, Ordering::SeqCst);
+        session.idle_epoch.fetch_add(1, Ordering::SeqCst);
         let _ = session.child.lock().await.kill();
         let _ = session.tx.send(SessionEvent::Exit {
             message: "terminal process exited".to_string(),
@@ -1414,6 +1441,13 @@ fn state_dir() -> PathBuf {
                 .unwrap_or_else(|| PathBuf::from("."));
             home.join(".kiri").join("kiriterm")
         })
+}
+
+fn idle_kill_ms() -> u64 {
+    env::var("KIRI_TERM_IDLE_KILL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_IDLE_KILL_MS)
 }
 
 async fn wait_for_shutdown(shutdown: CancellationToken) {
