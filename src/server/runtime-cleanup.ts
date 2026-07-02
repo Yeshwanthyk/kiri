@@ -123,9 +123,8 @@ function deleteSessionAndCleanupRuntime<Result>(
   const session = dependencies.findSession(input.agentId)
   if (!session) throw new Error(`Session not found: ${input.agentId}`)
 
-  const result = dependencies.deleteSession(input)
   throwCleanupErrors(cleanupRuntimeSessions([session], dependencies))
-  return result
+  return dependencies.deleteSession(input)
 }
 
 function findActiveSessionForRuntimeCleanup(agentId: string) {

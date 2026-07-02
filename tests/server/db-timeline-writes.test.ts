@@ -10,9 +10,12 @@ import { insertProject } from '../../src/server/db/projects'
 import { insertSessionRow } from '../../src/server/db/sessions'
 import {
   appendUserMessageRow,
-  recordRuntimeMessages,
   recordPiLiveMessages,
   recordPiProjectionMessages,
+  recordRuntimeMessageRow,
+  recordRuntimeMessages,
+  recordRuntimeTimelineEventRow,
+  replaceAgentTasksRows,
 } from '../../src/server/db/timeline-writes'
 
 type DbFixture = {
@@ -265,6 +268,81 @@ describe('timeline write repository', () => {
           .prepare('SELECT session_file AS sessionFile FROM agent_slots WHERE id = ?')
           .get(fixture.agentId),
       ).toEqual({ sessionFile: '/tmp/claude.jsonl' })
+    } finally {
+      closeFixture(fixture)
+    }
+  })
+
+  it('ignores stale runtime writes for archived agents', () => {
+    const fixture = createFixture()
+    try {
+      const eventCountBefore = fixture.database
+        .prepare('SELECT COUNT(*) AS count FROM timeline_events WHERE thread_id = ?')
+        .get(fixture.threadId)
+      const taskCountBefore = fixture.database
+        .prepare('SELECT COUNT(*) AS count FROM agent_tasks WHERE thread_id = ?')
+        .get(fixture.threadId)
+      fixture.database
+        .prepare('UPDATE agent_slots SET archived_at = ? WHERE id = ?')
+        .run('2026-01-03T00:00:00.000Z', fixture.agentId)
+
+      recordRuntimeMessageRow(fixture.database, {
+        agentId: fixture.agentId,
+        id: 'message-1',
+        role: 'assistant',
+        text: 'Late answer',
+        timestamp: '2026-01-03T00:00:01.000Z',
+      })
+      recordRuntimeMessages(fixture.database, {
+        agentId: fixture.agentId,
+        sessionFile: '/tmp/archived.jsonl',
+        messages: [{
+          id: 'message-2',
+          role: 'assistant',
+          text: 'Late batch answer',
+          timestamp: '2026-01-03T00:00:02.000Z',
+        }],
+      })
+      recordRuntimeTimelineEventRow(fixture.database, {
+        agentId: fixture.agentId,
+        kind: 'tool',
+        tone: 'tool',
+        label: 'Ran command',
+        timestamp: '2026-01-03T00:00:03.000Z',
+      })
+      replaceAgentTasksRows(fixture.database, {
+        agentId: fixture.agentId,
+        source: 'codex',
+        tasks: [{
+          id: 'task-1',
+          title: 'Late task',
+          status: 'inProgress',
+          source: 'codex',
+          updatedAt: '2026-01-03T00:00:04.000Z',
+        }],
+      })
+
+      expect(readMessages(fixture.database, fixture.threadId)).toEqual([])
+      expect(
+        fixture.database
+          .prepare('SELECT preview, message_count AS messageCount FROM threads WHERE id = ?')
+          .get(fixture.threadId),
+      ).toEqual({ preview: 'Ready.', messageCount: 0 })
+      expect(
+        fixture.database
+          .prepare('SELECT COUNT(*) AS count FROM timeline_events WHERE thread_id = ?')
+          .get(fixture.threadId),
+      ).toEqual(eventCountBefore)
+      expect(
+        fixture.database
+          .prepare('SELECT COUNT(*) AS count FROM agent_tasks WHERE thread_id = ?')
+          .get(fixture.threadId),
+      ).toEqual(taskCountBefore)
+      expect(
+        fixture.database
+          .prepare('SELECT session_file AS sessionFile FROM agent_slots WHERE id = ?')
+          .get(fixture.agentId),
+      ).toEqual({ sessionFile: null })
     } finally {
       closeFixture(fixture)
     }

@@ -173,7 +173,7 @@ describe('runtime cleanup use-cases', () => {
     }
   })
 
-  it('cleans a session runtime only after session delete succeeds', () => {
+  it('cleans a session runtime before archiving the session', () => {
     const calls: string[] = []
 
     const result = deleteSessionSummaryWithRuntimeCleanup({ agentId: 'agent-1' }, {
@@ -210,9 +210,9 @@ describe('runtime cleanup use-cases', () => {
     expect(result.archivedAt).toBe('2026-01-01T00:00:01.000Z')
     expect(calls).toEqual([
       'find:agent-1',
-      'delete:agent-1',
       'forget:codex:agent-1',
       'terminal:agent-1',
+      'delete:agent-1',
     ])
   })
 
@@ -239,13 +239,13 @@ describe('runtime cleanup use-cases', () => {
     expect(result).toBe(emptyWorkspaceSnapshot)
     expect(calls).toEqual([
       'find:agent-1',
-      'delete:agent-1',
       'forget:pi:agent-1',
       'terminal:agent-1',
+      'delete:agent-1',
     ])
   })
 
-  it('surfaces cleanup failures after session delete has succeeded', () => {
+  it('surfaces cleanup failures before archiving the session', () => {
     const calls: string[] = []
 
     expect(() =>
@@ -283,13 +283,12 @@ describe('runtime cleanup use-cases', () => {
 
     expect(calls).toEqual([
       'find:agent-1',
-      'delete:agent-1',
       'forget:codex:agent-1',
       'terminal:agent-1',
     ])
   })
 
-  it('does not stop a session runtime when session delete fails', () => {
+  it('surfaces archive failures after the session runtime has stopped', () => {
     const calls: string[] = []
 
     expect(() =>
@@ -311,7 +310,12 @@ describe('runtime cleanup use-cases', () => {
       }),
     ).toThrow('Archive failed')
 
-    expect(calls).toEqual(['find:agent-1', 'delete:agent-1'])
+    expect(calls).toEqual([
+      'find:agent-1',
+      'forget:pi:agent-1',
+      'terminal:agent-1',
+      'delete:agent-1',
+    ])
   })
 
   it('does not stop a runtime when the session cannot be found', () => {

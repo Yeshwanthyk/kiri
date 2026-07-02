@@ -69,6 +69,13 @@ export function getAgentRuntimeState(database: DatabaseSync, agentId: string) {
   return parseAgentRuntimeStateJson(row?.runtimeStateJson, agentId)
 }
 
+export function isAgentArchived(database: DatabaseSync, agentId: string) {
+  const row = database
+    .prepare('SELECT archived_at AS archivedAt FROM agent_slots WHERE id = ?')
+    .get(agentId) as { archivedAt: string | null } | undefined
+  return row?.archivedAt !== undefined && row.archivedAt !== null
+}
+
 export function parseAgentRuntimeStateJson(
   json: string | null | undefined,
   agentId: string,
@@ -91,7 +98,14 @@ export function setAgentRuntimeState(
   state: Record<string, unknown>,
 ) {
   database
-    .prepare('UPDATE agent_slots SET runtime_state_json = ?, runtime_state_updated_at = ? WHERE id = ?')
+    .prepare(
+      `
+        UPDATE agent_slots
+        SET runtime_state_json = ?, runtime_state_updated_at = ?
+        WHERE id = ?
+          AND archived_at IS NULL
+      `,
+    )
     .run(JSON.stringify(state), new Date().toISOString(), agentId)
 }
 
@@ -166,7 +180,14 @@ export function setAgentPendingQuestion(
 
 export function clearAgentRuntimeState(database: DatabaseSync, agentId: string) {
   database
-    .prepare('UPDATE agent_slots SET runtime_state_json = NULL, runtime_state_updated_at = ? WHERE id = ?')
+    .prepare(
+      `
+        UPDATE agent_slots
+        SET runtime_state_json = NULL, runtime_state_updated_at = ?
+        WHERE id = ?
+          AND archived_at IS NULL
+      `,
+    )
     .run(new Date().toISOString(), agentId)
 }
 
@@ -177,11 +198,15 @@ export function setAgentStatus(
 ) {
   const parsed = agentStatusSchema.parse(status)
   const row = database
-    .prepare('SELECT status FROM agent_slots WHERE id = ?')
-    .get(agentId) as { status: AgentStatus } | undefined
+    .prepare('SELECT status, archived_at AS archivedAt FROM agent_slots WHERE id = ?')
+    .get(agentId) as { status: AgentStatus; archivedAt: string | null } | undefined
+  if (!row || row.archivedAt !== null) return
   const previousStatus = row?.status
-  database.prepare('UPDATE agent_slots SET status = ? WHERE id = ?').run(parsed, agentId)
+  const result = database
+    .prepare('UPDATE agent_slots SET status = ? WHERE id = ? AND archived_at IS NULL')
+    .run(parsed, agentId)
   if (previousStatus && previousStatus !== parsed) {
+    if (result.changes === 0) return
     appendAgentEvent(database, {
       agentId,
       type: 'agent.status.changed',
@@ -195,6 +220,7 @@ export function upsertAgentContextUsage(
   input: ContextUsageInput,
 ) {
   if (input.usedTokens === undefined) return
+  if (isAgentArchived(database, input.agentId)) return
   database
     .prepare(
       `

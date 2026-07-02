@@ -13,7 +13,7 @@ import {
 import { appendAgentEvent } from './agent-events'
 import type { PiSessionProjection } from '../pi-jsonl'
 import type { PiRpcEvent, PiRpcMessage } from '../pi-rpc'
-import { upsertAgentContextUsage } from './runtime-state'
+import { isAgentArchived, upsertAgentContextUsage } from './runtime-state'
 import {
   eventId,
   normalizeUnixTimestamp,
@@ -76,6 +76,7 @@ export function recordRuntimeMessageRow(
 ) {
   const text = input.text.trim()
   if (!text) return
+  if (isAgentArchived(database, input.agentId)) return
 
   const threadId = ensureThreadForAgent(database, input.agentId, undefined)
   const timestamp = input.timestamp ?? new Date().toISOString()
@@ -125,6 +126,7 @@ export function recordRuntimeMessagesInTransaction(
     readonly sessionFile?: string
   },
 ) {
+  if (isAgentArchived(database, input.agentId)) return
   if (input.messages.length === 0) {
     if (!input.sessionFile) return
     database
@@ -183,6 +185,7 @@ export function recordRuntimeTimelineEventRow(
     readonly timestamp?: string
   },
 ) {
+  if (isAgentArchived(database, input.agentId)) return
   const threadId = ensureThreadForAgent(database, input.agentId, undefined)
   const timestamp = input.timestamp ?? new Date().toISOString()
   const payload = {
@@ -224,6 +227,7 @@ export function replaceAgentTasksRows(
     readonly updatedAt?: string
   },
 ) {
+  if (isAgentArchived(database, input.agentId)) return
   const threadId = ensureThreadForAgent(database, input.agentId, undefined)
   const updatedAt = input.updatedAt ?? new Date().toISOString()
   withTransaction(database, () => {
@@ -248,6 +252,7 @@ export function recordPiProjectionMessages(
     readonly projection: PiSessionProjection
   },
 ) {
+  if (isAgentArchived(database, input.agentId)) return
   const thread = requireActiveThread(database, input.agentId)
   withTransaction(database, () => {
     database
@@ -291,6 +296,7 @@ export function recordPiLiveMessages(
     readonly sessionFile?: string
   },
 ) {
+  if (isAgentArchived(database, input.agentId)) return
   const thread = requireActiveThread(database, input.agentId)
   const insertMessage = database.prepare(`
     INSERT OR IGNORE INTO messages (id, thread_id, role, text, timestamp)
@@ -362,6 +368,7 @@ export function recordPiTimelineEventRow(
     readonly event: PiRpcEvent
   },
 ) {
+  if (isAgentArchived(database, input.agentId)) return
   const thread = requireActiveThread(database, input.agentId)
   const event = piEventToTimelineEvent(input.agentId, input.event)
   if (!event) return
@@ -397,6 +404,7 @@ export function recordAgentInfoEventRow(
     readonly timestamp?: string
   },
 ) {
+  if (isAgentArchived(database, input.agentId)) return
   const timestamp = input.timestamp ?? new Date().toISOString()
   const thread = requireActiveThread(database, input.agentId)
   const payload = {
@@ -460,6 +468,7 @@ export function hydrateProjectionMessages(
   agentId: string,
   projection: Pick<PiSessionProjection, 'preview' | 'updatedAt' | 'messages'>,
 ) {
+  if (isAgentArchived(database, agentId)) return
   const threadId = ensureThreadForAgent(database, agentId, projection)
   const projectedPrefix = `pi-jsonl-${agentId}-`
   const existingMessages = existingThreadMessages(database, threadId, agentId)

@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from 'effect'
 import {
   appendUserMessage,
   clearRuntimeContextUsage,
+  isAgentArchived,
   recordRuntimeContextUsage,
   recordRuntimeMessage,
   recordRuntimeTimelineEvent,
@@ -27,7 +28,10 @@ function makeDbRuntimeProjector(): RuntimeLifecycleProjection {
   }
 }
 
-function projectRuntimeEventToDb(event: RuntimeProjectionEvent) {
+export function projectRuntimeEventToDb(event: RuntimeProjectionEvent) {
+  const agentId = projectionAgentId(event)
+  if (agentId && isAgentArchived(agentId)) return
+
   if (event.type === 'status') {
     setAgentStatus(event.agentId, event.status)
     return
@@ -78,6 +82,11 @@ function projectRuntimeEventToDb(event: RuntimeProjectionEvent) {
   if (event.type === 'fileOperationStarted' || event.type === 'fileOperationCompleted') {
     recordRuntimeTimelineEvent(fileOperationTimelineEvent(event))
   }
+}
+
+function projectionAgentId(event: RuntimeProjectionEvent) {
+  if ('agentId' in event) return event.agentId
+  return event.value.agentId
 }
 
 function fileOperationTimelineEvent(

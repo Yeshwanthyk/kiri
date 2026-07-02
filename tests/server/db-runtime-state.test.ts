@@ -13,6 +13,7 @@ import {
   getAgentLaunchConfig,
   getAgentRuntimeState,
   getAgentThinkingLevel,
+  isAgentArchived,
   queueAgentTerminalInput,
   readContextUsage,
   readPendingQuestion,
@@ -232,6 +233,60 @@ describe('runtime state repository', () => {
       expect(() => getAgentLaunchConfig(database, agentId)).toThrow(
         `Agent not found: ${agentId}`,
       )
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('ignores runtime state, pending question, status, and context writes for archived agents', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-runtime-archived-writes-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const agentId = insertSessionRow(database, {
+        projectId,
+        runtime: 'codex',
+        interfaceMode: 'gui',
+        model: 'codex-model',
+        sessionDirForSlot: (slot) => join(root, slot),
+      })
+      setAgentRuntimeState(database, agentId, { threadId: 'thread-1' })
+      database
+        .prepare('UPDATE agent_slots SET archived_at = ? WHERE id = ?')
+        .run('2026-01-01T00:00:00.000Z', agentId)
+
+      expect(isAgentArchived(database, agentId)).toBe(true)
+
+      setAgentRuntimeState(database, agentId, { threadId: 'thread-2' })
+      setAgentPendingQuestion(database, agentId, {
+        requestId: 'request-1',
+        questions: [{
+          id: 'q1',
+          header: 'Confirm',
+          question: 'Proceed?',
+          options: [],
+          multiSelect: false,
+        }],
+      })
+      clearAgentRuntimeState(database, agentId)
+      setAgentStatus(database, agentId, 'running')
+      upsertAgentContextUsage(database, { agentId, usedTokens: 75 })
+
+      expect(getAgentRuntimeState(database, agentId)).toEqual({ threadId: 'thread-1' })
+      expect(readPendingQuestion(database, agentId)).toBeNull()
+      expect(
+        database.prepare('SELECT status FROM agent_slots WHERE id = ?').get(agentId),
+      ).toEqual({ status: 'idle' })
+      expect(
+        database.prepare('SELECT COUNT(*) AS count FROM agent_context_usage WHERE agent_id = ?').get(agentId),
+      ).toEqual({ count: 0 })
+      expect(
+        database.prepare('SELECT COUNT(*) AS count FROM agent_events WHERE agent_id = ?').get(agentId),
+      ).toEqual({ count: 0 })
     } finally {
       database.close()
       rmSync(root, { recursive: true, force: true })

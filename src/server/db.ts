@@ -79,6 +79,7 @@ import {
   getAgentLaunchConfig as getAgentLaunchConfigFromDb,
   getAgentRuntimeState as getAgentRuntimeStateFromDb,
   getAgentThinkingLevel as getAgentThinkingLevelFromDb,
+  isAgentArchived as isAgentArchivedInDb,
   queueAgentTerminalInput as queueAgentTerminalInputInDb,
   requeueAgentTerminalInputs as requeueAgentTerminalInputsInDb,
   readContextUsage,
@@ -543,6 +544,10 @@ export function getAgentLaunchConfig(agentId: string) {
 
 export function getAgentRuntimeState(agentId: string) {
   return getAgentRuntimeStateFromDb(getDb(), agentId)
+}
+
+export function isAgentArchived(agentId: string) {
+  return isAgentArchivedInDb(getDb(), agentId)
 }
 
 export function setAgentRuntimeState(agentId: string, state: Record<string, unknown>) {
