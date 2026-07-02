@@ -6,6 +6,7 @@ import {
   idDbRowSchema,
   sessionSummaryDbRowSchema,
 } from './schema'
+import { compactSessionTitle } from './session-title'
 import { forgetPiHydrationStamp } from './session-operations'
 import { withTransaction } from './transaction'
 
@@ -25,6 +26,8 @@ type InsertSessionInput = {
   readonly now?: () => string
   readonly slotTimestampMs?: () => number
   readonly slotSuffix?: () => string
+  readonly titleSetManually?: boolean
+  readonly sourceScratchpadId?: string
 }
 
 type RenameSessionInput = {
@@ -113,6 +116,8 @@ export function insertSessionRow(database: DatabaseSync, input: InsertSessionInp
     .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM agent_slots WHERE project_id = ?')
     .get(projectId) as { position: number }
   const title = input.title?.trim() || `Session ${nextPosition.position + 1}`
+  const titleSetManually = input.titleSetManually ?? Boolean(input.title?.trim())
+  const sourceScratchpadId = input.sourceScratchpadId?.trim() || null
 
   let lastCollision: unknown
   const maxAttempts = input.slotSuffix ? 1 : 5
@@ -129,9 +134,10 @@ export function insertSessionRow(database: DatabaseSync, input: InsertSessionInp
           .prepare(
             `
               INSERT INTO agent_slots (
-                id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, position
+                id, project_id, slot, title, runtime, interface_mode, model, status,
+                session_dir, session_file, title_set_manually, source_scratchpad_id, position
               )
-              VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, NULL, ?)
+              VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, NULL, ?, ?, ?)
             `,
           )
           .run(
@@ -143,6 +149,8 @@ export function insertSessionRow(database: DatabaseSync, input: InsertSessionInp
             input.interfaceMode,
             input.model,
             sessionDir,
+            titleSetManually ? 1 : 0,
+            sourceScratchpadId,
             nextPosition.position,
           )
         database
@@ -299,7 +307,30 @@ export function renameSessionRow(database: DatabaseSync, input: RenameSessionInp
   if (!row) throw new Error(`Session not found: ${agentId}`)
   assertStartedSession(row.slot, 'renamed')
 
-  database.prepare('UPDATE agent_slots SET title = ? WHERE id = ?').run(title, agentId)
+  database
+    .prepare('UPDATE agent_slots SET title = ?, title_set_manually = 1 WHERE id = ?')
+    .run(title, agentId)
+  return agentId
+}
+
+export function autoRenameSessionRow(
+  database: DatabaseSync,
+  input: {
+    readonly agentId: string
+    readonly preview?: string
+    readonly fallback?: string
+  },
+) {
+  const agentId = input.agentId.trim()
+  const row = database
+    .prepare('SELECT id, title, title_set_manually AS titleSetManually FROM agent_slots WHERE id = ?')
+    .get(agentId) as { id: string; title: string; titleSetManually: number } | undefined
+  if (!row || row.titleSetManually === 1) return undefined
+  const title = compactSessionTitle(input.preview, input.fallback ?? row.title)
+  if (!title || title === row.title) return row.id
+  database
+    .prepare('UPDATE agent_slots SET title = ? WHERE id = ?')
+    .run(title, agentId)
   return agentId
 }
 

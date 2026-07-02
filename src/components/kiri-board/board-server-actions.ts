@@ -4,14 +4,17 @@ import * as React from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import {
   addProjectMutation,
+  addKnowledgeEntryMutation,
   addScratchpadBlockMutation,
   answerQuestionMutation,
   chooseProjectDirectoryMutation,
   deleteProjectMutation,
+  deleteKnowledgeEntryMutation,
   deleteScratchpadBlockMutation,
   deleteSessionMutation,
   fetchWorkspaceSnapshot,
   fetchWorkspaceRevision,
+  fetchKnowledgeEntries,
   forkSessionMutation,
   hideProjectMutation,
   interruptMessageMutation,
@@ -30,21 +33,25 @@ import {
   startSessionMutation,
   steerMessageMutation,
   triggerScratchpadBlockMutation,
+  updateKnowledgeEntryMutation,
   unhideProjectMutation,
 } from '~/server/workspace'
 
 export function useBoardServerActions() {
   const addProject = useServerFn(addProjectMutation)
+  const addKnowledgeEntry = useServerFn(addKnowledgeEntryMutation)
   const addScratchpadBlock = useServerFn(addScratchpadBlockMutation)
   const answerQuestion = useServerFn(answerQuestionMutation)
   const chooseProjectDirectory = useServerFn(chooseProjectDirectoryMutation)
   const deleteProject = useServerFn(deleteProjectMutation)
+  const deleteKnowledgeEntry = useServerFn(deleteKnowledgeEntryMutation)
   const deleteScratchpadBlock = useServerFn(deleteScratchpadBlockMutation)
   const deleteSession = useServerFn(deleteSessionMutation)
   const forkSession = useServerFn(forkSessionMutation)
   const hideProject = useServerFn(hideProjectMutation)
   const refreshWorkspace = useServerFn(fetchWorkspaceSnapshot)
   const refreshWorkspaceRevision = useServerFn(fetchWorkspaceRevision)
+  const listKnowledgeEntries = useServerFn(fetchKnowledgeEntries)
   const resetSession = useServerFn(resetSessionMutation)
   const restoreSession = useServerFn(restoreSessionMutation)
   const reviewSession = useServerFn(reviewSessionMutation)
@@ -61,6 +68,7 @@ export function useBoardServerActions() {
   const reorderProjects = useServerFn(reorderProjectsMutation)
   const startSession = useServerFn(startSessionMutation)
   const triggerScratchpadBlock = useServerFn(triggerScratchpadBlockMutation)
+  const updateKnowledgeEntry = useServerFn(updateKnowledgeEntryMutation)
   const unhideProject = useServerFn(unhideProjectMutation)
 
   const workspaceQueries = React.useMemo(() => ({
@@ -139,11 +147,24 @@ export function useBoardServerActions() {
     triggerScratchpadBlock,
   ])
 
+  const knowledgeMutations = React.useMemo(() => ({
+    addKnowledgeEntry,
+    deleteKnowledgeEntry,
+    listKnowledgeEntries,
+    updateKnowledgeEntry,
+  }), [
+    addKnowledgeEntry,
+    deleteKnowledgeEntry,
+    listKnowledgeEntries,
+    updateKnowledgeEntry,
+  ])
+
   return {
     workspaceQueries,
     preferenceMutations,
     sessionMutations,
     projectMutations,
     scratchpadMutations,
+    knowledgeMutations,
   }
 }

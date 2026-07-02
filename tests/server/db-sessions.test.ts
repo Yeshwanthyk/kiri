@@ -92,6 +92,16 @@ describe('session repository', () => {
           .prepare('SELECT session_dir AS sessionDir FROM agent_slots WHERE id = ?')
           .get(firstId),
       ).toEqual({ sessionDir: join(root, 'sessions', 'session-a-aaaaaa') })
+      expect(
+        database
+          .prepare('SELECT title_set_manually AS titleSetManually FROM agent_slots WHERE id = ?')
+          .get(firstId),
+      ).toEqual({ titleSetManually: 1 })
+      expect(
+        database
+          .prepare('SELECT title_set_manually AS titleSetManually FROM agent_slots WHERE id = ?')
+          .get(secondId),
+      ).toEqual({ titleSetManually: 0 })
       expect(listSessionSummaries(database, { projectId }).map((session) => session.id)).toEqual([
         secondId,
         firstId,
@@ -115,6 +125,11 @@ describe('session repository', () => {
 
       renameSessionRow(database, { agentId: firstId, title: '  Renamed  ' })
       expect(requireSessionSummary(database, firstId).title).toBe('Renamed')
+      expect(
+        database
+          .prepare('SELECT title_set_manually AS titleSetManually FROM agent_slots WHERE id = ?')
+          .get(firstId),
+      ).toEqual({ titleSetManually: 1 })
 
       archiveSessionRow(database, firstId)
       expect(() => requireSessionSummary(database, firstId)).toThrow(

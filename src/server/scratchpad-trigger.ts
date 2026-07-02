@@ -81,6 +81,8 @@ export type ScratchpadTriggerDependencies = {
     readonly model?: string
     readonly title?: string
     readonly thinkingLevel?: ThinkingLevel
+    readonly titleSetManually?: boolean
+    readonly sourceScratchpadId?: string
   }) => string
   readonly markScratchpadBlockTriggered: (id: string, agentId: string) => void
   readonly listSessionSummaries: (input: { readonly includeArchived: true }) => readonly TriggerScratchpadSession[]
@@ -171,29 +173,38 @@ async function triggerScratchpadSessionWithDeps(
     model: input.model,
     title: input.title,
     thinkingLevel: input.thinkingLevel,
+    titleSetManually: false,
+    sourceScratchpadId: input.id,
   })
 
-  try {
-    dependencies.markScratchpadBlockTriggered(input.id, agentId)
-  } catch (error) {
-    try {
-      dependencies.archiveSessionSummary({ agentId })
-    } catch {
-      // The mark failure is the primary signal; cleanup is best effort.
-    }
-    throw error
-  }
-
   if (interfaceMode === 'terminal') {
-    dependencies.queueAgentTerminalInput({
-      agentId,
-      text: block.body,
-      submit: true,
-    })
-    if (dependencies.spawnTerminalOnTrigger) {
-      await dependencies.pasteAgentRuntimeTerminal({ agentId }).catch((error) => {
-        dependencies.reportPromptFailure(error)
+    try {
+      dependencies.queueAgentTerminalInput({
+        agentId,
+        text: block.body,
+        submit: true,
       })
+      if (dependencies.spawnTerminalOnTrigger) {
+        await dependencies.pasteAgentRuntimeTerminal({ agentId })
+      }
+    } catch (error) {
+      try {
+        dependencies.archiveSessionSummary({ agentId })
+      } catch {
+        // The delivery failure is the primary signal; cleanup is best effort.
+      }
+      dependencies.reportPromptFailure(error)
+      throw error
+    }
+    try {
+      dependencies.markScratchpadBlockTriggered(input.id, agentId)
+    } catch (error) {
+      try {
+        dependencies.archiveSessionSummary({ agentId })
+      } catch {
+        // The mark failure is the primary signal; cleanup is best effort.
+      }
+      throw error
     }
   } else {
     try {
@@ -208,6 +219,16 @@ async function triggerScratchpadSessionWithDeps(
         // The prompt failure is the primary signal; cleanup is best effort.
       }
       dependencies.reportPromptFailure(error)
+      throw error
+    }
+    try {
+      dependencies.markScratchpadBlockTriggered(input.id, agentId)
+    } catch (error) {
+      try {
+        dependencies.archiveSessionSummary({ agentId })
+      } catch {
+        // The mark failure is the primary signal; cleanup is best effort.
+      }
       throw error
     }
   }

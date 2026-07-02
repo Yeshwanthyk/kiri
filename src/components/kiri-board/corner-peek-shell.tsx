@@ -2,18 +2,18 @@
 
 import * as React from 'react'
 import { X } from 'lucide-react'
-import type { AgentCell, ProjectRow } from '~/lib/contracts'
+import type { AgentCell, KnowledgeAddInput, KnowledgeEntry, ProjectRow } from '~/lib/contracts'
 import type { SidebarTab } from './board-types'
 import { CornerPeek } from './corner-peek'
 import { ResourceStage } from './resource-stage'
 import { ResourceTabStrip } from './resource-tab-strip'
 import {
   collectBrowserResources,
-  type BrowserResource,
   type ProjectResource,
   type ResourceId,
 } from './resource-tabs'
 import { ScratchpadHeader, ScratchpadPanel } from './scratchpad'
+import { KnowledgeHeader, KnowledgePanel } from './knowledge-panel'
 
 type StageProps = React.ComponentProps<typeof ResourceStage>
 
@@ -35,6 +35,8 @@ type CornerPeekShellProps = Omit<
   readonly resources: readonly ProjectResource[]
   readonly activeResourceId: ResourceId | null
   readonly scratchpadOpen: boolean
+  readonly knowledgeOpen: boolean
+  readonly knowledgeEntries: readonly KnowledgeEntry[]
   readonly hydrated: boolean
   readonly browserAvailable: boolean
   readonly resourcesByProject: Record<string, {
@@ -52,6 +54,10 @@ type CornerPeekShellProps = Omit<
   readonly onEnsureBrowser: (projectId: string) => void
   readonly onOpenScratchpad: () => void
   readonly onCloseScratchpad: () => void
+  readonly onOpenKnowledge: () => void
+  readonly onCloseKnowledge: () => void
+  readonly onCaptureKnowledge: (input: KnowledgeAddInput) => Promise<KnowledgeEntry>
+  readonly onDeleteKnowledge: (id: string) => Promise<void>
   readonly onStartSession: () => void
   readonly onOpenProjects: (returnFocusElement?: HTMLElement | null) => void
   readonly onOpenSettings: () => void
@@ -66,6 +72,8 @@ export function CornerPeekShell({
   resources,
   activeResourceId,
   scratchpadOpen,
+  knowledgeOpen,
+  knowledgeEntries,
   hydrated,
   browserAvailable,
   resourcesByProject,
@@ -80,6 +88,10 @@ export function CornerPeekShell({
   onEnsureBrowser,
   onOpenScratchpad,
   onCloseScratchpad,
+  onOpenKnowledge,
+  onCloseKnowledge,
+  onCaptureKnowledge,
+  onDeleteKnowledge,
   onStartSession,
   onOpenProjects,
   onOpenSettings,
@@ -131,6 +143,7 @@ export function CornerPeekShell({
         browserAvailable={browserAvailable}
         onAddBrowser={() => onEnsureBrowser(selectedProject.id)}
         onOpenScratchpad={onOpenScratchpad}
+        onOpenKnowledge={onOpenKnowledge}
         onStartSession={onStartSession}
       />
 
@@ -195,6 +208,43 @@ export function CornerPeekShell({
               onCapture={stageProps.onCaptureBlock}
               onDelete={stageProps.onDeleteBlock}
               onTrigger={stageProps.onTriggerBlock}
+            />
+          </section>
+        </>
+      ) : null}
+      {knowledgeOpen ? (
+        <>
+          <button
+            type="button"
+            className="scratchpad-float-scrim"
+            aria-label="Close knowledge"
+            onClick={onCloseKnowledge}
+          />
+          <section
+            className="scratchpad-float"
+            role="dialog"
+            aria-label="Knowledge"
+            data-testid="knowledge-float"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') onCloseKnowledge()
+            }}
+          >
+            <button
+              type="button"
+              className="scratchpad-float-close"
+              aria-label="Close knowledge"
+              data-testid="knowledge-float-close"
+              onClick={onCloseKnowledge}
+            >
+              <X size={15} aria-hidden="true" />
+            </button>
+            <KnowledgeHeader entryCount={knowledgeEntries.length} />
+            <KnowledgePanel
+              entries={knowledgeEntries}
+              projects={projects}
+              selectedProjectId={selectedProject.id}
+              onCapture={onCaptureKnowledge}
+              onDelete={onDeleteKnowledge}
             />
           </section>
         </>

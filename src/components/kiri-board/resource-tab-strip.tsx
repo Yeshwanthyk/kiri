@@ -1,6 +1,6 @@
 'use client'
 
-import { Globe2, NotebookPen, Plus, X } from 'lucide-react'
+import { BookOpen, Globe2, NotebookPen, Plus, X } from 'lucide-react'
 import * as React from 'react'
 import type { AgentResource, ProjectResource, ResourceId } from './resource-tabs'
 
@@ -17,6 +17,7 @@ type ResourceTabStripProps = {
   readonly browserAvailable: boolean
   readonly onAddBrowser: () => void
   readonly onOpenScratchpad: () => void
+  readonly onOpenKnowledge: () => void
   readonly onStartSession: () => void
 }
 
@@ -33,6 +34,7 @@ export function ResourceTabStrip({
   browserAvailable,
   onAddBrowser,
   onOpenScratchpad,
+  onOpenKnowledge,
   onStartSession,
 }: ResourceTabStripProps) {
   const tabResources = resources.filter((resource): resource is AgentResource => resource.kind === 'agent')
@@ -272,6 +274,10 @@ export function ResourceTabStrip({
         <button type="button" onClick={onOpenScratchpad} aria-label="Open scratchpad">
           <NotebookPen size={14} aria-hidden="true" />
           scratchpad
+        </button>
+        <button type="button" onClick={onOpenKnowledge} aria-label="Open knowledge">
+          <BookOpen size={14} aria-hidden="true" />
+          knowledge
         </button>
       </div>
     </div>

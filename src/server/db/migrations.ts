@@ -29,6 +29,8 @@ export function migrate(database: DatabaseSync) {
       runtime_state_json TEXT,
       runtime_state_updated_at TEXT,
       archived_at TEXT,
+      title_set_manually INTEGER NOT NULL DEFAULT 0,
+      source_scratchpad_id TEXT REFERENCES scratchpad_blocks(id) ON DELETE SET NULL,
       position INTEGER NOT NULL
     );
 
@@ -110,6 +112,16 @@ export function migrate(database: DatabaseSync) {
 
     CREATE INDEX IF NOT EXISTS scratchpad_blocks_created_at
       ON scratchpad_blocks(created_at);
+
+    CREATE TABLE IF NOT EXISTS scratchpad_block_triggers (
+      id TEXT PRIMARY KEY,
+      block_id TEXT NOT NULL REFERENCES scratchpad_blocks(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+      triggered_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS scratchpad_block_triggers_block
+      ON scratchpad_block_triggers(block_id, triggered_at DESC);
 
     CREATE TABLE IF NOT EXISTS knowledge_entries (
       id TEXT PRIMARY KEY,
@@ -200,7 +212,10 @@ export function migrate(database: DatabaseSync) {
   addRuntimeStateUpdatedAtColumn(database)
   addAgentArchivedAtColumn(database)
   addAgentInterfaceModeColumn(database)
+  addAgentTitleSetManuallyColumn(database)
+  addAgentSourceScratchpadColumn(database)
   addAgentEventsTable(database)
+  addScratchpadBlockTriggersTable(database)
   addKnowledgeIndexTables(database)
   addReadModelEntriesTable(database)
   widenReadModelKindCheck(database)
@@ -310,6 +325,22 @@ function addAgentInterfaceModeColumn(database: DatabaseSync) {
   database.exec("ALTER TABLE agent_slots ADD COLUMN interface_mode TEXT NOT NULL DEFAULT 'gui'")
 }
 
+function addAgentTitleSetManuallyColumn(database: DatabaseSync) {
+  const columns = database
+    .prepare('PRAGMA table_info(agent_slots)')
+    .all() as Array<{ name: string }>
+  if (columns.some((column) => column.name === 'title_set_manually')) return
+  database.exec('ALTER TABLE agent_slots ADD COLUMN title_set_manually INTEGER NOT NULL DEFAULT 0')
+}
+
+function addAgentSourceScratchpadColumn(database: DatabaseSync) {
+  const columns = database
+    .prepare('PRAGMA table_info(agent_slots)')
+    .all() as Array<{ name: string }>
+  if (columns.some((column) => column.name === 'source_scratchpad_id')) return
+  database.exec('ALTER TABLE agent_slots ADD COLUMN source_scratchpad_id TEXT REFERENCES scratchpad_blocks(id) ON DELETE SET NULL')
+}
+
 function addAgentEventsTable(database: DatabaseSync) {
   database.exec(`
     CREATE TABLE IF NOT EXISTS agent_events (
@@ -324,6 +355,20 @@ function addAgentEventsTable(database: DatabaseSync) {
 
     CREATE INDEX IF NOT EXISTS agent_events_agent_sequence
       ON agent_events(agent_id, sequence);
+  `)
+}
+
+function addScratchpadBlockTriggersTable(database: DatabaseSync) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS scratchpad_block_triggers (
+      id TEXT PRIMARY KEY,
+      block_id TEXT NOT NULL REFERENCES scratchpad_blocks(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+      triggered_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS scratchpad_block_triggers_block
+      ON scratchpad_block_triggers(block_id, triggered_at DESC);
   `)
 }
 
@@ -393,6 +438,8 @@ function widenAgentSlotsRuntimeCheck(database: DatabaseSync) {
   const runtimeStateJson = columns.has('runtime_state_json') ? 'runtime_state_json' : 'NULL'
   const runtimeStateUpdatedAt = columns.has('runtime_state_updated_at') ? 'runtime_state_updated_at' : 'NULL'
   const archivedAt = columns.has('archived_at') ? 'archived_at' : 'NULL'
+  const titleSetManually = columns.has('title_set_manually') ? 'title_set_manually' : '0'
+  const sourceScratchpadId = columns.has('source_scratchpad_id') ? 'source_scratchpad_id' : 'NULL'
 
   database.exec(`
     PRAGMA foreign_keys = OFF;
@@ -413,13 +460,15 @@ function widenAgentSlotsRuntimeCheck(database: DatabaseSync) {
       runtime_state_json TEXT,
       runtime_state_updated_at TEXT,
       archived_at TEXT,
+      title_set_manually INTEGER NOT NULL DEFAULT 0,
+      source_scratchpad_id TEXT REFERENCES scratchpad_blocks(id) ON DELETE SET NULL,
       position INTEGER NOT NULL
     );
 
     INSERT INTO agent_slots (
-      id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, runtime_state_json, runtime_state_updated_at, archived_at, position
+      id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, runtime_state_json, runtime_state_updated_at, archived_at, title_set_manually, source_scratchpad_id, position
     )
-    SELECT id, project_id, slot, title, runtime, ${interfaceMode}, model, status, session_dir, session_file, ${runtimeStateJson}, ${runtimeStateUpdatedAt}, ${archivedAt}, position
+    SELECT id, project_id, slot, title, runtime, ${interfaceMode}, model, status, session_dir, session_file, ${runtimeStateJson}, ${runtimeStateUpdatedAt}, ${archivedAt}, ${titleSetManually}, ${sourceScratchpadId}, position
     FROM agent_slots_old;
 
     DROP TABLE agent_slots_old;

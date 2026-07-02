@@ -11,6 +11,7 @@ import {
   messageRoleSchema,
 } from '~/lib/contracts'
 import { appendAgentEvent } from './agent-events'
+import { deriveSessionTitleFrom } from './session-title'
 import type { PiSessionProjection } from '../pi-jsonl'
 import type { PiRpcEvent, PiRpcMessage } from '../pi-rpc'
 import { isAgentArchived, upsertAgentContextUsage } from './runtime-state'
@@ -81,6 +82,9 @@ export function recordRuntimeMessageRow(
   const threadId = ensureThreadForAgent(database, input.agentId, undefined)
   const timestamp = input.timestamp ?? new Date().toISOString()
   const existing = readMessage(database, input.id)
+  const shouldAutoTitle = input.role === 'assistant' &&
+    existing === undefined &&
+    !hasAssistantMessage(database, threadId)
   withTransaction(database, () => {
     database
       .prepare(
@@ -102,6 +106,13 @@ export function recordRuntimeMessageRow(
       existing,
     })
     updateThreadSummary(database, threadId, input.role === 'assistant' ? text : null, timestamp)
+    if (shouldAutoTitle) {
+      maybeAutoTitleSession(database, {
+        agentId: input.agentId,
+        preview: text,
+        tasks: [],
+      })
+    }
   })
 }
 
@@ -139,6 +150,7 @@ export function recordRuntimeMessagesInTransaction(
     messages: input.messages,
     updatedAt: input.messages.at(-1)?.timestamp,
   })
+  const hadAssistantMessage = hasAssistantMessage(database, threadId)
   const insertMessage = database.prepare(`
     INSERT INTO messages (id, thread_id, role, text, timestamp)
     VALUES (?, ?, ?, ?, ?)
@@ -147,6 +159,7 @@ export function recordRuntimeMessagesInTransaction(
       text = excluded.text,
       timestamp = excluded.timestamp
   `)
+  let firstAssistantPreview: string | undefined
   for (const message of input.messages) {
     const text = message.text.trim()
     if (!text) continue
@@ -159,6 +172,9 @@ export function recordRuntimeMessagesInTransaction(
       timestamp: message.timestamp,
       existing,
     })
+    if (!hadAssistantMessage && firstAssistantPreview === undefined && message.role === 'assistant') {
+      firstAssistantPreview = text
+    }
   }
   updateThreadSummary(
     database,
@@ -170,6 +186,13 @@ export function recordRuntimeMessagesInTransaction(
     database
       .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
       .run(input.sessionFile, input.agentId)
+  }
+  if (firstAssistantPreview) {
+    maybeAutoTitleSession(database, {
+      agentId: input.agentId,
+      preview: firstAssistantPreview,
+      tasks: [],
+    })
   }
 }
 
@@ -237,6 +260,11 @@ export function replaceAgentTasksRows(
       tasks: input.tasks,
       updatedAt,
     })
+    maybeAutoTitleSession(database, {
+      agentId: input.agentId,
+      preview: currentThreadPreview(database, threadId),
+      tasks: input.tasks,
+    })
     database
       .prepare('UPDATE threads SET updated_at = ? WHERE id = ?')
       .run(updatedAt, threadId)
@@ -254,6 +282,7 @@ export function recordPiProjectionMessages(
 ) {
   if (isAgentArchived(database, input.agentId)) return
   const thread = requireActiveThread(database, input.agentId)
+  const hadAssistantMessage = hasAssistantMessage(database, thread.id)
   withTransaction(database, () => {
     database
       .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
@@ -276,6 +305,13 @@ export function recordPiProjectionMessages(
       tasks: input.projection.tasks,
       updatedAt: input.projection.updatedAt ?? new Date().toISOString(),
     })
+    if (!hadAssistantMessage) {
+      maybeAutoTitleSession(database, {
+        agentId: input.agentId,
+        preview: input.projection.preview,
+        tasks: input.projection.tasks,
+      })
+    }
     upsertAgentContextUsage(database, {
       agentId: input.agentId,
       usedTokens: input.projection.contextUsedTokens,
@@ -298,6 +334,7 @@ export function recordPiLiveMessages(
 ) {
   if (isAgentArchived(database, input.agentId)) return
   const thread = requireActiveThread(database, input.agentId)
+  const hadAssistantMessage = hasAssistantMessage(database, thread.id)
   const insertMessage = database.prepare(`
     INSERT OR IGNORE INTO messages (id, thread_id, role, text, timestamp)
     VALUES (?, ?, ?, ?, ?)
@@ -357,6 +394,13 @@ export function recordPiLiveMessages(
       database
         .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
         .run(input.sessionFile, input.agentId)
+    }
+    if (!hadAssistantMessage && preview) {
+      maybeAutoTitleSession(database, {
+        agentId: input.agentId,
+        preview,
+        tasks: [],
+      })
     }
   })
 }
@@ -470,6 +514,7 @@ export function hydrateProjectionMessages(
 ) {
   if (isAgentArchived(database, agentId)) return
   const threadId = ensureThreadForAgent(database, agentId, projection)
+  const hadAssistantMessage = hasAssistantMessage(database, threadId)
   const projectedPrefix = `pi-jsonl-${agentId}-`
   const existingMessages = existingThreadMessages(database, threadId, agentId)
   const existingById = new Map(existingMessages.map((message) => [message.id, message]))
@@ -513,6 +558,42 @@ export function hydrateProjectionMessages(
     projection.preview || projection.messages.at(-1)?.text || null,
     projection.updatedAt ?? projection.messages.at(-1)?.timestamp,
   )
+  if (!hadAssistantMessage) {
+    maybeAutoTitleSession(database, {
+      agentId,
+      preview: projection.preview || projection.messages.at(-1)?.text,
+      tasks: [],
+    })
+  }
+}
+
+function maybeAutoTitleSession(
+  database: DatabaseSync,
+  input: {
+    readonly agentId: string
+    readonly preview: string | undefined
+    readonly tasks: readonly AgentTask[]
+  },
+) {
+  const row = database
+    .prepare('SELECT title, title_set_manually AS titleSetManually FROM agent_slots WHERE id = ?')
+    .get(input.agentId) as { title: string; titleSetManually: number } | undefined
+  if (!row || row.titleSetManually === 1) return
+  const title = deriveSessionTitleFrom(input.preview, input.tasks, row.title)
+  if (!title || title === row.title) return
+  database.prepare('UPDATE agent_slots SET title = ? WHERE id = ?').run(title, input.agentId)
+}
+
+function hasAssistantMessage(database: DatabaseSync, threadId: string) {
+  return Boolean(database
+    .prepare("SELECT 1 AS present FROM messages WHERE thread_id = ? AND role = 'assistant' LIMIT 1")
+    .get(threadId))
+}
+
+function currentThreadPreview(database: DatabaseSync, threadId: string) {
+  return (database
+    .prepare('SELECT preview FROM threads WHERE id = ?')
+    .get(threadId) as { preview: string } | undefined)?.preview
 }
 
 function readMessage(database: DatabaseSync, id: string) {

@@ -1,5 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { createServerFn } from '@tanstack/react-start'
+import { z } from 'zod'
 import {
   addProjectInputSchema,
   addScratchpadBlockInputSchema,
@@ -12,6 +13,10 @@ import {
   forkSessionInputSchema,
   hideProjectInputSchema,
   interruptMessageInputSchema,
+  knowledgeAddInputSchema,
+  knowledgeListInputSchema,
+  knowledgeMarkSeenInputSchema,
+  knowledgeUpdateInputSchema,
   resetSessionInputSchema,
   reorderProjectsInputSchema,
   reviewSessionInputSchema,
@@ -140,6 +145,22 @@ export const terminalConfigQuery = createServerFn({ method: 'GET' })
 export const startSessionMutation = createServerFn({ method: 'POST' })
   .inputValidator(startSessionInputSchema)
   .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.startSession(data)))
+
+export const fetchKnowledgeEntries = createServerFn({ method: 'GET' })
+  .inputValidator(knowledgeListInputSchema)
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.listKnowledge(data)))
+
+export const addKnowledgeEntryMutation = createServerFn({ method: 'POST' })
+  .inputValidator(knowledgeAddInputSchema)
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.addKnowledge(data)))
+
+export const updateKnowledgeEntryMutation = createServerFn({ method: 'POST' })
+  .inputValidator(knowledgeUpdateInputSchema)
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.updateKnowledge(data)))
+
+export const deleteKnowledgeEntryMutation = createServerFn({ method: 'POST' })
+  .inputValidator(z.object({ id: knowledgeMarkSeenInputSchema.shape.id }))
+  .handler(async ({ data }) => runWorkspaceServiceMethod((workspace) => workspace.deleteKnowledge(data)))
 
 export const addScratchpadBlockMutation = createServerFn({ method: 'POST' })
   .inputValidator(addScratchpadBlockInputSchema)

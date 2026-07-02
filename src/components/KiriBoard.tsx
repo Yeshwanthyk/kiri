@@ -10,6 +10,7 @@ import { AgentSwitcherSheet, MobileTopBar } from './kiri-board/board-navigation'
 import { useBoardKeyboardShortcuts } from './kiri-board/board-keyboard-shortcuts'
 import { useBoardPreferences } from './kiri-board/board-preferences'
 import { useBoardProjectActions } from './kiri-board/board-project-actions'
+import { useBoardKnowledgeActions } from './kiri-board/board-knowledge-actions'
 import { useBoardScratchpadActions } from './kiri-board/board-scratchpad-actions'
 import { useBoardSelection } from './kiri-board/board-selection'
 import { useBoardServerActions } from './kiri-board/board-server-actions'
@@ -36,6 +37,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
   const [tab, setTab] = React.useState<SidebarTab>('chat')
   const [cornerPeekHeld, setCornerPeekHeld] = React.useState(false)
   const [scratchpadOpen, setScratchpadOpen] = React.useState(false)
+  const [knowledgeOpen, setKnowledgeOpen] = React.useState(false)
   const [browserAvailable, setBrowserAvailable] = React.useState(false)
   const projectManagerReturnFocusRef = React.useRef<HTMLElement | null>(null)
   const previousProjectManagerOpenRef = React.useRef(false)
@@ -79,6 +81,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     sessionMutations,
     projectMutations,
     scratchpadMutations,
+    knowledgeMutations,
   } = useBoardServerActions()
   const {
     workspace,
@@ -286,6 +289,14 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     runWorkspaceMutation,
     selectAgent,
     setTab,
+  })
+  const {
+    handleCaptureKnowledge,
+    handleDeleteKnowledge,
+  } = useBoardKnowledgeActions({
+    mutations: knowledgeMutations,
+    applyWorkspace,
+    refreshWorkspace,
   })
 
   const browserOverlayOpen = commandPaletteOpen ||
@@ -567,6 +578,8 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         resources={projectResources.activeProjectResources?.resources ?? []}
         activeResourceId={activeResourceId}
         scratchpadOpen={scratchpadOpen}
+        knowledgeOpen={knowledgeOpen}
+        knowledgeEntries={workspace.knowledgeEntries ?? []}
         hydrated={hydrated}
         browserAvailable={browserAvailable}
         browserOverlayOpen={browserOverlayOpen}
@@ -586,6 +599,10 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         }}
         onOpenScratchpad={() => setScratchpadOpen(true)}
         onCloseScratchpad={() => setScratchpadOpen(false)}
+        onOpenKnowledge={() => setKnowledgeOpen(true)}
+        onCloseKnowledge={() => setKnowledgeOpen(false)}
+        onCaptureKnowledge={handleCaptureKnowledge}
+        onDeleteKnowledge={handleDeleteKnowledge}
         onStartSession={() => openSessionLauncher()}
         onOpenProjects={openProjectManagerWithReturnFocus}
         onOpenSettings={openSettings}

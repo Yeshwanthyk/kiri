@@ -4,8 +4,10 @@ import { z } from 'zod'
 import type {
   KnowledgeAddInput,
   KnowledgeEntry,
+  KnowledgeListInput,
   KnowledgeMarkSeenInput,
   KnowledgeSearchInput,
+  KnowledgeUpdateInput,
 } from '~/lib/contracts'
 
 import {
@@ -53,6 +55,35 @@ export function searchKnowledgeEntries(
     .map(({ entry }) => entry)
 }
 
+export function listKnowledgeEntries(
+  database: DatabaseSync,
+  input: KnowledgeListInput = {},
+): KnowledgeEntry[] {
+  const projectId = input.projectId?.trim() || null
+  if (projectId) assertProjectExists(database, projectId)
+  return database
+    .prepare(
+      `
+        SELECT
+          id,
+          project_id AS projectId,
+          title,
+          problem,
+          answer,
+          tags_json AS tagsJson,
+          created_at AS createdAt,
+          updated_at AS updatedAt,
+          last_seen_at AS lastSeenAt,
+          seen_count AS seenCount
+        FROM knowledge_entries
+        WHERE (? IS NULL OR project_id = ?)
+        ORDER BY updated_at DESC, id DESC
+      `,
+    )
+    .all(projectId, projectId)
+    .map(entryFromRow)
+}
+
 export function addKnowledgeEntry(
   database: DatabaseSync,
   input: KnowledgeAddInput & { readonly projectId: string },
@@ -82,6 +113,37 @@ export function addKnowledgeEntry(
       now,
     )
   return requireKnowledgeEntry(database, id)
+}
+
+export function updateKnowledgeEntry(
+  database: DatabaseSync,
+  input: KnowledgeUpdateInput,
+): KnowledgeEntry {
+  const entry = requireKnowledgeEntry(database, input.id)
+  const now = new Date().toISOString()
+  database
+    .prepare(
+      `
+        UPDATE knowledge_entries
+        SET title = ?, problem = ?, answer = ?, tags_json = ?, updated_at = ?
+        WHERE id = ?
+      `,
+    )
+    .run(
+      input.title,
+      input.problem,
+      input.answer,
+      JSON.stringify(input.tags),
+      now,
+      entry.id,
+    )
+  return requireKnowledgeEntry(database, entry.id)
+}
+
+export function deleteKnowledgeEntry(database: DatabaseSync, id: string): KnowledgeEntry {
+  const entry = requireKnowledgeEntry(database, id)
+  database.prepare('DELETE FROM knowledge_entries WHERE id = ?').run(entry.id)
+  return entry
 }
 
 export function markKnowledgeEntrySeen(

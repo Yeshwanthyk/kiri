@@ -151,6 +151,7 @@ function workspaceWithProjects(
       triggeredAt: null,
       triggeredAgentId: null,
     }],
+    knowledgeEntries: [],
     selected: { projectId: '', agentId: '' },
   }
 }

@@ -98,6 +98,7 @@ export function ScratchpadPanel({
     overrides?: {
       runtime?: RuntimeKind
       interfaceMode?: SessionInterfaceMode
+      title?: string
     },
   ) => Promise<void>
 }) {
@@ -174,6 +175,7 @@ export function ScratchpadPanel({
       await onTrigger(block, {
         runtime: triggerRuntime,
         interfaceMode: selectedTriggerInterfaceMode,
+        title: titleFromScratchpadBody(block.body),
       })
       dispatch({
         type: 'noticeShown',
@@ -377,6 +379,12 @@ export function ScratchpadPanel({
       </div>
     </div>
   )
+}
+
+function titleFromScratchpadBody(body: string) {
+  const title = body.replace(/\s+/g, ' ').trim()
+  if (!title) return undefined
+  return title.length > 44 ? `${title.slice(0, 41)}...` : title
 }
 
 export function groupBlocksByDay(blocks: ScratchpadBlock[]) {

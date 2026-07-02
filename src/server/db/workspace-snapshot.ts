@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type {
   KiriSettings,
+  KnowledgeEntry,
   ScratchpadBlock,
   WorkspaceRevision,
   WorkspaceSnapshot,
@@ -27,6 +28,7 @@ type ReadWorkspaceSnapshotInput = {
   readonly settings: KiriSettings
   readonly preferences: UiPreferences
   readonly scratchpadBlocks: ScratchpadBlock[]
+  readonly knowledgeEntries?: KnowledgeEntry[]
 }
 
 type ReadWorkspaceRevisionInput = {
@@ -177,6 +179,7 @@ export function readWorkspaceSnapshot(
     hiddenProjects,
     archivedSessions,
     scratchpadBlocks: input.scratchpadBlocks,
+    knowledgeEntries: input.knowledgeEntries ?? [],
     selected: {
       projectId: selectedProject?.id ?? '',
       agentId: selectedAgent?.id ?? '',
@@ -261,6 +264,17 @@ export function readWorkspaceRevision(
           char(31)
         ), '') AS marker
       FROM scratchpad_blocks
+    `).get(),
+    knowledgeEntries: database.prepare(`
+      SELECT
+        COUNT(*) AS rowCount,
+        COALESCE(SUM(LENGTH(title) + LENGTH(problem) + LENGTH(answer) + LENGTH(tags_json)), 0) AS bodyBytes,
+        COALESCE(MAX(updated_at), '') AS updatedAt,
+        COALESCE(GROUP_CONCAT(
+          id || ':' || project_id || ':' || updated_at || ':' || seen_count,
+          char(31)
+        ), '') AS marker
+      FROM knowledge_entries
     `).get(),
   }))
   return workspaceRevisionSchema.parse({ revision: hash.digest('hex') })

@@ -308,6 +308,7 @@ export const workspaceSnapshotSchema = z.object({
   hiddenProjects: z.array(projectRowSchema),
   archivedSessions: z.array(archivedSessionSummarySchema).default([]),
   scratchpadBlocks: z.array(scratchpadBlockSchema).default([]),
+  knowledgeEntries: z.array(knowledgeEntrySchema).optional().default([]),
   selected: z.object({
     projectId: z.string(),
     agentId: z.string(),
@@ -609,6 +610,11 @@ export const knowledgeSearchInputSchema = z.object({
 })
 export type KnowledgeSearchInput = z.infer<typeof knowledgeSearchInputSchema>
 
+export const knowledgeListInputSchema = z.object({
+  projectId: z.string().trim().min(1).optional(),
+})
+export type KnowledgeListInput = z.infer<typeof knowledgeListInputSchema>
+
 export const knowledgeAddInputSchema = z.object({
   projectId: z.string().trim().min(1).optional(),
   title: z.string().trim().min(1).max(240),
@@ -618,10 +624,31 @@ export const knowledgeAddInputSchema = z.object({
 })
 export type KnowledgeAddInput = z.infer<typeof knowledgeAddInputSchema>
 
+export const knowledgeUpdateInputSchema = knowledgeAddInputSchema
+  .omit({ projectId: true })
+  .extend({
+    id: z.string().trim().min(1),
+  })
+export type KnowledgeUpdateInput = z.infer<typeof knowledgeUpdateInputSchema>
+
 export const knowledgeMarkSeenInputSchema = z.object({
   id: z.string().trim().min(1),
 })
 export type KnowledgeMarkSeenInput = z.infer<typeof knowledgeMarkSeenInputSchema>
+
+export const taskListInputSchema = z.object({
+  projectId: z.string().trim().min(1).optional(),
+  includeArchived: z.boolean().default(false),
+})
+export type TaskListInput = z.infer<typeof taskListInputSchema>
+
+export const taskListItemSchema = z.object({
+  agentId: z.string(),
+  agentTitle: z.string(),
+  projectId: z.string(),
+  tasks: z.array(agentTaskSchema),
+})
+export type TaskListItem = z.infer<typeof taskListItemSchema>
 
 export const kiriReadOperations = [
   'operations.list',
@@ -631,6 +658,8 @@ export const kiriReadOperations = [
   'session.list',
   'agent.detail',
   'agent.events.list',
+  'task.list',
+  'knowledge.list',
   'knowledge.search',
   'scratchpad.list',
   'terminal.read',
@@ -660,6 +689,8 @@ export const kiriWriteOperations = [
   'terminal.spawn',
   'terminal.kill',
   'knowledge.add',
+  'knowledge.update',
+  'knowledge.delete',
   'knowledge.markSeen',
   'scratchpad.add',
   'scratchpad.delete',

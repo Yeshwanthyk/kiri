@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { AddScratchpadBlockInput } from '~/lib/contracts'
 
 import { scratchpadBlockDbRowSchema } from './schema'
+import { withTransaction } from './transaction'
 
 export function listScratchpadBlocks(
   database: DatabaseSync,
@@ -69,15 +70,41 @@ export function markScratchpadBlockTriggered(
 ) {
   const id = blockId.trim()
   if (!id) throw new Error('Block id is required')
-  database
+  const triggeredAt = new Date().toISOString()
+  withTransaction(database, () => {
+    database
+      .prepare(
+        `
+          UPDATE scratchpad_blocks
+          SET triggered_at = ?, triggered_agent_id = ?
+          WHERE id = ?
+        `,
+      )
+      .run(triggeredAt, agentId, id)
+    database
+      .prepare(
+        `
+          INSERT INTO scratchpad_block_triggers (id, block_id, agent_id, triggered_at)
+          VALUES (?, ?, ?, ?)
+        `,
+      )
+      .run(scratchpadTriggerId(id, agentId, triggeredAt), id, agentId, triggeredAt)
+  })
+}
+
+export function listScratchpadBlockTriggers(database: DatabaseSync, blockId: string) {
+  const id = blockId.trim()
+  if (!id) throw new Error('Block id is required')
+  return database
     .prepare(
       `
-        UPDATE scratchpad_blocks
-        SET triggered_at = ?, triggered_agent_id = ?
-        WHERE id = ?
+        SELECT block_id AS blockId, agent_id AS agentId, triggered_at AS triggeredAt
+        FROM scratchpad_block_triggers
+        WHERE block_id = ?
+        ORDER BY triggered_at ASC, id ASC
       `,
     )
-    .run(new Date().toISOString(), agentId, id)
+    .all(id) as Array<{ blockId: string; agentId: string; triggeredAt: string }>
 }
 
 export function getScratchpadBlock(database: DatabaseSync, id: string) {
@@ -100,4 +127,8 @@ export function getScratchpadBlock(database: DatabaseSync, id: string) {
     .get(id.trim())
   if (!row) return undefined
   return scratchpadBlockDbRowSchema.parse(row)
+}
+
+function scratchpadTriggerId(blockId: string, agentId: string, triggeredAt: string) {
+  return `trigger-${blockId}-${agentId}-${Date.parse(triggeredAt).toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }

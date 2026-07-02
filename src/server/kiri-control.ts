@@ -14,8 +14,10 @@ import type {
   KiriSettings,
   KnowledgeAddInput,
   KnowledgeEntry,
+  KnowledgeListInput,
   KnowledgeMarkSeenInput,
   KnowledgeSearchInput,
+  KnowledgeUpdateInput,
   ListAgentEventsInput,
   ListWorkflowRunsInput,
   ScratchpadBlock,
@@ -30,6 +32,8 @@ import type {
   TerminalTarget,
   TerminalWaitForInput,
   ThinkingLevel,
+  TaskListInput,
+  TaskListItem,
   WorkflowAwaitInput,
   WorkflowItemOperationInput,
   WorkflowRunOperationInput,
@@ -44,7 +48,11 @@ import {
   hideProjectSummary,
   listAgentEvents,
   addKnowledgeEntry,
+  deleteKnowledgeEntry,
+  listKnowledgeEntries,
+  listTasks,
   markKnowledgeEntrySeen,
+  updateKnowledgeEntry,
   listScratchpadBlocks,
   listProjectSummaries,
   listSessionSummaries,
@@ -166,6 +174,7 @@ export type KiriControlApi = {
   }) => ControlEffect<readonly SessionSummary[]>
   readonly agentDetail: (input: { readonly agentId: string; readonly limit?: number; readonly offset?: number }) => ControlEffect<AgentDetail>
   readonly listAgentEvents: (input: ListAgentEventsInput) => ControlEffect<readonly AgentEvent[]>
+  readonly listTasks: (input?: TaskListInput) => ControlEffect<readonly TaskListItem[]>
   readonly startSession: (input: StartSessionInput) => ControlEffect<SessionSummary>
   readonly spawnSession: (input: SpawnSessionInput) => ControlEffect<{
     readonly session: SessionSummary
@@ -223,8 +232,11 @@ export type KiriControlApi = {
   readonly listScratchpad: (input?: {
     readonly projectId?: string
   }) => ControlEffect<readonly ScratchpadBlock[]>
+  readonly listKnowledge: (input?: KnowledgeListInput) => ControlEffect<readonly KnowledgeEntry[]>
   readonly searchKnowledge: (input: KnowledgeSearchInput) => ControlEffect<readonly KnowledgeEntry[]>
   readonly addKnowledge: (input: KnowledgeAddInput) => ControlEffect<KnowledgeEntry>
+  readonly updateKnowledge: (input: KnowledgeUpdateInput) => ControlEffect<KnowledgeEntry>
+  readonly deleteKnowledge: (id: string) => ControlEffect<KnowledgeEntry>
   readonly markKnowledgeSeen: (input: KnowledgeMarkSeenInput) => ControlEffect<KnowledgeEntry>
   readonly addScratchpad: (input: AddScratchpadBlockInput) => ControlEffect<ScratchpadBlock>
   readonly deleteScratchpad: (id: string) => ControlEffect<ScratchpadBlock>
@@ -263,6 +275,7 @@ export type KiriControlDependencies = {
   }) => readonly SessionSummary[]
   readonly getAgentDetail: (input: { readonly agentId: string; readonly limit?: number; readonly offset?: number }) => AgentDetail
   readonly listAgentEvents: (input: ListAgentEventsInput) => readonly AgentEvent[]
+  readonly listTasks?: (input?: TaskListInput) => readonly TaskListItem[]
   readonly startSessionSummary: (input: StartSessionInput) => SessionSummary
   readonly renameSessionSummary: (input: {
     readonly agentId: string
@@ -287,8 +300,11 @@ export type KiriControlDependencies = {
   readonly listScratchpadBlocks: (input?: {
     readonly projectId?: string
   }) => readonly ScratchpadBlock[]
+  readonly listKnowledgeEntries?: (input?: KnowledgeListInput) => readonly KnowledgeEntry[]
   readonly searchKnowledgeEntries: (input: KnowledgeSearchInput & { readonly projectId: string }) => readonly KnowledgeEntry[]
   readonly addKnowledgeEntry: (input: KnowledgeAddInput & { readonly projectId: string }) => KnowledgeEntry
+  readonly updateKnowledgeEntry?: (input: KnowledgeUpdateInput) => KnowledgeEntry
+  readonly deleteKnowledgeEntry?: (id: string) => KnowledgeEntry
   readonly markKnowledgeEntrySeen: (input: KnowledgeMarkSeenInput) => KnowledgeEntry
   readonly addScratchpadBlockSummary: (input: AddScratchpadBlockInput) => ScratchpadBlock
   readonly deleteScratchpadBlockSummary: (id: string) => ScratchpadBlock
@@ -330,8 +346,12 @@ const liveKiriControlDependencies: KiriControlDependencies = {
   terminalControlRequest,
   callerAgentId: () => process.env.KIRI_AGENT_ID?.trim() || null,
   listScratchpadBlocks,
+  listKnowledgeEntries,
   searchKnowledgeEntries,
   addKnowledgeEntry,
+  updateKnowledgeEntry,
+  deleteKnowledgeEntry,
+  listTasks,
   markKnowledgeEntrySeen,
   addScratchpadBlockSummary,
   deleteScratchpadBlockSummary,
@@ -410,6 +430,12 @@ export function makeKiriControl(
   const listAgentEventsEffect = Effect.fn('KiriControl.listAgentEvents')(
     function* (input: ListAgentEventsInput) {
       return yield* fromSync(() => dependencies.listAgentEvents(input))
+    },
+  )
+
+  const listTasksEffect = Effect.fn('KiriControl.listTasks')(
+    function* (input: TaskListInput = { includeArchived: false }) {
+      return yield* fromSync(() => dependencies.listTasks?.(input) ?? [])
     },
   )
 
@@ -692,6 +718,16 @@ export function makeKiriControl(
     },
   )
 
+  const listKnowledge = Effect.fn('KiriControl.listKnowledge')(
+    function* (input: KnowledgeListInput = {}) {
+      return yield* fromSync(() =>
+        dependencies.listKnowledgeEntries?.({
+          ...input,
+          projectId: resolveProjectId(input.projectId, dependencies),
+        }) ?? [])
+    },
+  )
+
   const searchKnowledge = Effect.fn('KiriControl.searchKnowledge')(
     function* (input: KnowledgeSearchInput) {
       return yield* fromSync(() =>
@@ -709,6 +745,24 @@ export function makeKiriControl(
           ...input,
           projectId: resolveProjectId(input.projectId, dependencies),
         }))
+    },
+  )
+
+  const updateKnowledge = Effect.fn('KiriControl.updateKnowledge')(
+    function* (input: KnowledgeUpdateInput) {
+      return yield* fromSync(() => {
+        if (!dependencies.updateKnowledgeEntry) throw new Error('knowledge.update is not configured')
+        return dependencies.updateKnowledgeEntry(input)
+      })
+    },
+  )
+
+  const deleteKnowledge = Effect.fn('KiriControl.deleteKnowledge')(
+    function* (id: string) {
+      return yield* fromSync(() => {
+        if (!dependencies.deleteKnowledgeEntry) throw new Error('knowledge.delete is not configured')
+        return dependencies.deleteKnowledgeEntry(id)
+      })
     },
   )
 
@@ -805,6 +859,7 @@ export function makeKiriControl(
     listSessions,
     agentDetail: agentDetailEffect,
     listAgentEvents: listAgentEventsEffect,
+    listTasks: listTasksEffect,
     startSession: startSessionEffect,
     spawnSession: spawnSessionEffect,
     renameSession: renameSessionEffect,
@@ -822,8 +877,11 @@ export function makeKiriControl(
     terminalKill: terminalKillEffect,
     workflowAwait: workflowAwaitEffect,
     listScratchpad,
+    listKnowledge,
     searchKnowledge,
     addKnowledge,
+    updateKnowledge,
+    deleteKnowledge,
     markKnowledgeSeen,
     addScratchpad,
     deleteScratchpad,

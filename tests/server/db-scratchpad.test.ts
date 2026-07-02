@@ -9,6 +9,7 @@ import {
   deleteScratchpadBlockRow,
   getScratchpadBlock,
   insertScratchpadBlock,
+  listScratchpadBlockTriggers,
   listScratchpadBlocks,
   markScratchpadBlockTriggered,
 } from '../../src/server/db/scratchpad'
@@ -67,11 +68,34 @@ describe('scratchpad repository', () => {
         triggeredAgentId: 'agent-1',
       })
       expect(getScratchpadBlock(database, projectBlockId)?.triggeredAt).toEqual(expect.any(String))
+      expect(listScratchpadBlockTriggers(database, projectBlockId)).toEqual([{
+        blockId: projectBlockId,
+        agentId: 'agent-1',
+        triggeredAt: expect.any(String),
+      }])
+
+      database
+        .prepare(
+          `
+            INSERT INTO agent_slots (
+              id, project_id, slot, title, runtime, interface_mode, model, status,
+              session_dir, session_file, runtime_state_json, archived_at, position
+            )
+            VALUES (
+              'agent-2', ?, 'session-2', 'Agent 2', 'pi', 'gui', 'test-model', 'idle',
+              '/tmp/session-2', NULL, NULL, NULL, 1
+            )
+          `,
+        )
+        .run(projectId)
+      markScratchpadBlockTriggered(database, projectBlockId, 'agent-2')
+      expect(listScratchpadBlockTriggers(database, projectBlockId).map((trigger) => trigger.agentId))
+        .toEqual(['agent-1', 'agent-2'])
 
       expect(() => markScratchpadBlockTriggered(database, globalBlockId, 'missing-agent'))
         .toThrow('FOREIGN KEY constraint failed')
 
-      database.prepare('DELETE FROM agent_slots WHERE id = ?').run('agent-1')
+      database.prepare('DELETE FROM agent_slots WHERE id = ?').run('agent-2')
       expect(getScratchpadBlock(database, projectBlockId)).toMatchObject({
         triggeredAgentId: null,
       })

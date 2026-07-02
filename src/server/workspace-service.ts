@@ -6,6 +6,10 @@ import type {
   AgentDetail,
   AnswerQuestionInput,
   DeleteSessionInput,
+  KnowledgeAddInput,
+  KnowledgeEntry,
+  KnowledgeListInput,
+  KnowledgeUpdateInput,
   ReorderProjectsInput,
   RestoreSessionInput,
   StartSessionInput,
@@ -34,6 +38,8 @@ import type { UiPreferences } from '~/lib/ui-preferences'
 import {
   addProject,
   addScratchpadBlock,
+  addKnowledgeEntry,
+  deleteKnowledgeEntry,
   deleteScratchpadBlock,
   getAgentDetail,
   getAgentLaunchConfig,
@@ -41,10 +47,12 @@ import {
   getWorkspaceRevision,
   getWorkspaceSnapshot,
   hideProject,
+  listKnowledgeEntries,
   renameSession,
   reorderProjects,
   restoreSession,
   startSession,
+  updateKnowledgeEntry,
   unhideProject,
 } from './db'
 import { chooseProjectDirectory } from './directory-picker'
@@ -84,6 +92,7 @@ type TerminalConfigInput = z.infer<typeof terminalConfigInputSchema>
 type RenameSessionInput = z.infer<typeof renameSessionInputSchema>
 type DeleteScratchpadBlockInput = z.infer<typeof deleteScratchpadBlockInputSchema>
 type TriggerScratchpadBlockInput = z.infer<typeof triggerScratchpadBlockInputSchema>
+type KnowledgeDeleteInput = { readonly id: string }
 
 type AgentLaunchConfig = ReturnType<typeof getAgentLaunchConfig>
 type TerminalServerConfig = Awaited<ReturnType<TerminalServerApi['ensure']>>
@@ -125,6 +134,10 @@ export type WorkspaceServiceApi = {
   readonly answerQuestion: (input: AnswerQuestionInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly terminalConfig: (input: TerminalConfigInput) => Effect.Effect<TerminalConfig, WorkspaceServiceError>
   readonly startSession: (input: StartSessionInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
+  readonly listKnowledge: (input: KnowledgeListInput) => Effect.Effect<readonly KnowledgeEntry[], WorkspaceServiceError>
+  readonly addKnowledge: (input: KnowledgeAddInput) => Effect.Effect<KnowledgeEntry, WorkspaceServiceError>
+  readonly updateKnowledge: (input: KnowledgeUpdateInput) => Effect.Effect<KnowledgeEntry, WorkspaceServiceError>
+  readonly deleteKnowledge: (input: KnowledgeDeleteInput) => Effect.Effect<KnowledgeEntry, WorkspaceServiceError>
   readonly addScratchpadBlock: (input: AddScratchpadBlockInput) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>
   readonly deleteScratchpadBlock: (
     input: DeleteScratchpadBlockInput
@@ -199,6 +212,10 @@ export type WorkspaceServiceDependencies = {
   readonly ensureTerminalServer: () => Promise<TerminalServerConfig>
   readonly prepareTerminalAgent: TerminalServerApi['prepareAgent']
   readonly startSession: (input: StartSessionInput) => WorkspaceSnapshot
+  readonly listKnowledgeEntries?: (input?: KnowledgeListInput) => readonly KnowledgeEntry[]
+  readonly addKnowledgeEntry?: (input: KnowledgeAddInput & { readonly projectId: string }) => KnowledgeEntry
+  readonly updateKnowledgeEntry?: (input: KnowledgeUpdateInput) => KnowledgeEntry
+  readonly deleteKnowledgeEntry?: (id: string) => KnowledgeEntry
   readonly addScratchpadBlock: (input: AddScratchpadBlockInput) => WorkspaceSnapshot
   readonly deleteScratchpadBlock: (id: string) => WorkspaceSnapshot
   readonly triggerScratchpadSession: (input: TriggerScratchpadBlockInput) => Promise<{ readonly agentId: string }>
@@ -241,6 +258,10 @@ function liveWorkspaceServiceDependencies(
     ensureTerminalServer: input.terminalServer.ensure,
     prepareTerminalAgent: input.terminalServer.prepareAgent,
     startSession,
+    listKnowledgeEntries,
+    addKnowledgeEntry,
+    updateKnowledgeEntry,
+    deleteKnowledgeEntry,
     addScratchpadBlock,
     deleteScratchpadBlock,
     triggerScratchpadSession: triggerScratchpadSessionAndSpawn,
@@ -428,6 +449,48 @@ export function makeWorkspaceService(
         next,
         startedSessionId(next, input),
       )
+    }),
+    listKnowledge: Effect.fn('WorkspaceService.listKnowledge')(function* (input) {
+      return yield* syncCall(
+        'WorkspaceService.listKnowledge',
+        () => dependencies.listKnowledgeEntries?.(input) ?? [],
+      )
+    }),
+    addKnowledge: Effect.fn('WorkspaceService.addKnowledge')(function* (input) {
+      const entry = yield* syncCall(
+        'WorkspaceService.addKnowledge',
+        () => {
+          if (!dependencies.addKnowledgeEntry) throw new Error('knowledge.add is not configured')
+          return dependencies.addKnowledgeEntry({
+            ...input,
+            projectId: input.projectId ?? dependencies.getWorkspaceSnapshot().selected.projectId,
+          })
+        },
+      )
+      yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
+      return entry
+    }),
+    updateKnowledge: Effect.fn('WorkspaceService.updateKnowledge')(function* (input) {
+      const entry = yield* syncCall(
+        'WorkspaceService.updateKnowledge',
+        () => {
+          if (!dependencies.updateKnowledgeEntry) throw new Error('knowledge.update is not configured')
+          return dependencies.updateKnowledgeEntry(input)
+        },
+      )
+      yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
+      return entry
+    }),
+    deleteKnowledge: Effect.fn('WorkspaceService.deleteKnowledge')(function* (input) {
+      const entry = yield* syncCall(
+        'WorkspaceService.deleteKnowledge',
+        () => {
+          if (!dependencies.deleteKnowledgeEntry) throw new Error('knowledge.delete is not configured')
+          return dependencies.deleteKnowledgeEntry(input.id)
+        },
+      )
+      yield* syncCall('WorkspaceService.refreshReadModels', dependencies.refreshReadModels)
+      return entry
     }),
     addScratchpadBlock: syncSnapshotMethod('WorkspaceService.addScratchpadBlock', dependencies.addScratchpadBlock),
     deleteScratchpadBlock: syncSnapshotIdMethod(

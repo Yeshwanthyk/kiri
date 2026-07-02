@@ -16,8 +16,10 @@ import {
   kiriReadOperations,
   kiriWriteOperations,
   knowledgeAddInputSchema,
+  knowledgeListInputSchema,
   knowledgeMarkSeenInputSchema,
   knowledgeSearchInputSchema,
+  knowledgeUpdateInputSchema,
   listWorkflowRunsInputSchema,
   renameSessionInputSchema,
   restoreSessionInputSchema,
@@ -29,6 +31,7 @@ import {
   terminalReadInputSchema,
   terminalTargetSchema,
   terminalWaitForInputSchema,
+  taskListInputSchema,
   triggerScratchpadBlockInputSchema,
   workflowAwaitInputSchema,
   unhideProjectInputSchema,
@@ -274,6 +277,10 @@ async function dispatchReadOperation(
       return shapeResult(await run(control.agentDetail(parseParams(agentDetailInputSchema, params))), options)
     case 'agent.events.list':
       return shapeResult(await run(control.listAgentEvents(parseParams(listAgentEventsInputSchema, params))), options)
+    case 'task.list':
+      return shapeResult(await run(control.listTasks(parseParams(taskListInputSchema, params))), options)
+    case 'knowledge.list':
+      return shapeResult(await run(control.listKnowledge(parseParams(knowledgeListInputSchema, params))), options)
     case 'knowledge.search':
       return shapeResult(await run(control.searchKnowledge(parseParams(knowledgeSearchInputSchema, params))), options)
     case 'scratchpad.list': {
@@ -356,6 +363,12 @@ async function dispatchWriteOperation(
       break
     case 'knowledge.add':
       result = await run(control.addKnowledge(parseParams(knowledgeAddInputSchema, params)))
+      break
+    case 'knowledge.update':
+      result = await run(control.updateKnowledge(parseParams(knowledgeUpdateInputSchema, params)))
+      break
+    case 'knowledge.delete':
+      result = await run(control.deleteKnowledge(parseParams(idParamsSchema, params).id))
       break
     case 'knowledge.markSeen':
       result = await run(control.markKnowledgeSeen(parseParams(knowledgeMarkSeenInputSchema, params)))

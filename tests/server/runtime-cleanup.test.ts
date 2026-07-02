@@ -21,6 +21,7 @@ const emptyWorkspaceSnapshot: WorkspaceSnapshot = {
   hiddenProjects: [],
   archivedSessions: [],
   scratchpadBlocks: [],
+  knowledgeEntries: [],
   selected: { projectId: '', agentId: '' },
 }
 

@@ -152,6 +152,7 @@ function buildSnapshot(overrides: {
       triggeredAt: null,
       triggeredAgentId: null,
     }],
+    knowledgeEntries: [],
     selected: { projectId: 'alpha', agentId: 'alpha-a' },
   }
 }

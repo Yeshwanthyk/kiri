@@ -4,6 +4,8 @@ import {
   agentTaskSchema,
   messageRoleSchema,
   timelineEventToneSchema,
+  type TaskListInput,
+  type TaskListItem,
 } from '~/lib/contracts'
 import {
   agentDetailDbRowSchema,
@@ -160,6 +162,69 @@ export function readAgentDetail(database: DatabaseSync, input: ReadAgentDetailIn
     },
     tasks: readAgentTasks(database, agentId),
   }
+}
+
+export function listActiveThreadTasks(
+  database: DatabaseSync,
+  input: TaskListInput = { includeArchived: false },
+): TaskListItem[] {
+  const projectId = input.projectId?.trim() || null
+  const includeArchived = input.includeArchived ? 1 : 0
+  const rows = database
+    .prepare(
+      `
+        SELECT
+          a.id AS agentId,
+          a.title AS agentTitle,
+          a.project_id AS projectId,
+          tasks.task_id AS id,
+          tasks.title,
+          tasks.status,
+          tasks.source,
+          tasks.updated_at AS updatedAt,
+          tasks.position
+        FROM agent_tasks tasks
+        INNER JOIN threads t ON t.id = tasks.thread_id AND t.active = 1
+        INNER JOIN agent_slots a ON a.id = t.agent_id
+        WHERE (? IS NULL OR a.project_id = ?)
+          AND (? = 1 OR a.archived_at IS NULL)
+        ORDER BY a.project_id ASC, a.position ASC, a.id ASC, tasks.position ASC, tasks.task_id ASC
+      `,
+    )
+    .all(projectId, projectId, includeArchived) as Array<{
+      agentId: string
+      agentTitle: string
+      projectId: string
+      id: string
+      title: string
+      status: string
+      source: string
+      updatedAt: string
+      position: number
+    }>
+  const groups = new Map<string, TaskListItem>()
+  for (const row of rows) {
+    const parsed = agentTaskDbRowSchema.parse(row)
+    const task = agentTaskSchema.parse({
+      id: parsed.id,
+      title: parsed.title,
+      status: parsed.status,
+      source: parsed.source,
+      updatedAt: parsed.updatedAt,
+    })
+    const existing = groups.get(row.agentId)
+    if (existing) {
+      existing.tasks.push(task)
+    } else {
+      groups.set(row.agentId, {
+        agentId: row.agentId,
+        agentTitle: row.agentTitle,
+        projectId: row.projectId,
+        tasks: [task],
+      })
+    }
+  }
+  return [...groups.values()]
 }
 
 function readAgentTasks(database: DatabaseSync, agentId: string) {

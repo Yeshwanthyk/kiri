@@ -22,6 +22,7 @@ import {
   hydrateProjectionMessages,
   replaceAgentTasksForThread,
 } from './timeline-writes'
+import { compactSessionTitle, forkSessionTitle } from './session-title'
 import { withTransaction } from './transaction'
 
 type PiHydrationStamp = {
@@ -140,16 +141,17 @@ export function createForkedSessionRow(
       .prepare(
         `
           INSERT INTO agent_slots (
-            id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, position
+            id, project_id, slot, title, runtime, interface_mode, model, status,
+            session_dir, session_file, title_set_manually, position
           )
-          VALUES (?, ?, ?, ?, 'pi', ?, ?, 'idle', ?, ?, ?)
+          VALUES (?, ?, ?, ?, 'pi', ?, ?, 'idle', ?, ?, 1, ?)
         `,
       )
       .run(
         id,
         source.projectId,
         slot,
-        `${source.title} fork`,
+        forkSessionTitle(source.title),
         source.interfaceMode,
         source.model,
         sessionDir,
@@ -401,9 +403,10 @@ function createPersistedSessionAgent(
     .prepare(
       `
         INSERT INTO agent_slots (
-          id, project_id, slot, title, runtime, interface_mode, model, status, session_dir, session_file, position
+          id, project_id, slot, title, runtime, interface_mode, model, status,
+          session_dir, session_file, title_set_manually, position
         )
-        VALUES (?, ?, ?, ?, 'pi', 'gui', ?, 'idle', ?, ?, ?)
+        VALUES (?, ?, ?, ?, 'pi', 'gui', ?, 'idle', ?, ?, 0, ?)
       `,
     )
     .run(
@@ -441,7 +444,5 @@ export function safeProjectPiSessionFile(path: string) {
 }
 
 function sessionTitle(preview: string | undefined, fallback: string) {
-  const title = preview?.replace(/\s+/g, ' ').trim()
-  if (!title) return fallback
-  return title.length > 44 ? `${title.slice(0, 41)}...` : title
+  return compactSessionTitle(preview, fallback)
 }

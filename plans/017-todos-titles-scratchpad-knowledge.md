@@ -22,6 +22,39 @@
   bundle, codex resume re-bind, PATH-shim wrappers).
 - **Category**: feature
 - **Planned at**: commit `1fa5160`, 2026-07-01
+- **Completed at**: 2026-07-02
+- **Result**: DONE for the shippable scope. Landed deterministic auto-title
+  guards (`title_set_manually`), auto-retitle on task/message projections,
+  fork title de-duplication, scratchpad-trigger titles/provenance/history and
+  failure cleanup, knowledge list/update/delete plus board UI, `task.list`,
+  Claude task consumption through plan 014's hook writer, and terminal-mode
+  Codex plan-task sync by parsing actual Codex TUI JSONL `update_plan` calls.
+  OpenCode per-session MCP wiring is decision-gated as unsupported by the
+  current CLI surface (`opencode`/`opencode run` expose no per-launch MCP
+  config flag; only global `opencode mcp add/list/...`). Knowledge embeddings
+  and automatic ingestion remain follow-up product/architecture decisions.
+
+## Completion notes
+
+- G3-2 chose the JSONL path after checking `codex --help` and
+  `codex exec --help`: there is a SessionStart hook/trust flag but no
+  terminal plan hook. The implemented path reads the remembered Codex
+  session JSONL (`codex-hook-session.json` transcript path, sidecar
+  `codex-session-id`, or scanned `$CODEX_HOME/sessions` id), parses the
+  latest `response_item.payload.name === "update_plan"` arguments, normalizes
+  statuses through the existing Codex task-status helper, and hydrates
+  `agent_tasks` on `agent.detail` / `task.list` reads.
+- G3-3/G5-3 are explicitly gated: `opencode --help`, `opencode run --help`,
+  and `opencode mcp add --help` expose global MCP management but no
+  invocation-scoped MCP config/system-prompt channel. Do not mutate global
+  OpenCode MCP config from a Kiri session launch.
+- G3-5 remains a follow-up: task-status diff events need a consumer decision
+  (notification/spawn/wake) before adding another event stream.
+- G2-3/G2-4 remain follow-ups: embeddings/RAG need a backend choice and
+  automatic ingestion needs a product rule for what is worth remembering.
+- Verification run for this plan included `pnpm typecheck`, focused 017 DB/UI
+  tests, focused ESLint on changed files, and targeted Codex JSONL/task-list
+  tests.
 
 ## Why this matters
 

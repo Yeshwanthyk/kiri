@@ -116,9 +116,9 @@ describe('ScratchpadTriggerService', () => {
     expect(result.agentId).toBe('agent-1')
     expect(calls).toEqual([
       'start:codex:terminal',
-      'mark:block-1:agent-1',
       'queue:agent-1:Do the work:true',
       'spawn:agent-1',
+      'mark:block-1:agent-1',
     ])
   })
 
@@ -162,17 +162,17 @@ describe('ScratchpadTriggerService', () => {
         if (shape.interfaceMode === 'gui') {
           expect(calls).toEqual([
             'start:codex:gui',
-            'mark:block-1:agent-1',
             'prompt:agent-1:Do the work',
+            'mark:block-1:agent-1',
           ])
           return
         }
 
         expect(calls).toEqual([
           'start:codex:terminal',
-          'mark:block-1:agent-1',
           'queue:agent-1:Do the work:true',
           ...(shape.spawnTerminal ? ['spawn:agent-1'] : []),
+          'mark:block-1:agent-1',
         ])
       },
     ), { numRuns: 40 })
@@ -230,7 +230,43 @@ describe('ScratchpadTriggerService', () => {
       interfaceMode: 'gui',
     }))).rejects.toMatchObject({ message: 'Mark failed' })
 
-    expect(calls).toEqual(['start', 'mark', 'delete:agent-1'])
+    expect(calls).toEqual(['start', 'prompt', 'mark', 'delete:agent-1'])
+  })
+
+  it('archives terminal scratchpad sessions when terminal paste fails', async () => {
+    const calls: string[] = []
+    const service = makeScratchpadTriggerService(testDependencies({
+      queueAgentTerminalInput: (input) => {
+        calls.push(`queue:${input.agentId}`)
+      },
+      pasteAgentRuntimeTerminal: (input) => {
+        calls.push(`spawn:${input.agentId}`)
+        return Promise.reject(new Error('Paste failed'))
+      },
+      markScratchpadBlockTriggered: () => {
+        calls.push('mark')
+      },
+      archiveSessionSummary: (input) => {
+        calls.push(`delete:${input.agentId}`)
+      },
+      reportPromptFailure: (error) => {
+        calls.push(`report:${error instanceof Error ? error.message : String(error)}`)
+      },
+    }))
+
+    await expect(Effect.runPromise(service.trigger({
+      id: 'block-1',
+      projectId: 'project-1',
+      runtime: 'codex',
+      interfaceMode: 'terminal',
+    }))).rejects.toMatchObject({ message: 'Paste failed' })
+
+    expect(calls).toEqual([
+      'queue:agent-1',
+      'spawn:agent-1',
+      'delete:agent-1',
+      'report:Paste failed',
+    ])
   })
 
   it('fails before creating a session when the scratchpad block is missing', async () => {

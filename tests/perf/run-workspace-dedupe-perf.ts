@@ -70,6 +70,7 @@ function buildSnapshot(tick: number, churning: boolean): WorkspaceSnapshot {
     hiddenProjects: [],
     archivedSessions: [],
     scratchpadBlocks: [],
+    knowledgeEntries: [],
     selected: { projectId: 'p0', agentId: 'p0-a0' },
   }
 }

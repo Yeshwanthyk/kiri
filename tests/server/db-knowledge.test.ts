@@ -7,8 +7,11 @@ import { openKiriDatabase } from '../../src/server/db/connection'
 import { insertProject } from '../../src/server/db/projects'
 import {
   addKnowledgeEntry,
+  deleteKnowledgeEntry,
+  listKnowledgeEntries,
   markKnowledgeEntrySeen,
   searchKnowledgeEntries,
+  updateKnowledgeEntry,
 } from '../../src/server/db/knowledge'
 
 describe('knowledge repository', () => {
@@ -49,6 +52,27 @@ describe('knowledge repository', () => {
         seenCount: 1,
         lastSeenAt: expect.any(String),
       })
+
+      expect(listKnowledgeEntries(database, { projectId }).map((entry) => entry.id))
+        .toEqual([created.id])
+
+      const updated = updateKnowledgeEntry(database, {
+        id: created.id,
+        title: 'desktop dynamic import fix',
+        problem: 'The desktop shell restores a stale asset URL.',
+        answer: 'Refresh the owner URL and reload the shell.',
+        tags: ['desktop', 'assets'],
+      })
+      expect(updated).toMatchObject({
+        id: created.id,
+        title: 'desktop dynamic import fix',
+        tags: ['desktop', 'assets'],
+        seenCount: 1,
+      })
+
+      const deleted = deleteKnowledgeEntry(database, created.id)
+      expect(deleted.id).toBe(created.id)
+      expect(listKnowledgeEntries(database, { projectId })).toEqual([])
     } finally {
       database.close()
       rmSync(root, { recursive: true, force: true })

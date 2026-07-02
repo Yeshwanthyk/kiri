@@ -171,6 +171,108 @@ describe('session operations repository', () => {
           .prepare('SELECT used_tokens AS usedTokens FROM agent_context_usage WHERE agent_id = ?')
           .get(forkedAgentId),
       ).toEqual({ usedTokens: 77 })
+
+      const secondForkId = createForkedSessionRow(database, {
+        sourceAgentId: forkedAgentId,
+        sessionFile: fork.sessionFile,
+        sessionDirForProjectSlot: (id, slot) => join(root, 'pi-sessions', id, slot),
+        now: () => '2026-01-04T00:00:00.000Z',
+        slotTimestampMs: () => 13,
+        slotSuffix: () => 'dddddd',
+      })
+      expect(
+        database
+          .prepare('SELECT title FROM agent_slots WHERE id = ?')
+          .get(secondForkId),
+      ).toEqual({ title: 'Source fork' })
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('auto-retitles fresh sessions from first assistant message and in-progress task', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-auto-title-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const messageAgentId = insertSessionRow(database, {
+        projectId,
+        runtime: 'codex',
+        interfaceMode: 'gui',
+        model: 'codex-model',
+        sessionDirForSlot: (slot) => join(root, 'sessions', slot),
+        slotTimestampMs: () => 20,
+        slotSuffix: () => 'aaaaaa',
+      })
+      recordRuntimeMessageRow(database, {
+        agentId: messageAgentId,
+        id: 'assistant-1',
+        role: 'assistant',
+        text: 'Implement the deterministic title refresh path with plenty of detail',
+        timestamp: '2026-01-01T00:00:00.000Z',
+      })
+      expect(
+        database.prepare('SELECT title FROM agent_slots WHERE id = ?').get(messageAgentId),
+      ).toEqual({ title: 'Implement the deterministic title refresh...' })
+
+      const taskAgentId = insertSessionRow(database, {
+        projectId,
+        runtime: 'claude',
+        interfaceMode: 'terminal',
+        model: 'claude-model',
+        sessionDirForSlot: (slot) => join(root, 'sessions', slot),
+        slotTimestampMs: () => 21,
+        slotSuffix: () => 'bbbbbb',
+      })
+      replaceAgentTasksRows(database, {
+        agentId: taskAgentId,
+        source: 'claude',
+        tasks: [{
+          id: 'task-1',
+          title: 'Wire Claude TodoWrite projection',
+          status: 'inProgress',
+          source: 'claude',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        }],
+      })
+      expect(
+        database.prepare('SELECT title FROM agent_slots WHERE id = ?').get(taskAgentId),
+      ).toEqual({ title: 'Wire Claude TodoWrite projection' })
+    } finally {
+      database.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not auto-retitle manually renamed sessions', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kiri-db-session-manual-title-'))
+    const cwd = join(root, 'project')
+    mkdirSync(cwd)
+
+    const database = openKiriDatabase(join(root, 'kiri.sqlite'))
+    try {
+      const projectId = insertProject(database, { name: 'Project One', cwd })
+      const agentId = insertSessionRow(database, {
+        projectId,
+        title: 'Pinned title',
+        runtime: 'codex',
+        interfaceMode: 'gui',
+        model: 'codex-model',
+        sessionDirForSlot: (slot) => join(root, 'sessions', slot),
+      })
+      recordRuntimeMessageRow(database, {
+        agentId,
+        id: 'assistant-1',
+        role: 'assistant',
+        text: 'Should not replace the title',
+        timestamp: '2026-01-01T00:00:00.000Z',
+      })
+      expect(database.prepare('SELECT title FROM agent_slots WHERE id = ?').get(agentId))
+        .toEqual({ title: 'Pinned title' })
     } finally {
       database.close()
       rmSync(root, { recursive: true, force: true })

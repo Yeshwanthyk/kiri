@@ -10,8 +10,10 @@ import type {
   AgentEvent,
   DeleteSessionInput,
   KnowledgeAddInput,
+  KnowledgeListInput,
   KnowledgeMarkSeenInput,
   KnowledgeSearchInput,
+  KnowledgeUpdateInput,
   PendingQuestion,
   RestoreSessionInput,
   ScratchpadBlock,
@@ -29,8 +31,9 @@ import {
   applyDatabaseBootstraps,
 } from './db/bootstrap'
 import { hydrateClaudeSession } from './claude-projection'
-import { readAgentDetail } from './db/agent-detail'
+import { listActiveThreadTasks, readAgentDetail } from './db/agent-detail'
 import { listAgentEvents as listAgentEventsFromDb } from './db/agent-events'
+import { hydrateCodexTerminalTasksRows } from './db/codex-terminal-tasks'
 import { openKiriDatabase } from './db/connection'
 import {
   deleteProjectRow,
@@ -50,8 +53,11 @@ import {
 } from './db/scratchpad'
 import {
   addKnowledgeEntry as addKnowledgeEntryInDb,
+  deleteKnowledgeEntry as deleteKnowledgeEntryInDb,
+  listKnowledgeEntries as listKnowledgeEntriesFromDb,
   markKnowledgeEntrySeen as markKnowledgeEntrySeenInDb,
   searchKnowledgeEntries as searchKnowledgeEntriesFromDb,
+  updateKnowledgeEntry as updateKnowledgeEntryInDb,
 } from './db/knowledge'
 import {
   completeScratchpadWorkflowItem as completeScratchpadWorkflowItemInDb,
@@ -195,6 +201,7 @@ export function getWorkspaceSnapshot() {
     settings: getSettings(),
     preferences: getUiPreferences(),
     scratchpadBlocks: listScratchpadBlocks(),
+    knowledgeEntries: listKnowledgeEntries(),
   })
 }
 
@@ -230,6 +237,7 @@ function readModelRefreshDisabled(env: NodeJS.ProcessEnv) {
 export function getAgentDetail(input: { agentId: string; limit?: number; offset?: number }): AgentDetail {
   const database = getDb()
   hydratePersistedPiSessions(database, input.agentId)
+  hydrateCodexTerminalTasksRows(database, { agentId: input.agentId })
   const agentId = input.agentId.trim()
   if (agentRuntime(database, agentId) === 'claude') {
     hydrateClaudeSession(database, agentId)
@@ -321,7 +329,12 @@ export function startSessionSummary(input: StartSessionInput) {
   return requireSessionSummary(getDb(), id, true)
 }
 
-function insertSession(input: StartSessionInput) {
+type InternalStartSessionInput = StartSessionInput & {
+  readonly titleSetManually?: boolean
+  readonly sourceScratchpadId?: string
+}
+
+function insertSession(input: InternalStartSessionInput) {
   const database = getDb()
   const projectId = input.projectId.trim()
   assertSessionProjectExists(database, projectId)
@@ -342,6 +355,8 @@ function insertSession(input: StartSessionInput) {
     interfaceMode,
     model,
     thinkingLevel: input.thinkingLevel,
+    titleSetManually: input.titleSetManually,
+    sourceScratchpadId: input.sourceScratchpadId,
     sessionDirForSlot: (slot) => runtimeSessionDir(runtime, projectId, slot),
   })
 }
@@ -489,12 +504,36 @@ export function searchKnowledgeEntries(input: KnowledgeSearchInput & { readonly 
   return searchKnowledgeEntriesFromDb(getDb(), input)
 }
 
+export function listKnowledgeEntries(input: KnowledgeListInput = {}) {
+  return listKnowledgeEntriesFromDb(getDb(), input)
+}
+
 export function addKnowledgeEntry(input: KnowledgeAddInput & { readonly projectId: string }) {
   return addKnowledgeEntryInDb(getDb(), input)
 }
 
+export function updateKnowledgeEntry(input: KnowledgeUpdateInput) {
+  return updateKnowledgeEntryInDb(getDb(), input)
+}
+
+export function deleteKnowledgeEntry(id: string) {
+  return deleteKnowledgeEntryInDb(getDb(), id)
+}
+
 export function markKnowledgeEntrySeen(input: KnowledgeMarkSeenInput) {
   return markKnowledgeEntrySeenInDb(getDb(), input)
+}
+
+export function listTasks(input: {
+  readonly projectId?: string
+  readonly includeArchived?: boolean
+} = {}) {
+  const database = getDb()
+  hydrateCodexTerminalTasksRows(database, { projectId: input.projectId })
+  return listActiveThreadTasks(database, {
+    ...input,
+    includeArchived: input.includeArchived ?? false,
+  })
 }
 
 export function listWorkflowRuns(input: {
@@ -541,7 +580,7 @@ export function restoreWorkflowRun(id: string) {
   return setWorkflowRunArchiveState(getDb(), id, false)
 }
 
-export function startSessionAndGetId(input: StartSessionInput) {
+export function startSessionAndGetId(input: InternalStartSessionInput) {
   return insertSession(input)
 }
 

@@ -74,6 +74,7 @@ function workspaceWithProjects(projects: ProjectRow[]): WorkspaceSnapshot {
     hiddenProjects: [],
     archivedSessions: [],
     scratchpadBlocks: [],
+    knowledgeEntries: [],
     selected: { projectId: '', agentId: '' },
   }
 }
