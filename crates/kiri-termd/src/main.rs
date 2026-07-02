@@ -150,7 +150,12 @@ enum ClientFrame {
 struct LaunchConfig {
     id: String,
     project_id: String,
+    runtime: String,
+    session_dir: String,
+    session_file: Option<String>,
+    model: String,
     cwd: String,
+    runtime_state_json: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -173,6 +178,14 @@ struct PendingInput {
 #[serde(rename_all = "camelCase")]
 struct AgentIdRequest {
     agent_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpawnAgentRequest {
+    agent_id: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
 }
 
 #[derive(Deserialize)]
@@ -325,6 +338,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/agents/upsert", post(upsert_agent))
+        .route("/api/agents/spawn", post(spawn_agent))
         .route("/api/agents/close-runtime", post(close_agent_runtime))
         .route("/api/agents/input", post(input_agent))
         .route("/api/sessions", get(list_sessions))
@@ -408,6 +422,39 @@ async fn upsert_agent(
             .extend(body.pending_inputs);
     }
     Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+async fn spawn_agent(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SpawnAgentRequest>,
+) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    let Some(config) = state
+        .launch_configs
+        .read()
+        .await
+        .get(&body.agent_id)
+        .cloned()
+    else {
+        return not_found(format!(
+            "No launch config registered for agent {}",
+            body.agent_id
+        ));
+    };
+    match spawn_runtime_session(
+        &state,
+        config,
+        body.cols.unwrap_or(80),
+        body.rows.unwrap_or(24),
+    )
+    .await
+    {
+        Ok(_) => Json(serde_json::json!({ "ok": true, "codexLaunches": [] })).into_response(),
+        Err(error) => server_error(error.to_string()),
+    }
 }
 
 async fn close_agent_runtime(
@@ -958,6 +1005,18 @@ async fn get_or_spawn_session(state: &AppState, query: &TerminalQuery) -> Result
             return Ok(session);
         }
     }
+    if query.mode == "runtime" {
+        let Some(config) = config else {
+            anyhow::bail!("No launch config registered for agent {}", query.agent_id);
+        };
+        return spawn_runtime_session(
+            state,
+            config,
+            query.cols.unwrap_or(80),
+            query.rows.unwrap_or(24),
+        )
+        .await;
+    }
     let mut sessions = state.sessions.write().await;
     if let Some(session) = sessions.get(&key).cloned() {
         if !session.exited.load(Ordering::SeqCst) {
@@ -975,51 +1034,248 @@ async fn get_or_spawn_session(state: &AppState, query: &TerminalQuery) -> Result
         });
     let generation = next_generation(state, &key).await;
     let restored = state.restored_sessions.lock().await.remove(&key);
-    let (session, reader) = spawn_shell_session(
+    let launch = SessionLaunch::shell(
         key.clone(),
-        query.mode.clone(),
         cwd,
         query.cols.unwrap_or(80),
         query.rows.unwrap_or(24),
-        generation,
-        restored,
-    )?;
+    );
+    let (session, reader) = spawn_pty_session(launch, generation, restored)?;
     let session = Arc::new(session);
     start_reader(session.clone(), reader);
     sessions.insert(key, session.clone());
     Ok(session)
 }
 
-fn spawn_shell_session(
-    key: String,
-    mode: String,
-    cwd: String,
+async fn spawn_runtime_session(
+    state: &AppState,
+    config: LaunchConfig,
     cols: u16,
     rows: u16,
+) -> Result<Arc<Session>> {
+    let key = format!("{}:runtime", config.id);
+    if let Some(session) = session_by_key(state, &key).await {
+        if !session.exited.load(Ordering::SeqCst) {
+            drain_pending_inputs(state, &config.id, &session).await;
+            return Ok(session);
+        }
+    }
+    let mut sessions = state.sessions.write().await;
+    if let Some(session) = sessions.get(&key).cloned() {
+        if !session.exited.load(Ordering::SeqCst) {
+            drop(sessions);
+            drain_pending_inputs(state, &config.id, &session).await;
+            return Ok(session);
+        }
+        sessions.remove(&key);
+    }
+    let generation = next_generation(state, &key).await;
+    let restored = state.restored_sessions.lock().await.remove(&key);
+    let mut pending = {
+        state
+            .pending_inputs
+            .write()
+            .await
+            .remove(&config.id)
+            .unwrap_or_default()
+    };
+    let launch = match SessionLaunch::runtime(config.clone(), key.clone(), cols, rows) {
+        Ok(launch) => launch,
+        Err(error) => {
+            if !pending.is_empty() {
+                state
+                    .pending_inputs
+                    .write()
+                    .await
+                    .entry(config.id)
+                    .or_default()
+                    .splice(0..0, pending);
+            }
+            return Err(error);
+        }
+    };
+    let (session, reader) = match spawn_pty_session(launch, generation, restored) {
+        Ok(spawned) => spawned,
+        Err(error) => {
+            if !pending.is_empty() {
+                state
+                    .pending_inputs
+                    .write()
+                    .await
+                    .entry(config.id)
+                    .or_default()
+                    .splice(0..0, pending);
+            }
+            return Err(error);
+        }
+    };
+    let session = Arc::new(session);
+    start_reader(session.clone(), reader);
+    sessions.insert(key, session.clone());
+    drop(sessions);
+    for input in pending.drain(..) {
+        if let Err(error) = write_session_input(&session, &pending_input_data(&input)).await {
+            warn!("failed to drain pending input for {}: {error}", config.id);
+        }
+    }
+    Ok(session)
+}
+
+async fn drain_pending_inputs(state: &AppState, agent_id: &str, session: &Session) {
+    let mut pending = state
+        .pending_inputs
+        .write()
+        .await
+        .remove(agent_id)
+        .unwrap_or_default();
+    for input in pending.drain(..) {
+        if let Err(error) = write_session_input(session, &pending_input_data(&input)).await {
+            warn!("failed to drain pending input for {agent_id}: {error}");
+        }
+    }
+}
+
+struct SessionLaunch {
+    key: String,
+    mode: String,
+    label: String,
+    cwd: String,
+    command: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+    cols: u16,
+    rows: u16,
+}
+
+impl SessionLaunch {
+    fn shell(key: String, cwd: String, cols: u16, rows: u16) -> Self {
+        let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        let mut env = common_terminal_env();
+        env.insert("KIRI_PROJECT_CWD".to_string(), cwd.clone());
+        Self {
+            key,
+            mode: "shell".to_string(),
+            label: "shell".to_string(),
+            cwd,
+            command: shell,
+            args: Vec::new(),
+            env,
+            cols,
+            rows,
+        }
+    }
+
+    fn runtime(config: LaunchConfig, key: String, cols: u16, rows: u16) -> Result<Self> {
+        let runtime = config.runtime.as_str();
+        let env = runtime_env(&config);
+        let mut args = Vec::new();
+        let runtime_state = parse_runtime_state(config.runtime_state_json.as_deref());
+        let command = match runtime {
+            "codex" => {
+                let resume = runtime_state.get("resume");
+                if resume.is_some() {
+                    args.push("resume".to_string());
+                }
+                args.extend([
+                    "--dangerously-bypass-approvals-and-sandbox".to_string(),
+                    "--no-alt-screen".to_string(),
+                ]);
+                if !config.model.is_empty() {
+                    args.extend(["--model".to_string(), config.model.clone()]);
+                }
+                if let Some(resume) = resume {
+                    args.push(resume.clone());
+                }
+                env::var("KIRI_CODEX_BIN")
+                    .ok()
+                    .or_else(|| runtime_state.get("binaryPath").cloned())
+                    .unwrap_or_else(|| "codex".to_string())
+            }
+            "claude" => {
+                args.extend([
+                    "--dangerously-skip-permissions".to_string(),
+                    "--append-system-prompt".to_string(),
+                    format!("Kiri terminal session {}", config.id),
+                ]);
+                if !config.model.is_empty() {
+                    args.extend(["--model".to_string(), config.model.clone()]);
+                }
+                if let Some(resume) = runtime_state.get("resume") {
+                    args.extend(["--resume".to_string(), resume.clone()]);
+                }
+                env::var("KIRI_CLAUDE_BIN")
+                    .ok()
+                    .or_else(|| runtime_state.get("binaryPath").cloned())
+                    .unwrap_or_else(|| "claude".to_string())
+            }
+            "pi" => {
+                args.extend(["--session-dir".to_string(), config.session_dir.clone()]);
+                if let Some(session_file) = &config.session_file {
+                    args.extend(["--session".to_string(), session_file.clone()]);
+                }
+                if !config.model.is_empty() {
+                    args.extend(["--model".to_string(), config.model.clone()]);
+                }
+                env::var("KIRI_PI_BIN").unwrap_or_else(|_| "pi".to_string())
+            }
+            "opencode" => {
+                args.push(config.cwd.clone());
+                if !config.model.is_empty() {
+                    args.extend(["--model".to_string(), config.model.clone()]);
+                }
+                if let Some(resume) = runtime_state
+                    .get("resume")
+                    .or_else(|| runtime_state.get("opencodeSessionId"))
+                {
+                    args.extend(["--session".to_string(), resume.clone()]);
+                }
+                env::var("KIRI_OPENCODE_BIN")
+                    .ok()
+                    .or_else(|| runtime_state.get("binaryPath").cloned())
+                    .unwrap_or_else(|| "opencode".to_string())
+            }
+            _ => anyhow::bail!("Unsupported terminal runtime: {runtime}"),
+        };
+        Ok(Self {
+            key,
+            mode: "runtime".to_string(),
+            label: runtime.to_string(),
+            cwd: config.cwd,
+            command,
+            args,
+            env,
+            cols,
+            rows,
+        })
+    }
+}
+
+fn spawn_pty_session(
+    launch: SessionLaunch,
     generation: u64,
     restored: Option<PersistedSession>,
 ) -> Result<(Session, Box<dyn Read + Send>)> {
-    if mode != "shell" {
-        anyhow::bail!("kiri-termd P0 supports shell sessions only")
-    }
-    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
-            rows,
-            cols,
+            rows: launch.rows,
+            cols: launch.cols,
             pixel_width: 0,
             pixel_height: 0,
         })
         .context("failed to open pty")?;
-    let mut command = CommandBuilder::new(shell);
-    command.cwd(&cwd);
-    command.env("TERM", "xterm-256color");
-    command.env("COLORTERM", "truecolor");
+    let mut command = CommandBuilder::new(launch.command);
+    command.args(launch.args);
+    command.cwd(&launch.cwd);
+    for (key, value) in &launch.env {
+        command.env(key, value);
+    }
+    command.env_remove("NO_COLOR");
+    command.env_remove("NODE_DISABLE_COLORS");
     let child = pair
         .slave
         .spawn_command(command)
-        .context("failed to spawn shell")?;
+        .context("failed to spawn terminal process")?;
     drop(pair.slave);
     let writer = pair
         .master
@@ -1030,19 +1286,19 @@ fn spawn_shell_session(
         .try_clone_reader()
         .context("failed to clone pty reader")?;
     let (tx, _) = broadcast::channel(16_384);
-    let mut grid = Grid::new(usize::from(cols), usize::from(rows));
+    let mut grid = Grid::new(usize::from(launch.cols), usize::from(launch.rows));
     if let Some(restored) = restored {
         grid.feed(restored.snapshot.as_bytes());
         grid.feed(b"\r\n\x1b[2m[kiriterm: restored scrollback from previous session]\x1b[0m\r\n");
     }
     Ok((
         Session {
-            key,
-            mode,
-            label: "shell".to_string(),
-            cwd,
-            cols: Mutex::new(cols),
-            rows: Mutex::new(rows),
+            key: launch.key,
+            mode: launch.mode,
+            label: launch.label,
+            cwd: launch.cwd,
+            cols: Mutex::new(launch.cols),
+            rows: Mutex::new(launch.rows),
             grid: Mutex::new(grid),
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
@@ -1243,6 +1499,51 @@ async fn persist_session(state: &AppState, session: &Session) -> Result<()> {
 
 fn persisted_session_path(sessions_dir: &Path, key: &str) -> PathBuf {
     sessions_dir.join(format!("{}.json", encode_uri_component(key)))
+}
+
+fn runtime_env(config: &LaunchConfig) -> HashMap<String, String> {
+    let mut env = common_terminal_env();
+    env.insert("KIRI_AGENT_ID".to_string(), config.id.clone());
+    env.insert("KIRI_PROJECT_CWD".to_string(), config.cwd.clone());
+    env.insert("KIRI_RUNTIME".to_string(), config.runtime.clone());
+    env.insert("KIRI_MODEL".to_string(), config.model.clone());
+    env.insert("KIRI_SESSION_DIR".to_string(), config.session_dir.clone());
+    if let Some(session_file) = &config.session_file {
+        env.insert("KIRI_SESSION_FILE".to_string(), session_file.clone());
+    }
+    env
+}
+
+fn common_terminal_env() -> HashMap<String, String> {
+    HashMap::from([
+        ("TERM".to_string(), "xterm-256color".to_string()),
+        ("COLORTERM".to_string(), "truecolor".to_string()),
+        ("FORCE_COLOR".to_string(), "3".to_string()),
+        ("CLICOLOR".to_string(), "1".to_string()),
+        ("CLICOLOR_FORCE".to_string(), "1".to_string()),
+    ])
+}
+
+fn pending_input_data(input: &PendingInput) -> String {
+    if input.submit {
+        format!("{}\r", input.text)
+    } else {
+        input.text.clone()
+    }
+}
+
+fn parse_runtime_state(value: Option<&str>) -> HashMap<String, String> {
+    let Some(value) = value else {
+        return HashMap::new();
+    };
+    let Ok(serde_json::Value::Object(object)) = serde_json::from_str::<serde_json::Value>(value)
+    else {
+        return HashMap::new();
+    };
+    object
+        .into_iter()
+        .filter_map(|(key, value)| value.as_str().map(|value| (key, value.to_string())))
+        .collect()
 }
 
 fn write_file_atomic(path: &Path, contents: &[u8]) -> Result<()> {

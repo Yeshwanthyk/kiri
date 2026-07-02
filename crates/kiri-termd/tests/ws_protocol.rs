@@ -3,6 +3,7 @@ use std::{
     fs,
     io::{Read, Write},
     net::TcpStream,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
@@ -35,6 +36,24 @@ fn websocket_flow_control_pauses_until_client_ack() {
 #[test]
 fn agent_input_queues_and_close_runtime_clears_snapshot() {
     with_daemon(run_agent_routes_smoke);
+}
+
+#[test]
+fn agent_spawn_launches_runtime_and_drains_queued_input() {
+    let state_dir = temp_state_dir();
+    let fake_codex = write_fake_runtime(&state_dir).expect("fake runtime should be written");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", &state_dir)
+        .env("KIRI_CODEX_BIN", &fake_codex)
+        .spawn()
+        .expect("kiri-termd should spawn");
+
+    let result = run_runtime_spawn_smoke(&state_dir);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&state_dir);
+
+    result.expect("runtime spawn smoke should pass");
 }
 
 #[test]
@@ -621,6 +640,111 @@ fn run_agent_routes_smoke(state_dir: &Path) -> Result<(), String> {
     assert_eq!(closed["ok"], true);
     assert!(!runtime_snapshot.exists());
     Ok(())
+}
+
+fn run_runtime_spawn_smoke(state_dir: &Path) -> Result<(), String> {
+    let record = wait_record(state_dir)?;
+    post_upsert(&record, state_dir)?;
+    http_json(
+        &record,
+        "POST",
+        "/api/agents/input",
+        Some(json!({ "agentId": "agent-t1", "text": "queued-runtime-input" })),
+    )?;
+    let spawned = http_json(
+        &record,
+        "POST",
+        "/api/agents/spawn",
+        Some(json!({ "agentId": "agent-t1", "cols": 90, "rows": 20 })),
+    )?;
+    assert_eq!(spawned["ok"], true);
+    let sessions = http_json(&record, "GET", "/api/sessions", None)?;
+    assert!(sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|session| session["key"] == "agent-t1:runtime"
+            && session["mode"] == "runtime"
+            && session["cols"] == 90
+            && session["rows"] == 20));
+    let env_wait = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "agent-t1:runtime",
+            "pattern": "env:agent-t1:.*:codex:",
+            "scope": "output",
+            "timeoutMs": 5000
+        })),
+    )?;
+    assert_eq!(env_wait["matched"], true);
+    let input_wait = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "agent-t1:runtime",
+            "pattern": "input:queued-runtime-input",
+            "scope": "output",
+            "timeoutMs": 5000
+        })),
+    )?;
+    assert_eq!(input_wait["matched"], true);
+    http_json(
+        &record,
+        "POST",
+        "/api/agents/upsert",
+        Some(json!({
+            "config": {
+                "id": "agent-t1",
+                "projectId": "proj-t1",
+                "runtime": "codex",
+                "sessionDir": state_dir,
+                "sessionFile": null,
+                "model": "",
+                "cwd": state_dir,
+                "runtimeStateJson": null
+            },
+            "pendingInputs": [
+                { "text": "queued-after-live", "submit": true, "createdAt": "123" }
+            ]
+        })),
+    )?;
+    http_json(
+        &record,
+        "POST",
+        "/api/agents/spawn",
+        Some(json!({ "agentId": "agent-t1" })),
+    )?;
+    let reused_input_wait = http_json(
+        &record,
+        "POST",
+        "/api/sessions/wait-for",
+        Some(json!({
+            "key": "agent-t1:runtime",
+            "pattern": "input:queued-after-live",
+            "scope": "output",
+            "timeoutMs": 5000
+        })),
+    )?;
+    assert_eq!(reused_input_wait["matched"], true);
+    Ok(())
+}
+
+fn write_fake_runtime(state_dir: &Path) -> Result<PathBuf, String> {
+    let path = state_dir.join("fake-codex.sh");
+    fs::write(
+        &path,
+        "#!/bin/sh\nprintf 'fake-runtime-start\\n'\nprintf 'env:%s:%s:%s:%s\\n' \"$KIRI_AGENT_ID\" \"$KIRI_PROJECT_CWD\" \"$KIRI_RUNTIME\" \"$KIRI_SESSION_DIR\"\nwhile IFS= read -r line; do printf 'input:%s\\n' \"$line\"; done\n",
+    )
+    .map_err(|error| error.to_string())?;
+    let mut permissions = fs::metadata(&path)
+        .map_err(|error| error.to_string())?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).map_err(|error| error.to_string())?;
+    Ok(path)
 }
 
 fn run_shutdown_smoke(state_dir: &Path, child: &mut std::process::Child) -> Result<(), String> {
