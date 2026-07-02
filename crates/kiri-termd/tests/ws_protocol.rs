@@ -29,6 +29,11 @@ fn wait_routes_match_screen_output_and_idle_targets() {
 }
 
 #[test]
+fn osc_3008_presence_updates_session_state() {
+    with_daemon(run_presence_smoke);
+}
+
+#[test]
 fn websocket_flow_control_pauses_until_client_ack() {
     with_daemon(run_flow_control_smoke);
 }
@@ -596,6 +601,66 @@ fn run_wait_smoke(state_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn run_presence_smoke(state_dir: &Path) -> Result<(), String> {
+    let record = wait_record(state_dir)?;
+    post_upsert(&record, state_dir)?;
+    let url = format!(
+        "ws://{}:{}{}?agentId=agent-t1&mode=shell&cols=80&rows=24&token={}",
+        record["host"].as_str().unwrap(),
+        record["port"].as_u64().unwrap(),
+        record["path"].as_str().unwrap(),
+        record["token"].as_str().unwrap()
+    );
+    let (mut socket, _) = connect(&url).map_err(|error| error.to_string())?;
+    assert_eq!(
+        read_json_frame(&mut socket, Duration::from_secs(5))?["type"],
+        "snapshot"
+    );
+    http_json(
+        &record,
+        "POST",
+        "/api/sessions/input",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "data": "printf '\\033]3008;start=claude;event=busy;pid=42\\033\\\\'\r"
+        })),
+    )?;
+    let busy = poll_session_presence(&record, "busy")?;
+    assert_eq!(busy["agent"], "claude");
+    assert_eq!(busy["pid"], 42);
+
+    http_json(
+        &record,
+        "POST",
+        "/api/sessions/input",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "data": "printf '\\033]3008;end=claude;event=session_end;pid=42\\033\\\\'\r"
+        })),
+    )?;
+    poll_session_presence_cleared(&record)?;
+    http_json(
+        &record,
+        "POST",
+        "/api/sessions/input",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "data": "printf '\\033]3008;start=claude;event=awaiting_input;pid=42\\033\\\\'\r"
+        })),
+    )?;
+    let awaiting = poll_session_presence(&record, "awaiting_input")?;
+    assert_eq!(awaiting["agent"], "claude");
+    http_json(
+        &record,
+        "POST",
+        "/api/sessions/input",
+        Some(json!({ "key": "proj-t1:shell", "data": "exit\r" })),
+    )?;
+    poll_session_exited_without_presence(&record, "proj-t1:shell")?;
+    let _ = socket.close(None);
+    Ok(())
+}
+
 fn run_flow_control_smoke(state_dir: &Path) -> Result<(), String> {
     let record = wait_record(state_dir)?;
     post_upsert(&record, state_dir)?;
@@ -1075,6 +1140,47 @@ fn poll_session_key_exists(record: &Value, key: &str) -> Result<(), String> {
     Err(format!("timed out waiting for session {key}"))
 }
 
+fn poll_session_presence(record: &Value, event: &str) -> Result<Value, String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let sessions = http_json(record, "GET", "/api/sessions", None)?;
+        if let Some(presence) = sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["key"] == "proj-t1:shell")
+            .and_then(|session| session["presence"].as_object())
+        {
+            if presence
+                .get("event")
+                .is_some_and(|value| value.as_str() == Some(event))
+            {
+                return Ok(Value::Object(presence.clone()));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!("timed out waiting for presence event {event}"))
+}
+
+fn poll_session_presence_cleared(record: &Value) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let sessions = http_json(record, "GET", "/api/sessions", None)?;
+        if sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["key"] == "proj-t1:shell")
+            .is_some_and(|session| session["presence"].is_null())
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err("timed out waiting for presence to clear".to_string())
+}
+
 fn wait_subscription_status(record: &Value, status: &str) -> Result<Value, String> {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
@@ -1280,6 +1386,27 @@ fn poll_session_exited(record: &Value, key: &str) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(50));
     }
     Err(format!("timed out waiting for session {key} to exit"))
+}
+
+fn poll_session_exited_without_presence(record: &Value, key: &str) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        let sessions = http_json(record, "GET", "/api/sessions", None)?;
+        if sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|session| {
+                session["key"] == key && session["exited"] == true && session["presence"].is_null()
+            })
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!(
+        "timed out waiting for session {key} to exit without presence"
+    ))
 }
 
 fn poll_read_contains(record: &Value, cursor: Option<&str>, needle: &str) -> Result<Value, String> {

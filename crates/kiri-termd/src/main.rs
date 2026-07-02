@@ -13,7 +13,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use futures_util::{SinkExt, StreamExt};
-use grid::Grid;
+use grid::{AgentPresenceEvent, AgentPresenceStatusEvent, Grid};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use rand::RngCore;
 use regex::{Regex, RegexBuilder};
@@ -79,6 +79,7 @@ struct Session {
     output_seq: AtomicU64,
     last_output_at_ms: AtomicU64,
     recent_output: Mutex<Vec<OutputChunk>>,
+    presence: Mutex<Option<AgentPresenceStatusEvent>>,
     attached_clients: AtomicUsize,
     idle_epoch: AtomicU64,
     flow_control: FlowControl,
@@ -588,6 +589,7 @@ async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) -> imp
             "rows": rows,
             "attachedClients": session.attached_clients.load(Ordering::SeqCst),
             "exited": session.exited.load(Ordering::SeqCst),
+            "presence": session.presence.lock().await.clone(),
         }));
     }
     Json(serde_json::json!({ "sessions": payload })).into_response()
@@ -1687,6 +1689,7 @@ fn spawn_pty_session(
             output_seq: AtomicU64::new(0),
             last_output_at_ms: AtomicU64::new(epoch_ms() as u64),
             recent_output: Mutex::new(Vec::new()),
+            presence: Mutex::new(None),
             attached_clients: AtomicUsize::new(0),
             idle_epoch: AtomicU64::new(0),
             flow_control: FlowControl::new(),
@@ -1715,11 +1718,16 @@ fn start_reader(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                     tokio::runtime::Handle::current().block_on(async move {
                         let seq = {
                             let mut grid = session.grid.lock().await;
-                            grid.feed(bytes);
+                            let presence_events = grid.feed(bytes);
                             session
                                 .last_output_at_ms
                                 .store(epoch_ms() as u64, Ordering::SeqCst);
-                            session.output_seq.fetch_add(1, Ordering::SeqCst) + 1
+                            let seq = session.output_seq.fetch_add(1, Ordering::SeqCst) + 1;
+                            drop(grid);
+                            for event in presence_events {
+                                record_presence_event(&session, event).await;
+                            }
+                            seq
                         };
                         if !text.is_empty() {
                             session
@@ -1737,6 +1745,7 @@ fn start_reader(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
             }
         }
         session.exited.store(true, Ordering::SeqCst);
+        tokio::runtime::Handle::current().block_on(clear_presence(&session));
         let _ = session.tx.send(SessionEvent::Exit {
             message: "terminal process exited".to_string(),
         });
@@ -1745,6 +1754,22 @@ fn start_reader(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
 
 async fn session_by_key(state: &AppState, key: &str) -> Option<Arc<Session>> {
     state.sessions.read().await.get(key).cloned()
+}
+
+async fn record_presence_event(session: &Session, event: AgentPresenceEvent) {
+    let AgentPresenceEvent::Status(status) = event else {
+        return;
+    };
+    let mut presence = session.presence.lock().await;
+    if status.event == "session_end" {
+        *presence = None;
+    } else {
+        *presence = Some(status);
+    }
+}
+
+async fn clear_presence(session: &Session) {
+    *session.presence.lock().await = None;
 }
 
 async fn write_session_input(session: &Session, data: &str) -> Result<()> {
@@ -1780,6 +1805,7 @@ async fn kill_session_process(state: &AppState, session: &Session) {
     session.exited.store(true, Ordering::SeqCst);
     session.idle_epoch.fetch_add(1, Ordering::SeqCst);
     session.flow_control.wake();
+    clear_presence(session).await;
     let _ = session.child.lock().await.kill();
     let _ = session.tx.send(SessionEvent::Exit {
         message: "terminal process exited".to_string(),
@@ -1810,6 +1836,7 @@ async fn close_all_sessions(state: &AppState) {
         session.exited.store(true, Ordering::SeqCst);
         session.idle_epoch.fetch_add(1, Ordering::SeqCst);
         session.flow_control.wake();
+        clear_presence(&session).await;
         let _ = session.child.lock().await.kill();
         let _ = session.tx.send(SessionEvent::Exit {
             message: "terminal process exited".to_string(),

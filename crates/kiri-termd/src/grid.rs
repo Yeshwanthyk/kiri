@@ -1,7 +1,13 @@
 use std::collections::VecDeque;
+
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use serde::Serialize;
 use vte::{Params, Parser, Perform};
 
 const DEFAULT_SCROLLBACK: usize = 10_000;
+const MAX_PRESENCE_PAYLOAD_BYTES: usize = 8_192;
+const MAX_NOTIFY_ENCODED_BYTES: usize = 4_096;
+const MAX_NOTIFY_DECODED_BYTES: usize = 4_096;
 
 const DEFAULT_ATTR: Attr = Attr {
     bold: false,
@@ -28,6 +34,29 @@ pub struct ScreenText {
     pub cursor_y: usize,
     pub cols: usize,
     pub rows: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum AgentPresenceEvent {
+    Status(AgentPresenceStatusEvent),
+    Notify(AgentPresenceNotifyEvent),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AgentPresenceStatusEvent {
+    pub agent: String,
+    pub event: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AgentPresenceNotifyEvent {
+    pub agent: String,
+    pub kind: String,
+    pub title: String,
+    pub body: String,
 }
 
 pub struct Grid {
@@ -61,14 +90,19 @@ impl Grid {
         }
     }
 
-    pub fn feed(&mut self, bytes: &[u8]) {
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<AgentPresenceEvent> {
         let mut parser = Parser::new();
         std::mem::swap(&mut parser, &mut self.parser);
+        let mut presence_events = Vec::new();
         {
-            let mut performer = GridPerformer { grid: self };
+            let mut performer = GridPerformer {
+                grid: self,
+                presence_events: &mut presence_events,
+            };
             parser.advance(&mut performer, bytes);
         }
         std::mem::swap(&mut parser, &mut self.parser);
+        presence_events
     }
 
     #[allow(dead_code)]
@@ -354,6 +388,7 @@ impl Grid {
 
 struct GridPerformer<'a> {
     grid: &'a mut Grid,
+    presence_events: &'a mut Vec<AgentPresenceEvent>,
 }
 
 impl Perform for GridPerformer<'_> {
@@ -370,12 +405,142 @@ impl Perform for GridPerformer<'_> {
     fn hook(&mut self, _: &Params, _: &[u8], _: bool, _: char) {}
     fn put(&mut self, _: u8) {}
     fn unhook(&mut self) {}
-    fn osc_dispatch(&mut self, _: &[&[u8]], _: bool) {}
+    fn osc_dispatch(&mut self, params: &[&[u8]], _: bool) {
+        if let Some(event) = parse_presence_osc(params) {
+            self.presence_events.push(event);
+        }
+    }
     fn esc_dispatch(&mut self, _: &[u8], _: bool, _: u8) {}
 
     fn csi_dispatch(&mut self, params: &Params, _: &[u8], _: bool, action: char) {
         self.grid.csi_dispatch(params, action);
     }
+}
+
+fn parse_presence_osc(params: &[&[u8]]) -> Option<AgentPresenceEvent> {
+    let (code, payload_parts) = params.split_first()?;
+    if *code != b"3008" {
+        return None;
+    }
+    let payload = payload_parts
+        .iter()
+        .map(|part| String::from_utf8_lossy(part))
+        .collect::<Vec<_>>()
+        .join(";");
+    parse_agent_presence_osc(&payload)
+}
+
+fn parse_agent_presence_osc(payload: &str) -> Option<AgentPresenceEvent> {
+    if payload.len() > MAX_PRESENCE_PAYLOAD_BYTES {
+        return None;
+    }
+    let fields = parse_fields(payload)?;
+    let agent =
+        parse_agent(field_value(&fields, "start").or_else(|| field_value(&fields, "end"))?)?;
+    if field_value(&fields, "kind") == Some("notify") {
+        if field_value(&fields, "end").is_some() {
+            return None;
+        }
+        return Some(AgentPresenceEvent::Notify(AgentPresenceNotifyEvent {
+            agent,
+            kind: "notify".to_string(),
+            title: decode_notify_field(field_value(&fields, "title")?)?,
+            body: decode_notify_field(field_value(&fields, "body")?)?,
+        }));
+    }
+    let event = parse_status(field_value(&fields, "event")?)?;
+    if field_value(&fields, "end").is_some() && event != "session_end" {
+        return None;
+    }
+    let pid = match field_value(&fields, "pid") {
+        Some(value) => Some(parse_pid(value)?),
+        None => None,
+    };
+    Some(AgentPresenceEvent::Status(AgentPresenceStatusEvent {
+        agent,
+        event,
+        pid,
+    }))
+}
+
+fn parse_fields(payload: &str) -> Option<Vec<(String, String)>> {
+    let mut fields = Vec::new();
+    for raw_part in payload.split(';') {
+        let part = raw_part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let separator = part.find('=')?;
+        if separator == 0 {
+            return None;
+        }
+        let key = part[..separator].trim();
+        let value = part[(separator + 1)..].trim();
+        if key.is_empty() || value.is_empty() {
+            return None;
+        }
+        fields.push((key.to_string(), value.to_string()));
+    }
+    Some(fields)
+}
+
+fn field_value<'a>(fields: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    fields
+        .iter()
+        .rev()
+        .find_map(|(field_key, value)| (field_key == key).then_some(value.as_str()))
+}
+
+fn parse_agent(value: &str) -> Option<String> {
+    matches!(value, "claude" | "codex" | "opencode" | "pi").then(|| value.to_string())
+}
+
+fn parse_status(value: &str) -> Option<String> {
+    matches!(
+        value,
+        "session_start" | "busy" | "awaiting_input" | "idle" | "session_end"
+    )
+    .then(|| value.to_string())
+}
+
+fn parse_pid(value: &str) -> Option<u64> {
+    if value.is_empty()
+        || value.len() > 16
+        || value.starts_with('0')
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|pid| *pid <= 9_007_199_254_740_991)
+}
+
+fn decode_notify_field(value: &str) -> Option<String> {
+    if value.is_empty() || value.len() > MAX_NOTIFY_ENCODED_BYTES || value.len() % 4 != 0 {
+        return None;
+    }
+    let mut padding = 0;
+    let mut saw_padding = false;
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' if !saw_padding => {}
+            b'=' => {
+                saw_padding = true;
+                padding += 1;
+                if padding > 2 {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    let decoded = BASE64_STANDARD.decode(value.as_bytes()).ok()?;
+    if decoded.len() > MAX_NOTIFY_DECODED_BYTES {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&decoded).into_owned())
 }
 
 fn blank_cell() -> Cell {
@@ -534,5 +699,58 @@ mod tests {
 
         assert!(!snapshot.contains("one"));
         assert!(snapshot.contains("three"));
+    }
+
+    #[test]
+    fn parses_osc_3008_status_events() {
+        let mut grid = Grid::new(20, 3);
+        let events = grid.feed(b"\x1b]3008;start=claude;event=busy;pid=42\x1b\\");
+
+        assert_eq!(
+            events,
+            vec![AgentPresenceEvent::Status(AgentPresenceStatusEvent {
+                agent: "claude".to_string(),
+                event: "busy".to_string(),
+                pid: Some(42),
+            })]
+        );
+        assert_eq!(grid.read_screen().lines[0], "");
+    }
+
+    #[test]
+    fn parses_osc_3008_notify_events() {
+        let mut grid = Grid::new(20, 3);
+        let events = grid.feed(
+            b"\x1b]3008;start=codex;kind=notify;title=TmVlZHMgaW5wdXQ=;body=UGljayBhbiBvcHRpb24=\x1b\\",
+        );
+
+        assert_eq!(
+            events,
+            vec![AgentPresenceEvent::Notify(AgentPresenceNotifyEvent {
+                agent: "codex".to_string(),
+                kind: "notify".to_string(),
+                title: "Needs input".to_string(),
+                body: "Pick an option".to_string(),
+            })]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_osc_3008_payloads() {
+        for payload in [
+            "start=unknown;event=busy",
+            "start=claude;event=nope",
+            "start=claude;event=busy;pid=0",
+            "end=claude;event=busy",
+            "start=claude;kind=notify;title=not base64;body=ok",
+        ] {
+            let mut grid = Grid::new(20, 3);
+            let bytes = format!("\x1b]3008;{payload}\x1b\\");
+            assert!(grid.feed(bytes.as_bytes()).is_empty(), "{payload}");
+        }
+
+        let mut grid = Grid::new(20, 3);
+        let oversized = format!("\x1b]3008;{}\x1b\\", "x".repeat(8_193));
+        assert!(grid.feed(oversized.as_bytes()).is_empty());
     }
 }
