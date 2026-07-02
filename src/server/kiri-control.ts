@@ -67,8 +67,8 @@ import { triggerScratchpadSession } from './scratchpad-trigger'
 import { getSettings } from './settings'
 import { pasteAgentRuntimeTerminal, terminalControlRequest } from './terminal-server'
 import {
+  archiveSessionSummaryWithRuntimeCleanup,
   deleteProjectSummaryWithRuntimeCleanup,
-  deleteSessionSummaryWithRuntimeCleanup,
 } from './runtime-cleanup'
 import {
   archiveWorkflowRun as archiveWorkflowRunById,
@@ -268,7 +268,7 @@ export type KiriControlDependencies = {
     readonly agentId: string
     readonly title: string
   }) => SessionSummary
-  readonly deleteSessionSummary: (input: { readonly agentId: string }) => SessionSummary
+  readonly archiveSessionSummary: (input: { readonly agentId: string }) => SessionSummary
   readonly restoreSessionSummary: (input: RestoreSessionInput) => SessionSummary
   readonly promptAgent: typeof promptAgent
   readonly steerAgent: typeof steerAgent
@@ -318,7 +318,7 @@ const liveKiriControlDependencies: KiriControlDependencies = {
   listAgentEvents,
   startSessionSummary,
   renameSessionSummary,
-  deleteSessionSummary: deleteSessionSummaryWithRuntimeCleanup,
+  archiveSessionSummary: archiveSessionSummaryWithRuntimeCleanup,
   restoreSessionSummary,
   promptAgent,
   steerAgent,
@@ -423,8 +423,8 @@ export function makeKiriControl(
     },
   )
 
-  const deleteSessionEffect = Effect.fn('KiriControl.deleteSession')(function* (agentId: string) {
-    return yield* fromSync(() => dependencies.deleteSessionSummary({ agentId }))
+  const archiveSessionEffect = Effect.fn('KiriControl.deleteSession')(function* (agentId: string) {
+    return yield* fromSync(() => dependencies.archiveSessionSummary({ agentId }))
   })
 
   const restoreSessionEffect = Effect.fn('KiriControl.restoreSession')(function* (input: RestoreSessionInput) {
@@ -808,7 +808,7 @@ export function makeKiriControl(
     startSession: startSessionEffect,
     spawnSession: spawnSessionEffect,
     renameSession: renameSessionEffect,
-    deleteSession: deleteSessionEffect,
+    deleteSession: archiveSessionEffect,
     restoreSession: restoreSessionEffect,
     agentPrompt: agentPromptEffect,
     setAgentStatus: setAgentStatusEffect,

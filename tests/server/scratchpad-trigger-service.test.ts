@@ -185,7 +185,7 @@ describe('ScratchpadTriggerService', () => {
         calls.push('prompt')
         return Promise.reject(new Error('Prompt failed'))
       },
-      deleteSessionSummary: (input) => {
+      archiveSessionSummary: (input) => {
         calls.push(`delete:${input.agentId}`)
       },
       reportPromptFailure: (error) => {
@@ -214,7 +214,7 @@ describe('ScratchpadTriggerService', () => {
         calls.push('mark')
         throw new Error('Mark failed')
       },
-      deleteSessionSummary: (input) => {
+      archiveSessionSummary: (input) => {
         calls.push(`delete:${input.agentId}`)
       },
       promptAgent: () => {
@@ -274,7 +274,7 @@ function testDependencies(
       updatedAt: '2026-01-01T00:00:00.000Z',
       archivedAt: null,
     }],
-    deleteSessionSummary: () => undefined,
+    archiveSessionSummary: () => undefined,
     promptAgent: () => Promise.resolve(),
     queueAgentTerminalInput: () => undefined,
     pasteAgentRuntimeTerminal: (input) => Promise.resolve({ agentId: input.agentId, mode: 'runtime' }),

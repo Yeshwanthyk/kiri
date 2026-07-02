@@ -398,7 +398,7 @@ function testDependencies(
     reorderProjects: () => snapshot,
     unhideProject: () => snapshot,
     chooseProjectDirectory: () => '/tmp/project',
-    deleteSession: () => snapshot,
+    archiveSession: () => snapshot,
     restoreSession: () => snapshot,
     renameSession: () => snapshot,
     promptAgent: () => Promise.resolve(),

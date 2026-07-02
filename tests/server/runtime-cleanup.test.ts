@@ -3,8 +3,8 @@ import type { WorkspaceSnapshot } from '~/lib/contracts'
 import { defaultUiPreferences } from '~/lib/ui-preferences'
 import {
   deleteProjectSummaryWithRuntimeCleanup,
-  deleteSessionWithRuntimeCleanup,
-  deleteSessionSummaryWithRuntimeCleanup,
+  archiveSessionWithRuntimeCleanup,
+  archiveSessionSummaryWithRuntimeCleanup,
 } from '~/server/runtime-cleanup'
 
 const emptyWorkspaceSnapshot: WorkspaceSnapshot = {
@@ -176,12 +176,12 @@ describe('runtime cleanup use-cases', () => {
   it('cleans a session runtime before archiving the session', () => {
     const calls: string[] = []
 
-    const result = deleteSessionSummaryWithRuntimeCleanup({ agentId: 'agent-1' }, {
+    const result = archiveSessionSummaryWithRuntimeCleanup({ agentId: 'agent-1' }, {
       findSession: (agentId) => {
         calls.push(`find:${agentId}`)
         return { id: agentId, runtime: 'codex' }
       },
-      deleteSession: (input) => {
+      archiveSession: (input) => {
         calls.push(`delete:${input.agentId}`)
         return {
           id: input.agentId,
@@ -219,12 +219,12 @@ describe('runtime cleanup use-cases', () => {
   it('returns workspace delete results from the workspace session cleanup helper', () => {
     const calls: string[] = []
 
-    const result = deleteSessionWithRuntimeCleanup({ agentId: 'agent-1' }, {
+    const result = archiveSessionWithRuntimeCleanup({ agentId: 'agent-1' }, {
       findSession: (agentId) => {
         calls.push(`find:${agentId}`)
         return { id: agentId, runtime: 'pi' }
       },
-      deleteSession: (input) => {
+      archiveSession: (input) => {
         calls.push(`delete:${input.agentId}`)
         return emptyWorkspaceSnapshot
       },
@@ -249,12 +249,12 @@ describe('runtime cleanup use-cases', () => {
     const calls: string[] = []
 
     expect(() =>
-      deleteSessionSummaryWithRuntimeCleanup({ agentId: 'agent-1' }, {
+      archiveSessionSummaryWithRuntimeCleanup({ agentId: 'agent-1' }, {
         findSession: (agentId) => {
           calls.push(`find:${agentId}`)
           return { id: agentId, runtime: 'codex' }
         },
-        deleteSession: (input) => {
+        archiveSession: (input) => {
           calls.push(`delete:${input.agentId}`)
           return {
             id: input.agentId,
@@ -292,12 +292,12 @@ describe('runtime cleanup use-cases', () => {
     const calls: string[] = []
 
     expect(() =>
-      deleteSessionSummaryWithRuntimeCleanup({ agentId: 'agent-1' }, {
+      archiveSessionSummaryWithRuntimeCleanup({ agentId: 'agent-1' }, {
         findSession: (agentId) => {
           calls.push(`find:${agentId}`)
           return { id: agentId, runtime: 'pi' }
         },
-        deleteSession: (input) => {
+        archiveSession: (input) => {
           calls.push(`delete:${input.agentId}`)
           throw new Error('Archive failed')
         },
@@ -322,12 +322,12 @@ describe('runtime cleanup use-cases', () => {
     const calls: string[] = []
 
     expect(() =>
-      deleteSessionSummaryWithRuntimeCleanup({ agentId: 'agent-1' }, {
+      archiveSessionSummaryWithRuntimeCleanup({ agentId: 'agent-1' }, {
         findSession: (agentId) => {
           calls.push(`find:${agentId}`)
           return undefined
         },
-        deleteSession: (input) => {
+        archiveSession: (input) => {
           calls.push(`delete:${input.agentId}`)
           return {
             id: input.agentId,

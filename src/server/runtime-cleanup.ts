@@ -1,9 +1,9 @@
 import type { DeleteSessionInput, RuntimeKind } from '~/lib/contracts'
 import {
+  archiveSession,
+  archiveSessionSummary,
   deleteProject,
   deleteProjectSummary,
-  deleteSession,
-  deleteSessionSummary,
   listSessionSummaries,
 } from './db'
 import { forgetProviderRuntimeAgent } from './provider-runtime'
@@ -27,7 +27,7 @@ type ProjectRuntimeCleanupDependencies<Result> = RuntimeCleanupDependencies & {
 
 type SessionRuntimeCleanupDependencies<Result> = RuntimeCleanupDependencies & {
   readonly findSession: (agentId: string) => RuntimeCleanupSession | undefined
-  readonly deleteSession: (input: DeleteSessionInput) => Result
+  readonly archiveSession: (input: DeleteSessionInput) => Result
 }
 
 const liveCleanupDependencies: RuntimeCleanupDependencies = {
@@ -79,26 +79,26 @@ export function deleteProjectSummaryWithRuntimeCleanup(
   return deleteProjectAndCleanupRuntimes(id, dependencies)
 }
 
-export function deleteSessionWithRuntimeCleanup(
+export function archiveSessionWithRuntimeCleanup(
   input: DeleteSessionInput,
-  dependencies: SessionRuntimeCleanupDependencies<ReturnType<typeof deleteSession>> = {
+  dependencies: SessionRuntimeCleanupDependencies<ReturnType<typeof archiveSession>> = {
     ...liveCleanupDependencies,
     findSession: findActiveSessionForRuntimeCleanup,
-    deleteSession,
+    archiveSession,
   },
 ) {
-  return deleteSessionAndCleanupRuntime(input, dependencies)
+  return archiveSessionAndCleanupRuntime(input, dependencies)
 }
 
-export function deleteSessionSummaryWithRuntimeCleanup(
+export function archiveSessionSummaryWithRuntimeCleanup(
   input: DeleteSessionInput,
-  dependencies: SessionRuntimeCleanupDependencies<ReturnType<typeof deleteSessionSummary>> = {
+  dependencies: SessionRuntimeCleanupDependencies<ReturnType<typeof archiveSessionSummary>> = {
     ...liveCleanupDependencies,
     findSession: findAnySessionForRuntimeCleanup,
-    deleteSession: deleteSessionSummary,
+    archiveSession: archiveSessionSummary,
   },
 ) {
-  return deleteSessionAndCleanupRuntime(input, dependencies)
+  return archiveSessionAndCleanupRuntime(input, dependencies)
 }
 
 function deleteProjectAndCleanupRuntimes<Result>(
@@ -116,7 +116,7 @@ function deleteProjectAndCleanupRuntimes<Result>(
   return dependencies.deleteProject(id)
 }
 
-function deleteSessionAndCleanupRuntime<Result>(
+function archiveSessionAndCleanupRuntime<Result>(
   input: DeleteSessionInput,
   dependencies: SessionRuntimeCleanupDependencies<Result>,
 ) {
@@ -124,7 +124,7 @@ function deleteSessionAndCleanupRuntime<Result>(
   if (!session) throw new Error(`Session not found: ${input.agentId}`)
 
   throwCleanupErrors(cleanupRuntimeSessions([session], dependencies))
-  return dependencies.deleteSession(input)
+  return dependencies.archiveSession(input)
 }
 
 function findActiveSessionForRuntimeCleanup(agentId: string) {

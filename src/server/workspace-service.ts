@@ -63,8 +63,8 @@ import {
   steerAgent,
 } from './runtime'
 import {
+  archiveSessionWithRuntimeCleanup,
   deleteProjectWithRuntimeCleanup,
-  deleteSessionWithRuntimeCleanup,
 } from './runtime-cleanup'
 import { triggerScratchpadSessionAndSpawn } from './scratchpad-trigger'
 import { TerminalServerService, type TerminalServerApi } from './terminal-server'
@@ -173,7 +173,7 @@ export type WorkspaceServiceDependencies = {
   readonly reorderProjects: (input: ReorderProjectsInput) => WorkspaceSnapshot
   readonly unhideProject: (id: string) => WorkspaceSnapshot
   readonly chooseProjectDirectory: () => string
-  readonly deleteSession: (input: DeleteSessionInput) => WorkspaceSnapshot
+  readonly archiveSession: (input: DeleteSessionInput) => WorkspaceSnapshot
   readonly restoreSession: (input: RestoreSessionInput) => WorkspaceSnapshot
   readonly renameSession: (input: RenameSessionInput) => WorkspaceSnapshot
   readonly promptAgent: (input: SendMessageInput) => Promise<unknown>
@@ -221,7 +221,7 @@ function liveWorkspaceServiceDependencies(
     reorderProjects,
     unhideProject,
     chooseProjectDirectory,
-    deleteSession: deleteSessionWithRuntimeCleanup,
+    archiveSession: archiveSessionWithRuntimeCleanup,
     restoreSession,
     renameSession,
     promptAgent,
@@ -346,7 +346,7 @@ export function makeWorkspaceService(
     chooseProjectDirectory: Effect.fn('WorkspaceService.chooseProjectDirectory')(function* () {
       return yield* syncCall('WorkspaceService.chooseProjectDirectory', dependencies.chooseProjectDirectory)
     }),
-    deleteSession: syncSnapshotMethod('WorkspaceService.deleteSession', dependencies.deleteSession),
+    deleteSession: syncSnapshotMethod('WorkspaceService.deleteSession', dependencies.archiveSession),
     restoreSession: Effect.fn('WorkspaceService.restoreSession')(function* (input) {
       const next = yield* syncCall(
         'WorkspaceService.restoreSession',

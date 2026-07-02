@@ -346,17 +346,17 @@ function insertSession(input: StartSessionInput) {
   })
 }
 
-export function deleteSession(input: DeleteSessionInput) {
-  archiveSession(input)
+export function archiveSession(input: DeleteSessionInput) {
+  archiveSessionByInput(input)
   return getWorkspaceSnapshot()
 }
 
-export function deleteSessionSummary(input: DeleteSessionInput) {
-  const id = archiveSession(input)
+export function archiveSessionSummary(input: DeleteSessionInput) {
+  const id = archiveSessionByInput(input)
   return requireSessionSummary(getDb(), id, true)
 }
 
-function archiveSession(input: DeleteSessionInput) {
+function archiveSessionByInput(input: DeleteSessionInput) {
   return archiveSessionRow(getDb(), input.agentId)
 }
 

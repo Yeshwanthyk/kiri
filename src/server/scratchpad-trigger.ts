@@ -12,7 +12,7 @@ import {
   queueAgentTerminalInput,
   startSessionAndGetId,
 } from './db'
-import { deleteSessionSummaryWithRuntimeCleanup } from './runtime-cleanup'
+import { archiveSessionSummaryWithRuntimeCleanup } from './runtime-cleanup'
 import { promptAgent } from './runtime'
 import {
   defaultRuntimeTurnAcceptanceWindowMs,
@@ -84,7 +84,7 @@ export type ScratchpadTriggerDependencies = {
   }) => string
   readonly markScratchpadBlockTriggered: (id: string, agentId: string) => void
   readonly listSessionSummaries: (input: { readonly includeArchived: true }) => readonly TriggerScratchpadSession[]
-  readonly deleteSessionSummary: (input: { readonly agentId: string }) => unknown
+  readonly archiveSessionSummary: (input: { readonly agentId: string }) => unknown
   readonly promptAgent: typeof promptAgent
   readonly queueAgentTerminalInput: typeof queueAgentTerminalInput
   readonly pasteAgentRuntimeTerminal: typeof pasteAgentRuntimeTerminal
@@ -97,7 +97,7 @@ const liveScratchpadTriggerDependencies: ScratchpadTriggerDependencies = {
   startSessionAndGetId,
   markScratchpadBlockTriggered,
   listSessionSummaries,
-  deleteSessionSummary: deleteSessionSummaryWithRuntimeCleanup,
+  archiveSessionSummary: archiveSessionSummaryWithRuntimeCleanup,
   promptAgent,
   queueAgentTerminalInput,
   pasteAgentRuntimeTerminal,
@@ -177,7 +177,7 @@ async function triggerScratchpadSessionWithDeps(
     dependencies.markScratchpadBlockTriggered(input.id, agentId)
   } catch (error) {
     try {
-      dependencies.deleteSessionSummary({ agentId })
+      dependencies.archiveSessionSummary({ agentId })
     } catch {
       // The mark failure is the primary signal; cleanup is best effort.
     }
@@ -203,7 +203,7 @@ async function triggerScratchpadSessionWithDeps(
       )
     } catch (error) {
       try {
-        dependencies.deleteSessionSummary({ agentId })
+        dependencies.archiveSessionSummary({ agentId })
       } catch {
         // The prompt failure is the primary signal; cleanup is best effort.
       }

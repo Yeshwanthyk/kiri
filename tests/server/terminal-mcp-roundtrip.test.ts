@@ -54,7 +54,7 @@ function dependencies(handle: KiritermDaemonHandle): KiriControlDependencies {
     listAgentEvents: () => notUsed('listAgentEvents'),
     startSessionSummary: () => notUsed('startSessionSummary'),
     renameSessionSummary: () => notUsed('renameSessionSummary'),
-    deleteSessionSummary: () => notUsed('deleteSessionSummary'),
+    archiveSessionSummary: () => notUsed('archiveSessionSummary'),
     restoreSessionSummary: () => notUsed('restoreSessionSummary'),
     promptAgent: () => notUsed('promptAgent'),
     steerAgent: () => notUsed('steerAgent'),

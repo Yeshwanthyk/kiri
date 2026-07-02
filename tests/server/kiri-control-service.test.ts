@@ -109,7 +109,7 @@ describe('KiriControl service construction', () => {
         calls.push(`deleteProject:${id}`)
         return projectSummary(id)
       },
-      deleteSessionSummary: (input) => {
+      archiveSessionSummary: (input) => {
         calls.push(`deleteSession:${input.agentId}`)
         return sessionSummary(input.agentId)
       },
@@ -498,7 +498,7 @@ function testDependencies(
     })(),
     startSessionSummary: () => sessionSummary('agent-1'),
     renameSessionSummary: (input) => ({ ...sessionSummary(input.agentId), title: input.title }),
-    deleteSessionSummary: (input) => ({ ...sessionSummary(input.agentId), archivedAt: '2026-01-01T00:00:01.000Z' }),
+    archiveSessionSummary: (input) => ({ ...sessionSummary(input.agentId), archivedAt: '2026-01-01T00:00:01.000Z' }),
     restoreSessionSummary: (input) => sessionSummary(input.agentId),
     promptAgent: () => Promise.resolve({}),
     steerAgent: () => Promise.resolve({}),
