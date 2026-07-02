@@ -122,22 +122,24 @@ describe('Codex terminal session memory', () => {
     expect(readCodexTerminalSessionId(config.sessionDir)).toBeUndefined()
   })
 
-  it('remembers the launch-local Codex session when later same-cwd sessions already exist', async () => {
+  it('fails closed when scan fallback sees multiple same-cwd candidates', async () => {
     const { rememberCodexTerminalSession } = await import('~/server/codex-cli-sessions')
     const codexHome = mkdtempSync(join(tmpdir(), 'kiri-codex-home-'))
     const cwd = '/tmp/project'
-    const config = launchConfig({ id: 'agent-reopen', cwd })
+    const config = launchConfig({ id: 'agent-ambiguous', cwd })
     writeCodexSession(codexHome, '2026/05/15/rollout-original.jsonl', 'original-session', cwd, 10)
     writeCodexSession(codexHome, '2026/05/15/rollout-reopen.jsonl', 'reopen-session', cwd, 40)
 
-    await rememberCodexTerminalSession(config, { CODEX_HOME: codexHome }, {
+    await expect(rememberCodexTerminalSession(config, { CODEX_HOME: codexHome }, {
       launchedAtMs: 9_500,
       launchToken: 'launch-token',
       hookWaitMs: 0,
-    })
+      attempts: 1,
+      intervalMs: 5,
+    })).resolves.toBe(false)
 
-    expect(dbMock.state.get(config.id)).toEqual({ codexSessionId: 'original-session' })
-    expect(readCodexTerminalSessionId(config.sessionDir)).toBe('original-session')
+    expect(dbMock.state.get(config.id)).toBeUndefined()
+    expect(readCodexTerminalSessionId(config.sessionDir)).toBeUndefined()
   })
 
   it('remembers a fresh hook binding before scanning shared Codex sessions', async () => {

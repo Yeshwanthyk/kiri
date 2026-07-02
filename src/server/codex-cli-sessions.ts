@@ -90,6 +90,7 @@ export function findLatestCodexSessionForCwd(input: CodexSessionDiscoveryInput) 
     }
   }
 
+  if (input.requireUnique) return matchingSessions.length === 1 ? matchingSessions[0].id : null
   if (input.closestToMs !== undefined) {
     const closestToMs = input.closestToMs
     matchingSessions.sort((left, right) =>
@@ -97,8 +98,7 @@ export function findLatestCodexSessionForCwd(input: CodexSessionDiscoveryInput) 
       || left.sortMs - right.sortMs)
     return matchingSessions[0]?.id ?? null
   }
-  if (!input.requireUnique) return matchingSessions[0]?.id ?? null
-  return matchingSessions.length === 1 ? matchingSessions[0].id : null
+  return matchingSessions[0]?.id ?? null
 }
 
 export async function rememberCodexTerminalSession(
@@ -139,7 +139,7 @@ export async function rememberCodexTerminalSession(
     codexHome: env.CODEX_HOME,
     cwd: config.cwd,
     newerThanMs: input.launchedAtMs - 1000,
-    closestToMs: input.launchedAtMs,
+    requireUnique: true,
     attempts: remainingAttempts,
     intervalMs,
   })

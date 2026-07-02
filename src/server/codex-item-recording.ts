@@ -78,5 +78,16 @@ export function codexItemRecord(
     }
   }
 
-  return null
+  return {
+    type: 'timelineEvent',
+    value: {
+      agentId,
+      kind: 'codex_unrecognized_item',
+      tone: 'info',
+      label: `Unrecognized item: ${type}`,
+      detail: null,
+      payload: item,
+      timestamp,
+    },
+  }
 }

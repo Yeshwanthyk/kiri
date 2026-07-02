@@ -45,11 +45,7 @@ export function makeCodexRetainedState(input: {
     if (!turnKey) return false
     if (turnKeys.has(turnKey)) return false
     turnKeys.add(turnKey)
-    while (turnKeys.size > maxTurnKeys) {
-      const oldest = turnKeys.values().next().value
-      if (!oldest) break
-      turnKeys.delete(oldest)
-    }
+    pruneOldestTurnKeysForThread(turnKeys, turnKeyThreadId(turnKey), maxTurnKeys)
     return true
   }
 
@@ -159,4 +155,29 @@ export function makeCodexRetainedState(input: {
 
 export function codexRetainedTurnKey(threadId: string, turnId: string) {
   return `${threadId}:${turnId}`
+}
+
+function turnKeyThreadId(turnKey: string) {
+  const separatorIndex = turnKey.indexOf(':')
+  return separatorIndex === -1 ? turnKey : turnKey.slice(0, separatorIndex)
+}
+
+function pruneOldestTurnKeysForThread(
+  turnKeys: Set<string>,
+  threadId: string,
+  maxTurnKeys: number,
+) {
+  const prefix = `${threadId}:`
+  let count = 0
+  for (const turnKey of turnKeys) {
+    if (turnKey === threadId || turnKey.startsWith(prefix)) count += 1
+  }
+  while (count > maxTurnKeys) {
+    for (const turnKey of turnKeys) {
+      if (turnKey !== threadId && !turnKey.startsWith(prefix)) continue
+      turnKeys.delete(turnKey)
+      count -= 1
+      break
+    }
+  }
 }

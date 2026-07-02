@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Effect } from 'effect'
@@ -60,9 +60,18 @@ function stubCodexTerminalEnv() {
   vi.stubEnv('KIRI_MCP_BIN', '/tmp/bin/kiri-mcp')
 }
 
+function writeCodexHelpScript(path: string, supportsHooks: boolean) {
+  writeFileSync(path, [
+    '#!/bin/sh',
+    supportsHooks ? 'printf "%s\\n" "dangerously-bypass-hook-trust"' : 'printf "%s\\n" "codex help"',
+  ].join('\n'))
+  chmodSync(path, 0o755)
+}
+
 describe('buildTerminalProcessLaunch', () => {
   afterEach(() => {
     vi.unstubAllEnvs()
+    vi.useRealTimers()
   })
 
   it('launches Claude Code in yolo mode and preserves Kiri runtime metadata', () => {
@@ -228,6 +237,24 @@ describe('buildTerminalProcessLaunch', () => {
 
     expect(launch.args).not.toContain('--dangerously-bypass-hook-trust')
     expect(launch.args).not.toContain('--enable')
+  })
+
+  it('re-probes Codex hook support after the cache TTL expires', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const binDir = mkdtempSync(join(tmpdir(), 'kiri-codex-bin-'))
+    const codexBin = join(binDir, 'codex')
+    writeCodexHelpScript(codexBin, false)
+    vi.stubEnv('KIRI_CODEX_BIN', codexBin)
+    vi.stubEnv('KIRI_MCP_BIN', '/tmp/bin/kiri-mcp')
+
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+    expect(buildTerminalProcessLaunch(launchConfig('codex'), 'runtime', shell).args)
+      .not.toContain('--dangerously-bypass-hook-trust')
+
+    writeCodexHelpScript(codexBin, true)
+    vi.setSystemTime(new Date('2026-01-01T01:00:01.000Z'))
+    expect(buildTerminalProcessLaunch(launchConfig('codex'), 'runtime', shell).args)
+      .toContain('--dangerously-bypass-hook-trust')
   })
 
   it('passes queued terminal input to new Codex sessions as the initial prompt', () => {

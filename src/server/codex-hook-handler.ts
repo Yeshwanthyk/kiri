@@ -10,14 +10,16 @@ export type CodexSessionStartHookResult = {
   readonly reason?: string
 }
 
-export async function handleCodexSessionStartHook(input: {
+export function handleCodexSessionStartHook(input: {
   readonly stdin: string
   readonly env: NodeJS.ProcessEnv
-}): Promise<CodexSessionStartHookResult> {
+}): CodexSessionStartHookResult {
   try {
     const sessionDir = stringValue(input.env.KIRI_SESSION_DIR)
     const agentId = stringValue(input.env.KIRI_AGENT_ID)
-    if (!sessionDir || !agentId) return { ok: true }
+    if (!sessionDir || !agentId) {
+      return { ok: true, reason: 'KIRI_SESSION_DIR/KIRI_AGENT_ID not set; skipping' }
+    }
     if (!isAbsolute(sessionDir)) return { ok: false, reason: 'KIRI_SESSION_DIR must be absolute' }
 
     const payload = parseHookPayload(input.stdin)
@@ -27,7 +29,6 @@ export async function handleCodexSessionStartHook(input: {
       return { ok: true, reason: 'Ignored SessionStart hook for a different cwd' }
     }
 
-    writeCodexTerminalSessionId(sessionDir, payload.sessionId)
     writeCodexHookSessionBinding(sessionDir, {
       agentId,
       sessionId: payload.sessionId,
@@ -38,6 +39,7 @@ export async function handleCodexSessionStartHook(input: {
       hookEventName: 'SessionStart',
       writtenAtMs: Date.now(),
     })
+    writeCodexTerminalSessionId(sessionDir, payload.sessionId)
     return { ok: true }
   } catch (error) {
     return {
@@ -75,6 +77,9 @@ function parseHookPayload(input: string):
   }
   const sessionId = normalizeCodexSessionId(record.session_id)
   if (!sessionId) return { ok: false, reason: 'Missing session_id' }
+  if (stringValue(record.thread_source) === 'subagent') {
+    return { ok: false, reason: 'Ignored SessionStart hook for a subagent thread' }
+  }
   return {
     ok: true,
     sessionId,

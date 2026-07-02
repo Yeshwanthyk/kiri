@@ -41,9 +41,11 @@ type PendingTurnCompletion = {
   cleanup: () => void
 }
 
-class CodexAppServerError extends Data.TaggedError('CodexAppServerError')<{
+export class CodexAppServerError extends Data.TaggedError('CodexAppServerError')<{
   readonly message: string
   readonly cause?: unknown
+  readonly code?: number
+  readonly data?: unknown
 }> {}
 
 async function runCodexEffect<A>(
@@ -59,7 +61,7 @@ async function runCodexEffect<A>(
 const defaultCodexPort = 8390
 const requestTimeoutMs = 30_000
 const turnTimeoutMs = 30 * 60_000
-const maxCachedCompletedTurns = 100
+const maxCachedCompletedTurnsPerThread = 100
 
 export class CodexAppServerAdapter {
   private socket: WebSocket | null = null
@@ -416,6 +418,10 @@ export class CodexAppServerAdapter {
         pending?.resume(Effect.fail(codexAppServerError(
           response.error.message ?? 'Codex app-server request failed',
           response.error,
+          {
+            code: response.error.code,
+            data: response.error.data,
+          },
         )))
       } else {
         pending?.resume(Effect.succeed(response.result))
@@ -452,11 +458,7 @@ export class CodexAppServerAdapter {
     const params = decodeServerParams(message, TurnCompletedParamsSchema)
     if (!params?.turn.id) return
     this.completedTurns.set(completedTurnKey(params.threadId, params.turn.id), params.turn)
-    while (this.completedTurns.size > maxCachedCompletedTurns) {
-      const firstKey = this.completedTurns.keys().next().value
-      if (!firstKey) break
-      this.completedTurns.delete(firstKey)
-    }
+    this.pruneCompletedTurnsForThread(params.threadId)
   }
 
   private completedTurn(input: { threadId: string; turnId?: string }) {
@@ -473,6 +475,20 @@ export class CodexAppServerAdapter {
       }
     }
     return undefined
+  }
+
+  private pruneCompletedTurnsForThread(threadId: string) {
+    const prefix = `${threadId}:`
+    let count = 0
+    for (const key of this.completedTurns.keys()) {
+      if (key.startsWith(prefix)) count += 1
+    }
+    while (count > maxCachedCompletedTurnsPerThread) {
+      const firstKey = Array.from(this.completedTurns.keys()).find((key) => key.startsWith(prefix))
+      if (!firstKey) break
+      this.completedTurns.delete(firstKey)
+      count -= 1
+    }
   }
 }
 
@@ -532,9 +548,18 @@ function cachedTurnResult(turn: CodexTurn) {
   return Promise.resolve(turn)
 }
 
-function codexAppServerError(message: string, cause?: unknown) {
+function codexAppServerError(
+  message: string,
+  cause?: unknown,
+  details: { readonly code?: number; readonly data?: unknown } = {},
+) {
   return new CodexAppServerError(
-    cause === undefined ? { message } : { message, cause },
+    {
+      message,
+      ...(cause === undefined ? {} : { cause }),
+      ...(details.code === undefined ? {} : { code: details.code }),
+      ...(details.data === undefined ? {} : { data: details.data }),
+    },
   )
 }
 

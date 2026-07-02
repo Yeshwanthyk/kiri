@@ -14,10 +14,10 @@ import {
 const projectRoot = process.cwd()
 
 describe('Codex SessionStart hook handler', () => {
-  it('writes the resume id and rich hook binding', async () => {
+  it('writes the resume id and rich hook binding', () => {
     const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-hook-'))
 
-    const result = await handleCodexSessionStartHook({
+    const result = handleCodexSessionStartHook({
       stdin: hookPayload({ session_id: '  hook-session-1  ', source: 'startup' }),
       env: {
         KIRI_SESSION_DIR: sessionDir,
@@ -38,31 +38,31 @@ describe('Codex SessionStart hook handler', () => {
     })
   })
 
-  it('no-ops when Kiri env is absent', async () => {
+  it('no-ops when Kiri env is absent', () => {
     const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-hook-'))
 
-    const result = await handleCodexSessionStartHook({
+    const result = handleCodexSessionStartHook({
       stdin: hookPayload({ session_id: 'hook-session-1' }),
       env: { KIRI_SESSION_DIR: sessionDir },
     })
 
-    expect(result).toEqual({ ok: true })
+    expect(result).toEqual({ ok: true, reason: 'KIRI_SESSION_DIR/KIRI_AGENT_ID not set; skipping' })
     expect(existsSync(codexTerminalSessionIdPath(sessionDir))).toBe(false)
     expect(existsSync(codexHookSessionBindingPath(sessionDir))).toBe(false)
   })
 
-  it('reports bad payloads without writing files', async () => {
+  it('reports bad payloads without writing files', () => {
     const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-hook-'))
 
-    const malformed = await handleCodexSessionStartHook({
+    const malformed = handleCodexSessionStartHook({
       stdin: '{not-json',
       env: { KIRI_SESSION_DIR: sessionDir, KIRI_AGENT_ID: 'agent-hook' },
     })
-    const wrongEvent = await handleCodexSessionStartHook({
+    const wrongEvent = handleCodexSessionStartHook({
       stdin: JSON.stringify({ hook_event_name: 'Stop', session_id: 'hook-session-1' }),
       env: { KIRI_SESSION_DIR: sessionDir, KIRI_AGENT_ID: 'agent-hook' },
     })
-    const missingSession = await handleCodexSessionStartHook({
+    const missingSession = handleCodexSessionStartHook({
       stdin: JSON.stringify({ hook_event_name: 'SessionStart', session_id: ' ' }),
       env: { KIRI_SESSION_DIR: sessionDir, KIRI_AGENT_ID: 'agent-hook' },
     })
@@ -74,10 +74,26 @@ describe('Codex SessionStart hook handler', () => {
     expect(existsSync(codexHookSessionBindingPath(sessionDir))).toBe(false)
   })
 
-  it('ignores SessionStart payloads from a different cwd', async () => {
+  it('rejects subagent SessionStart payloads without overwriting bindings', () => {
     const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-hook-'))
 
-    const result = await handleCodexSessionStartHook({
+    const result = handleCodexSessionStartHook({
+      stdin: hookPayload({ session_id: 'subagent-session', thread_source: 'subagent' }),
+      env: {
+        KIRI_SESSION_DIR: sessionDir,
+        KIRI_AGENT_ID: 'agent-hook',
+      },
+    })
+
+    expect(result).toEqual({ ok: false, reason: 'Ignored SessionStart hook for a subagent thread' })
+    expect(existsSync(codexTerminalSessionIdPath(sessionDir))).toBe(false)
+    expect(existsSync(codexHookSessionBindingPath(sessionDir))).toBe(false)
+  })
+
+  it('ignores SessionStart payloads from a different cwd', () => {
+    const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-hook-'))
+
+    const result = handleCodexSessionStartHook({
       stdin: hookPayload({ session_id: 'wrong-cwd-session' }),
       env: {
         KIRI_SESSION_DIR: sessionDir,
@@ -91,14 +107,14 @@ describe('Codex SessionStart hook handler', () => {
     expect(existsSync(codexHookSessionBindingPath(sessionDir))).toBe(false)
   })
 
-  it('overwrites both files when Codex starts a replacement session', async () => {
+  it('overwrites both files when Codex starts a replacement session', () => {
     const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-hook-'))
 
-    await handleCodexSessionStartHook({
+    handleCodexSessionStartHook({
       stdin: hookPayload({ session_id: 'first-session', source: 'startup' }),
       env: { KIRI_SESSION_DIR: sessionDir, KIRI_AGENT_ID: 'agent-hook' },
     })
-    await handleCodexSessionStartHook({
+    handleCodexSessionStartHook({
       stdin: hookPayload({ session_id: 'second-session', source: 'clear' }),
       env: { KIRI_SESSION_DIR: sessionDir, KIRI_AGENT_ID: 'agent-hook' },
     })
@@ -134,11 +150,16 @@ describe('Codex SessionStart hook handler', () => {
   }, 20_000)
 })
 
-function hookPayload(overrides: { readonly session_id: string; readonly source?: string }) {
+function hookPayload(overrides: {
+  readonly session_id: string
+  readonly source?: string
+  readonly thread_source?: string
+}) {
   return `${JSON.stringify({
     hook_event_name: 'SessionStart',
     session_id: overrides.session_id,
     source: overrides.source ?? 'startup',
+    ...(overrides.thread_source ? { thread_source: overrides.thread_source } : {}),
     cwd: '/tmp/project',
     transcript_path: '/tmp/codex.jsonl',
     model: 'gpt-test',

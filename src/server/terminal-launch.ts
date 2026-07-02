@@ -87,7 +87,11 @@ type KirictlInvocation = {
   readonly args: readonly string[]
 }
 
-const codexHookSupportByCommand = new Map<string, boolean>()
+const codexHookSupportTtlMs = 60 * 60_000
+const codexHookSupportByCommand = new Map<string, {
+  readonly supported: boolean
+  readonly checkedAtMs: number
+}>()
 
 export function makeTerminalLaunchService(input: {
   readonly runtimeBinaries: RuntimeBinariesApi
@@ -304,6 +308,8 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
   const state = yield* parseRuntimeState(config.runtimeStateJson)
   const initialTerminalInput = firstPendingTerminalInput(state)
   const command = yield* resolveExecutable(context, 'codex', context.env.KIRI_CODEX_BIN)
+  // No launchedAtMs exists pre-spawn, so the binding staleness guard is skipped here.
+  // Plan 013 keeps stale/wrong bindings from existing by unlinking resets and rejecting subagents.
   const resume = readCodexTerminalResumeId({
     agentId: config.id,
     cwd: config.cwd,
@@ -349,6 +355,7 @@ function codexSessionStartHookArgs(invocation: KirictlInvocation) {
 }
 
 function codexKiriConfigArgs(agentId: string, config: KiriMcpServerConfig) {
+  // Keep Codex config ephemeral: do not write ~/.codex/config.toml or clobber notify.
   const args = [
     '--config',
     `developer_instructions=${tomlString(codexKiriTerminalPrompt(agentId))}`,
@@ -394,7 +401,10 @@ function codexHooksSupported(command: string, context: TerminalLaunchContext) {
   if (context.env.KIRI_CODEX_HOOKS === '1') return true
 
   const cached = codexHookSupportByCommand.get(command)
-  if (cached !== undefined) return cached
+  const now = Date.now()
+  if (cached !== undefined && now - cached.checkedAtMs < codexHookSupportTtlMs) {
+    return cached.supported
+  }
 
   const result = spawnSync(command, ['--help'], {
     encoding: 'utf8',
@@ -403,7 +413,7 @@ function codexHooksSupported(command: string, context: TerminalLaunchContext) {
   })
   const supported = result.status === 0
     && `${result.stdout ?? ''}\n${result.stderr ?? ''}`.includes('dangerously-bypass-hook-trust')
-  codexHookSupportByCommand.set(command, supported)
+  codexHookSupportByCommand.set(command, { supported, checkedAtMs: now })
   return supported
 }
 

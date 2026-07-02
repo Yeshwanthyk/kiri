@@ -62,8 +62,22 @@ describe('Codex item recording', () => {
     })
   })
 
-  it('ignores unsupported or incomplete items', () => {
-    expect(codexItemRecord('agent-1', { id: 'item-4', type: 'unknown' }, 'now')).toBeNull()
+  it('records unsupported items as explicit timeline events', () => {
+    expect(codexItemRecord('agent-1', { id: 'item-4', type: 'webSearch' }, 'now')).toEqual({
+      type: 'timelineEvent',
+      value: {
+        agentId: 'agent-1',
+        kind: 'codex_unrecognized_item',
+        tone: 'info',
+        label: 'Unrecognized item: webSearch',
+        detail: null,
+        payload: { id: 'item-4', type: 'webSearch' },
+        timestamp: 'now',
+      },
+    })
+  })
+
+  it('ignores incomplete items', () => {
     expect(codexItemRecord('agent-1', { type: 'agentMessage', text: 'missing id' }, 'now')).toBeNull()
   })
 })

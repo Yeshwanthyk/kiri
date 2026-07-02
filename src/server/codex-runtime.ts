@@ -1,7 +1,9 @@
 import { Effect } from 'effect'
+import { rmSync } from 'node:fs'
 import type { ReviewTarget, SendMessageImage, ThinkingLevel } from '~/lib/contracts'
 import {
   CodexAppServerAdapter,
+  CodexAppServerError,
   decodeServerParams,
   ItemCompletedParamsSchema,
   ThreadCompactedParamsSchema,
@@ -28,6 +30,10 @@ import {
   timestampFromMs,
 } from './codex-value-helpers'
 import { codexItemRecord } from './codex-item-recording'
+import {
+  codexHookSessionBindingPath,
+  codexTerminalSessionIdPath,
+} from './codex-terminal-session'
 import { makeCodexRetainedState } from './codex-retained-state'
 import { activeCodexTurnId, codexThreadAgentStatus } from './codex-thread-state'
 import {
@@ -83,6 +89,7 @@ export async function promptCodexAgent(input: {
     const adapter = getOrCreateCodexAdapter(state.websocketUrl, runtimeBinaries)
     const thread = await readCodexThreadIfAvailable(adapter, state.threadId)
     if (thread) {
+      rememberCodexThread(config.id, state.threadId)
       syncCodexThreadStatus(config.id, thread)
       const activeTurnId = activeCodexTurnId(thread)
       if (activeTurnId) {
@@ -124,6 +131,7 @@ export async function steerCodexAgent(input: {
     forgetCodexThread(config.id, state)
     return promptCodexAgent(input)
   }
+  rememberCodexThread(config.id, state.threadId)
   syncCodexThreadStatus(config.id, thread)
   const activeTurnId = activeCodexTurnId(thread)
   if (!activeTurnId) return promptCodexAgent(input)
@@ -149,6 +157,7 @@ export async function interruptCodexAgent(input: { agentId: string } & CodexRunt
     forgetCodexThread(input.agentId, state)
     throw new Error('Codex session has no active turn to interrupt')
   }
+  rememberCodexThread(input.agentId, state.threadId)
   syncCodexThreadStatus(input.agentId, thread)
   const activeTurnId = activeCodexTurnId(thread)
   if (!activeTurnId) {
@@ -180,27 +189,30 @@ export function setCodexThinkingLevel(input: {
 }
 
 export async function resetCodexSession(input: { agentId: string } & CodexRuntimeDependencies) {
-  const runtimeBinaries = runtimeBinariesFor(input)
   retainedState.bumpGeneration(input.agentId)
-  const state = codexState(getAgentRuntimeState(input.agentId))
-  if (state.threadId) {
-    try {
-      const adapter = getOrCreateCodexAdapter(state.websocketUrl, runtimeBinaries)
-      const thread = await readCodexThread(adapter, state.threadId)
-      const activeTurnId = activeCodexTurnId(thread)
-      if (activeTurnId) {
-        await adapter.interruptTurn({
-          threadId: state.threadId,
-          turnId: activeTurnId,
-        })
+  await runRuntimeLifecyclePromise(enqueueAgentTurn(input.agentId, retainedState.queues, async () => {
+    const runtimeBinaries = runtimeBinariesFor(input)
+    const state = codexState(getAgentRuntimeState(input.agentId))
+    if (state.threadId) {
+      try {
+        const adapter = getOrCreateCodexAdapter(state.websocketUrl, runtimeBinaries)
+        const thread = await readCodexThread(adapter, state.threadId)
+        const activeTurnId = activeCodexTurnId(thread)
+        if (activeTurnId) {
+          await adapter.interruptTurn({
+            threadId: state.threadId,
+            turnId: activeTurnId,
+          })
+        }
+      } catch {
+        // Reset should clear local state even if the remote turn is already gone.
       }
-    } catch {
-      // Reset should clear local state even if the remote turn is already gone.
     }
-  }
-  forgetCodexRuntimeAgent(input.agentId, { keepGeneration: true })
-  clearAgentRuntimeState(input.agentId)
-  resetStoredSession(input.agentId)
+    forgetCodexRuntimeAgent(input.agentId, { keepGeneration: true })
+    clearAgentRuntimeState(input.agentId)
+    resetStoredSession(input.agentId)
+    unlinkCodexResumeBindings(getAgentLaunchConfig(input.agentId).sessionDir)
+  }))
 }
 
 export async function reviewCodexSession(input: {
@@ -325,6 +337,7 @@ function startOrSteerCodexTurn(input: {
       return false
     }
 
+    if (!isCurrentCodexGeneration(input.config.id, input.generation)) return false
     const turnResponse = yield* codexProtocolPromise(() => input.adapter.startTurn({
       threadId,
       input: textInput(input.text),
@@ -381,6 +394,7 @@ function startCodexReview(input: {
       })
     }
 
+    if (!isCurrentCodexGeneration(input.config.id, input.generation)) return false
     const review = yield* codexProtocolPromise(() => input.adapter.startReview({
       threadId,
       target: input.target,
@@ -751,14 +765,28 @@ function isCurrentCodexGeneration(agentId: string, generation: number) {
 }
 
 function isUnmaterializedThreadReadError(error: unknown) {
+  if (structuredCodexErrorCode(error) === 'thread_unmaterialized') return true
+  // Fallback for Codex versions that only return localized/message-shaped errors.
   return error instanceof Error &&
-    error.message.includes('not materialized yet') &&
+    error.message.includes(codexUnmaterializedThreadMessagePart) &&
     error.message.includes('includeTurns')
 }
 
 function isMissingRolloutError(error: unknown) {
+  if (structuredCodexErrorCode(error) === 'missing_rollout') return true
+  // Fallback for Codex versions without a structured missing-rollout code.
   return error instanceof Error &&
-    error.message.includes('no rollout found for thread id')
+    error.message.includes(codexMissingRolloutMessagePart)
+}
+
+const codexUnmaterializedThreadMessagePart = 'not materialized yet'
+const codexMissingRolloutMessagePart = 'no rollout found for thread id'
+
+function structuredCodexErrorCode(error: unknown) {
+  if (!(error instanceof CodexAppServerError)) return undefined
+  const code = stringValue(objectValue(error.data).code)
+  if (code === 'thread_unmaterialized' || code === 'missing_rollout') return code
+  return undefined
 }
 
 function forgetCodexThread(agentId: string, state: CodexRuntimeState) {
@@ -823,6 +851,16 @@ function recordCodexItem(agentId: string, item: unknown, timestamp = new Date().
 
 function setCodexState(agentId: string, state: CodexRuntimeState) {
   runRuntimeLifecycleSync(setRuntimeState(agentId, state))
+}
+
+function unlinkCodexResumeBindings(sessionDir: string) {
+  for (const path of [codexTerminalSessionIdPath(sessionDir), codexHookSessionBindingPath(sessionDir)]) {
+    try {
+      rmSync(path, { force: true })
+    } catch {
+      // Best-effort: reset must clear DB/runtime state even if sidecar files race.
+    }
+  }
 }
 
 function textInput(text: string) {

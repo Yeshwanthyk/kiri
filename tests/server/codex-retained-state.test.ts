@@ -96,16 +96,18 @@ describe('codex retained state', () => {
     })
   })
 
-  it('dedupes turn-start projection guards and evicts oldest turn keys', () => {
+  it('dedupes turn-start projection guards and evicts oldest turn keys per thread', () => {
     const state = makeCodexRetainedState({ maxTurnStartProjections: 2 })
 
     expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-1', 'turn-1'))).toBe(true)
     expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-1', 'turn-1'))).toBe(false)
-    expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-2', 'turn-2'))).toBe(true)
-    expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-3', 'turn-3'))).toBe(true)
+    expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-2', 'turn-a'))).toBe(true)
+    expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-1', 'turn-2'))).toBe(true)
+    expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-1', 'turn-3'))).toBe(true)
 
     expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-1', 'turn-1'))).toBe(true)
-    expect(state.stats().turnStartProjections).toBe(2)
+    expect(state.rememberTurnStartProjection(codexRetainedTurnKey('thread-2', 'turn-a'))).toBe(false)
+    expect(state.stats().turnStartProjections).toBe(3)
   })
 
   it('clears runtime maps for tests without clearing adapter ownership', () => {

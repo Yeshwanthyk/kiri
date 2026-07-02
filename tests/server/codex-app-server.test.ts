@@ -83,6 +83,8 @@ describe('CodexAppServerAdapter', () => {
     try {
       await expect(adapter.request('boom')).rejects.toMatchObject({
         message: 'bad codex thing',
+        code: -32099,
+        data: { reason: 'shape drift' },
         cause: {
           code: -32099,
           message: 'bad codex thing',
@@ -94,6 +96,45 @@ describe('CodexAppServerAdapter', () => {
       await harness.close()
     }
   })
+
+  it('does not evict one thread completed turn from another thread churn', async () => {
+    const harness = await startHarness()
+    const adapter = new CodexAppServerAdapter({
+      websocketUrl: harness.url,
+      spawnIfMissing: false,
+    })
+
+    try {
+      await adapter.connect()
+      harness.send({
+        method: 'turn/completed',
+        params: {
+          threadId: 'quiet-thread',
+          turn: { id: 'quiet-turn', status: 'completed', items: [] },
+        },
+      })
+      for (let index = 0; index < 105; index += 1) {
+        harness.send({
+          method: 'turn/completed',
+          params: {
+            threadId: 'busy-thread',
+            turn: { id: `turn-${index}`, status: 'completed', items: [] },
+          },
+        })
+      }
+      await waitForCachedCompletedTurn(adapter, 'busy-thread', 'turn-104')
+
+      await expect(
+        adapter.waitForTurnCompleted({ threadId: 'quiet-thread', turnId: 'quiet-turn' }),
+      ).resolves.toEqual({ id: 'quiet-turn', status: 'completed', items: [] })
+      const evictedBusyTurn = adapter.waitForTurnCompleted({ threadId: 'busy-thread', turnId: 'turn-0' })
+      harness.closeSockets()
+      await expect(evictedBusyTurn).rejects.toThrow('Codex app-server websocket closed')
+    } finally {
+      adapter.close()
+      await harness.close()
+    }
+  }, 2_000)
 
   it('rejects decoded method responses with invalid result shapes', async () => {
     const harness = await startHarness((socket, request) => {
