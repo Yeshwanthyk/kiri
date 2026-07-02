@@ -28,11 +28,14 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 
 | File | Classification | Target Seam | Status | Review Gate | Notes |
 |---|---|---|---|---|---|
+| `src/server/agent-presence.ts` | pure | OSC 3008 agent presence parser and command renderer | explicit-non-migration | not-required | Pure parser/renderer; keep Effect-free unless IO dependencies are added. |
 | `src/server/backend-readiness.ts` | use-case | readiness service over settings and DB dependencies | migrating | required | Extracted from `backend-server.ts`; review/verification pending. |
 | `src/server/backend-server.ts` | transport | `app/readiness` entrypoint over app layer | migrating | required | Readiness probe moved behind injectable service; transport behavior preserved. |
 | `src/server/codex-app-protocol.ts` | pure | Codex app-server JSON-RPC schemas and parsers | explicit-non-migration | not-required | Pure protocol/schema module extracted from adapter. |
 | `src/server/codex-app-server.ts` | runtime-adapter | `runtime/codex/app-server-adapter.ts` scoped protocol adapter | migrating | required | Protocol parsing extracted; scoped lifecycle and process adapter split remain. |
 | `src/server/codex-cli-sessions.ts` | runtime-adapter | Codex CLI session discovery and terminal resume persistence boundary | migrating | required | Added after Codex terminal resume support; review/verification pending. |
+| `src/server/codex-hook-handler.ts` | process-adapter | Codex terminal hook session binding adapter | migrating | required | Added for terminal SessionStart binding; filesystem service seam pending. |
+| `src/server/codex-jsonl-tasks.ts` | projection | Codex JSONL TodoWrite/update_plan task projection over session files | migrating | required | Added for terminal Codex task hydration; final filesystem service injection remains. |
 | `src/server/codex-terminal-session.ts` | process-adapter | Codex terminal session id file persistence boundary | migrating | required | Added after Codex terminal resume support; filesystem service seam pending. |
 | `src/server/codex-item-recording.ts` | pure | Codex completed-item to timeline/message write payload helper | explicit-non-migration | not-required | Pure item formatting extracted from Codex runtime; keep DB writes in the runtime/projection boundary. |
 | `src/server/codex-retained-state.ts` | runtime-adapter | Codex retained-state registry for adapters, listeners, threads, turns, queues, generations, and turn-start projection guards | migrating | required | Extracted from `codex-runtime.ts`; review/verification pending. |
@@ -44,12 +47,14 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/codex-value-helpers.ts` | pure | Codex notification value normalization helpers | explicit-non-migration | not-required | Pure object/number/status/timestamp/command text helpers extracted from Codex runtime. |
 | `src/server/claude-jsonl-file.ts` | projection | Claude JSONL session file reader over pure Claude projection | migrating | required | Added for Claude terminal session hydration; review passed, final filesystem service injection remains. |
 | `src/server/claude-jsonl.ts` | pure | Pure Claude JSONL session projection into board messages and cursor state | explicit-non-migration | not-required | Pure parser/projection module; IO remains in `claude-jsonl-file.ts`. |
+| `src/server/claude-hook-handler.ts` | process-adapter | Claude terminal hook binding/status/task adapter | migrating | required | Added for terminal Claude hooks; filesystem/control operation services remain compatibility dependencies. |
 | `src/server/claude-projection.ts` | projection | DB-backed Claude JSONL hydrator for agent detail | migrating | required | Added to hydrate Claude terminal output into timeline rows before `agent.detail`; review passed, final DB/filesystem service injection remains. |
 | `src/server/claude-session-path.ts` | pure | Claude project key and deterministic session id helpers | explicit-non-migration | not-required | Pure helper split out so JSONL hydration does not depend on terminal launch services. |
 | `src/server/db.ts` | legacy-compat | `db/{connection,migrations,schema,transaction,repositories,projections}` | migrating | required | Compatibility facade now uses explicit `KiriDbService` cache/close seam over extracted repositories. |
 | `src/server/db/agent-detail.ts` | repository | Paged agent detail reader for timeline, tasks, and context usage | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/agent-events.ts` | repository | Agent event append/list repository over DB connection | migrating | required | Extracted from timeline write paths; review/verification pending. |
 | `src/server/db/bootstrap.ts` | repository | Startup DB data repair and seed cleanup boundary | migrating | required | Extracted from `db.ts`; direct bootstrap tests added and review passed; final status waits for DB/settings service boundary. |
+| `src/server/db/codex-terminal-tasks.ts` | projection | DB-backed terminal Codex task hydration from JSONL files | migrating | required | Added for terminal Codex task projection; final DB/filesystem service seams remain. |
 | `src/server/db/connection.ts` | repository | DB open/configure/migrate boundary | migrating | required | Owns SQLite handle creation; review/verification pending. |
 | `src/server/db/knowledge.ts` | repository | Knowledge entry repository over DB connection | migrating | required | Added for knowledge search/add/seen operations; review/verification pending. |
 | `src/server/db/migrations.ts` | repository | DB schema creation and migration helpers | migrating | required | Extracted and reviewed; final status waits for DB connection/transaction service boundary. |
@@ -57,6 +62,7 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/db/runtime-state.ts` | repository | Agent launch/runtime state/status/context usage repository | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/scratchpad.ts` | repository | Scratchpad block repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/session-operations.ts` | repository | Session reset/fork/persisted-Pi hydration operations over DB and session files | migrating | required | Extracted from `db.ts`; direct reset/fork/hydration tests added and review passed; final status waits for DB/config/filesystem service boundary. |
+| `src/server/db/session-title.ts` | pure | Session title normalization helpers | explicit-non-migration | not-required | Pure title derivation helper for session create/fork/auto-rename. |
 | `src/server/db/sessions.ts` | repository | Session summary and lifecycle repository over DB connection | migrating | required | Extracted from `db.ts`; review/verification pending. |
 | `src/server/db/schema.ts` | pure | DB row schemas/parsers used by repositories and projections | explicit-non-migration | not-required | Pure parser module; no Effect needed unless schemas migrate later. |
 | `src/server/db/timeline-format.ts` | pure | Timeline event id/tone/display derivation helpers | explicit-non-migration | not-required | Pure formatting/normalization module shared by readers and writers. |
@@ -97,9 +103,11 @@ This tracker is the source of truth for the Kiri Effect migration. Keep it curre
 | `src/server/terminal-launch.ts` | process-adapter | terminal launch resolver service | migrating | required | Typed injectable terminal launch service added; review/verification pending. |
 | `src/server/terminal-registry.ts` | runtime-adapter | terminal session registry for PTY/socket state | migrating | required | Extracted from `terminal-server.ts`; review/verification pending. |
 | `src/server/terminal-server.ts` | runtime-adapter | scoped websocket/PTY service over terminal registry | migrating | required | Scoped service boundary and Effect layer added; workspace terminal config consumes the service layer; cleanup compatibility exports remain. |
+| `src/server/terminal-shim.ts` | process-adapter | terminal PATH shim generation for CLI runtime injection | migrating | required | Writes shim scripts/settings; filesystem service seam pending. |
 | `src/server/workflow-orchestration.ts` | use-case | Durable workflow orchestration over workflow repository, scratchpad, sessions, and terminal paste | migrating | required | Added with workflow runs; final status waits for DB/session/scratchpad/terminal dependencies to be injected services. |
 | `src/server/workspace-service.ts` | use-case | shared workspace service over DB/runtime/preference/terminal use-cases | migrating | required | First service slice added; workspace transport delegates to it while dependency leaf services remain compatibility exports. |
 | `src/server/workspace.ts` | transport | `transport/workspace-functions.ts` over `WorkspaceService` | migrating | required | Server functions now delegate through `WorkspaceService`; final transport split/file move remains. |
+| `src/server/zmx.ts` | process-adapter | zmx binary/session wrapper for durable terminal hosts | migrating | required | Added as opt-in spike adapter; process execution and packaging seams remain follow-up. |
 
 ## Per-File Record Template
 
