@@ -36,6 +36,7 @@ use tokio::{
     sync::{broadcast, Mutex, RwLock},
 };
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
 const DAEMON_PATH: &str = "/terminal";
@@ -45,6 +46,8 @@ const MAX_RECENT_OUTPUT_BYTES: usize = 64_000;
 #[derive(Clone)]
 struct AppState {
     token: String,
+    record_path: PathBuf,
+    shutdown: CancellationToken,
     sessions: Arc<RwLock<HashMap<String, Arc<Session>>>>,
     generations: Arc<RwLock<HashMap<String, u64>>>,
     launch_configs: Arc<RwLock<HashMap<String, LaunchConfig>>>,
@@ -210,7 +213,7 @@ struct PatternMatcher {
     sticky: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 struct DaemonRecord {
     pid: u32,
     host: String,
@@ -240,8 +243,11 @@ async fn main() -> Result<()> {
     fs::create_dir_all(&state_dir).context("failed to create kiriterm state dir")?;
     let _lock = DaemonLock::acquire(state_dir.join("daemon.lock"))?;
     let token = token();
+    let shutdown = CancellationToken::new();
     let state = AppState {
         token: token.clone(),
+        record_path: state_dir.join("daemon.json"),
+        shutdown: shutdown.clone(),
         sessions: Arc::new(RwLock::new(HashMap::new())),
         generations: Arc::new(RwLock::new(HashMap::new())),
         launch_configs: Arc::new(RwLock::new(HashMap::new())),
@@ -258,16 +264,21 @@ async fn main() -> Result<()> {
         .route("/api/sessions/wait-any", post(wait_any_session))
         .route("/api/sessions/kill", post(kill_session))
         .route("/api/sessions/kill-prefix", post(kill_prefix))
+        .route("/api/shutdown", post(shutdown_daemon))
         .route(DAEMON_PATH, get(terminal_ws))
         .with_state(state.clone());
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
         .context("failed to bind kiri-termd")?;
     let port = listener.local_addr()?.port();
-    write_record(&state_dir, &token, port)?;
+    write_record(&state.record_path, &token, port)?;
     axum::serve(listener, app)
+        .with_graceful_shutdown(wait_for_shutdown(shutdown.clone()))
         .await
-        .context("kiri-termd server failed")
+        .context("kiri-termd server failed")?;
+    close_all_sessions(&state).await;
+    remove_owned_record(&state.record_path);
+    Ok(())
 }
 
 async fn health(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
@@ -671,6 +682,14 @@ async fn kill_prefix(
     Json(serde_json::json!({ "ok": true, "killed": targets.len() })).into_response()
 }
 
+async fn shutdown_daemon(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Some(response) = unauthorized_response(&state, &headers) {
+        return response;
+    }
+    state.shutdown.cancel();
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
 async fn terminal_ws(
     State(state): State<AppState>,
     Query(query): Query<TerminalQuery>,
@@ -956,6 +975,18 @@ async fn kill_session_process(state: &AppState, session: &Session) {
         message: "terminal process exited".to_string(),
     });
     remove_session_from_registry(state, &session.key).await;
+}
+
+async fn close_all_sessions(state: &AppState) {
+    let sessions: Vec<_> = state.sessions.read().await.values().cloned().collect();
+    for session in sessions {
+        session.exited.store(true, Ordering::SeqCst);
+        let _ = session.child.lock().await.kill();
+        let _ = session.tx.send(SessionEvent::Exit {
+            message: "terminal process exited".to_string(),
+        });
+    }
+    state.sessions.write().await.clear();
 }
 
 async fn remove_session_from_registry(state: &AppState, key: &str) {
@@ -1274,7 +1305,14 @@ fn state_dir() -> PathBuf {
         })
 }
 
-fn write_record(state_dir: &PathBuf, token: &str, port: u16) -> Result<()> {
+async fn wait_for_shutdown(shutdown: CancellationToken) {
+    tokio::select! {
+        _ = shutdown.cancelled() => {}
+        _ = tokio::signal::ctrl_c() => {}
+    }
+}
+
+fn write_record(record_path: &PathBuf, token: &str, port: u16) -> Result<()> {
     let record = DaemonRecord {
         pid: process::id(),
         host: "127.0.0.1".to_string(),
@@ -1284,8 +1322,20 @@ fn write_record(state_dir: &PathBuf, token: &str, port: u16) -> Result<()> {
         version: VERSION.to_string(),
         started_at: iso_now(),
     };
-    let path = state_dir.join("daemon.json");
-    fs::write(path, serde_json::to_vec_pretty(&record)?).context("failed to write daemon record")
+    fs::write(record_path, serde_json::to_vec_pretty(&record)?)
+        .context("failed to write daemon record")
+}
+
+fn remove_owned_record(record_path: &PathBuf) {
+    let Ok(contents) = fs::read_to_string(record_path) else {
+        return;
+    };
+    let Ok(record) = serde_json::from_str::<DaemonRecord>(&contents) else {
+        return;
+    };
+    if record.pid == process::id() {
+        let _ = fs::remove_file(record_path);
+    }
 }
 
 fn token() -> String {
@@ -1425,5 +1475,61 @@ mod tests {
     #[test]
     fn regex_rejects_unknown_flags() {
         assert!(compile_regex("needle", "z").is_err());
+    }
+
+    #[test]
+    fn remove_owned_record_preserves_foreign_pid() {
+        let dir = unique_test_dir("foreign-record");
+        let record_path = dir.join("daemon.json");
+        fs::write(
+            &record_path,
+            serde_json::json!({
+                "pid": process::id() + 1,
+                "host": "127.0.0.1",
+                "port": 1234,
+                "path": "/terminal",
+                "token": "token",
+                "version": "test",
+                "startedAt": "2026-01-01T00:00:00.000Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        remove_owned_record(&record_path);
+
+        assert!(record_path.exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn remove_owned_record_deletes_current_pid() {
+        let dir = unique_test_dir("owned-record");
+        let record_path = dir.join("daemon.json");
+        fs::write(
+            &record_path,
+            serde_json::json!({
+                "pid": process::id(),
+                "host": "127.0.0.1",
+                "port": 1234,
+                "path": "/terminal",
+                "token": "token",
+                "version": "test",
+                "startedAt": "2026-01-01T00:00:00.000Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        remove_owned_record(&record_path);
+
+        assert!(!record_path.exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!("{name}-{}-{}", process::id(), epoch_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 }

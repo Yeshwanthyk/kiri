@@ -27,6 +27,22 @@ fn wait_routes_match_screen_output_and_idle_targets() {
     with_daemon(run_wait_smoke);
 }
 
+#[test]
+fn shutdown_route_stops_daemon_and_removes_record() {
+    let state_dir = temp_state_dir();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", &state_dir)
+        .spawn()
+        .expect("kiri-termd should spawn");
+
+    let result = run_shutdown_smoke(&state_dir, &mut child);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&state_dir);
+
+    result.expect("shutdown smoke should pass");
+}
+
 fn with_daemon(run: impl FnOnce(&Path) -> Result<(), String>) {
     let state_dir = temp_state_dir();
     let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
@@ -445,6 +461,46 @@ fn run_wait_smoke(state_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn run_shutdown_smoke(state_dir: &Path, child: &mut std::process::Child) -> Result<(), String> {
+    let record = wait_record(state_dir)?;
+    post_upsert(&record, state_dir)?;
+    let url = format!(
+        "ws://{}:{}{}?agentId=agent-t1&mode=shell&cols=80&rows=24&token={}",
+        record["host"].as_str().unwrap(),
+        record["port"].as_u64().unwrap(),
+        record["path"].as_str().unwrap(),
+        record["token"].as_str().unwrap()
+    );
+    let (mut socket, _) = connect(&url).map_err(|error| error.to_string())?;
+    let snapshot = read_json_frame(&mut socket, Duration::from_secs(5))?;
+    assert_eq!(snapshot["type"], "snapshot");
+    http_json(
+        &record,
+        "POST",
+        "/api/sessions/input",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "data": "sleep 99999\r"
+        })),
+    )?;
+    http_json(&record, "POST", "/api/shutdown", Some(json!({})))?;
+    read_until_frame_type(&mut socket, "exit", Duration::from_secs(5))?;
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        if child
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_some()
+            && !state_dir.join("daemon.json").exists()
+        {
+            let _ = socket.close(None);
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err("daemon did not shut down and remove daemon.json".to_string())
+}
+
 fn poll_session_exited(record: &Value, key: &str) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline {
@@ -616,6 +672,23 @@ fn read_json_frame(
         let message = socket.read().map_err(|error| error.to_string())?;
         if let Message::Text(text) = message {
             return serde_json::from_str(&text).map_err(|error| error.to_string());
+        }
+    }
+}
+
+fn read_until_frame_type(
+    socket: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>,
+    frame_type: &str,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if Instant::now() > deadline {
+            return Err(format!("timed out waiting for {frame_type} frame"));
+        }
+        let frame = read_json_frame(socket, Duration::from_secs(1))?;
+        if frame["type"] == frame_type {
+            return Ok(frame);
         }
     }
 }
