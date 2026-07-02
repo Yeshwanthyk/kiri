@@ -43,6 +43,22 @@ fn shutdown_route_stops_daemon_and_removes_record() {
     result.expect("shutdown smoke should pass");
 }
 
+#[test]
+fn persisted_shell_snapshot_restores_after_daemon_restart() {
+    let state_dir = temp_state_dir();
+    let mut first = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", &state_dir)
+        .spawn()
+        .expect("first kiri-termd should spawn");
+
+    let result = run_restart_restore_smoke(&state_dir, &mut first);
+    let _ = first.kill();
+    let _ = first.wait();
+    let _ = fs::remove_dir_all(&state_dir);
+
+    result.expect("restart restore smoke should pass");
+}
+
 fn with_daemon(run: impl FnOnce(&Path) -> Result<(), String>) {
     let state_dir = temp_state_dir();
     let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
@@ -499,6 +515,88 @@ fn run_shutdown_smoke(state_dir: &Path, child: &mut std::process::Child) -> Resu
         std::thread::sleep(Duration::from_millis(50));
     }
     Err("daemon did not shut down and remove daemon.json".to_string())
+}
+
+fn run_restart_restore_smoke(
+    state_dir: &Path,
+    first: &mut std::process::Child,
+) -> Result<(), String> {
+    let record = wait_record(state_dir)?;
+    post_upsert(&record, state_dir)?;
+    let url = format!(
+        "ws://{}:{}{}?agentId=agent-t1&mode=shell&cols=80&rows=24&token={}",
+        record["host"].as_str().unwrap(),
+        record["port"].as_u64().unwrap(),
+        record["path"].as_str().unwrap(),
+        record["token"].as_str().unwrap()
+    );
+    let (mut socket, _) = connect(&url).map_err(|error| error.to_string())?;
+    let snapshot = read_json_frame(&mut socket, Duration::from_secs(5))?;
+    assert_eq!(snapshot["type"], "snapshot");
+    http_json(
+        &record,
+        "POST",
+        "/api/sessions/input",
+        Some(json!({
+            "key": "proj-t1:shell",
+            "data": "printf 'persisted-shell-snapshot\\n'",
+            "keys": ["enter"]
+        })),
+    )?;
+    poll_read_contains(&record, None, "persisted-shell-snapshot")?;
+    http_json(&record, "POST", "/api/shutdown", Some(json!({})))?;
+    let _ = socket.close(None);
+    wait_child_exit_and_record_removed(state_dir, first)?;
+
+    let persisted_path = state_dir.join("sessions").join("proj-t1%3Ashell.json");
+    let persisted = fs::read_to_string(&persisted_path).map_err(|error| error.to_string())?;
+    assert!(persisted.contains("persisted-shell-snapshot"));
+
+    let mut second = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", state_dir)
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let second_result = (|| {
+        let record = wait_record(state_dir)?;
+        post_upsert(&record, state_dir)?;
+        let url = format!(
+            "ws://{}:{}{}?agentId=agent-t1&mode=shell&cols=80&rows=24&token={}",
+            record["host"].as_str().unwrap(),
+            record["port"].as_u64().unwrap(),
+            record["path"].as_str().unwrap(),
+            record["token"].as_str().unwrap()
+        );
+        let (mut restored_socket, _) = connect(&url).map_err(|error| error.to_string())?;
+        let restored_snapshot = read_json_frame(&mut restored_socket, Duration::from_secs(5))?;
+        let data = restored_snapshot["data"].as_str().unwrap_or("");
+        assert!(data.contains("persisted-shell-snapshot"));
+        assert!(data.contains("[kiriterm: restored scrollback from previous session]"));
+        let _ = restored_socket.close(None);
+        http_json(&record, "POST", "/api/shutdown", Some(json!({})))?;
+        wait_child_exit_and_record_removed(state_dir, &mut second)
+    })();
+    let _ = second.kill();
+    let _ = second.wait();
+    second_result
+}
+
+fn wait_child_exit_and_record_removed(
+    state_dir: &Path,
+    child: &mut std::process::Child,
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        if child
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_some()
+            && !state_dir.join("daemon.json").exists()
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err("daemon did not exit and remove daemon.json".to_string())
 }
 
 fn poll_session_exited(record: &Value, key: &str) -> Result<(), String> {

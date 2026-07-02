@@ -23,7 +23,7 @@ use std::{
     env,
     fs::{self, OpenOptions},
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -47,10 +47,12 @@ const MAX_RECENT_OUTPUT_BYTES: usize = 64_000;
 struct AppState {
     token: String,
     record_path: PathBuf,
+    sessions_dir: PathBuf,
     shutdown: CancellationToken,
     sessions: Arc<RwLock<HashMap<String, Arc<Session>>>>,
     generations: Arc<RwLock<HashMap<String, u64>>>,
     launch_configs: Arc<RwLock<HashMap<String, LaunchConfig>>>,
+    restored_sessions: Arc<Mutex<HashMap<String, PersistedSession>>>,
 }
 
 struct Session {
@@ -77,6 +79,19 @@ struct Session {
 struct OutputChunk {
     seq: u64,
     data: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct PersistedSession {
+    key: String,
+    mode: String,
+    label: String,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+    snapshot: String,
+    #[serde(rename = "savedAt")]
+    saved_at: String,
 }
 
 #[derive(Deserialize)]
@@ -241,16 +256,21 @@ async fn main() -> Result<()> {
 
     let state_dir = state_dir();
     fs::create_dir_all(&state_dir).context("failed to create kiriterm state dir")?;
+    let sessions_dir = state_dir.join("sessions");
+    fs::create_dir_all(&sessions_dir).context("failed to create kiriterm sessions dir")?;
     let _lock = DaemonLock::acquire(state_dir.join("daemon.lock"))?;
     let token = token();
     let shutdown = CancellationToken::new();
+    let restored_sessions = load_persisted_sessions(&sessions_dir);
     let state = AppState {
         token: token.clone(),
         record_path: state_dir.join("daemon.json"),
+        sessions_dir,
         shutdown: shutdown.clone(),
         sessions: Arc::new(RwLock::new(HashMap::new())),
         generations: Arc::new(RwLock::new(HashMap::new())),
         launch_configs: Arc::new(RwLock::new(HashMap::new())),
+        restored_sessions: Arc::new(Mutex::new(restored_sessions)),
     };
     let app = Router::new()
         .route("/api/health", get(health))
@@ -276,6 +296,7 @@ async fn main() -> Result<()> {
         .with_graceful_shutdown(wait_for_shutdown(shutdown.clone()))
         .await
         .context("kiri-termd server failed")?;
+    persist_all_sessions(&state).await;
     close_all_sessions(&state).await;
     remove_owned_record(&state.record_path);
     Ok(())
@@ -819,6 +840,7 @@ async fn get_or_spawn_session(state: &AppState, query: &TerminalQuery) -> Result
                 .unwrap_or_else(|_| ".".to_string())
         });
     let generation = next_generation(state, &key).await;
+    let restored = state.restored_sessions.lock().await.remove(&key);
     let (session, reader) = spawn_shell_session(
         key.clone(),
         query.mode.clone(),
@@ -826,6 +848,7 @@ async fn get_or_spawn_session(state: &AppState, query: &TerminalQuery) -> Result
         query.cols.unwrap_or(80),
         query.rows.unwrap_or(24),
         generation,
+        restored,
     )?;
     let session = Arc::new(session);
     start_reader(session.clone(), reader);
@@ -840,6 +863,7 @@ fn spawn_shell_session(
     cols: u16,
     rows: u16,
     generation: u64,
+    restored: Option<PersistedSession>,
 ) -> Result<(Session, Box<dyn Read + Send>)> {
     if mode != "shell" {
         anyhow::bail!("kiri-termd P0 supports shell sessions only")
@@ -872,6 +896,11 @@ fn spawn_shell_session(
         .try_clone_reader()
         .context("failed to clone pty reader")?;
     let (tx, _) = broadcast::channel(16_384);
+    let mut grid = Grid::new(usize::from(cols), usize::from(rows));
+    if let Some(restored) = restored {
+        grid.feed(restored.snapshot.as_bytes());
+        grid.feed(b"\r\n\x1b[2m[kiriterm: restored scrollback from previous session]\x1b[0m\r\n");
+    }
     Ok((
         Session {
             key,
@@ -880,7 +909,7 @@ fn spawn_shell_session(
             cwd,
             cols: Mutex::new(cols),
             rows: Mutex::new(rows),
-            grid: Mutex::new(Grid::new(usize::from(cols), usize::from(rows))),
+            grid: Mutex::new(grid),
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
             child: Mutex::new(child),
@@ -991,6 +1020,88 @@ async fn close_all_sessions(state: &AppState) {
 
 async fn remove_session_from_registry(state: &AppState, key: &str) {
     state.sessions.write().await.remove(key);
+}
+
+fn load_persisted_sessions(sessions_dir: &Path) -> HashMap<String, PersistedSession> {
+    let mut restored = HashMap::new();
+    let Ok(entries) = fs::read_dir(sessions_dir) else {
+        return restored;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(session) = serde_json::from_str::<PersistedSession>(&contents) else {
+            continue;
+        };
+        restored.insert(session.key.clone(), session);
+    }
+    restored
+}
+
+async fn persist_all_sessions(state: &AppState) {
+    let sessions: Vec<_> = state.sessions.read().await.values().cloned().collect();
+    for session in sessions {
+        if let Err(error) = persist_session(state, &session).await {
+            warn!("failed to persist session {}: {error}", session.key);
+        }
+    }
+}
+
+async fn persist_session(state: &AppState, session: &Session) -> Result<()> {
+    let (cols, rows, snapshot) = {
+        let grid = session.grid.lock().await;
+        (
+            grid.cols() as u16,
+            grid.rows() as u16,
+            grid.serialize_ansi(),
+        )
+    };
+    let persisted = PersistedSession {
+        key: session.key.clone(),
+        mode: session.mode.clone(),
+        label: session.label.clone(),
+        cwd: session.cwd.clone(),
+        cols,
+        rows,
+        snapshot,
+        saved_at: iso_now(),
+    };
+    let path = state
+        .sessions_dir
+        .join(format!("{}.json", encode_uri_component(&session.key)));
+    write_file_atomic(&path, &serde_json::to_vec_pretty(&persisted)?)
+        .with_context(|| format!("failed to persist {}", session.key))
+}
+
+fn write_file_atomic(path: &Path, contents: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).context("failed to create atomic write parent")?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("session.json");
+    let temp_path =
+        path.with_file_name(format!(".{file_name}.{}.{}.tmp", process::id(), epoch_ms()));
+    fs::write(&temp_path, contents).context("failed to write temp file")?;
+    fs::rename(&temp_path, path).context("failed to rename temp file")
+}
+
+fn encode_uri_component(input: &str) -> String {
+    input
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![byte as char]
+            }
+            _ => format!("%{byte:02X}").chars().collect(),
+        })
+        .collect()
 }
 
 async fn next_generation(state: &AppState, key: &str) -> u64 {
