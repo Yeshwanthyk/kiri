@@ -371,6 +371,13 @@ struct HealthPayload {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if let Some(arg) = env::args().nth(1) {
+        if arg == "--version" || arg == "-V" {
+            println!("{VERSION}");
+            return Ok(());
+        }
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();

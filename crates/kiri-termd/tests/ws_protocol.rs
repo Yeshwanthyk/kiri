@@ -14,6 +14,21 @@ use tungstenite::{connect, Message};
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn version_flag_prints_package_version_and_exits() {
+    let output = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .arg("--version")
+        .output()
+        .expect("kiri-termd --version should run");
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        env!("CARGO_PKG_VERSION")
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn websocket_sends_snapshot_and_streams_shell_output() {
     with_daemon(|state_dir| run_ws_smoke(state_dir));
 }

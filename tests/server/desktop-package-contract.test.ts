@@ -1,4 +1,6 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import packageJson from '../../package.json'
 import { describe, expect, it } from 'vitest'
@@ -48,7 +50,7 @@ describe('desktop package contract', () => {
     expect(backendScript).not.toContain('const serverEntry = await import')
   })
 
-  it('keeps built packaged app contents runnable when a desktop package assertion is requested', () => {
+  it('keeps built packaged app contents runnable when a desktop package assertion is requested', async () => {
     if (process.env.KIRI_ASSERT_PACKAGED_APP !== '1') return
 
     const appRoots = [
@@ -72,6 +74,7 @@ describe('desktop package contract', () => {
         isExecutable(join(resourcesRoot, 'bin/kiri-termd')),
         `${appRoot} has executable kiri-termd`,
       ).toBe(true)
+      await expectKiriTermdRuns(join(resourcesRoot, 'bin/kiri-termd'))
       const header = readAsarHeader(appAsar)
       expect(hasAsarPath(header, ['scripts', 'kiri-desktop-backend.mjs'])).toBe(true)
       expect(hasAsarPath(header, ['dist', 'client'])).toBe(true)
@@ -88,6 +91,118 @@ describe('desktop package contract', () => {
 
 function isExecutable(path: string) {
   return existsSync(path) && (statSync(path).mode & 0o111) !== 0
+}
+
+async function expectKiriTermdRuns(binary: string) {
+  const version = (await runCommand(binary, ['--version'])).trim()
+  expect(version, `${binary} --version`).toMatch(/^\d+\.\d+\.\d+$/)
+
+  const stateDir = mkdtempSync(join(tmpdir(), 'kiri-termd-package-'))
+  let child: ChildProcess | null = null
+  try {
+    child = spawn(binary, [], {
+      env: { ...process.env, KIRI_TERM_STATE_DIR: stateDir },
+      stdio: 'ignore',
+    })
+    const record = await waitForDaemonRecord(stateDir)
+    const health = await fetch(`http://${record.host}:${record.port}/api/health`, {
+      headers: { authorization: `Bearer ${record.token}` },
+      signal: AbortSignal.timeout(5_000),
+    })
+    expect(health.ok, `${binary} health status`).toBe(true)
+    await expect(health.json()).resolves.toMatchObject({
+      ok: true,
+      pid: expect.any(Number),
+      version,
+      sessions: 0,
+    })
+    await fetch(`http://${record.host}:${record.port}/api/shutdown`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${record.token}`,
+        'content-type': 'application/json',
+      },
+      body: '{}',
+      signal: AbortSignal.timeout(5_000),
+    })
+    await waitForExit(child, 5_000)
+    child = null
+  } finally {
+    if (child) {
+      child.kill()
+      await waitForExit(child, 5_000).catch(() => {})
+    }
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+}
+
+function runCommand(command: string, args: readonly string[]) {
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn(command, [...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout?.setEncoding('utf8')
+    child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk
+    })
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += chunk
+    })
+    child.on('error', reject)
+    child.on('exit', (code, signal) => {
+      if (code === 0) resolve(stdout)
+      else reject(new Error(`${command} ${args.join(' ')} failed (${code ?? signal}): ${stderr}`))
+    })
+  })
+}
+
+async function waitForDaemonRecord(stateDir: string) {
+  const recordPath = join(stateDir, 'daemon.json')
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    if (existsSync(recordPath)) {
+      return JSON.parse(readFileSync(recordPath, 'utf8')) as {
+        readonly host: string
+        readonly port: number
+        readonly token: string
+      }
+    }
+    await sleep(50)
+  }
+  throw new Error(`timed out waiting for daemon record at ${recordPath}`)
+}
+
+function waitForExit(child: ChildProcess, timeoutMs: number) {
+  return new Promise<void>((resolve, reject) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve()
+      return
+    }
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error(`timed out waiting for child process ${child.pid ?? '<unknown>'} to exit`))
+    }, timeoutMs)
+    const cleanup = () => {
+      clearTimeout(timeout)
+      child.off('error', onError)
+      child.off('exit', onExit)
+    }
+    const onError = (error: Error) => {
+      cleanup()
+      reject(error)
+    }
+    const onExit = () => {
+      cleanup()
+      resolve()
+    }
+    child.once('error', onError)
+    child.once('exit', onExit)
+  })
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function readAsarHeader(path: string): AsarHeaderNode {
