@@ -166,6 +166,8 @@ export function TerminalPanel({
     let fitAddon: XTermFitAddonInstance | null = null
     let resizeObserver: ResizeObserver | null = null
     let themeObserver: MutationObserver | null = null
+    let settleFitFrame: number | null = null
+    const settleFitTimers: number[] = []
     let pendingWrite = ''
     let pendingServerBytes = 0
     let writeFrame: number | null = null
@@ -458,6 +460,24 @@ export function TerminalPanel({
         })
         resizeObserver.observe(host)
 
+        // The initial fit() can run before layout and font metrics settle,
+        // which leaves xterm at its 80x24 fallback. Because the host's pixel
+        // size never changes afterward, the ResizeObserver never fires to
+        // correct it. Re-fit across a few settle points; each fit that changes
+        // the grid propagates the real size to the PTY via term.onResize.
+        const settleFit = () => {
+          if (disposed) return
+          fitAddonRef.current?.fit()
+        }
+        settleFitFrame = window.requestAnimationFrame(settleFit)
+        settleFitTimers.push(
+          window.setTimeout(settleFit, 120),
+          window.setTimeout(settleFit, 360),
+        )
+        if (typeof document !== 'undefined' && document.fonts?.ready) {
+          void document.fonts.ready.then(settleFit)
+        }
+
         openSocket(terminalConfig)
         terminalDisposables.push(
           term.onData((data) => {
@@ -498,6 +518,8 @@ export function TerminalPanel({
       if (writeFrame !== null) window.cancelAnimationFrame(writeFrame)
       if (debugFrame !== null) window.cancelAnimationFrame(debugFrame)
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
+      if (settleFitFrame !== null) window.cancelAnimationFrame(settleFitFrame)
+      for (const timer of settleFitTimers) window.clearTimeout(timer)
       resizeObserver?.disconnect()
       themeObserver?.disconnect()
       for (const disposable of terminalDisposables) {
