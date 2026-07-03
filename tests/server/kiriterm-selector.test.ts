@@ -1,30 +1,44 @@
 import { describe, expect, it } from 'vitest'
 import { resolveDaemonLaunch } from '../../src/server/kiriterm-daemon-client'
 
-describe('kiriterm daemon selector', () => {
-  it('keeps the node daemon path by default', () => {
-    const previous = process.env.KIRI_TERM_CORE
-    delete process.env.KIRI_TERM_CORE
-    try {
-      const launch = resolveDaemonLaunch()
-      expect(launch.command).not.toContain('kiri-termd')
-      expect(launch.args.join(' ')).toContain('term daemon')
-    } finally {
-      if (previous === undefined) delete process.env.KIRI_TERM_CORE
-      else process.env.KIRI_TERM_CORE = previous
-    }
+describe('kiriterm daemon resolver', () => {
+  it('uses the rust sidecar by default', () => {
+    const launch = withEnv({}, () => resolveDaemonLaunch())
+
+    expect(launch.args).toEqual([])
+    expect(launch.env).toEqual({})
+    expect(launch.command).toContain('kiri-termd')
   })
 
-  it('uses the rust sidecar when requested', () => {
-    const previous = process.env.KIRI_TERM_CORE
-    process.env.KIRI_TERM_CORE = 'rust'
-    try {
-      const launch = resolveDaemonLaunch()
-      expect(launch.args).toEqual([])
-      expect(launch.command).toContain('kiri-termd')
-    } finally {
-      if (previous === undefined) delete process.env.KIRI_TERM_CORE
-      else process.env.KIRI_TERM_CORE = previous
-    }
+  it('lets an explicit daemon binary override the default sidecar', () => {
+    const launch = withEnv({ KIRI_TERM_DAEMON_BIN: '/tmp/custom-kiriterm' }, () =>
+      resolveDaemonLaunch(),
+    )
+
+    expect(launch).toEqual({
+      command: '/tmp/custom-kiriterm',
+      args: ['term', 'daemon'],
+      env: {},
+    })
   })
 })
+
+function withEnv<T>(env: Record<string, string | undefined>, run: () => T): T {
+  const previous = new Map<string, string | undefined>()
+  for (const key of ['KIRI_TERM_DAEMON_BIN']) {
+    previous.set(key, process.env[key])
+    delete process.env[key]
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  try {
+    return run()
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}

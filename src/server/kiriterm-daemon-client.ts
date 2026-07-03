@@ -282,25 +282,7 @@ export function resolveDaemonLaunch(): {
 } {
   const override = process.env.KIRI_TERM_DAEMON_BIN?.trim()
   if (override) return { command: override, args: ['term', 'daemon'], env: {} }
-  if (process.env.KIRI_TERM_CORE === 'rust') {
-    return { command: resolveRustDaemonBinary(), args: [], env: {} }
-  }
-
-  const builtCli = resolve(process.cwd(), 'dist/cli/kirictl.mjs')
-  if (existsSync(builtCli)) {
-    return {
-      command: process.execPath,
-      args: [builtCli, 'term', 'daemon'],
-      // Electron binaries need this to run the entry as plain node.
-      env: { ELECTRON_RUN_AS_NODE: '1' },
-    }
-  }
-
-  return {
-    command: 'pnpm',
-    args: ['exec', 'tsx', resolve(process.cwd(), 'src/cli/kirictl.ts'), 'term', 'daemon'],
-    env: {},
-  }
+  return { command: resolveRustDaemonBinary(), args: [], env: {} }
 }
 
 function resolveRustDaemonBinary() {

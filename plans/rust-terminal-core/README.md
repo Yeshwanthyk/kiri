@@ -15,7 +15,7 @@ literally.
 
 **Framing (per user):** this is a **replacement, not a compatibility layer**.
 We own the frontend and backend, so the wire protocol is free to change. There
-is no dual-core, no wire back-compat, no default-flip. The single hard rule:
+is no long-term dual-core selector and no wire back-compat. The single hard rule:
 every currently-working flow keeps working flawlessly.
 
 ## Execution order & status
@@ -23,7 +23,7 @@ every currently-working flow keeps working flawlessly.
 | Phase | File | Outcome | Priority | Effort | Risk | Status |
 |---|---|---|---|---|---|---|
 | — | [00-overview](00-overview.md) | Design, decisions, protocol contract, risks | — | — | — | DESIGN |
-| P0 | [10-phase0-spike](10-phase0-spike.md) | Shell session end-to-end; VT engine chosen; temporary `KIRI_TERM_CORE=rust` bring-up switch | P0 | M | LOW | TODO |
+| P0 | [10-phase0-spike](10-phase0-spike.md) | Shell session end-to-end; VT engine chosen; initial daemon resolver wiring | P0 | M | LOW | TODO |
 | P1 | [20-phase1-parity](20-phase1-parity.md) | All shell + control-plane flows (see [CONTRACTS.md](CONTRACTS.md)); scrollback+persist all modes | P1 | L | MED | TODO |
 | P2 | [30-phase2-kiri-semantics](30-phase2-kiri-semantics.md) | Agent runtimes, OSC-3008 presence, MCP reads, conservative reattach | P1 | M | MED | TODO |
 | P3 | [40-phase3-v2-protocol](40-phase3-v2-protocol.md) | Binary grid diffs, resumable attach, paged history; delete ANSI passthrough | P2 | L | MED | TODO |
