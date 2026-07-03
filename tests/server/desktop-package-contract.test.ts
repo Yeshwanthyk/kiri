@@ -2,12 +2,25 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { WebSocket } from 'ws'
 import packageJson from '../../package.json'
 import { describe, expect, it } from 'vitest'
 
 type AsarHeaderNode = {
   readonly files?: Record<string, AsarHeaderNode>
 }
+
+type DaemonRecord = {
+  readonly host: string
+  readonly port: number
+  readonly path: string
+  readonly token: string
+}
+
+type TerminalFrame =
+  | { readonly type: 'snapshot'; readonly data: string }
+  | { readonly type: 'data'; readonly data: string }
+  | { readonly type: string }
 
 describe('desktop package contract', () => {
   it('ships runtime app assets without build-only packaging scripts', () => {
@@ -116,6 +129,7 @@ async function expectKiriTermdRuns(binary: string) {
       version,
       sessions: 0,
     })
+    await expectPackagedShellEcho(record)
     await fetch(`http://${record.host}:${record.port}/api/shutdown`, {
       method: 'POST',
       headers: {
@@ -162,15 +176,100 @@ async function waitForDaemonRecord(stateDir: string) {
   const deadline = Date.now() + 5_000
   while (Date.now() < deadline) {
     if (existsSync(recordPath)) {
-      return JSON.parse(readFileSync(recordPath, 'utf8')) as {
-        readonly host: string
-        readonly port: number
-        readonly token: string
-      }
+      return JSON.parse(readFileSync(recordPath, 'utf8')) as DaemonRecord
     }
     await sleep(50)
   }
   throw new Error(`timed out waiting for daemon record at ${recordPath}`)
+}
+
+async function expectPackagedShellEcho(record: DaemonRecord) {
+  const socket = new WebSocket(
+    `ws://${record.host}:${record.port}${record.path}?agentId=package-smoke&mode=shell&cols=80&rows=24&token=${record.token}`,
+  )
+  try {
+    await waitForSocketOpen(socket)
+    const snapshot = await waitForFrame(socket, (frame) => frame.type === 'snapshot')
+    expect(snapshot).toMatchObject({ type: 'snapshot' })
+
+    socket.send(JSON.stringify({
+      type: 'input',
+      data: "printf 'packaged-rust-shell-%s\\n' ok\r",
+    }))
+    const echo = await waitForFrame(socket, (frame) =>
+      frame.type === 'data' && 'data' in frame && frame.data.includes('packaged-rust-shell-ok'),
+    )
+    expect(echo).toMatchObject({ type: 'data' })
+  } finally {
+    socket.close()
+  }
+}
+
+function waitForSocketOpen(socket: WebSocket) {
+  if (socket.readyState === WebSocket.OPEN) return Promise.resolve()
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error('timed out waiting for packaged kiri-termd websocket to open'))
+    }, 5_000)
+    const cleanup = () => {
+      clearTimeout(timeout)
+      socket.off('open', onOpen)
+      socket.off('error', onError)
+    }
+    const onOpen = () => {
+      cleanup()
+      resolve()
+    }
+    const onError = (error: Error) => {
+      cleanup()
+      reject(error)
+    }
+    socket.once('open', onOpen)
+    socket.once('error', onError)
+  })
+}
+
+function waitForFrame(socket: WebSocket, predicate: (frame: TerminalFrame) => boolean) {
+  return new Promise<TerminalFrame>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error('timed out waiting for packaged kiri-termd terminal frame'))
+    }, 5_000)
+    const cleanup = () => {
+      clearTimeout(timeout)
+      socket.off('message', onMessage)
+      socket.off('error', onError)
+    }
+    const onMessage = (raw: WebSocket.RawData) => {
+      const frame = parseTerminalFrame(raw)
+      if (!frame || !predicate(frame)) return
+      cleanup()
+      resolve(frame)
+    }
+    const onError = (error: Error) => {
+      cleanup()
+      reject(error)
+    }
+    socket.on('message', onMessage)
+    socket.once('error', onError)
+  })
+}
+
+function parseTerminalFrame(raw: WebSocket.RawData): TerminalFrame | null {
+  const text = Buffer.isBuffer(raw)
+    ? raw.toString('utf8')
+    : Array.isArray(raw)
+      ? Buffer.concat(raw).toString('utf8')
+      : Buffer.from(new Uint8Array(raw)).toString('utf8')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null || !('type' in parsed)) return null
+  return parsed as TerminalFrame
 }
 
 function waitForExit(child: ChildProcess, timeoutMs: number) {
