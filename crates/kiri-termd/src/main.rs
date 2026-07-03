@@ -1340,6 +1340,19 @@ async fn handle_socket(state: AppState, query: TerminalQuery, socket: WebSocket)
             return;
         }
     };
+    if let (Some(cols), Some(rows)) = (query.cols, query.rows) {
+        if cols > 0 && rows > 0 {
+            let current = {
+                let grid = session.grid.lock().await;
+                (grid.cols() as u16, grid.rows() as u16)
+            };
+            if current != (cols, rows) {
+                if let Err(error) = resize_session_to(&session, cols, rows).await {
+                    warn!("failed to resize pty on attach for {}: {error}", session.key);
+                }
+            }
+        }
+    }
     let mut stream = BroadcastStream::new(session.tx.subscribe());
     let (cols, rows, snapshot, snapshot_seq, generation) = {
         let grid = session.grid.lock().await;
