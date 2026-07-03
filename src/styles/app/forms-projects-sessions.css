@@ -1,6 +1,11 @@
 @media (prefers-reduced-motion: reduce) {
   .settings-back,
   .settings-reset,
+  .project-add-form button,
+  .project-hidden-toggle,
+  .project-settings-row,
+  .project-settings-row button,
+  .project-manager .settings-close,
   .theme-card,
   .theme-mode-toggle button,
   .keymap-row,
@@ -10,7 +15,10 @@
   }
   .theme-card:hover,
   .settings-back:active,
-  .settings-reset:active {
+  .settings-reset:active,
+  .project-add-form button:not(:disabled):active,
+  .project-hidden-toggle:active,
+  .project-settings-row button:not(:disabled):active {
     transform: none;
   }
 }
@@ -687,9 +695,16 @@
   color: var(--selection-ink);
   font-size: 12px;
   font-weight: 800;
-  transition-property: transform, background-color, border-color;
+  transition-property: transform, background-color, border-color, box-shadow;
   transition-duration: 160ms;
   transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+.project-add-form .project-add-button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--selection-ink);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .project-add-form .project-folder-button {
@@ -697,6 +712,32 @@
   border-color: var(--line);
   background: var(--panel);
   color: var(--muted);
+}
+
+.project-add-form button:not(:disabled):hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 88%, var(--panel));
+  color: var(--selection-ink);
+}
+
+.project-add-form button:not(:disabled):focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 88%, var(--panel));
+  color: var(--selection-ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.project-add-form .project-folder-button:not(:disabled):hover {
+  border-color: var(--accent-muted);
+  background: var(--accent-soft);
+  color: var(--selection-ink);
+}
+
+.project-add-form .project-folder-button:not(:disabled):focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--selection-ink);
 }
 
 .project-add-form button:not(:disabled):active,
@@ -710,6 +751,7 @@
 .composer button:disabled,
 .project-settings-row button:disabled {
   cursor: not-allowed;
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
   opacity: 0.45;
 }
 
@@ -726,8 +768,20 @@
   min-height: 52px;
   padding: 8px 10px 8px 12px;
   border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 88%, var(--paper));
+  box-shadow:
+    inset 0 0 0 1px var(--line),
+    0 8px 22px color-mix(in srgb, var(--ink) 5%, transparent);
+  transition-property: background-color, box-shadow;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+.project-settings-row:hover {
   background: var(--panel);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 72%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent-muted) 70%, var(--line)),
+    0 12px 28px color-mix(in srgb, var(--ink) 7%, transparent);
 }
 
 .project-settings-row div {
@@ -751,7 +805,9 @@
 }
 
 .project-settings-row strong {
+  color: var(--ink);
   font-size: 14px;
+  font-weight: 820;
   line-height: 1.1;
 }
 
@@ -776,7 +832,7 @@
   border-radius: 10px;
   background: transparent;
   color: var(--muted);
-  transition-property: transform, border-color, background-color, color;
+  transition-property: transform, border-color, background-color, color, box-shadow;
   transition-duration: 160ms;
   transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
@@ -784,13 +840,29 @@
 .project-settings-row button:not(:disabled):hover {
   border-color: var(--accent-muted);
   background: var(--accent-soft);
-  color: var(--muted);
+  color: var(--selection-ink);
+}
+
+.project-settings-row button:not(:disabled):focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--selection-ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .project-settings-row .project-remove-button:not(:disabled):hover {
   border-color: color-mix(in srgb, var(--danger) 52%, var(--line));
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
+}
+
+.project-settings-row .project-remove-button:not(:disabled):focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--danger) 52%, var(--line));
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
 .project-settings-row button:not(:disabled):active {
