@@ -44,6 +44,7 @@ type CornerPeekShellProps = Omit<
     readonly activeResourceId: ResourceId | null
   }>
   readonly cornerPeekHeld: boolean
+  readonly projectVisibilityPendingId: string | null
   readonly onSelectProject: (projectId: string) => void
   readonly onSelectAgent: (projectId: string, agentId: string) => void
   readonly onSelectResource: (projectId: string, resourceId: ResourceId) => void
@@ -59,6 +60,8 @@ type CornerPeekShellProps = Omit<
   readonly onCaptureKnowledge: (input: KnowledgeAddInput) => Promise<KnowledgeEntry>
   readonly onDeleteKnowledge: (id: string) => Promise<void>
   readonly onStartSession: () => void
+  readonly onHideProject: (projectId: string) => void
+  readonly onUnhideProject: (projectId: string) => void
   readonly onOpenProjects: (returnFocusElement?: HTMLElement | null) => void
   readonly onOpenSettings: () => void
   readonly onPeekExpandedChange?: (expanded: boolean) => void
@@ -78,6 +81,7 @@ export function CornerPeekShell({
   browserAvailable,
   resourcesByProject,
   cornerPeekHeld,
+  projectVisibilityPendingId,
   onSelectProject,
   onSelectAgent,
   onSelectResource,
@@ -93,6 +97,8 @@ export function CornerPeekShell({
   onCaptureKnowledge,
   onDeleteKnowledge,
   onStartSession,
+  onHideProject,
+  onUnhideProject,
   onOpenProjects,
   onOpenSettings,
   onPeekExpandedChange,
@@ -154,8 +160,11 @@ export function CornerPeekShell({
         activeResourceId={activeResourceId}
         resourcesByProject={resourcesByProject}
         held={cornerPeekHeld}
+        pendingProjectId={projectVisibilityPendingId}
         onSelectProject={onSelectProject}
         onSelectResource={onSelectResource}
+        onHide={onHideProject}
+        onUnhide={onUnhideProject}
         onOpenProjects={onOpenProjects}
         onOpenSettings={onOpenSettings}
         onExpandedChange={onPeekExpandedChange}

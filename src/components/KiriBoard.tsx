@@ -265,6 +265,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
     handleDeleteProject,
     handleHideProject,
     handleUnhideProject,
+    projectVisibilityPendingId,
     handleReorderProjects,
     handleChooseProjectDirectory,
   } = useBoardProjectActions({
@@ -585,6 +586,7 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         browserOverlayOpen={browserOverlayOpen}
         resourcesByProject={projectResources.resourcesByProject}
         cornerPeekHeld={cornerPeekHeld}
+        projectVisibilityPendingId={projectVisibilityPendingId}
         onPeekExpandedChange={setPeekExpanded}
         onSelectProject={selectProject}
         onSelectAgent={selectAgent}
@@ -604,6 +606,8 @@ export function KiriBoard({ snapshot }: { snapshot: WorkspaceSnapshot }) {
         onCaptureKnowledge={handleCaptureKnowledge}
         onDeleteKnowledge={handleDeleteKnowledge}
         onStartSession={() => openSessionLauncher()}
+        onHideProject={handleHideProject}
+        onUnhideProject={handleUnhideProject}
         onOpenProjects={openProjectManagerWithReturnFocus}
         onOpenSettings={openSettings}
         chatFocusRequest={chatFocusRequest}

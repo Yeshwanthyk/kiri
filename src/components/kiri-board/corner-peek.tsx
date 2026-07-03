@@ -1,6 +1,6 @@
 'use client'
 
-import { FolderKanban, Settings } from 'lucide-react'
+import { Eye, EyeOff, FolderKanban, Settings } from 'lucide-react'
 import * as React from 'react'
 import type { ProjectRow } from '~/lib/contracts'
 import type { ProjectResource, ResourceId } from './resource-tabs'
@@ -15,8 +15,11 @@ type CornerPeekProps = {
     readonly activeResourceId: ResourceId | null
   }>
   readonly held: boolean
+  readonly pendingProjectId: string | null
   readonly onSelectProject: (projectId: string) => void
   readonly onSelectResource: (projectId: string, resourceId: ResourceId) => void
+  readonly onHide: (projectId: string) => void
+  readonly onUnhide: (projectId: string) => void
   readonly onOpenProjects: (returnFocusElement?: HTMLElement | null) => void
   readonly onOpenSettings: () => void
   readonly onExpandedChange?: (expanded: boolean) => void
@@ -29,8 +32,11 @@ export function CornerPeek({
   activeResourceId,
   resourcesByProject,
   held,
+  pendingProjectId,
   onSelectProject,
   onSelectResource,
+  onHide,
+  onUnhide,
   onOpenProjects,
   onOpenSettings,
   onExpandedChange,
@@ -110,10 +116,46 @@ export function CornerPeek({
                     />
                   ))}
                 </div>
+                <button
+                  type="button"
+                  className="corner-peek-hide"
+                  aria-label={`Hide ${project.name}`}
+                  title={`Hide ${project.name}`}
+                  disabled={projects.length <= 1 || pendingProjectId === project.id}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onHide(project.id)
+                  }}
+                >
+                  <EyeOff size={13} aria-hidden="true" />
+                </button>
               </div>
             )
           })}
         </div>
+        {hiddenProjects.length > 0 ? (
+          <div className="corner-peek-hidden">
+            <div className="corner-peek-hidden-head">
+              <strong>hidden</strong>
+              <span>{hiddenProjects.length}</span>
+            </div>
+            {hiddenProjects.map((project) => (
+              <div key={project.id} className="corner-peek-hidden-row">
+                <span>{project.name}</span>
+                <button
+                  type="button"
+                  className="corner-peek-restore"
+                  aria-label={`Restore ${project.name}`}
+                  title={`Restore ${project.name}`}
+                  disabled={pendingProjectId === project.id}
+                  onClick={() => onUnhide(project.id)}
+                >
+                  <Eye size={13} aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div className="corner-peek-actions">
           <button
             type="button"
