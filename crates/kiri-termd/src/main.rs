@@ -18,9 +18,11 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use rand::RngCore;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
     env,
+    ffi::OsString,
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -534,6 +536,7 @@ async fn close_agent_runtime(
         return response;
     }
     let key = format!("{}:runtime", body.agent_id);
+    schedule_zmx_runtime_kill(&key);
     if let Some(session) = session_by_key(&state, &key).await {
         kill_session_process(&state, &session).await;
     }
@@ -1674,8 +1677,117 @@ impl SessionLaunch {
     }
 }
 
+fn apply_zmx_launch(launch: &mut SessionLaunch) {
+    let Some(binary) = resolve_zmx_binary() else {
+        return;
+    };
+    let command = std::mem::replace(&mut launch.command, binary);
+    let args = std::mem::take(&mut launch.args);
+    launch.args = zmx_attach_args(&launch.key, command, args);
+}
+
+fn zmx_attach_args(key: &str, command: String, args: Vec<String>) -> Vec<String> {
+    let mut wrapped = vec!["attach".to_string(), zmx_session_name(key), command];
+    wrapped.extend(args);
+    wrapped
+}
+
+fn resolve_zmx_binary() -> Option<String> {
+    if env::var("KIRI_ZMX").ok().as_deref() != Some("1") {
+        return None;
+    }
+    if let Ok(override_path) = env::var("KIRI_ZMX_BIN") {
+        let trimmed = override_path.trim();
+        if !trimmed.is_empty() && executable_exists(trimmed) {
+            return Some(trimmed.to_string());
+        }
+        if !trimmed.is_empty() {
+            return None;
+        }
+    }
+    find_zmx_on_path(env::var_os("PATH"))
+}
+
+fn find_zmx_on_path(paths: Option<OsString>) -> Option<String> {
+    paths
+        .into_iter()
+        .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| path.join("zmx"))
+        .find(|path| executable_exists(path))
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn schedule_zmx_runtime_kill(key: &str) {
+    let Some(binary) = resolve_zmx_binary() else {
+        return;
+    };
+    let name = zmx_session_name(key);
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            process::Command::new(binary).args(["kill", &name]).output()
+        })
+        .await;
+        match result {
+            Ok(Ok(output)) if output.status.success() => {}
+            Ok(Ok(output)) => warn!("zmx runtime kill failed with status {}", output.status),
+            Ok(Err(error)) => warn!("zmx runtime kill failed: {error}"),
+            Err(error) => warn!("zmx runtime kill task failed: {error}"),
+        }
+    });
+}
+
+fn zmx_session_name(key: &str) -> String {
+    let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+    let readable = zmx_readable_name(key);
+    format!("kiri-{}-{}", readable, &digest[..24])
+}
+
+fn zmx_readable_name(key: &str) -> String {
+    let mut readable = String::new();
+    let mut previous_dash = false;
+    for ch in key.chars() {
+        let next = if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_') {
+            previous_dash = false;
+            ch
+        } else if previous_dash {
+            continue;
+        } else {
+            previous_dash = true;
+            '-'
+        };
+        readable.push(next);
+    }
+    let trimmed = readable.trim_matches('-');
+    let prefix: String = trimmed.chars().take(12).collect();
+    if prefix.is_empty() {
+        "session".to_string()
+    } else {
+        prefix
+    }
+}
+
+fn executable_exists(path: impl AsRef<Path>) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    metadata.is_file() && executable_mode(&metadata)
+}
+
+#[cfg(unix)]
+fn executable_mode(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn executable_mode(metadata: &fs::Metadata) -> bool {
+    !metadata.permissions().readonly()
+}
+
 fn spawn_pty_session(
-    launch: SessionLaunch,
+    mut launch: SessionLaunch,
     generation: u64,
     restored: Option<PersistedSession>,
 ) -> Result<(Session, Box<dyn Read + Send>)> {
@@ -1688,6 +1800,7 @@ fn spawn_pty_session(
             pixel_height: 0,
         })
         .context("failed to open pty")?;
+    apply_zmx_launch(&mut launch);
     let mut command = CommandBuilder::new(launch.command);
     command.args(launch.args);
     command.cwd(&launch.cwd);
@@ -2688,6 +2801,55 @@ mod tests {
     #[test]
     fn regex_rejects_unknown_flags() {
         assert!(compile_regex("needle", "z").is_err());
+    }
+
+    #[test]
+    fn zmx_session_names_match_node_shape() {
+        assert_eq!(
+            zmx_session_name("agent-1:runtime"),
+            "kiri-agent-1-runt-6733bd3b6afa78ccdc32296d"
+        );
+        assert!(zmx_session_name(
+            "project with weird/chars and a very very long terminal id:shell:abc"
+        )
+        .starts_with("kiri-project-with-"));
+    }
+
+    #[test]
+    fn zmx_attach_args_wrap_original_command() {
+        assert_eq!(
+            zmx_attach_args(
+                "agent-1:runtime",
+                "/bin/sh".to_string(),
+                vec!["-lc".to_string()]
+            ),
+            vec![
+                "attach".to_string(),
+                "kiri-agent-1-runt-6733bd3b6afa78ccdc32296d".to_string(),
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn zmx_path_lookup_skips_empty_entries() {
+        let dir = unique_test_dir("zmx-path");
+        let zmx = dir.join("zmx");
+        fs::write(&zmx, "#!/bin/sh\n").unwrap();
+        let mut permissions = fs::metadata(&zmx).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(0o755);
+        }
+        fs::set_permissions(&zmx, permissions).unwrap();
+
+        assert_eq!(
+            find_zmx_on_path(Some(OsString::from(format!(":{}", dir.display())))),
+            Some(zmx.to_string_lossy().into_owned())
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

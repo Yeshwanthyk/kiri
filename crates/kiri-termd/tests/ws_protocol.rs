@@ -62,6 +62,135 @@ fn agent_spawn_launches_runtime_and_drains_queued_input() {
 }
 
 #[test]
+fn zmx_wraps_runtime_launch_when_enabled() {
+    let state_dir = temp_state_dir();
+    let fake_codex = write_fake_runtime(&state_dir).expect("fake runtime should be written");
+    let fake_zmx = write_fake_zmx(&state_dir).expect("fake zmx should be written");
+    let zmx_args = state_dir.join("zmx-args.txt");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", &state_dir)
+        .env("KIRI_CODEX_BIN", &fake_codex)
+        .env("KIRI_ZMX", "1")
+        .env("KIRI_ZMX_BIN", &fake_zmx)
+        .env("KIRI_ZMX_ARGS_FILE", &zmx_args)
+        .spawn()
+        .expect("kiri-termd should spawn");
+
+    let result = (|| {
+        run_runtime_spawn_smoke(&state_dir)?;
+        let args = fs::read_to_string(&zmx_args).map_err(|error| error.to_string())?;
+        let lines = args.lines().collect::<Vec<_>>();
+        assert_eq!(lines.first().copied(), Some("attach"));
+        assert!(lines
+            .get(1)
+            .is_some_and(|name| name.starts_with("kiri-agent-t1-run-")));
+        assert_eq!(
+            lines.get(2).copied(),
+            Some(fake_codex.to_string_lossy().as_ref())
+        );
+        Ok::<(), String>(())
+    })();
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&state_dir);
+
+    result.expect("zmx runtime smoke should pass");
+}
+
+#[test]
+fn zmx_empty_override_falls_back_to_path() {
+    let state_dir = temp_state_dir();
+    let fake_codex = write_fake_runtime(&state_dir).expect("fake runtime should be written");
+    let _fake_zmx = write_fake_zmx(&state_dir).expect("fake zmx should be written");
+    let zmx_args = state_dir.join("zmx-args.txt");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", &state_dir)
+        .env("KIRI_CODEX_BIN", &fake_codex)
+        .env("KIRI_ZMX", "1")
+        .env("KIRI_ZMX_BIN", "  ")
+        .env("KIRI_ZMX_ARGS_FILE", &zmx_args)
+        .env("PATH", &state_dir)
+        .spawn()
+        .expect("kiri-termd should spawn");
+
+    let result = (|| {
+        run_runtime_spawn_smoke(&state_dir)?;
+        let args = fs::read_to_string(&zmx_args).map_err(|error| error.to_string())?;
+        assert!(args.starts_with("attach\nkiri-agent-t1-run-"));
+        Ok::<(), String>(())
+    })();
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&state_dir);
+
+    result.expect("zmx path fallback smoke should pass");
+}
+
+#[test]
+fn zmx_missing_binary_fails_open_to_raw_runtime() {
+    let state_dir = temp_state_dir();
+    let fake_codex = write_fake_runtime(&state_dir).expect("fake runtime should be written");
+    let zmx_args = state_dir.join("zmx-args.txt");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", &state_dir)
+        .env("KIRI_CODEX_BIN", &fake_codex)
+        .env("KIRI_ZMX", "1")
+        .env("KIRI_ZMX_BIN", state_dir.join("missing-zmx"))
+        .env("KIRI_ZMX_ARGS_FILE", &zmx_args)
+        .spawn()
+        .expect("kiri-termd should spawn");
+
+    let result = (|| {
+        run_runtime_spawn_smoke(&state_dir)?;
+        assert!(
+            !zmx_args.exists(),
+            "missing zmx binary should leave launch unwrapped"
+        );
+        Ok::<(), String>(())
+    })();
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&state_dir);
+
+    result.expect("zmx fail-open runtime smoke should pass");
+}
+
+#[test]
+fn close_runtime_kills_matching_zmx_session() {
+    let state_dir = temp_state_dir();
+    let fake_codex = write_fake_runtime(&state_dir).expect("fake runtime should be written");
+    let fake_zmx = write_fake_zmx(&state_dir).expect("fake zmx should be written");
+    let zmx_args = state_dir.join("zmx-args.txt");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kiri-termd"))
+        .env("KIRI_TERM_STATE_DIR", &state_dir)
+        .env("KIRI_CODEX_BIN", &fake_codex)
+        .env("KIRI_ZMX", "1")
+        .env("KIRI_ZMX_BIN", &fake_zmx)
+        .env("KIRI_ZMX_ARGS_FILE", &zmx_args)
+        .spawn()
+        .expect("kiri-termd should spawn");
+
+    let result = (|| {
+        run_runtime_spawn_smoke(&state_dir)?;
+        let record = wait_record(&state_dir)?;
+        http_json(
+            &record,
+            "POST",
+            "/api/agents/close-runtime",
+            Some(json!({ "agentId": "agent-t1" })),
+        )?;
+        let args = poll_file_starts_with(&zmx_args, "kill\nkiri-agent-t1-run-")?;
+        assert_eq!(args.lines().count(), 2);
+        Ok::<(), String>(())
+    })();
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&state_dir);
+
+    result.expect("zmx close-runtime smoke should pass");
+}
+
+#[test]
 fn subscription_delivers_wake_to_runtime_session() {
     let state_dir = temp_state_dir();
     let fake_codex = write_fake_runtime(&state_dir).expect("fake runtime should be written");
@@ -1225,6 +1354,37 @@ fn write_fake_runtime(state_dir: &Path) -> Result<PathBuf, String> {
     permissions.set_mode(0o755);
     fs::set_permissions(&path, permissions).map_err(|error| error.to_string())?;
     Ok(path)
+}
+
+fn write_fake_zmx(state_dir: &Path) -> Result<PathBuf, String> {
+    let path = state_dir.join("zmx");
+    fs::write(
+        &path,
+        "#!/bin/sh\n{\n  printf '%s\\n' \"$@\"\n} > \"$KIRI_ZMX_ARGS_FILE\"\nif [ \"$1\" = \"attach\" ]; then\n  shift\n  shift\n  exec \"$@\"\nfi\nif [ \"$1\" = \"kill\" ]; then\n  exit 0\nfi\nexit 127\n",
+    )
+    .map_err(|error| error.to_string())?;
+    let mut permissions = fs::metadata(&path)
+        .map_err(|error| error.to_string())?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).map_err(|error| error.to_string())?;
+    Ok(path)
+}
+
+fn poll_file_starts_with(path: &Path, prefix: &str) -> Result<String, String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let Ok(contents) = fs::read_to_string(path) {
+            if contents.starts_with(prefix) {
+                return Ok(contents);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!(
+        "timed out waiting for {} to start with {prefix}",
+        path.display()
+    ))
 }
 
 fn run_shutdown_smoke(state_dir: &Path, child: &mut std::process::Child) -> Result<(), String> {
