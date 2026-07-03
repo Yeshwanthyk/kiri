@@ -60,6 +60,16 @@ pnpm install:desktop
 This builds the web/server bundles, packages the macOS app, creates the DMG,
 replaces `~/Applications/kiri.app`, and opens the installed app.
 
+Rust sidecar binaries require both macOS Rust targets:
+
+```sh
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+pnpm build:rust
+```
+
+`pnpm install:desktop` runs `pnpm build:rust` and packages the universal Rust
+helpers into the app.
+
 ## CLI
 
 ```sh
