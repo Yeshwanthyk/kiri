@@ -53,6 +53,12 @@ function listen(server: ReturnType<typeof createServer>) {
   })
 }
 
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
 function launchConfig(stateDir: string) {
   return {
     id: 'agent-t1',
@@ -386,7 +392,9 @@ describe('kiriterm daemon', () => {
           body += String(chunk)
         })
         request.on('end', () => {
-          const afterSeq = JSON.parse(body || '{}').afterSeq ?? 0
+          const parsed: unknown = JSON.parse(body || '{}')
+          const afterSeqValue = objectRecord(parsed)?.afterSeq
+          const afterSeq = typeof afterSeqValue === 'number' ? afterSeqValue : 0
           response.writeHead(200, { 'content-type': 'application/json' })
           response.end(JSON.stringify({
             events: events.filter((event) => event.seq > afterSeq),
