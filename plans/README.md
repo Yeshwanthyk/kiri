@@ -164,9 +164,59 @@ resulting Claude task rows.
   resume-binding and TodoWrite payloads. The shipped path is the new runtime
   launch bundle; PATH shims were left out of scope.
 
+## Control-plane audit: kirictl, MCP, hooks & packaging (2026-07-04)
+
+A dedicated audit of the agent-facing control surface (kirictl CLI, MCP
+server, backend control endpoint, lifecycle hooks) at commit `e464651`.
+Five parallel codex reviewers: operation parity, state consistency, MCP
+protocol compliance, packaging/import-graph, and hook→title→presence
+tracing. Headline findings: the backend "fallback" is fail-closed (a stale
+`backend-control.json` bricks the CLI) yet also permits dual-writer local
+DB access; MCP failures lack `isError` so clients see them as successes;
+the two hook wirings (launch vs PATH-shim) diverged, leaving the Stop-title
+fallback dead on the normal path; `options.compact` is advertised but
+unimplemented; and every hook event pays a 5.4 MB/1,379-module bundle where
+~9 KB suffices. Category: bugfix + correctness + architecture.
+
+| Plan | Title | Priority | Effort | Risk | Depends on | Status |
+|---|---|---|---|---|---|---|
+| [021](021-control-plane-correctness.md) | Control-plane correctness: liveness-checked backend fallback + dual-writer guard, MCP `isError`/`outputSchema`/annotations, wait-for timeout coherence, dead option/code cleanup, read/write reclassification | P1 | M | MED | — | DONE — focused gates + stale-control smoke pass; full lint blocked by unrelated existing test lint |
+| [022](022-hook-title-presence-followups.md) | Hook/title/presence follow-ups: unify launch-vs-shim wiring, revive Stop title fallback, unstick `blocked`, Claude subagent guard, Codex terminal lifecycle push, mid-session retitle, hook write reliability | P1 | M | MED | 014/017/019 (DONE); 021 step 1 | TODO |
+| [023](023-operation-surface-completeness.md) | Operation surface completeness: `agent.interrupt`, `session.delete`, schema-backed `operations.list`, kiri-control skill-doc drift test | P2 | M | LOW-MED | 021 | TODO |
+| [024](024-control-surface-breakout.md) | Control-surface break-out: ~9 KB hook micro-entrypoints, `packages/kiri-control` boundary, control protocol version (gate for external distribution) | P2 | L | MED | 021, 022 step 1 | TODO |
+
+Order and dependencies:
+- **021 first** — it settles fallback semantics and the operation enum that
+  022/023/024 all build on. Its dual-writer guard is also the safety
+  prerequisite for 024's "hooks never open the DB" rule.
+- **022 is the felt-pain fix** for titles/status going stale; it closes
+  seams *between* DONE plans 014/017/019 rather than reopening them.
+- **023 and 024 are independent of each other**; 024 step 1 (hook
+  micro-entrypoint) is the highest-leverage packaging change and can ship
+  alone once 021+022-step-1 land. External distribution of kirictl/MCP is
+  explicitly gated on 024 step 3 (protocol versioning).
+- Break-out verdict: **split internally, don't externalize yet** — the
+  control protocol is unversioned and CLI↔backend skew detection must land
+  first. The Rust direction (`kiri-termd`) covers the terminal core only;
+  the control plane stays Node.
+
 ## Findings considered and rejected
 
 Recorded so future audits don't re-litigate them:
+
+- **Preferences/theme, project reorder/selection, browser/resource, and
+  workspace snapshot/revision operations** (2026-07-04 parity audit) — the
+  UI has them, agents don't need them; deliberately excluded from plan 023's
+  scope. Revisit only with a concrete agent use case.
+- **`workflow.await` reclassification as read** (2026-07-04) — rejected:
+  `deliver:"wake"` registers delivery state that later injects terminal
+  input (`kiri-control.ts:663`); the conservative write classification
+  stands. `terminal.wait-for`/`workflow.validate` reclassification is
+  planned (021).
+- **Per-operation MCP tools instead of `kiri_get`/`kiri_do`** (2026-07-04)
+  — rejected for now: 45 tools would bloat every agent's tool list; the
+  two-tool funnel plus schema-backed `operations.list` (plan 023) keeps
+  discovery cheap without the bloat.
 
 - **SSR layer per request** — investigated; the Effect layer is already a
   process-level singleton and SSR cost is initial-load only. Not a hot path.

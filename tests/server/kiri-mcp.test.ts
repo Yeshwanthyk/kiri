@@ -89,6 +89,15 @@ describe('kiri MCP server', () => {
 
     const tools = await client.listTools()
     expect(tools.tools.map((tool) => tool.name)).toEqual(['kiri_get', 'kiri_do'])
+    const getTool = tools.tools.find((tool) => tool.name === 'kiri_get')
+    const doTool = tools.tools.find((tool) => tool.name === 'kiri_do')
+    expect(getTool?.outputSchema).toMatchObject({ type: 'object' })
+    expect(getTool?.annotations).toMatchObject({ readOnlyHint: true })
+    expect(doTool?.outputSchema).toMatchObject({ type: 'object' })
+    expect(doTool?.annotations).toMatchObject({
+      destructiveHint: true,
+      idempotentHint: false,
+    })
 
     const operations = z.object({
       read: z.array(z.string()),
@@ -113,8 +122,12 @@ describe('kiri MCP server', () => {
       operation: 'operations.list',
     }))
     expect(operations.read).toContain('model.list')
+    expect(operations.read).toContain('terminal.wait-for')
+    expect(operations.read).toContain('workflow.validate')
     expect(operations.write).toContain('session.create')
     expect(operations.write).toContain('session.spawn')
+    expect(operations.write).not.toContain('terminal.wait-for')
+    expect(operations.write).not.toContain('workflow.validate')
     expect(operations.recipes.decisionTree.intents).toContainEqual(expect.objectContaining({
       intent: 'start one new worker with a prompt',
       operation: 'session.spawn',
@@ -325,7 +338,6 @@ describe('kiri MCP server', () => {
           operation: 'workflow.dispatch',
           params: { id: 'mcp-workflow' },
           options: {
-            compact: true,
             includeContext: false,
           },
         },
@@ -371,6 +383,22 @@ describe('kiri MCP server', () => {
       'codex-hook',
       'session-start',
     ])
+  })
+
+  it('marks failed operation results as MCP errors', async () => {
+    const client = await startClient()
+    const result = await client.callTool({
+      name: 'kiri_do',
+      arguments: {
+        operation: 'project.delete',
+        params: { id: 'missing-project' },
+      },
+    })
+    expect(result.isError).toBe(true)
+    expect(responseSchema.parse(result.structuredContent)).toMatchObject({
+      ok: false,
+      operation: 'project.delete',
+    })
   })
 })
 

@@ -664,8 +664,10 @@ export const kiriReadOperations = [
   'scratchpad.list',
   'terminal.read',
   'terminal.list',
+  'terminal.wait-for',
   'workflow.list',
   'workflow.show',
+  'workflow.validate',
 ] as const
 export const kiriReadOperationSchema = z.enum(kiriReadOperations)
 export type KiriReadOperation = z.infer<typeof kiriReadOperationSchema>
@@ -685,7 +687,6 @@ export const kiriWriteOperations = [
   'agent.tasks.replace',
   'terminal.input',
   'terminal.keys',
-  'terminal.wait-for',
   'terminal.spawn',
   'terminal.kill',
   'knowledge.add',
@@ -695,7 +696,6 @@ export const kiriWriteOperations = [
   'scratchpad.add',
   'scratchpad.delete',
   'scratchpad.trigger',
-  'workflow.validate',
   'workflow.create',
   'workflow.dispatch',
   'workflow.await',
@@ -715,7 +715,6 @@ export const kiriOperationSchema = z.union([
 export type KiriOperation = z.infer<typeof kiriOperationSchema>
 
 export const kiriOperationOptionsSchema = z.object({
-  compact: z.boolean().default(true),
   fields: z.array(z.string().trim().min(1)).optional(),
   includeContext: z.boolean().default(false),
   limit: z.number().int().positive().max(500).optional(),
@@ -726,7 +725,6 @@ export const kiriOperationRequestSchema = z.object({
   operation: kiriOperationSchema,
   params: z.record(z.string(), z.unknown()).default({}),
   options: kiriOperationOptionsSchema.default({
-    compact: true,
     includeContext: false,
   }),
 })

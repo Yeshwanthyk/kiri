@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { runKiriOperationRequest, runKiriOperationWithBackendFallback } from '~/cli/kirictl'
+import { backendControlTimeoutMsForTests, runKiriOperationRequest, runKiriOperationWithBackendFallback } from '~/cli/kirictl'
 import { closeTerminalServerForTests } from '~/server/terminal-server'
 import { runTsxJsonWithArgs } from '../harness/run-tsx'
 
@@ -255,8 +255,93 @@ describe('kirictl call', () => {
     }
   })
 
-  it('does not fall back to local execution when configured backend control is unreachable', async () => {
+  it('falls back to local reads when configured backend control is unreachable', async () => {
     const root = mkdtempSync(join(tmpdir(), 'kirictl-proxy-unreachable-'))
+    tempRoots.push(root)
+    writeFileSync(join(root, 'backend-control.json'), JSON.stringify({
+      url: 'http://127.0.0.1:1/',
+      token: 'missing-backend',
+    }))
+    const previousEnv = {
+      KIRI_DISABLE_BACKEND_PROXY: process.env.KIRI_DISABLE_BACKEND_PROXY,
+      KIRI_BACKEND_CONTROL_PATH: process.env.KIRI_BACKEND_CONTROL_PATH,
+    }
+    process.env.KIRI_DISABLE_BACKEND_PROXY = '0'
+    process.env.KIRI_BACKEND_CONTROL_PATH = join(root, 'backend-control.json')
+    const response = responseSchema.parse(
+      await runKiriOperationWithBackendFallback({} as never, {
+        operation: 'operations.list',
+      }).finally(() => {
+        restoreEnv('KIRI_DISABLE_BACKEND_PROXY', previousEnv.KIRI_DISABLE_BACKEND_PROXY)
+        restoreEnv('KIRI_BACKEND_CONTROL_PATH', previousEnv.KIRI_BACKEND_CONTROL_PATH)
+      }),
+    )
+    expect(response.ok).toBe(true)
+    expect(response.operation).toBe('operations.list')
+  })
+
+  it('falls back locally and removes a stale backend control file when its pid is dead', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kirictl-proxy-stale-pid-'))
+    tempRoots.push(root)
+    const controlPath = join(root, 'backend-control.json')
+    writeFileSync(controlPath, JSON.stringify({
+      url: 'http://127.0.0.1:1/',
+      token: 'missing-backend',
+      pid: 999_999_999,
+    }))
+    const previousEnv = {
+      KIRI_DISABLE_BACKEND_PROXY: process.env.KIRI_DISABLE_BACKEND_PROXY,
+      KIRI_BACKEND_CONTROL_PATH: process.env.KIRI_BACKEND_CONTROL_PATH,
+    }
+    process.env.KIRI_DISABLE_BACKEND_PROXY = '0'
+    process.env.KIRI_BACKEND_CONTROL_PATH = controlPath
+    const response = responseSchema.parse(
+      await runKiriOperationWithBackendFallback({} as never, {
+        operation: 'operations.list',
+      }).finally(() => {
+        restoreEnv('KIRI_DISABLE_BACKEND_PROXY', previousEnv.KIRI_DISABLE_BACKEND_PROXY)
+        restoreEnv('KIRI_BACKEND_CONTROL_PATH', previousEnv.KIRI_BACKEND_CONTROL_PATH)
+      }),
+    )
+    expect(response.ok).toBe(true)
+    expect(response.operation).toBe('operations.list')
+    expect(() => readFileSync(controlPath, 'utf8')).toThrow()
+  })
+
+  it('refuses local writes when a live backend pid has an unreachable endpoint', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kirictl-proxy-live-pid-'))
+    tempRoots.push(root)
+    writeFileSync(join(root, 'backend-control.json'), JSON.stringify({
+      url: 'http://127.0.0.1:1/',
+      token: 'missing-backend',
+      pid: process.pid,
+    }))
+    const previousEnv = {
+      KIRI_DISABLE_BACKEND_PROXY: process.env.KIRI_DISABLE_BACKEND_PROXY,
+      KIRI_BACKEND_CONTROL_PATH: process.env.KIRI_BACKEND_CONTROL_PATH,
+    }
+    process.env.KIRI_DISABLE_BACKEND_PROXY = '0'
+    process.env.KIRI_BACKEND_CONTROL_PATH = join(root, 'backend-control.json')
+    const response = responseSchema.parse(
+      await runKiriOperationWithBackendFallback({} as never, {
+        operation: 'workflow.dispatch',
+        params: { id: 'workflow-proxy' },
+      }).finally(() => {
+        restoreEnv('KIRI_DISABLE_BACKEND_PROXY', previousEnv.KIRI_DISABLE_BACKEND_PROXY)
+        restoreEnv('KIRI_BACKEND_CONTROL_PATH', previousEnv.KIRI_BACKEND_CONTROL_PATH)
+      }),
+    )
+    expect(response).toMatchObject({
+      ok: false,
+      operation: 'workflow.dispatch',
+      error: {
+        code: 'BACKEND_ALIVE_LOCAL_WRITE_REFUSED',
+      },
+    })
+  })
+
+  it('refuses local writes when backend liveness is unknown and the endpoint is unreachable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kirictl-proxy-unknown-pid-'))
     tempRoots.push(root)
     writeFileSync(join(root, 'backend-control.json'), JSON.stringify({
       url: 'http://127.0.0.1:1/',
@@ -281,7 +366,7 @@ describe('kirictl call', () => {
       ok: false,
       operation: 'workflow.dispatch',
       error: {
-        code: 'BACKEND_CONTROL_UNREACHABLE',
+        code: 'BACKEND_ALIVE_LOCAL_WRITE_REFUSED',
       },
     })
   })
@@ -327,6 +412,28 @@ describe('kirictl call', () => {
     } finally {
       server.closeAllConnections?.()
       await close(server)
+    }
+  })
+
+  it('adds wait-operation timeout grace unless an explicit proxy timeout is set', () => {
+    const previousEnv = process.env.KIRI_BACKEND_CONTROL_TIMEOUT_MS
+    try {
+      delete process.env.KIRI_BACKEND_CONTROL_TIMEOUT_MS
+      expect(backendControlTimeoutMsForTests({
+        operation: 'terminal.wait-for',
+        params: { timeoutMs: 30_000 },
+      })).toBe(35_000)
+      expect(backendControlTimeoutMsForTests({
+        operation: 'workflow.await',
+        params: { timeoutMs: 600_000 },
+      })).toBe(605_000)
+      process.env.KIRI_BACKEND_CONTROL_TIMEOUT_MS = '1234'
+      expect(backendControlTimeoutMsForTests({
+        operation: 'terminal.wait-for',
+        params: { timeoutMs: 30_000 },
+      })).toBe(1234)
+    } finally {
+      restoreEnv('KIRI_BACKEND_CONTROL_TIMEOUT_MS', previousEnv)
     }
   })
 

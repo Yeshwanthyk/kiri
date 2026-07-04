@@ -320,7 +320,7 @@ function claudeKiriTerminalPrompt(agentId: string) {
     '- Keep TodoWrite current for multi-step work; Kiri projects TodoWrite into its Tasks view where supported.',
     `- Use the Kiri MCP server, especially kiri_do with operation "session.rename" and agentId "${agentId}", when the Kiri session title is generic, stale, or no longer matches the work.`,
     '- When stuck, try kiri_get "knowledge.search"; save reusable answers with kiri_do "knowledge.add", then mark helpful ones with "knowledge.markSeen".',
-    `- Kiri terminals are fully drivable over MCP: kiri_get "terminal.read" returns the screen of this session's shell (mode "shell") or another agent's terminal; kiri_do "terminal.input", "terminal.keys" (enter, up, c-c, ...), and "terminal.wait-for" (regex over screen/output) let you type, press keys, and wait like a human would.`,
+    `- Kiri terminals are fully drivable over MCP: kiri_get "terminal.read" and "terminal.wait-for" read/wait on this session's shell (mode "shell") or another agent's terminal; kiri_do "terminal.input" and "terminal.keys" (enter, up, c-c, ...) let you type and press keys like a human would.`,
   ].join('\n')
 }
 

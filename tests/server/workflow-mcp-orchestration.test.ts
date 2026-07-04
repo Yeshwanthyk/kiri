@@ -186,7 +186,7 @@ describe('workflow orchestration over MCP', () => {
       valid: z.boolean(),
       launchCount: z.number(),
       scratchpadCount: z.number(),
-    }).parse(await call(client, 'kiri_do', { operation: 'workflow.validate', params: workflowParams }))
+    }).parse(await call(client, 'kiri_get', { operation: 'workflow.validate', params: workflowParams }))
     expect(validation).toMatchObject({ valid: true, launchCount: 2, scratchpadCount: 1 })
 
     const created = workflowDetailSchema.parse(
@@ -230,7 +230,7 @@ describe('workflow orchestration over MCP', () => {
 
     // The workflow body was handed to the worker at launch (long lines wrap
     // on screen, so match against the raw output window).
-    expect(waitForSchema.parse(await call(client, 'kiri_do', {
+    expect(waitForSchema.parse(await call(client, 'kiri_get', {
       operation: 'terminal.wait-for',
       params: {
         agentId: implementer,
@@ -279,7 +279,7 @@ describe('workflow orchestration over MCP', () => {
         keys: ['enter'],
       },
     })
-    const reviewed = waitForSchema.parse(await call(client, 'kiri_do', {
+    const reviewed = waitForSchema.parse(await call(client, 'kiri_get', {
       operation: 'terminal.wait-for',
       params: {
         agentId: reviewer,
@@ -302,7 +302,7 @@ describe('workflow orchestration over MCP', () => {
       operation: 'terminal.input',
       params: { agentId: implementer, text: 'revise per-review pass-2', submit: true },
     })
-    expect(waitForSchema.parse(await call(client, 'kiri_do', {
+    expect(waitForSchema.parse(await call(client, 'kiri_get', {
       operation: 'terminal.wait-for',
       params: {
         agentId: implementer,
@@ -375,7 +375,7 @@ describe('workflow orchestration over MCP', () => {
       operation: 'terminal.spawn',
       params: { agentId: triggered.agentId },
     })
-    expect(waitForSchema.parse(await call(client, 'kiri_do', {
+    expect(waitForSchema.parse(await call(client, 'kiri_get', {
       operation: 'terminal.wait-for',
       params: {
         agentId: triggered.agentId,
@@ -385,7 +385,7 @@ describe('workflow orchestration over MCP', () => {
       },
     })).matched).toBe(true)
     // The scratchpad body was queued into the spawned terminal at launch.
-    expect(waitForSchema.parse(await call(client, 'kiri_do', {
+    expect(waitForSchema.parse(await call(client, 'kiri_get', {
       operation: 'terminal.wait-for',
       params: {
         agentId: triggered.agentId,

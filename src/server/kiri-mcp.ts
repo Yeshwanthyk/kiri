@@ -5,19 +5,29 @@ import {
   kiriReadOperations,
   kiriWriteOperations,
 } from '~/lib/contracts'
+import { kiriVersion } from '~/lib/version'
 import type { KiriControlApi } from './kiri-control'
 import { readOperationRequest, runKiriOperation } from './kiri-router'
 
-const version = '0.1.0'
+const version = kiriVersion
 type OperationRunner = (request: unknown) => Promise<unknown>
 
 const paramsSchema = z.record(z.string(), z.unknown()).optional()
 const optionsSchema = z.object({
-  compact: z.boolean().optional(),
   fields: z.array(z.string().trim().min(1)).optional(),
   includeContext: z.boolean().optional(),
   limit: z.number().int().positive().max(500).optional(),
 }).optional()
+const outputSchema = {
+  ok: z.boolean(),
+  operation: z.enum([...kiriReadOperations, ...kiriWriteOperations]),
+  result: z.unknown().optional(),
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+    path: z.string().optional(),
+  }).optional(),
+}
 
 export async function runKiriMcpServer(control: KiriControlApi, runOperation?: OperationRunner) {
   const server = createKiriMcpServer(control, runOperation)
@@ -33,12 +43,13 @@ function createKiriMcpServer(control: KiriControlApi, runOperation: OperationRun
 
   server.registerTool('kiri_get', {
     title: 'Kiri read operation',
-    description: 'Run a compact read-only Kiri operation. Use operation operations.list to discover supported operations.',
+    description: 'Run a read-only Kiri operation. Use operation operations.list to discover supported operations.',
     inputSchema: {
       operation: z.enum(kiriReadOperations).describe('Read operation name.'),
       params: paramsSchema.describe('Operation parameters.'),
-      options: optionsSchema.describe('Output options; compact defaults to true.'),
+      options: optionsSchema.describe('Output options.'),
     },
+    outputSchema,
     annotations: { readOnlyHint: true },
   }, async (input) => {
     const request = readOperationRequest(input)
@@ -47,12 +58,14 @@ function createKiriMcpServer(control: KiriControlApi, runOperation: OperationRun
 
   server.registerTool('kiri_do', {
     title: 'Kiri mutation operation',
-    description: 'Run a compact mutating Kiri operation.',
+    description: 'Run a mutating Kiri operation.',
     inputSchema: {
       operation: z.enum(kiriWriteOperations).describe('Mutation operation name.'),
       params: paramsSchema.describe('Operation parameters.'),
-      options: optionsSchema.describe('Output options; compact defaults to true.'),
+      options: optionsSchema.describe('Output options.'),
     },
+    outputSchema,
+    annotations: { destructiveHint: true, idempotentHint: false },
   }, async (input) => {
     const request = readOperationRequest(input)
     return toolResult(await runOperation(request))
@@ -62,6 +75,7 @@ function createKiriMcpServer(control: KiriControlApi, runOperation: OperationRun
 }
 
 function toolResult(value: unknown) {
+  const isError = isOperationError(value)
   return {
     content: [
       {
@@ -70,7 +84,12 @@ function toolResult(value: unknown) {
       },
     ],
     structuredContent: objectContent(value),
+    ...(isError ? { isError } : {}),
   }
+}
+
+function isOperationError(value: unknown) {
+  return !!value && typeof value === 'object' && 'ok' in value && value.ok === false
 }
 
 function toolText(value: unknown) {

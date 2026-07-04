@@ -291,12 +291,16 @@ async function dispatchReadOperation(
       return shapeResult(await run(control.terminalRead(parseParams(terminalReadInputSchema, params))), options)
     case 'terminal.list':
       return shapeResult(await run(control.terminalList()), options)
+    case 'terminal.wait-for':
+      return shapeResult(await run(control.terminalWaitFor(parseParams(terminalWaitForInputSchema, params))), options)
     case 'workflow.list': {
       const input = parseParams(listWorkflowRunsInputSchema, params)
       return shapeResult(await run(control.listWorkflowRuns(input)), options)
     }
     case 'workflow.show':
       return shapeResult(await run(control.getWorkflowRun(parseParams(idParamsSchema, params).id)), options)
+    case 'workflow.validate':
+      return shapeResult(await run(control.validateWorkflow(parseParams(createWorkflowRunInputSchema, params))), options)
     default:
       throw new Error(`Unsupported read operation: ${operation}`)
   }
@@ -352,9 +356,6 @@ async function dispatchWriteOperation(
     case 'terminal.keys':
       result = await run(control.terminalKeys(parseParams(terminalKeysInputSchema, params)))
       break
-    case 'terminal.wait-for':
-      result = await run(control.terminalWaitFor(parseParams(terminalWaitForInputSchema, params)))
-      break
     case 'terminal.spawn':
       result = await run(control.terminalSpawn(parseParams(agentIdParamsSchema, params)))
       break
@@ -381,9 +382,6 @@ async function dispatchWriteOperation(
       break
     case 'scratchpad.trigger':
       result = await run(control.triggerScratchpad(parseParams(triggerScratchpadBlockInputSchema, params)))
-      break
-    case 'workflow.validate':
-      result = await run(control.validateWorkflow(parseParams(createWorkflowRunInputSchema, params)))
       break
     case 'workflow.create':
       result = await run(control.createWorkflowRun(parseParams(createWorkflowRunInputSchema, params)))

@@ -32,7 +32,7 @@ pnpm kiricli mcp
     "title": "Useful title"
   },
   "options": {
-    "compact": true
+    "includeContext": false
   }
 }
 ```
@@ -55,18 +55,18 @@ Read via `kiri_get` / `pnpm kiri:ctl call`:
 - `agent.detail`, `agent.events.list`
 - `knowledge.search`
 - `scratchpad.list`
-- `terminal.read`, `terminal.list`
-- `workflow.list`, `workflow.show`
+- `terminal.read`, `terminal.list`, `terminal.wait-for`
+- `workflow.list`, `workflow.show`, `workflow.validate`
 
 Mutate via `kiri_do` / `pnpm kiri:ctl call`:
 
 - `project.add`, `project.hide`, `project.unhide`, `project.delete`
 - `session.create`, `session.spawn`, `session.rename`, `session.archive`, `session.restore`
 - `agent.prompt`
-- `terminal.input`, `terminal.keys`, `terminal.wait-for`, `terminal.spawn`, `terminal.kill`
+- `terminal.input`, `terminal.keys`, `terminal.spawn`, `terminal.kill`
 - `knowledge.add`, `knowledge.markSeen`
 - `scratchpad.add`, `scratchpad.delete`, `scratchpad.trigger`
-- `workflow.validate`, `workflow.create`, `workflow.dispatch`, `workflow.await`
+- `workflow.create`, `workflow.dispatch`, `workflow.await`
 - `workflow.retrigger`, `workflow.track`, `workflow.untrack`
 - `workflow.archive`, `workflow.restore`
 
