@@ -858,6 +858,8 @@ test('terminal preserves running shell across resource tab switches', async ({ p
 
   await openAgentResource(page, title)
   await expect(page.getByTestId('chat-panel')).toBeVisible()
+  await expect(page.getByTestId('resource-terminal-action')).toHaveAttribute('data-active', 'true')
+  await expect(page.getByTestId('resource-terminal-action')).toHaveAttribute('data-selected', 'false')
   await expect.poll(async () => terminalInputElement.evaluate((element) => element.isConnected))
     .toBe(true)
   await openTerminalResource(page)
@@ -1351,6 +1353,7 @@ async function openTerminalResource(page: import('@playwright/test').Page) {
   await page.getByTestId('resource-terminal-action').click()
   await expect(page.getByTestId('board-pane')).toHaveAttribute('data-active-resource-kind', 'terminal')
   await expect(page.getByTestId('resource-terminal-action')).toHaveAttribute('data-active', 'true')
+  await expect(page.getByTestId('resource-terminal-action')).toHaveAttribute('data-selected', 'true')
 }
 
 async function openProjectsPage(page: import('@playwright/test').Page) {

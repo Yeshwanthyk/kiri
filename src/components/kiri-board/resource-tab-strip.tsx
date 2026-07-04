@@ -38,8 +38,10 @@ export function ResourceTabStrip({
   onStartSession,
 }: ResourceTabStripProps) {
   const tabResources = resources.filter((resource): resource is AgentResource => resource.kind === 'agent')
-  const terminalActive = activeResourceId?.startsWith('terminal:') ?? false
-  const browserActive = activeResourceId?.startsWith('browser:') ?? false
+  const terminalActive = resources.some((resource) => resource.kind === 'terminal')
+  const terminalSelected = activeResourceId?.startsWith('terminal:') ?? false
+  const browserActive = resources.some((resource) => resource.kind === 'browser')
+  const browserSelected = activeResourceId?.startsWith('browser:') ?? false
   const stripRef = React.useRef<HTMLDivElement | null>(null)
   const dragRef = React.useRef<{
     readonly pointerId: number
@@ -247,6 +249,7 @@ export function ResourceTabStrip({
           aria-label="Open terminal resource"
           aria-pressed={terminalActive}
           data-active={terminalActive ? 'true' : 'false'}
+          data-selected={terminalSelected ? 'true' : 'false'}
           data-testid="resource-terminal-action"
           disabled={terminalDisabled}
         >
@@ -262,6 +265,7 @@ export function ResourceTabStrip({
             aria-label="Open browser resource"
             aria-pressed={browserActive}
             data-active={browserActive ? 'true' : 'false'}
+            data-selected={browserSelected ? 'true' : 'false'}
             data-kind="browser"
             data-testid="resource-browser-action"
           >
