@@ -20,7 +20,8 @@
   plan doesn't build on a moving enum)
 - **Category**: feature / API completeness
 - **Planned at**: commit `e464651`, 2026-07-04
-- **Status**: TODO
+- **Status**: DONE — `agent.interrupt`, archived-only `session.delete`,
+  schema-backed `operations.list`, and skill-doc drift coverage landed
 
 ## Why this matters
 

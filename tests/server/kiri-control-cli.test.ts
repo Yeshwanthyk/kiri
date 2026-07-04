@@ -858,6 +858,68 @@ describe('kirictl call', () => {
     }))
     expect(restored.archivedAt).toBeNull()
 
+    const operations = z.object({
+      read: z.array(z.string()),
+      write: z.array(z.string()),
+      schemas: z.record(z.string(), z.unknown()),
+    }).parse(callResult(env, {
+      operation: 'operations.list',
+    }))
+    expect(operations.write).toContain('agent.interrupt')
+    expect(operations.write).toContain('session.delete')
+    expect(operations.schemas['session.spawn']).toEqual(expect.objectContaining({
+      type: 'object',
+    }))
+
+    const missingConfirmDelete = responseSchema.parse(runTsxJsonWithArgs(
+      'src/cli/kirictl.ts',
+      ['call', JSON.stringify({
+        operation: 'session.delete',
+        params: { agentId: session.id },
+      })],
+      (output) => output,
+      {
+        cwd: projectRoot,
+        env,
+      },
+    ))
+    expect(missingConfirmDelete.ok).toBe(false)
+    expect(missingConfirmDelete.operation).toBe('session.delete')
+
+    const unarchivedDelete = responseSchema.parse(runTsxJsonWithArgs(
+      'src/cli/kirictl.ts',
+      ['call', JSON.stringify({
+        operation: 'session.delete',
+        params: { agentId: session.id, confirm: true },
+      })],
+      (output) => output,
+      {
+        cwd: projectRoot,
+        env,
+      },
+    ))
+    expect(unarchivedDelete.ok).toBe(false)
+    if (!unarchivedDelete.ok) {
+      expect(unarchivedDelete.error.message).toContain('must be archived')
+    }
+
+    sessionSummarySchema.parse(callResult(env, {
+      operation: 'session.archive',
+      params: { agentId: session.id },
+    }))
+    expect(z.object({
+      agentId: z.string(),
+      deleted: z.literal(true),
+    }).parse(callResult(env, {
+      operation: 'session.delete',
+      params: { agentId: session.id, confirm: true },
+    }))).toEqual({ agentId: session.id, deleted: true })
+    const sessionsAfterHardDelete = z.array(sessionSummarySchema).parse(callResult(env, {
+      operation: 'session.list',
+      params: { includeArchived: true },
+    }))
+    expect(sessionsAfterHardDelete.map((item) => item.id)).not.toContain(session.id)
+
     const malformed = responseSchema.parse(runTsxJsonWithArgs(
       'src/cli/kirictl.ts',
       ['call', '{nope'],

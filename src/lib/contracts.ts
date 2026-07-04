@@ -568,6 +568,12 @@ export const deleteSessionInputSchema = z.object({
 })
 export type DeleteSessionInput = z.infer<typeof deleteSessionInputSchema>
 
+export const hardDeleteSessionInputSchema = z.object({
+  agentId: z.string().trim().min(1),
+  confirm: z.literal(true),
+})
+export type HardDeleteSessionInput = z.infer<typeof hardDeleteSessionInputSchema>
+
 export const restoreSessionInputSchema = z.object({
   agentId: z.string().trim().min(1),
 })
@@ -682,7 +688,9 @@ export const kiriWriteOperations = [
   'session.rename',
   'session.archive',
   'session.restore',
+  'session.delete',
   'agent.prompt',
+  'agent.interrupt',
   'agent.status.set',
   'agent.tasks.replace',
   'terminal.input',

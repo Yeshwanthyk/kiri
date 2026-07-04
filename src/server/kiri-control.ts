@@ -11,6 +11,7 @@ import type {
   AgentStatusSetInput,
   AgentTasksReplaceInput,
   CreateWorkflowRunInput,
+  HardDeleteSessionInput,
   KiriSettings,
   KnowledgeAddInput,
   KnowledgeEntry,
@@ -65,8 +66,9 @@ import {
   queueAgentTerminalInput,
   searchKnowledgeEntries,
   getAgentLaunchConfig,
+  hardDeleteSession,
 } from './db'
-import { promptAgent, steerAgent } from './runtime'
+import { interruptAgent, promptAgent, steerAgent } from './runtime'
 import {
   defaultRuntimeTurnAcceptanceWindowMs,
   detachAfterAcceptance,
@@ -199,10 +201,18 @@ export type KiriControlApi = {
   }) => ControlEffect<SessionSummary>
   readonly deleteSession: (agentId: string) => ControlEffect<SessionSummary>
   readonly restoreSession: (input: RestoreSessionInput) => ControlEffect<SessionSummary>
+  readonly hardDeleteSession: (input: HardDeleteSessionInput) => ControlEffect<{
+    readonly agentId: string
+    readonly deleted: true
+  }>
   readonly agentPrompt: (input: AgentPromptInput) => ControlEffect<{
     readonly accepted: true
     readonly agentId: string
     readonly mode: 'prompt' | 'steer'
+  }>
+  readonly agentInterrupt: (input: { readonly agentId: string }) => ControlEffect<{
+    readonly agentId: string
+    readonly interrupted: boolean
   }>
   readonly setAgentStatus: (input: AgentStatusSetInput) => ControlEffect<{
     readonly agentId: string
@@ -283,8 +293,10 @@ export type KiriControlDependencies = {
   }) => SessionSummary
   readonly archiveSessionSummary: (input: { readonly agentId: string }) => SessionSummary
   readonly restoreSessionSummary: (input: RestoreSessionInput) => SessionSummary
+  readonly hardDeleteSession: (agentId: string) => string
   readonly promptAgent: typeof promptAgent
   readonly steerAgent: typeof steerAgent
+  readonly interruptAgent: typeof interruptAgent
   readonly setAgentStatus: typeof setAgentStatus
   readonly replaceAgentTasks: typeof replaceAgentTasks
   // How long agent.prompt waits for validation rejections before detaching
@@ -336,8 +348,10 @@ const liveKiriControlDependencies: KiriControlDependencies = {
   renameSessionSummary,
   archiveSessionSummary: archiveSessionSummaryWithRuntimeCleanup,
   restoreSessionSummary,
+  hardDeleteSession,
   promptAgent,
   steerAgent,
+  interruptAgent,
   setAgentStatus,
   replaceAgentTasks,
   queueAgentTerminalInput,
@@ -457,6 +471,16 @@ export function makeKiriControl(
     return yield* fromSync(() => dependencies.restoreSessionSummary(input))
   })
 
+  const hardDeleteSessionEffect = Effect.fn('KiriControl.hardDeleteSession')(
+    function* (input: HardDeleteSessionInput) {
+      const agentId = yield* fromSync(() => dependencies.hardDeleteSession(input.agentId))
+      return {
+        agentId,
+        deleted: true as const,
+      }
+    },
+  )
+
   const agentPromptEffect = Effect.fn('KiriControl.agentPrompt')(
     function* (input: AgentPromptInput) {
       // promptAgent resolves only when the full model turn completes, but this
@@ -473,6 +497,31 @@ export function makeKiriControl(
         accepted: true as const,
         agentId: input.agentId,
         mode: input.mode,
+      }
+    },
+  )
+
+  const agentInterruptEffect = Effect.fn('KiriControl.agentInterrupt')(
+    function* (input: { readonly agentId: string }) {
+      const agent = yield* agentDetailEffect({ agentId: input.agentId, limit: 1, offset: 0 })
+      if (agent.interfaceMode === 'terminal') {
+        return yield* normalizeError(new Error(
+          'agent.interrupt is only for GUI sessions; use terminal.keys with keys:["c-c"] or terminal.kill for terminal sessions',
+        ))
+      }
+      if (agent.status !== 'running') {
+        return {
+          agentId: input.agentId,
+          interrupted: false,
+        }
+      }
+      yield* Effect.tryPromise({
+        try: () => dependencies.interruptAgent(input),
+        catch: normalizeError,
+      })
+      return {
+        agentId: input.agentId,
+        interrupted: true,
       }
     },
   )
@@ -865,7 +914,9 @@ export function makeKiriControl(
     renameSession: renameSessionEffect,
     deleteSession: archiveSessionEffect,
     restoreSession: restoreSessionEffect,
+    hardDeleteSession: hardDeleteSessionEffect,
     agentPrompt: agentPromptEffect,
+    agentInterrupt: agentInterruptEffect,
     setAgentStatus: setAgentStatusEffect,
     replaceAgentTasks: replaceAgentTasksEffect,
     terminalInput: terminalInputEffect,

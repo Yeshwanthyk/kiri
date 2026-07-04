@@ -102,6 +102,7 @@ describe('kiri MCP server', () => {
     const operations = z.object({
       read: z.array(z.string()),
       write: z.array(z.string()),
+      schemas: z.record(z.string(), z.unknown()),
       recipes: z.object({
         decisionTree: z.object({
           intents: z.array(z.object({
@@ -126,6 +127,18 @@ describe('kiri MCP server', () => {
     expect(operations.read).toContain('workflow.validate')
     expect(operations.write).toContain('session.create')
     expect(operations.write).toContain('session.spawn')
+    expect(operations.write).toContain('session.delete')
+    expect(operations.write).toContain('agent.interrupt')
+    expect(operations.schemas['session.spawn']).toEqual(expect.objectContaining({
+      type: 'object',
+    }))
+    const sessionDeleteSchema = z.object({
+      type: z.literal('object'),
+      required: z.array(z.string()),
+    }).parse(operations.schemas['session.delete'])
+    expect(sessionDeleteSchema.type).toBe('object')
+    expect(sessionDeleteSchema.required).toContain('agentId')
+    expect(sessionDeleteSchema.required).toContain('confirm')
     expect(operations.write).not.toContain('terminal.wait-for')
     expect(operations.write).not.toContain('workflow.validate')
     expect(operations.recipes.decisionTree.intents).toContainEqual(expect.objectContaining({

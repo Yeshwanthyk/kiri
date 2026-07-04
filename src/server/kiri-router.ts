@@ -4,13 +4,16 @@ import {
   addProjectInputSchema,
   addScratchpadBlockInputSchema,
   agentDetailInputSchema,
+  interruptMessageInputSchema,
   listAgentEventsInputSchema,
   agentPromptInputSchema,
   agentStatusSetInputSchema,
   agentTasksReplaceInputSchema,
   createWorkflowRunInputSchema,
   deleteProjectInputSchema,
+  deleteSessionInputSchema,
   deleteScratchpadBlockInputSchema,
+  hardDeleteSessionInputSchema,
   hideProjectInputSchema,
   kiriOperationRequestSchema,
   kiriReadOperations,
@@ -44,6 +47,8 @@ import {
 } from '~/lib/contracts'
 import type { KiriControlApi } from './kiri-control'
 
+const emptyParamsSchema = z.object({})
+
 const listModelsParamsSchema = z.object({
   runtime: runtimeKindSchema.optional(),
 })
@@ -63,6 +68,66 @@ const idParamsSchema = z.object({
 const agentIdParamsSchema = z.object({
   agentId: z.string().trim().min(1),
 })
+
+const operationParamSchemas = {
+  'operations.list': emptyParamsSchema,
+  'context.show': emptyParamsSchema,
+  'model.list': listModelsParamsSchema,
+  'project.list': listProjectsParamsSchema,
+  'session.list': listSessionsParamsSchema,
+  'agent.detail': agentDetailInputSchema,
+  'agent.events.list': listAgentEventsInputSchema,
+  'task.list': taskListInputSchema,
+  'knowledge.list': knowledgeListInputSchema,
+  'knowledge.search': knowledgeSearchInputSchema,
+  'scratchpad.list': listScratchpadParamsSchema,
+  'terminal.read': terminalReadInputSchema,
+  'terminal.list': emptyParamsSchema,
+  'terminal.wait-for': terminalWaitForInputSchema,
+  'workflow.list': listWorkflowRunsInputSchema,
+  'workflow.show': idParamsSchema,
+  'workflow.validate': createWorkflowRunInputSchema,
+  'project.add': addProjectInputSchema,
+  'project.hide': hideProjectInputSchema,
+  'project.unhide': unhideProjectInputSchema,
+  'project.delete': deleteProjectInputSchema,
+  'session.create': startSessionInputSchema,
+  'session.spawn': spawnSessionInputSchema,
+  'session.rename': renameSessionInputSchema,
+  'session.archive': deleteSessionInputSchema,
+  'session.restore': restoreSessionInputSchema,
+  'session.delete': hardDeleteSessionInputSchema,
+  'agent.prompt': agentPromptInputSchema,
+  'agent.interrupt': interruptMessageInputSchema,
+  'agent.status.set': agentStatusSetInputSchema,
+  'agent.tasks.replace': agentTasksReplaceInputSchema,
+  'terminal.input': terminalInputSchema,
+  'terminal.keys': terminalKeysInputSchema,
+  'terminal.spawn': agentIdParamsSchema,
+  'terminal.kill': terminalTargetSchema,
+  'knowledge.add': knowledgeAddInputSchema,
+  'knowledge.update': knowledgeUpdateInputSchema,
+  'knowledge.delete': idParamsSchema,
+  'knowledge.markSeen': knowledgeMarkSeenInputSchema,
+  'scratchpad.add': addScratchpadBlockInputSchema,
+  'scratchpad.delete': deleteScratchpadBlockInputSchema,
+  'scratchpad.trigger': triggerScratchpadBlockInputSchema,
+  'workflow.create': createWorkflowRunInputSchema,
+  'workflow.dispatch': workflowRunOperationInputSchema,
+  'workflow.await': workflowAwaitInputSchema,
+  'workflow.retrigger': workflowItemOperationInputSchema,
+  'workflow.track': workflowItemOperationInputSchema,
+  'workflow.untrack': workflowItemOperationInputSchema,
+  'workflow.archive': workflowRunOperationInputSchema,
+  'workflow.restore': workflowRunOperationInputSchema,
+} satisfies Record<KiriOperation, z.ZodType>
+
+export const kiriOperationJsonSchemas = Object.fromEntries(
+  Object.entries(operationParamSchemas).map(([operation, schema]) => [
+    operation,
+    z.toJSONSchema(schema),
+  ]),
+) as Record<KiriOperation, unknown>
 
 const operationRecipes = {
   decisionTree: {
@@ -254,6 +319,7 @@ async function dispatchReadOperation(
       return shapeResult({
         read: kiriReadOperations,
         write: kiriWriteOperations,
+        schemas: kiriOperationJsonSchemas,
         recipes: operationRecipes,
       }, options)
     case 'context.show':
@@ -336,13 +402,19 @@ async function dispatchWriteOperation(
       result = await run(control.renameSession(parseParams(renameSessionInputSchema, params)))
       break
     case 'session.archive':
-      result = await run(control.deleteSession(parseParams(agentIdParamsSchema, params).agentId))
+      result = await run(control.deleteSession(parseParams(deleteSessionInputSchema, params).agentId))
       break
     case 'session.restore':
       result = await run(control.restoreSession(parseParams(restoreSessionInputSchema, params)))
       break
+    case 'session.delete':
+      result = await run(control.hardDeleteSession(parseParams(hardDeleteSessionInputSchema, params)))
+      break
     case 'agent.prompt':
       result = await run(control.agentPrompt(parseParams(agentPromptInputSchema, params)))
+      break
+    case 'agent.interrupt':
+      result = await run(control.agentInterrupt(parseParams(interruptMessageInputSchema, params)))
       break
     case 'agent.status.set':
       result = await run(control.setAgentStatus(parseParams(agentStatusSetInputSchema, params)))

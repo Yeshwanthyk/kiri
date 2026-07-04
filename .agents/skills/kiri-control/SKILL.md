@@ -53,6 +53,8 @@ Read via `kiri_get` / `pnpm kiri:ctl call`:
 - `project.list`
 - `session.list`
 - `agent.detail`, `agent.events.list`
+- `task.list`
+- `knowledge.list`
 - `knowledge.search`
 - `scratchpad.list`
 - `terminal.read`, `terminal.list`, `terminal.wait-for`
@@ -61,10 +63,10 @@ Read via `kiri_get` / `pnpm kiri:ctl call`:
 Mutate via `kiri_do` / `pnpm kiri:ctl call`:
 
 - `project.add`, `project.hide`, `project.unhide`, `project.delete`
-- `session.create`, `session.spawn`, `session.rename`, `session.archive`, `session.restore`
-- `agent.prompt`
+- `session.create`, `session.spawn`, `session.rename`, `session.archive`, `session.restore`, `session.delete`
+- `agent.prompt`, `agent.interrupt`, `agent.status.set`, `agent.tasks.replace`
 - `terminal.input`, `terminal.keys`, `terminal.spawn`, `terminal.kill`
-- `knowledge.add`, `knowledge.markSeen`
+- `knowledge.add`, `knowledge.update`, `knowledge.delete`, `knowledge.markSeen`
 - `scratchpad.add`, `scratchpad.delete`, `scratchpad.trigger`
 - `workflow.create`, `workflow.dispatch`, `workflow.await`
 - `workflow.retrigger`, `workflow.track`, `workflow.untrack`
@@ -96,6 +98,8 @@ Required success checks:
 
 - `session.spawn`: require `delivery.accepted === true`.
 - `agent.prompt`: require `accepted === true`.
+- `agent.interrupt`: terminal agents must use `terminal.keys` with `keys:["c-c"]`; GUI agents return `interrupted`.
+- `session.delete`: requires `{confirm:true}` and deletes only an archived session.
 - `terminal.input` / `terminal.keys`: require `queued === true`; `spawned` may be `false` in CI or when `spawn:false`.
 - `terminal.wait-for`: success means `matched === true` (timeout returns `matched: false`).
 - `workflow.dispatch`: require each launch result to include `prompt.accepted === true` or `terminalPaste.queued === true`; failed items are not launched.

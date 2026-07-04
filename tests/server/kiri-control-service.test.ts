@@ -114,13 +114,23 @@ describe('KiriControl service construction', () => {
         calls.push(`deleteSession:${input.agentId}`)
         return sessionSummary(input.agentId)
       },
+      hardDeleteSession: (agentId) => {
+        calls.push(`hardDeleteSession:${agentId}`)
+        return agentId
+      },
     }))
 
     await expect(Effect.runPromise(control.deleteProject('project-1')))
       .resolves.toMatchObject({ id: 'project-1' })
     await expect(Effect.runPromise(control.deleteSession('agent-1')))
       .resolves.toMatchObject({ id: 'agent-1' })
-    expect(calls).toEqual(['deleteProject:project-1', 'deleteSession:agent-1'])
+    await expect(Effect.runPromise(control.hardDeleteSession({ agentId: 'agent-1', confirm: true })))
+      .resolves.toEqual({ agentId: 'agent-1', deleted: true })
+    expect(calls).toEqual([
+      'deleteProject:project-1',
+      'deleteSession:agent-1',
+      'hardDeleteSession:agent-1',
+    ])
   })
 
   it('routes scratchpad trigger through the injected shared trigger path', async () => {
@@ -409,6 +419,49 @@ describe('KiriControl service construction', () => {
     expect(result).toEqual({ accepted: true, agentId: 'agent-1', mode: 'prompt' })
   }, 1_000)
 
+  it('interrupts running GUI agents and no-ops idle ones', async () => {
+    const calls: string[] = []
+    const baseAgent = snapshot.projects[0]?.agents[0]
+    if (!baseAgent) {
+      throw new Error('missing fixture agent')
+    }
+    const control = makeKiriControl(testDependencies({
+      getAgentDetail: (input) => ({
+        ...baseAgent,
+        id: input.agentId,
+        status: input.agentId === 'agent-running' ? 'running' : 'idle',
+      }),
+      interruptAgent: (input) => {
+        calls.push(`interrupt:${input.agentId}`)
+        return Promise.resolve({})
+      },
+    }))
+
+    await expect(Effect.runPromise(control.agentInterrupt({ agentId: 'agent-running' })))
+      .resolves.toEqual({ agentId: 'agent-running', interrupted: true })
+    await expect(Effect.runPromise(control.agentInterrupt({ agentId: 'agent-idle' })))
+      .resolves.toEqual({ agentId: 'agent-idle', interrupted: false })
+    expect(calls).toEqual(['interrupt:agent-running'])
+  })
+
+  it('refuses agent.interrupt for terminal sessions', async () => {
+    const baseAgent = snapshot.projects[0]?.agents[0]
+    if (!baseAgent) {
+      throw new Error('missing fixture agent')
+    }
+    const control = makeKiriControl(testDependencies({
+      getAgentDetail: (input) => ({
+        ...baseAgent,
+        id: input.agentId,
+        interfaceMode: 'terminal',
+        status: 'running',
+      }),
+    }))
+
+    await expect(Effect.runPromise(control.agentInterrupt({ agentId: 'agent-terminal' })))
+      .rejects.toThrow('terminal.keys')
+  })
+
   it('spawns sessions and delivers the first turn through the selected interface', async () => {
     const calls: string[] = []
     const control = makeKiriControl(testDependencies({
@@ -501,8 +554,10 @@ function testDependencies(
     renameSessionSummary: (input) => ({ ...sessionSummary(input.agentId), title: input.title }),
     archiveSessionSummary: (input) => ({ ...sessionSummary(input.agentId), archivedAt: '2026-01-01T00:00:01.000Z' }),
     restoreSessionSummary: (input) => sessionSummary(input.agentId),
+    hardDeleteSession: (agentId) => agentId,
     promptAgent: () => Promise.resolve({}),
     steerAgent: () => Promise.resolve({}),
+    interruptAgent: () => Promise.resolve({}),
     setAgentStatus: () => undefined,
     replaceAgentTasks: () => undefined,
     queueAgentTerminalInput: () => undefined,
