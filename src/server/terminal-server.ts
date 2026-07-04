@@ -18,6 +18,7 @@ import type { AgentPresenceEvent, AgentPresenceStatus } from './agent-presence'
 import { rememberCodexTerminalSession } from './codex-cli-sessions'
 import { writeCodexHookSessionBinding } from './codex-terminal-session'
 import {
+  hydrateCodexTerminalTasks,
   getAgentLaunchConfig,
   requeueAgentTerminalInputs,
   setAgentStatus,
@@ -125,6 +126,7 @@ export type TerminalServerDependencies = {
     options: Parameters<typeof pty.spawn>[2],
   ) => TerminalPtyProcess
   readonly rememberCodexTerminalSession: typeof rememberCodexTerminalSession
+  readonly hydrateCodexTerminalTasks: typeof hydrateCodexTerminalTasks
   readonly takeAgentTerminalInputs: typeof takeAgentTerminalInputs
   readonly requeueAgentTerminalInputs: typeof requeueAgentTerminalInputs
   readonly setAgentStatus: typeof setAgentStatus
@@ -274,6 +276,7 @@ export function makeTerminalServerService(
       buildTerminalProcessLaunch,
       spawnPty: (command, args, options) => pty.spawn(command, [...args], options),
       rememberCodexTerminalSession,
+      hydrateCodexTerminalTasks,
       takeAgentTerminalInputs,
       requeueAgentTerminalInputs,
       setAgentStatus,
@@ -598,6 +601,7 @@ async function getOrCreateTerminalSession(
     }).catch((error) => {
       console.error('Failed to remember Codex terminal session', error)
     })
+    startCodexTerminalTaskProjectionPoll(runtime, config.id)
   }
 
   proc.onData((data) => {
@@ -621,6 +625,20 @@ async function getOrCreateTerminalSession(
     throw error
   }
   return session
+}
+
+function startCodexTerminalTaskProjectionPoll(runtime: TerminalServerRuntime, agentId: string) {
+  const startedAtMs = Date.now()
+  const poll = () => {
+    try {
+      runtime.dependencies.hydrateCodexTerminalTasks({ agentId })
+    } catch (error) {
+      console.error('Failed to hydrate Codex terminal tasks', error)
+    }
+    if (Date.now() - startedAtMs >= 5_000) return
+    setTimeout(poll, 500).unref?.()
+  }
+  setTimeout(poll, 250).unref?.()
 }
 
 function wrapZmxLaunch(

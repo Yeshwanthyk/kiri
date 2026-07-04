@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  agentPresenceShellCommand,
+} from '~/server/agent-presence'
+import {
   buildTerminalShimArgsScript,
   installTerminalShims,
   terminalShimBinDir,
@@ -101,10 +104,28 @@ describe('terminal PATH shims', () => {
     }
 
     expect(script).toBe(`set -- '--settings' '${join(stateDir, 'claude-hooks-settings.json')}' "$@"`)
-    expect(settings.hooks.SessionStart?.[0]?.hooks[0]?.command)
-      .toBe("'/repo/kiri-mcp' 'claude-hook' 'session-start'")
+    expect(hookCommands(settings, 'SessionStart')).toEqual([
+      agentPresenceShellCommand('claude', 'session_start'),
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/repo/kiri-mcp' 'claude-hook' 'session-start'",
+    ])
     expect(settings.hooks.PreToolUse?.[0]?.matcher).toBe('AskUserQuestion|ExitPlanMode')
-    expect(settings.hooks.PostToolUse?.[0]?.matcher).toBe('TodoWrite')
+    expect(hookCommands(settings, 'Stop')).toEqual([
+      agentPresenceShellCommand('claude', 'idle'),
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/repo/kiri-mcp' 'claude-hook' 'stop'",
+    ])
+    expect(settings.hooks.PostToolUse?.[0]?.matcher).toBeUndefined()
+    expect(settings.hooks.PostToolUse?.[1]?.matcher).toBe('TodoWrite')
     expect(settings.hooks.PostToolUse?.[0]?.hooks[0]?.async).toBe(true)
+    expect(hookCommands(settings, 'PostToolUse')).toEqual([
+      agentPresenceShellCommand('claude', 'busy'),
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/repo/kiri-mcp' 'claude-hook' 'post-tool-use'",
+    ])
   })
 })
+
+function hookCommands(
+  settings: { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> },
+  event: string,
+) {
+  return settings.hooks[event]?.flatMap((entry) => entry.hooks.map((hook) => hook.command)) ?? []
+}

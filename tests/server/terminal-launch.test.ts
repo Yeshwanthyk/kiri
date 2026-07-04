@@ -35,8 +35,8 @@ function codexKiriArgs(kiriMcpBin = '/tmp/bin/kiri-mcp') {
 }
 
 function codexHookArgs(kiriMcpBin = '/tmp/bin/kiri-mcp') {
-  const invocation = `'${kiriMcpBin}' 'codex-hook' 'session-start'`
-  const script = `f="$(mktemp -t kiri-codex-hook)"; cat > "$f"; (${invocation} --stdin-file "$f" >> /tmp/kiri-codex-hook.log 2>&1; rm -f "$f") & printf '{}'`
+  const invocation = `KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '${kiriMcpBin}' 'codex-hook' 'session-start'`
+  const script = `f="$(mktemp -t kiri-codex-hook)"; cat > "$f"; (${invocation} --stdin-file "$f" >> /tmp/kiri-codex-hook.log 2>&1) & printf '{}'`
   const command = `/bin/sh -c '${script.replaceAll("'", "'\\''")}'`
   return [
     '--enable',
@@ -57,6 +57,13 @@ function launchConfig(runtime: TerminalAgentLaunchConfig['runtime']): TerminalAg
     model: 'test-model',
     cwd: '/tmp/project',
   }
+}
+
+function hookCommands(
+  settings: { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> },
+  event: string,
+) {
+  return settings.hooks[event]?.flatMap((entry) => entry.hooks.map((hook) => hook.command)) ?? []
 }
 
 function stubCodexTerminalEnv() {
@@ -143,23 +150,39 @@ describe('buildTerminalProcessLaunch', () => {
 
     expect(launch.args.filter((arg) => arg === '--settings')).toHaveLength(1)
     expect(launch.args).toContain(settingsPath)
-    expect(settings.hooks.SessionStart?.[0]?.hooks[0]?.command)
-      .toBe("'/tmp/bin/kiri-mcp' 'claude-hook' 'session-start'")
+    expect(hookCommands(settings, 'SessionStart')).toEqual([
+      agentPresenceShellCommand('claude', 'session_start'),
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'session-start'",
+    ])
     expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.async).toBe(true)
-    expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command)
-      .toBe(agentPresenceShellCommand('claude', 'busy'))
-    expect(settings.hooks.Stop?.[0]?.hooks[0]?.command)
-      .toBe(agentPresenceShellCommand('claude', 'idle'))
-    expect(settings.hooks.SessionEnd?.[0]?.hooks[0]?.command)
-      .toBe(agentPresenceShellCommand('claude', 'session_end'))
+    expect(hookCommands(settings, 'UserPromptSubmit')).toEqual([
+      agentPresenceShellCommand('claude', 'busy'),
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'user-prompt-submit'",
+    ])
+    expect(hookCommands(settings, 'Stop')).toEqual([
+      agentPresenceShellCommand('claude', 'idle'),
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'stop'",
+    ])
+    expect(hookCommands(settings, 'SessionEnd')).toEqual([
+      agentPresenceShellCommand('claude', 'session_end'),
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'session-end'",
+    ])
     expect(settings.hooks.PreToolUse?.[0]?.matcher).toBe('AskUserQuestion|ExitPlanMode')
-    expect(settings.hooks.PreToolUse?.[0]?.hooks[0]?.command)
-      .toBe(agentPresenceShellCommand('claude', 'awaiting_input'))
-    expect(settings.hooks.PermissionRequest?.[0]?.hooks[0]?.command)
-      .toBe(agentPresenceShellCommand('claude', 'awaiting_input'))
-    expect(settings.hooks.PostToolUse?.[0]?.matcher).toBe('TodoWrite')
-    expect(settings.hooks.PostToolUse?.[0]?.hooks[0]?.command)
-      .toBe("'/tmp/bin/kiri-mcp' 'claude-hook' 'post-tool-use'")
+    expect(settings.hooks.PreToolUse?.[1]?.matcher).toBe('AskUserQuestion|ExitPlanMode')
+    expect(hookCommands(settings, 'PreToolUse')).toEqual([
+      agentPresenceShellCommand('claude', 'awaiting_input'),
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'pre-tool-use'",
+    ])
+    expect(hookCommands(settings, 'PermissionRequest')).toEqual([
+      agentPresenceShellCommand('claude', 'awaiting_input'),
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'permission-request'",
+    ])
+    expect(settings.hooks.PostToolUse?.[0]?.matcher).toBeUndefined()
+    expect(settings.hooks.PostToolUse?.[1]?.matcher).toBe('TodoWrite')
+    expect(hookCommands(settings, 'PostToolUse')).toEqual([
+      agentPresenceShellCommand('claude', 'busy'),
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'post-tool-use'",
+    ])
   })
 
   it('reuses the same Claude Code session id for the same Kiri session', () => {

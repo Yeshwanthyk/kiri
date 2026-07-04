@@ -78,10 +78,10 @@ const stdinFileOption = Options.text('stdin-file').pipe(
 
 const codexHookSessionStartCommand = Command.make('session-start', { stdinFile: stdinFileOption }, ({ stdinFile }) =>
   Effect.sync(() => {
-    const watchdog = setTimeout(() => process.exit(0), 5_000)
+    const watchdog = setTimeout(() => process.exit(0), hookWatchdogTimeoutMs())
     watchdog.unref?.()
+    const file = optionValue(stdinFile)
     try {
-      const file = optionValue(stdinFile)
       const stdin = file ? readHookStdinFile(file) : readFileSync(0, 'utf8')
       const result = handleCodexSessionStartHook({
         stdin,
@@ -92,6 +92,7 @@ const codexHookSessionStartCommand = Command.make('session-start', { stdinFile: 
       } else if (result.reason) {
         console.error(`codex SessionStart hook: ${result.reason}`)
       }
+      if (file && result.ok) unlinkHookStdinFile(file)
     } finally {
       clearTimeout(watchdog)
     }
@@ -104,10 +105,10 @@ const codexHookCommand = Command.make('codex-hook', {}).pipe(
 )
 
 function claudeHookEventCommand(event: ClaudeHookEvent) {
-  return Command.make(event, {}, () =>
+  return Command.make(event, { stdinFile: stdinFileOption }, ({ stdinFile }) =>
     Effect.gen(function* () {
       const control = yield* KiriControl
-      yield* Effect.promise(() => runClaudeHook(event, control))
+      yield* Effect.promise(() => runClaudeHook(event, control, optionValue(stdinFile)))
     })).pipe(Command.withDescription(`Record a Claude ${event} hook event`))
 }
 
@@ -289,20 +290,20 @@ function readRequest(file: string | undefined, request: string | undefined) {
 }
 
 function readHookStdinFile(file: string) {
-  try {
-    return readFileSync(file, 'utf8')
-  } finally {
-    rmSync(file, { force: true })
-  }
+  return readFileSync(file, 'utf8')
 }
 
-async function runClaudeHook(event: ClaudeHookEvent, control: KiriControlApi) {
-  const watchdog = setTimeout(() => process.exit(0), 5_000)
+function unlinkHookStdinFile(file: string) {
+  rmSync(file, { force: true })
+}
+
+async function runClaudeHook(event: ClaudeHookEvent, control: KiriControlApi, stdinFile: string | undefined) {
+  const watchdog = setTimeout(() => process.exit(0), hookWatchdogTimeoutMs())
   watchdog.unref?.()
   try {
     const result = await handleClaudeHook({
       event,
-      stdin: readFileSync(0, 'utf8'),
+      stdin: stdinFile ? readHookStdinFile(stdinFile) : readFileSync(0, 'utf8'),
       env: process.env,
       runOperation: (request) => runKiriOperationWithBackendFallback(control, request),
     })
@@ -311,9 +312,17 @@ async function runClaudeHook(event: ClaudeHookEvent, control: KiriControlApi) {
     } else if (result.reason) {
       console.error(`claude ${event} hook: ${result.reason}`)
     }
+    if (stdinFile && result.ok) unlinkHookStdinFile(stdinFile)
+    if (stdinFile && !result.ok) {
+      console.error(`claude ${event} hook stdin retained at ${stdinFile}`)
+    }
   } finally {
     clearTimeout(watchdog)
   }
+}
+
+function hookWatchdogTimeoutMs() {
+  return backendControlTimeoutMs({ operation: 'agent.status.set' }) + 2_000
 }
 
 function parseRequest(input: string) {

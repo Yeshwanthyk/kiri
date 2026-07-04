@@ -273,6 +273,46 @@ describe('timeline write repository', () => {
     }
   })
 
+  it('auto-retitles from new user prompts while preserving manual titles', () => {
+    const fixture = createFixture()
+    try {
+      appendUserMessageRow(fixture.database, {
+        agentId: fixture.agentId,
+        text: 'Investigate stuck Claude permission prompt status updates',
+      })
+      expect(
+        fixture.database.prepare('SELECT title FROM agent_slots WHERE id = ?').get(fixture.agentId),
+      ).toEqual({ title: 'Investigate stuck Claude permission promp...' })
+
+      recordRuntimeMessageRow(fixture.database, {
+        agentId: fixture.agentId,
+        id: 'user-2',
+        role: 'user',
+        text: 'Retitle again for the new focused task',
+        timestamp: '2026-01-02T00:00:00.000Z',
+      })
+      expect(
+        fixture.database.prepare('SELECT title FROM agent_slots WHERE id = ?').get(fixture.agentId),
+      ).toEqual({ title: 'Retitle again for the new focused task' })
+
+      fixture.database
+        .prepare('UPDATE agent_slots SET title = ?, title_set_manually = 1 WHERE id = ?')
+        .run('Pinned title', fixture.agentId)
+      recordRuntimeMessageRow(fixture.database, {
+        agentId: fixture.agentId,
+        id: 'user-3',
+        role: 'user',
+        text: 'This prompt must not replace a manual title',
+        timestamp: '2026-01-02T00:00:01.000Z',
+      })
+      expect(
+        fixture.database.prepare('SELECT title FROM agent_slots WHERE id = ?').get(fixture.agentId),
+      ).toEqual({ title: 'Pinned title' })
+    } finally {
+      closeFixture(fixture)
+    }
+  })
+
   it('ignores stale runtime writes for archived agents', () => {
     const fixture = createFixture()
     try {

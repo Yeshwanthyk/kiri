@@ -9,7 +9,6 @@ import {
   type RuntimeBinaryError,
   type RuntimeBinariesApi,
 } from './runtime-binaries'
-import { agentPresenceShellCommand } from './agent-presence'
 export { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { claudeProjectKey, claudeTerminalSessionId } from './claude-session-path'
 import { commonTerminalEnv, removeColorDisablingEnv, withTerminalShimPath } from './terminal-env'
@@ -18,7 +17,6 @@ import {
   claudeHookSettings,
   codexKiriConfigArgs,
   codexSessionStartHookArgs,
-  kirictlCommand,
   type KiriMcpServerConfig,
   type KirictlInvocation,
 } from './terminal-shim'
@@ -237,15 +235,16 @@ function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunch
 
 function writeClaudeHookSettings(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
   return Effect.gen(function* () {
-  const settings = claudeHookSettings({
-    SessionStart: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'session-start'])),
-    UserPromptSubmit: agentPresenceShellCommand('claude', 'busy'),
-    Stop: agentPresenceShellCommand('claude', 'idle'),
-    SessionEnd: agentPresenceShellCommand('claude', 'session_end'),
-    PreToolUse: agentPresenceShellCommand('claude', 'awaiting_input'),
-    PermissionRequest: agentPresenceShellCommand('claude', 'awaiting_input'),
-    PostToolUse: kirictlCommand(yield* resolveKirictlInvocation(context, ['claude-hook', 'post-tool-use'])),
-  })
+  const hookInvocations = {
+    'session-start': yield* resolveKirictlInvocation(context, ['claude-hook', 'session-start']),
+    'user-prompt-submit': yield* resolveKirictlInvocation(context, ['claude-hook', 'user-prompt-submit']),
+    stop: yield* resolveKirictlInvocation(context, ['claude-hook', 'stop']),
+    'session-end': yield* resolveKirictlInvocation(context, ['claude-hook', 'session-end']),
+    'pre-tool-use': yield* resolveKirictlInvocation(context, ['claude-hook', 'pre-tool-use']),
+    'permission-request': yield* resolveKirictlInvocation(context, ['claude-hook', 'permission-request']),
+    'post-tool-use': yield* resolveKirictlInvocation(context, ['claude-hook', 'post-tool-use']),
+  }
+  const settings = claudeHookSettings((event) => hookInvocations[event])
   const settingsPath = join(config.sessionDir, 'claude-hooks-settings.json')
   return yield* Effect.try({
     try: () => {

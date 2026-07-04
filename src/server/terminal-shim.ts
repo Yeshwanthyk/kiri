@@ -1,6 +1,13 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { agentPresenceShellCommand } from './agent-presence'
+import {
+  claudeHookSettingsSpecs,
+  type ClaudeHookCommandSpec,
+  type ClaudeHookEvent,
+  type ClaudeHookSettingsEvent,
+} from './claude-hook-handler'
 
 export type TerminalShimRuntime = 'codex' | 'claude'
 
@@ -99,36 +106,10 @@ export function buildTerminalShimArgsScript(input: {
     || terminalShimStateDir(input.homeDir ?? homedir())
   const settingsPath = join(stateDir, 'claude-hooks-settings.json')
   mkdirSync(stateDir, { recursive: true })
-  writeFileIfChanged(settingsPath, `${globalThis.JSON.stringify(claudeHookSettings({
-    SessionStart: kirictlCommand({
-      command: baseInvocation.command,
-      args: [...baseInvocation.args, 'claude-hook', 'session-start'],
-    }),
-    UserPromptSubmit: kirictlCommand({
-      command: baseInvocation.command,
-      args: [...baseInvocation.args, 'claude-hook', 'user-prompt-submit'],
-    }),
-    Stop: kirictlCommand({
-      command: baseInvocation.command,
-      args: [...baseInvocation.args, 'claude-hook', 'stop'],
-    }),
-    SessionEnd: kirictlCommand({
-      command: baseInvocation.command,
-      args: [...baseInvocation.args, 'claude-hook', 'session-end'],
-    }),
-    PreToolUse: kirictlCommand({
-      command: baseInvocation.command,
-      args: [...baseInvocation.args, 'claude-hook', 'pre-tool-use'],
-    }),
-    PermissionRequest: kirictlCommand({
-      command: baseInvocation.command,
-      args: [...baseInvocation.args, 'claude-hook', 'permission-request'],
-    }),
-    PostToolUse: kirictlCommand({
-      command: baseInvocation.command,
-      args: [...baseInvocation.args, 'claude-hook', 'post-tool-use'],
-    }),
-  }), null, 2)}\n`)
+  writeFileIfChanged(settingsPath, `${globalThis.JSON.stringify(claudeHookSettings((event) => ({
+    command: baseInvocation.command,
+    args: [...baseInvocation.args, 'claude-hook', event],
+  })), null, 2)}\n`)
   return shellSetArgv(['--settings', settingsPath])
 }
 
@@ -160,30 +141,22 @@ export function codexKiriConfigArgs(agentId: string, config: KiriMcpServerConfig
   return args
 }
 
-export function claudeHookSettings(commandByEvent: {
-  readonly SessionStart: string
-  readonly UserPromptSubmit: string
-  readonly Stop: string
-  readonly SessionEnd: string
-  readonly PreToolUse: string
-  readonly PermissionRequest: string
-  readonly PostToolUse: string
-}) {
-  return {
-    hooks: {
-      SessionStart: [claudeHookConfigEntry(commandByEvent.SessionStart)],
-      UserPromptSubmit: [claudeHookConfigEntry(commandByEvent.UserPromptSubmit)],
-      Stop: [claudeHookConfigEntry(commandByEvent.Stop)],
-      SessionEnd: [claudeHookConfigEntry(commandByEvent.SessionEnd)],
-      PreToolUse: [claudeHookConfigEntry(commandByEvent.PreToolUse, 'AskUserQuestion|ExitPlanMode')],
-      PermissionRequest: [claudeHookConfigEntry(commandByEvent.PermissionRequest)],
-      PostToolUse: [claudeHookConfigEntry(commandByEvent.PostToolUse, 'TodoWrite')],
-    },
-  }
+export function claudeHookSettings(resolveKirictl: (event: ClaudeHookEvent) => KirictlInvocation) {
+  const hooks = Object.fromEntries(
+    claudeHookSettingsSpecs.map((spec) => [
+      spec.event,
+      spec.commands.map((command) => claudeHookConfigEntry(claudeHookCommand(command, resolveKirictl), command.matcher)),
+    ]),
+  ) as Record<ClaudeHookSettingsEvent, ReturnType<typeof claudeHookConfigEntry>[]>
+  return { hooks }
 }
 
 export function kirictlCommand(invocation: KirictlInvocation) {
   return [invocation.command, ...invocation.args].map(shellQuote).join(' ')
+}
+
+export function hookKirictlCommand(invocation: KirictlInvocation) {
+  return `KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 ${kirictlCommand(invocation)}`
 }
 
 export function parseTerminalShimRuntime(value: string): TerminalShimRuntime | null {
@@ -257,9 +230,20 @@ exec "$real" "$@"
 `
 }
 
+function claudeHookCommand(command: ClaudeHookCommandSpec, resolveKirictl: (event: ClaudeHookEvent) => KirictlInvocation) {
+  switch (command.kind) {
+    case 'presence':
+      return agentPresenceShellCommand('claude', command.status)
+    case 'kirictl':
+      return hookKirictlCommand(resolveKirictl(command.event))
+    default:
+      return unreachable(command)
+  }
+}
+
 function codexSessionStartHookCommand(invocation: KirictlInvocation) {
-  const command = kirictlCommand(invocation)
-  const script = `f="$(mktemp -t kiri-codex-hook)"; cat > "$f"; (${command} --stdin-file "$f" >> /tmp/kiri-codex-hook.log 2>&1; rm -f "$f") & printf '{}'`
+  const command = hookKirictlCommand(invocation)
+  const script = `f="$(mktemp -t kiri-codex-hook)"; cat > "$f"; (${command} --stdin-file "$f" >> /tmp/kiri-codex-hook.log 2>&1) & printf '{}'`
   return `/bin/sh -c ${shellQuote(script)}`
 }
 
@@ -281,6 +265,10 @@ function claudeHookConfigEntry(command: string, matcher?: string) {
       async: true as const,
     }],
   }
+}
+
+function unreachable(value: never): never {
+  throw new Error(`Unsupported Claude hook command: ${String(value)}`)
 }
 
 function shellSetArgv(args: readonly string[]) {

@@ -281,6 +281,14 @@ export function getAgentDetail(input: { agentId: string; limit?: number; offset?
   })
 }
 
+export function hydrateCodexTerminalTasks(input: {
+  agentId?: string
+  projectId?: string
+  codexHome?: string
+} = {}) {
+  hydrateCodexTerminalTasksRows(getDb(), input)
+}
+
 export function listAgentEvents(input: {
   agentId: string
   afterSequence?: number

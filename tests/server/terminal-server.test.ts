@@ -219,6 +219,52 @@ describe('terminal server', () => {
     }
   })
 
+  it('starts a bounded Codex terminal task hydration poll after runtime spawn', async () => {
+    vi.useFakeTimers()
+    const hydrate = vi.fn()
+    const service = makeTerminalServerService({
+      getAgentLaunchConfig: () => ({
+        id: 'agent-1',
+        projectId: 'project-1',
+        runtime: 'codex',
+        sessionDir: '/tmp/session',
+        sessionFile: null,
+        model: 'test-model',
+        cwd: '/tmp/project',
+      }),
+      buildTerminalProcessLaunch: () => ({
+        command: '/bin/fake',
+        args: [],
+        cwd: '/tmp/project',
+        env: process.env,
+        label: 'codex',
+      }),
+      spawnPty: () => ({
+        write: vi.fn(),
+        resize: vi.fn(),
+        kill: vi.fn(),
+        onData: vi.fn(),
+        onExit: vi.fn(),
+      } as never),
+      hydrateCodexTerminalTasks: hydrate,
+    })
+
+    try {
+      await service.spawnAgentRuntime({ agentId: 'agent-1' })
+      expect(hydrate).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(250)
+      expect(hydrate).toHaveBeenCalledWith({ agentId: 'agent-1' })
+      const callsAfterFirstPoll = hydrate.mock.calls.length
+      await vi.advanceTimersByTimeAsync(5_500)
+      expect(hydrate.mock.calls.length).toBeGreaterThan(callsAfterFirstPoll)
+      const callsAfterWindow = hydrate.mock.calls.length
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(hydrate).toHaveBeenCalledTimes(callsAfterWindow)
+    } finally {
+      await service.close()
+    }
+  })
+
   it('writes a fresh pid-bound Codex hook binding for resume launches', async () => {
     const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-codex-resume-'))
     const service = makeTerminalServerService({

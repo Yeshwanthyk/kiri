@@ -62,6 +62,11 @@ export function appendUserMessageRow(
       timestamp,
     })
     updateThreadSummary(database, thread.id, text, timestamp)
+    maybeAutoTitleSession(database, {
+      agentId: input.agentId,
+      preview: text,
+      tasks: [],
+    })
   })
 }
 
@@ -106,7 +111,13 @@ export function recordRuntimeMessageRow(
       existing,
     })
     updateThreadSummary(database, threadId, input.role === 'assistant' ? text : null, timestamp)
-    if (shouldAutoTitle) {
+    if (input.role === 'user' && existing === undefined) {
+      maybeAutoTitleSession(database, {
+        agentId: input.agentId,
+        preview: text,
+        tasks: [],
+      })
+    } else if (shouldAutoTitle) {
       maybeAutoTitleSession(database, {
         agentId: input.agentId,
         preview: text,
@@ -160,6 +171,7 @@ export function recordRuntimeMessagesInTransaction(
       timestamp = excluded.timestamp
   `)
   let firstAssistantPreview: string | undefined
+  let latestNewUserPrompt: string | undefined
   for (const message of input.messages) {
     const text = message.text.trim()
     if (!text) continue
@@ -175,6 +187,7 @@ export function recordRuntimeMessagesInTransaction(
     if (!hadAssistantMessage && firstAssistantPreview === undefined && message.role === 'assistant') {
       firstAssistantPreview = text
     }
+    if (existing === undefined && message.role === 'user') latestNewUserPrompt = text
   }
   updateThreadSummary(
     database,
@@ -187,7 +200,13 @@ export function recordRuntimeMessagesInTransaction(
       .prepare('UPDATE agent_slots SET session_file = ? WHERE id = ?')
       .run(input.sessionFile, input.agentId)
   }
-  if (firstAssistantPreview) {
+  if (latestNewUserPrompt) {
+    maybeAutoTitleSession(database, {
+      agentId: input.agentId,
+      preview: latestNewUserPrompt,
+      tasks: [],
+    })
+  } else if (firstAssistantPreview) {
     maybeAutoTitleSession(database, {
       agentId: input.agentId,
       preview: firstAssistantPreview,
