@@ -392,7 +392,7 @@ describe('kiri MCP server', () => {
     ])
     expect(readFileSync(hookCapturePath, 'utf8').trim().split('\n')).toEqual([
       '1',
-      join(root, 'kiri.app', 'Contents', 'Resources', 'app.asar', 'dist', 'cli', 'kirictl.mjs'),
+      join(root, 'kiri.app', 'Contents', 'Resources', 'app.asar', 'dist', 'cli', 'kiri-hook.mjs'),
       'codex-hook',
       'session-start',
     ])

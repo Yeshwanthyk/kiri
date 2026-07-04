@@ -34,8 +34,8 @@ function codexKiriArgs(kiriMcpBin = '/tmp/bin/kiri-mcp') {
   ]
 }
 
-function codexHookArgs(kiriMcpBin = '/tmp/bin/kiri-mcp') {
-  const invocation = `KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '${kiriMcpBin}' 'codex-hook' 'session-start'`
+function codexHookArgs(kiriHookBin = '/tmp/bin/kiri-hook') {
+  const invocation = `KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '${kiriHookBin}' 'codex-hook' 'session-start'`
   const script = `f="$(mktemp -t kiri-codex-hook)"; cat > "$f"; (${invocation} --stdin-file "$f" >> /tmp/kiri-codex-hook.log 2>&1) & printf '{}'`
   const command = `/bin/sh -c '${script.replaceAll("'", "'\\''")}'`
   return [
@@ -69,6 +69,7 @@ function hookCommands(
 function stubCodexTerminalEnv() {
   vi.stubEnv('KIRI_CODEX_BIN', '/tmp/bin/codex')
   vi.stubEnv('KIRI_MCP_BIN', '/tmp/bin/kiri-mcp')
+  vi.stubEnv('KIRI_HOOK_BIN', '/tmp/bin/kiri-hook')
 }
 
 function writeCodexHelpScript(path: string, supportsHooks: boolean) {
@@ -137,6 +138,7 @@ describe('buildTerminalProcessLaunch', () => {
   it('writes one Claude hook settings file for lifecycle and TodoWrite projection', () => {
     vi.stubEnv('KIRI_CLAUDE_BIN', '/tmp/bin/claude')
     vi.stubEnv('KIRI_MCP_BIN', '/tmp/bin/kiri-mcp')
+    vi.stubEnv('KIRI_HOOK_BIN', '/tmp/bin/kiri-hook')
     const sessionDir = mkdtempSync(join(tmpdir(), 'kiri-claude-hooks-'))
 
     const launch = buildTerminalProcessLaunch({
@@ -152,36 +154,36 @@ describe('buildTerminalProcessLaunch', () => {
     expect(launch.args).toContain(settingsPath)
     expect(hookCommands(settings, 'SessionStart')).toEqual([
       agentPresenceShellCommand('claude', 'session_start'),
-      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'session-start'",
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-hook' 'claude-hook' 'session-start'",
     ])
     expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.async).toBe(true)
     expect(hookCommands(settings, 'UserPromptSubmit')).toEqual([
       agentPresenceShellCommand('claude', 'busy'),
-      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'user-prompt-submit'",
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-hook' 'claude-hook' 'user-prompt-submit'",
     ])
     expect(hookCommands(settings, 'Stop')).toEqual([
       agentPresenceShellCommand('claude', 'idle'),
-      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'stop'",
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-hook' 'claude-hook' 'stop'",
     ])
     expect(hookCommands(settings, 'SessionEnd')).toEqual([
       agentPresenceShellCommand('claude', 'session_end'),
-      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'session-end'",
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-hook' 'claude-hook' 'session-end'",
     ])
     expect(settings.hooks.PreToolUse?.[0]?.matcher).toBe('AskUserQuestion|ExitPlanMode')
     expect(settings.hooks.PreToolUse?.[1]?.matcher).toBe('AskUserQuestion|ExitPlanMode')
     expect(hookCommands(settings, 'PreToolUse')).toEqual([
       agentPresenceShellCommand('claude', 'awaiting_input'),
-      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'pre-tool-use'",
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-hook' 'claude-hook' 'pre-tool-use'",
     ])
     expect(hookCommands(settings, 'PermissionRequest')).toEqual([
       agentPresenceShellCommand('claude', 'awaiting_input'),
-      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'permission-request'",
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-hook' 'claude-hook' 'permission-request'",
     ])
     expect(settings.hooks.PostToolUse?.[0]?.matcher).toBeUndefined()
     expect(settings.hooks.PostToolUse?.[1]?.matcher).toBe('TodoWrite')
     expect(hookCommands(settings, 'PostToolUse')).toEqual([
       agentPresenceShellCommand('claude', 'busy'),
-      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-mcp' 'claude-hook' 'post-tool-use'",
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/tmp/bin/kiri-hook' 'claude-hook' 'post-tool-use'",
     ])
   })
 
@@ -314,6 +316,7 @@ describe('buildTerminalProcessLaunch', () => {
     writeCodexHelpScript(codexBin, false)
     vi.stubEnv('KIRI_CODEX_BIN', codexBin)
     vi.stubEnv('KIRI_MCP_BIN', '/tmp/bin/kiri-mcp')
+    vi.stubEnv('KIRI_HOOK_BIN', '/tmp/bin/kiri-hook')
 
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
     expect(buildTerminalProcessLaunch(launchConfig('codex'), 'runtime', shell).args)

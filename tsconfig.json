@@ -19,6 +19,7 @@
       }
     ],
     "paths": {
+      "@kiri/control/*": ["./packages/kiri-control/src/*"],
       "~/*": ["./src/*"]
     },
     "noEmit": true

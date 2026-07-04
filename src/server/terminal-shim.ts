@@ -16,6 +16,8 @@ export type KirictlInvocation = {
   readonly args: readonly string[]
 }
 
+export type KiriHookInvocation = KirictlInvocation
+
 export type KiriMcpServerConfig = {
   readonly type: 'stdio'
   readonly command: string
@@ -39,6 +41,7 @@ export function terminalShimStateDir(homeDir: string) {
 export function installTerminalShims(input: {
   readonly homeDir: string
   readonly baseInvocation: KirictlInvocation
+  readonly hookInvocation?: KiriHookInvocation
   readonly mcpConfig: KiriMcpServerConfig
   readonly exists?: (path: string) => boolean
   readonly readFile?: (path: string) => string
@@ -62,6 +65,7 @@ export function installTerminalShims(input: {
       binDir,
       stateDir: terminalShimStateDir(input.homeDir),
       baseInvocation: input.baseInvocation,
+      hookInvocation: input.hookInvocation ?? input.baseInvocation,
       mcpConfig: input.mcpConfig,
     })
     const didChange = !exists(path) || readFile(path) !== contents
@@ -88,6 +92,8 @@ export function buildTerminalShimArgsScript(input: {
   const env = input.env ?? process.env
   const baseInvocation = invocationFromEnv(env.KIRI_SHIM_BASE_INVOCATION)
     ?? { command: 'kirictl', args: [] }
+  const hookInvocation = invocationFromEnv(env.KIRI_SHIM_HOOK_INVOCATION)
+    ?? baseInvocation
   const mcpConfig = mcpConfigFromEnv(env.KIRI_SHIM_MCP_CONFIG)
     ?? { type: 'stdio' as const, command: baseInvocation.command, args: [...baseInvocation.args, 'mcp'] }
   const agentId = env.KIRI_AGENT_ID?.trim() || 'shell'
@@ -96,8 +102,8 @@ export function buildTerminalShimArgsScript(input: {
     return shellSetArgv([
       ...codexKiriConfigArgs(agentId, mcpConfig),
       ...codexSessionStartHookArgs({
-        command: baseInvocation.command,
-        args: [...baseInvocation.args, 'codex-hook', 'session-start'],
+        command: hookInvocation.command,
+        args: [...hookInvocation.args, 'codex-hook', 'session-start'],
       }),
     ])
   }
@@ -107,8 +113,8 @@ export function buildTerminalShimArgsScript(input: {
   const settingsPath = join(stateDir, 'claude-hooks-settings.json')
   mkdirSync(stateDir, { recursive: true })
   writeFileIfChanged(settingsPath, `${globalThis.JSON.stringify(claudeHookSettings((event) => ({
-    command: baseInvocation.command,
-    args: [...baseInvocation.args, 'claude-hook', event],
+    command: hookInvocation.command,
+    args: [...hookInvocation.args, 'claude-hook', event],
   })), null, 2)}\n`)
   return shellSetArgv(['--settings', settingsPath])
 }
@@ -168,6 +174,7 @@ function terminalShimScript(input: {
   readonly binDir: string
   readonly stateDir: string
   readonly baseInvocation: KirictlInvocation
+  readonly hookInvocation: KiriHookInvocation
   readonly mcpConfig: KiriMcpServerConfig
 }) {
   const command = `${kirictlCommand({
@@ -216,8 +223,9 @@ unset TERMINFO
 KIRI_SHIM_ACTIVE=1
 KIRI_SHIM_STATE_DIR=${shellQuote(input.stateDir)}
 KIRI_SHIM_BASE_INVOCATION=${shellQuote(globalThis.JSON.stringify(input.baseInvocation))}
+KIRI_SHIM_HOOK_INVOCATION=${shellQuote(globalThis.JSON.stringify(input.hookInvocation))}
 KIRI_SHIM_MCP_CONFIG=${shellQuote(globalThis.JSON.stringify(input.mcpConfig))}
-export KIRI_SHIM_ACTIVE KIRI_SHIM_STATE_DIR KIRI_SHIM_BASE_INVOCATION KIRI_SHIM_MCP_CONFIG
+export KIRI_SHIM_ACTIVE KIRI_SHIM_STATE_DIR KIRI_SHIM_BASE_INVOCATION KIRI_SHIM_HOOK_INVOCATION KIRI_SHIM_MCP_CONFIG
 
 if shim_args=$(${command} 2>/dev/null); then
   if [ -n "$shim_args" ]; then
@@ -225,7 +233,7 @@ if shim_args=$(${command} 2>/dev/null); then
   fi
 fi
 
-unset KIRI_SHIM_BASE_INVOCATION KIRI_SHIM_MCP_CONFIG KIRI_SHIM_STATE_DIR
+unset KIRI_SHIM_BASE_INVOCATION KIRI_SHIM_HOOK_INVOCATION KIRI_SHIM_MCP_CONFIG KIRI_SHIM_STATE_DIR
 exec "$real" "$@"
 `
 }

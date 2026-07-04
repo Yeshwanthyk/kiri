@@ -1,5 +1,6 @@
 import { Effect } from 'effect'
 import { z } from 'zod'
+import { controlProtocolVersion } from '@kiri/control/control-protocol'
 import {
   addProjectInputSchema,
   addScratchpadBlockInputSchema,
@@ -46,6 +47,7 @@ import {
   type KiriOperationResponse,
 } from '~/lib/contracts'
 import type { KiriControlApi } from './kiri-control'
+import { kiriVersion } from '~/lib/version'
 
 const emptyParamsSchema = z.object({})
 
@@ -320,6 +322,10 @@ async function dispatchReadOperation(
         read: kiriReadOperations,
         write: kiriWriteOperations,
         schemas: kiriOperationJsonSchemas,
+        protocol: {
+          version: controlProtocolVersion,
+          appVersion: kiriVersion,
+        },
         recipes: operationRecipes,
       }, options)
     case 'context.show':

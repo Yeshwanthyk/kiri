@@ -26,4 +26,16 @@ export default tseslint.config(
       '@typescript-eslint/no-unnecessary-type-assertion': 'error',
     },
   },
+  {
+    files: ['packages/kiri-control/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [
+          '~/*',
+          '../../src/*',
+          '../../../src/*',
+        ],
+      }],
+    },
+  },
 )

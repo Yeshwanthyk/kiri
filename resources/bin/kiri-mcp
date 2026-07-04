@@ -6,6 +6,7 @@ RESOURCES_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 APP_DIR=$(CDPATH= cd -- "$RESOURCES_DIR/.." && pwd)
 ELECTRON="$APP_DIR/MacOS/kiri"
 CLI="$RESOURCES_DIR/app.asar/dist/cli/kirictl.mjs"
+HOOK_CLI="$RESOURCES_DIR/app.asar/dist/cli/kiri-hook.mjs"
 
 if [ ! -x "$ELECTRON" ]; then
   echo "kiri executable not found: $ELECTRON" >&2
@@ -15,5 +16,11 @@ fi
 if [ "$#" -eq 0 ]; then
   set -- mcp
 fi
+
+case "${1:-}" in
+  claude-hook|codex-hook)
+    CLI="$HOOK_CLI"
+    ;;
+esac
 
 ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$CLI" "$@"

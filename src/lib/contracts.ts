@@ -1,5 +1,9 @@
 import { z } from 'zod'
 import {
+  kiriReadOperations,
+  kiriWriteOperations,
+} from '@kiri/control/operation-names'
+import {
   agentByProjectSchema,
   chatTypographySchema,
   keymapSettingsSchema,
@@ -656,63 +660,10 @@ export const taskListItemSchema = z.object({
 })
 export type TaskListItem = z.infer<typeof taskListItemSchema>
 
-export const kiriReadOperations = [
-  'operations.list',
-  'context.show',
-  'model.list',
-  'project.list',
-  'session.list',
-  'agent.detail',
-  'agent.events.list',
-  'task.list',
-  'knowledge.list',
-  'knowledge.search',
-  'scratchpad.list',
-  'terminal.read',
-  'terminal.list',
-  'terminal.wait-for',
-  'workflow.list',
-  'workflow.show',
-  'workflow.validate',
-] as const
+export { kiriReadOperations, kiriWriteOperations }
 export const kiriReadOperationSchema = z.enum(kiriReadOperations)
 export type KiriReadOperation = z.infer<typeof kiriReadOperationSchema>
 
-export const kiriWriteOperations = [
-  'project.add',
-  'project.hide',
-  'project.unhide',
-  'project.delete',
-  'session.create',
-  'session.spawn',
-  'session.rename',
-  'session.archive',
-  'session.restore',
-  'session.delete',
-  'agent.prompt',
-  'agent.interrupt',
-  'agent.status.set',
-  'agent.tasks.replace',
-  'terminal.input',
-  'terminal.keys',
-  'terminal.spawn',
-  'terminal.kill',
-  'knowledge.add',
-  'knowledge.update',
-  'knowledge.delete',
-  'knowledge.markSeen',
-  'scratchpad.add',
-  'scratchpad.delete',
-  'scratchpad.trigger',
-  'workflow.create',
-  'workflow.dispatch',
-  'workflow.await',
-  'workflow.retrigger',
-  'workflow.track',
-  'workflow.untrack',
-  'workflow.archive',
-  'workflow.restore',
-] as const
 export const kiriWriteOperationSchema = z.enum(kiriWriteOperations)
 export type KiriWriteOperation = z.infer<typeof kiriWriteOperationSchema>
 
@@ -745,16 +696,26 @@ export const kiriOperationErrorSchema = z.object({
 })
 export type KiriOperationError = z.infer<typeof kiriOperationErrorSchema>
 
+export const controlProtocolWarningSchema = z.object({
+  code: z.literal('CONTROL_PROTOCOL_VERSION_MISMATCH'),
+  message: z.string(),
+  expectedVersion: z.number().int().positive(),
+  receivedVersion: z.number().int().positive().nullable(),
+})
+export type ControlProtocolWarning = z.infer<typeof controlProtocolWarningSchema>
+
 export const kiriOperationResponseSchema = z.discriminatedUnion('ok', [
   z.object({
     ok: z.literal(true),
     operation: kiriOperationSchema,
     result: z.unknown(),
+    warning: controlProtocolWarningSchema.optional(),
   }),
   z.object({
     ok: z.literal(false),
     operation: kiriOperationSchema,
     error: kiriOperationErrorSchema,
+    warning: controlProtocolWarningSchema.optional(),
   }),
 ])
 export type KiriOperationResponse = z.infer<typeof kiriOperationResponseSchema>

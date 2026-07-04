@@ -43,6 +43,7 @@ describe('desktop backend script', () => {
     await expect(environment.json()).resolves.toMatchObject({
       name: 'kiri',
       mode: 'desktop',
+      controlProtocolVersion: 1,
     })
     expect(existsSync(fixture.importMarker)).toBe(false)
 
@@ -59,12 +60,15 @@ describe('desktop backend script', () => {
 
     const controlInfo = JSON.parse(readFileSync(join(fixture.stateDir, 'backend-control.json'), 'utf8')) as {
       readonly token: string
+      readonly controlProtocolVersion: number
     }
+    expect(controlInfo.controlProtocolVersion).toBe(1)
     const control = await fetch(new URL('/.well-known/kiri/control', ready.url), {
       method: 'POST',
       headers: {
         authorization: `Bearer ${controlInfo.token}`,
         'content-type': 'application/json',
+        'x-kiri-control-version': '1',
       },
       body: JSON.stringify({ operation: 'operations.list' }),
     })
@@ -73,6 +77,27 @@ describe('desktop backend script', () => {
       ok: true,
       operation: 'operations.list',
       result: { source: 'fake-control' },
+    })
+    expect(existsSync(fixture.importMarker)).toBe(false)
+
+    const mismatchedControl = await fetch(new URL('/.well-known/kiri/control', ready.url), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${controlInfo.token}`,
+        'content-type': 'application/json',
+        'x-kiri-control-version': '2',
+      },
+      body: JSON.stringify({ operation: 'operations.list' }),
+    })
+    expect(mismatchedControl.status).toBe(200)
+    await expect(mismatchedControl.json()).resolves.toMatchObject({
+      ok: true,
+      operation: 'operations.list',
+      warning: {
+        code: 'CONTROL_PROTOCOL_VERSION_MISMATCH',
+        expectedVersion: 1,
+        receivedVersion: 2,
+      },
     })
     expect(existsSync(fixture.importMarker)).toBe(false)
 

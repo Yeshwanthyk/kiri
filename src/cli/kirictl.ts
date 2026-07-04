@@ -1,21 +1,21 @@
 #!/usr/bin/env tsx
 
-import { existsSync, readFileSync, rmSync, unlinkSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { readFileSync, rmSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Args, Command, Options } from '@effect/cli'
 import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { Console, Effect, Layer, Option } from 'effect'
+import {
+  backendControlTimeoutMs,
+  backendControlTimeoutMsForTests,
+  tryRunBackendOperation,
+} from '@kiri/control/backend-control-client'
 import { KiriControl, type KiriControlApi } from '~/server/kiri-control'
 import { runKiriMcpServer } from '~/server/kiri-mcp'
 import { runKiriOperation } from '~/server/kiri-router'
 import { knownTerminalKeys } from '~/lib/terminal-keys'
 import {
-  kiriOperationSchema,
-  kiriOperationResponseSchema,
-  kiriWriteOperations,
-  type KiriOperation,
   type KiriOperationResponse,
 } from '~/lib/contracts'
 import { kiriVersion } from '~/lib/version'
@@ -267,6 +267,8 @@ export async function runKiriOperationWithBackendFallback(
   return runKiriOperation(control, request)
 }
 
+export { backendControlTimeoutMsForTests }
+
 if (isMainModule()) {
   const cli = Command.run(kirictlCommand, {
     name: 'kirictl',
@@ -321,7 +323,7 @@ async function runClaudeHook(event: ClaudeHookEvent, control: KiriControlApi, st
   }
 }
 
-function hookWatchdogTimeoutMs() {
+export function hookWatchdogTimeoutMs() {
   return backendControlTimeoutMs({ operation: 'agent.status.set' }) + 2_000
 }
 
@@ -341,222 +343,6 @@ function parseRequest(input: string) {
       },
     }
   }
-}
-
-type BackendOperationResult =
-  | { readonly kind: 'none' }
-  | { readonly kind: 'handled'; readonly response: KiriOperationResponse }
-
-async function tryRunBackendOperation(request: unknown): Promise<BackendOperationResult> {
-  const info = readBackendControlInfo()
-  if (!info) return { kind: 'none' as const }
-  if (info.pid !== null && !isProcessAlive(info.pid)) {
-    removeStaleBackendControlFile(info.path)
-    return { kind: 'none' as const }
-  }
-  const timeoutMs = backendControlTimeoutMs(request)
-  try {
-    const response = await fetch(new URL('/.well-known/kiri/control', info.url), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${info.token}`,
-      },
-      body: JSON.stringify(request),
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-    if (response.ok) {
-      const parsed = await parseBackendResponseBody(response)
-      if (!parsed) {
-        return {
-          kind: 'handled' as const,
-          response: backendInvalidResponse(request),
-        }
-      }
-      return {
-        kind: 'handled' as const,
-        response: parsed,
-      }
-    }
-    return {
-      kind: 'handled' as const,
-      response: await backendErrorResponse(response, request),
-    }
-  } catch (error) {
-    if (isTimeoutAbort(error)) {
-      return {
-        kind: 'handled' as const,
-        response: {
-          ok: false,
-          operation: operationName(request),
-          error: {
-            code: 'BACKEND_CONTROL_TIMEOUT',
-            message: `Kiri backend did not respond within ${timeoutMs}ms; the operation may still be running (set KIRI_BACKEND_CONTROL_TIMEOUT_MS to wait longer)`,
-          },
-        },
-      }
-    }
-    if (isLocalWriteRefused(request, info)) {
-      return {
-        kind: 'handled' as const,
-        response: {
-          ok: false,
-          operation: operationName(request),
-          error: {
-            code: 'BACKEND_ALIVE_LOCAL_WRITE_REFUSED',
-            message: backendAliveLocalWriteRefusedMessage(info),
-          },
-        },
-      }
-    }
-    return {
-      kind: 'none' as const,
-    }
-  }
-}
-
-function isTimeoutAbort(error: unknown) {
-  if (!error || typeof error !== 'object') return false
-  return 'name' in error && error.name === 'TimeoutError'
-}
-
-export function backendControlTimeoutMsForTests(request: unknown) {
-  return backendControlTimeoutMs(request)
-}
-
-function backendControlTimeoutMs(request: unknown) {
-  const value = Number.parseInt(process.env.KIRI_BACKEND_CONTROL_TIMEOUT_MS ?? '', 10)
-  if (Number.isFinite(value) && value > 0) return value
-  const waitTimeoutMs = operationWaitTimeoutMs(request)
-  return waitTimeoutMs === null ? 15_000 : waitTimeoutMs + 5_000
-}
-
-function operationWaitTimeoutMs(request: unknown) {
-  if (!request || typeof request !== 'object') return null
-  const operation = 'operation' in request && typeof request.operation === 'string'
-    ? request.operation
-    : null
-  if (operation !== 'terminal.wait-for' && operation !== 'workflow.await') return null
-  const params = 'params' in request && request.params && typeof request.params === 'object'
-    ? request.params
-    : null
-  if (!params || !('timeoutMs' in params)) return null
-  const timeoutMs = params.timeoutMs
-  return typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? timeoutMs
-    : null
-}
-
-async function backendErrorResponse(response: Response, request: unknown): Promise<KiriOperationResponse> {
-  const parsed = await parseBackendErrorBody(response)
-  if (parsed) return parsed
-  return {
-    ok: false,
-    operation: operationName(request),
-    error: {
-      code: response.status === 401 || response.status === 403
-        ? 'BACKEND_CONTROL_UNAUTHORIZED'
-        : 'BACKEND_CONTROL_FAILED',
-      message: `Kiri backend control endpoint rejected the operation: ${response.status} ${response.statusText}`.trim(),
-    },
-  }
-}
-
-async function parseBackendErrorBody(response: Response) {
-  try {
-    const value: unknown = await response.json()
-    const parsed = kiriOperationResponseSchema.safeParse(value)
-    return parsed.success ? parsed.data : null
-  } catch {
-    // Fall through to a normalized control error.
-  }
-  return null
-}
-
-async function parseBackendResponseBody(response: Response) {
-  try {
-    const value: unknown = await response.json()
-    const parsed = kiriOperationResponseSchema.safeParse(value)
-    return parsed.success ? parsed.data : null
-  } catch {
-    return null
-  }
-}
-
-function backendInvalidResponse(request: unknown): KiriOperationResponse {
-  return {
-    ok: false,
-    operation: operationName(request),
-    error: {
-      code: 'BACKEND_CONTROL_FAILED',
-      message: 'Kiri backend control endpoint returned an invalid operation response',
-    },
-  }
-}
-
-function operationName(request: unknown): KiriOperation {
-  if (request && typeof request === 'object' && 'operation' in request && typeof request.operation === 'string') {
-    const parsed = kiriOperationSchema.safeParse(request.operation)
-    if (parsed.success) return parsed.data
-  }
-  return 'operations.list'
-}
-
-function readBackendControlInfo() {
-  if (process.env.KIRI_DISABLE_BACKEND_PROXY === '1') return null
-  const path = backendControlPath()
-  if (!path || !existsSync(path)) return null
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
-    if (!parsed || typeof parsed !== 'object') return null
-    const url = 'url' in parsed && typeof parsed.url === 'string' ? parsed.url : null
-    const token = 'token' in parsed && typeof parsed.token === 'string' ? parsed.token : null
-    const pid = 'pid' in parsed && typeof parsed.pid === 'number' && Number.isInteger(parsed.pid) && parsed.pid > 0
-      ? parsed.pid
-      : null
-    if (!url || !token) return null
-    return { path, url, token, pid }
-  } catch {
-    return null
-  }
-}
-
-function isProcessAlive(pid: number) {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return !(error && typeof error === 'object' && 'code' in error && error.code === 'ESRCH')
-  }
-}
-
-function removeStaleBackendControlFile(path: string) {
-  try {
-    unlinkSync(path)
-  } catch {
-    // Best effort: stale control files should not block local fallback.
-  }
-}
-
-function isLocalWriteRefused(request: unknown, info: { readonly pid: number | null }) {
-  if (!(kiriWriteOperations as readonly string[]).includes(operationName(request))) return false
-  return info.pid === null || isProcessAlive(info.pid)
-}
-
-function backendAliveLocalWriteRefusedMessage(info: { readonly pid: number | null }) {
-  if (info.pid !== null) {
-    return `Kiri backend pid ${info.pid} is alive, but its control endpoint was unavailable; refusing local write execution`
-  }
-  return 'Kiri backend control file has no pid and its endpoint was unavailable; refusing local write execution'
-}
-
-function backendControlPath() {
-  const explicit = process.env.KIRI_BACKEND_CONTROL_PATH?.trim()
-  if (explicit) return resolve(explicit)
-  const stateDir = process.env.KIRI_STATE_DIR?.trim()
-    ? resolve(process.env.KIRI_STATE_DIR)
-    : resolve(process.env.KIRI_HOME?.trim() || join(homedir(), '.kiri'), 'userdata')
-  return join(stateDir, 'backend-control.json')
 }
 
 function isMainModule() {

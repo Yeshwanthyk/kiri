@@ -1,6 +1,7 @@
 import { delimiter } from 'node:path'
 import {
   installTerminalShims,
+  type KiriHookInvocation,
   type KiriMcpServerConfig,
   type KirictlInvocation,
 } from './terminal-shim'
@@ -26,6 +27,7 @@ export function withTerminalShimPath(
   input: {
     readonly homeDir: string
     readonly baseInvocation: KirictlInvocation
+    readonly hookInvocation?: KiriHookInvocation
     readonly mcpConfig: KiriMcpServerConfig
   },
 ) {

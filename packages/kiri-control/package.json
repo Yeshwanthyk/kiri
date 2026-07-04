@@ -1,0 +1,11 @@
+{
+  "name": "@kiri/control",
+  "version": "0.1.14",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./backend-control-client": "./src/backend-control-client.ts",
+    "./control-protocol": "./src/control-protocol.ts",
+    "./operation-names": "./src/operation-names.ts"
+  }
+}

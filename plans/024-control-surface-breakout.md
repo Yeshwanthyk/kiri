@@ -22,7 +22,10 @@
   must support). Do **not** externalize before step 3.
 - **Category**: architecture / packaging
 - **Planned at**: commit `e464651`, 2026-07-04
-- **Status**: TODO
+- **Status**: DONE — hook micro-entrypoint split, in-repo control package
+  boundary, protocol version warning path, focused gates, `pnpm build`, and
+  `pnpm build:cli` pass. Full lint remains blocked only by the unrelated
+  pre-existing `tests/server/kiriterm-daemon.test.ts:389` unsafe JSON parse.
 
 ## Why this matters
 

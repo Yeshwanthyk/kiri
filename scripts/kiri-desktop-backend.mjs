@@ -34,6 +34,8 @@ const terminalProxyPath = process.env.KIRI_TERMINAL_PROXY_PATH ?? '/terminal'
 const terminalProxyPortParam = 'kiri_terminal_port'
 const controlToken = process.env.KIRI_BACKEND_CONTROL_TOKEN ?? randomBytes(32).toString('base64url')
 const controlInfoPath = resolve(process.env.KIRI_BACKEND_CONTROL_PATH ?? join(stateDir, 'backend-control.json'))
+const controlProtocolVersion = 1
+const controlProtocolVersionHeader = 'x-kiri-control-version'
 const tailscalePath = resolve(process.env.KIRI_TAILSCALE_PATH ?? '/Applications/Tailscale.app/Contents/MacOS/Tailscale')
 const ownerToken = process.env.KIRI_BACKEND_OWNER_TOKEN ?? randomBytes(32).toString('base64url')
 const ownerTokenParam = 'kiri_owner_token'
@@ -216,6 +218,7 @@ function environmentInfo(publicInfo = false) {
       name: 'kiri',
       mode: 'desktop',
       ready: true,
+      controlProtocolVersion,
     }
   }
   return {
@@ -224,6 +227,7 @@ function environmentInfo(publicInfo = false) {
     rootDir,
     stateDir,
     dbPath,
+    controlProtocolVersion,
   }
 }
 
@@ -698,7 +702,8 @@ async function handleControlRequest(request) {
     const operation = await import(pathToFileURL(join(rootDir, 'dist', 'cli', 'kirictl.mjs')).href)
     const run = operation.runKiriOperationRequest
     if (typeof run !== 'function') throw new Error('kirictl control export missing')
-    return Response.json(await run(await request.json()), {
+    const result = await run(await request.json())
+    return Response.json(withProtocolWarning(result, request.headers.get(controlProtocolVersionHeader)), {
       headers: { 'cache-control': 'no-store' },
     })
   } catch (error) {
@@ -722,9 +727,33 @@ function writeControlInfo(url) {
     url,
     token: controlToken,
     pid: process.pid,
+    controlProtocolVersion,
     createdAt: new Date().toISOString(),
   })}\n`, { mode: 0o600 })
   chmodSync(controlInfoPath, 0o600)
+}
+
+function withProtocolWarning(response, receivedHeader) {
+  if (!response || typeof response !== 'object') return response
+  const receivedVersion = parseControlProtocolVersion(receivedHeader)
+  if (receivedVersion === controlProtocolVersion) return response
+  return {
+    ...response,
+    warning: {
+      code: 'CONTROL_PROTOCOL_VERSION_MISMATCH',
+      message: receivedVersion === null
+        ? `Kiri control client did not send protocol version ${controlProtocolVersion}`
+        : `Kiri control client sent protocol version ${receivedVersion}; backend expects ${controlProtocolVersion}`,
+      expectedVersion: controlProtocolVersion,
+      receivedVersion,
+    },
+  }
+}
+
+function parseControlProtocolVersion(value) {
+  if (typeof value !== 'string') return null
+  const parsed = Number.parseInt(value, 10)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
 }
 
 function cleanupControlInfo() {

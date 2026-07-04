@@ -1,5 +1,6 @@
 import { serve } from 'srvx/node'
 import type { ServerRequest } from 'srvx'
+import { controlProtocolVersion } from '@kiri/control/control-protocol'
 import type { KiriConfig } from './kiri-config'
 import { getKiriConfig } from './kiri-config'
 import { checkBackendReadiness } from './backend-readiness'
@@ -12,6 +13,7 @@ export type KiriBackendInfo = {
   readonly rootDir: string
   readonly stateDir: string
   readonly dbPath: string
+  readonly controlProtocolVersion: number
 }
 
 export type FetchHandler = (request: ServerRequest) => Response | Promise<Response>
@@ -88,5 +90,6 @@ export function environmentInfo(config: KiriConfig): KiriBackendInfo {
     rootDir: config.rootDir,
     stateDir: config.stateDir,
     dbPath: config.dbPath,
+    controlProtocolVersion,
   }
 }

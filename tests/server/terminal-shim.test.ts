@@ -20,6 +20,10 @@ describe('terminal PATH shims', () => {
         command: '/repo/node',
         args: ['/repo/dist/cli/kirictl.mjs'],
       },
+      hookInvocation: {
+        command: '/repo/node',
+        args: ['/repo/dist/cli/kiri-hook.mjs'],
+      },
       mcpConfig: {
         type: 'stdio' as const,
         command: '/repo/node',
@@ -53,10 +57,12 @@ describe('terminal PATH shims', () => {
     installTerminalShims({
       ...common,
       baseInvocation: { command: '/repo/kiri-mcp', args: [] },
+      hookInvocation: { command: '/repo/kiri-hook', args: [] },
     })
     const changed = installTerminalShims({
       ...common,
       baseInvocation: { command: '/repo/other-kiri-mcp', args: [] },
+      hookInvocation: { command: '/repo/kiri-hook', args: [] },
     }).changed
 
     expect(changed).toEqual({ codex: true, claude: true })
@@ -68,6 +74,10 @@ describe('terminal PATH shims', () => {
       env: {
         KIRI_SHIM_BASE_INVOCATION: JSON.stringify({
           command: '/repo/kiri-mcp',
+          args: [],
+        }),
+        KIRI_SHIM_HOOK_INVOCATION: JSON.stringify({
+          command: '/repo/kiri-hook',
           args: [],
         }),
         KIRI_SHIM_MCP_CONFIG: JSON.stringify({
@@ -97,6 +107,10 @@ describe('terminal PATH shims', () => {
           command: '/repo/kiri-mcp',
           args: [],
         }),
+        KIRI_SHIM_HOOK_INVOCATION: JSON.stringify({
+          command: '/repo/kiri-hook',
+          args: [],
+        }),
       },
     })
     const settings = JSON.parse(readFileSync(join(stateDir, 'claude-hooks-settings.json'), 'utf8')) as {
@@ -106,19 +120,19 @@ describe('terminal PATH shims', () => {
     expect(script).toBe(`set -- '--settings' '${join(stateDir, 'claude-hooks-settings.json')}' "$@"`)
     expect(hookCommands(settings, 'SessionStart')).toEqual([
       agentPresenceShellCommand('claude', 'session_start'),
-      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/repo/kiri-mcp' 'claude-hook' 'session-start'",
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/repo/kiri-hook' 'claude-hook' 'session-start'",
     ])
     expect(settings.hooks.PreToolUse?.[0]?.matcher).toBe('AskUserQuestion|ExitPlanMode')
     expect(hookCommands(settings, 'Stop')).toEqual([
       agentPresenceShellCommand('claude', 'idle'),
-      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/repo/kiri-mcp' 'claude-hook' 'stop'",
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/repo/kiri-hook' 'claude-hook' 'stop'",
     ])
     expect(settings.hooks.PostToolUse?.[0]?.matcher).toBeUndefined()
     expect(settings.hooks.PostToolUse?.[1]?.matcher).toBe('TodoWrite')
     expect(settings.hooks.PostToolUse?.[0]?.hooks[0]?.async).toBe(true)
     expect(hookCommands(settings, 'PostToolUse')).toEqual([
       agentPresenceShellCommand('claude', 'busy'),
-      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/repo/kiri-mcp' 'claude-hook' 'post-tool-use'",
+      "KIRI_BACKEND_CONTROL_TIMEOUT_MS=3000 '/repo/kiri-hook' 'claude-hook' 'post-tool-use'",
     ])
   })
 })

@@ -17,6 +17,7 @@ import {
   claudeHookSettings,
   codexKiriConfigArgs,
   codexSessionStartHookArgs,
+  type KiriHookInvocation,
   type KiriMcpServerConfig,
   type KirictlInvocation,
 } from './terminal-shim'
@@ -236,13 +237,13 @@ function claudeLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunch
 function writeClaudeHookSettings(config: TerminalAgentLaunchConfig, context: TerminalLaunchContext) {
   return Effect.gen(function* () {
   const hookInvocations = {
-    'session-start': yield* resolveKirictlInvocation(context, ['claude-hook', 'session-start']),
-    'user-prompt-submit': yield* resolveKirictlInvocation(context, ['claude-hook', 'user-prompt-submit']),
-    stop: yield* resolveKirictlInvocation(context, ['claude-hook', 'stop']),
-    'session-end': yield* resolveKirictlInvocation(context, ['claude-hook', 'session-end']),
-    'pre-tool-use': yield* resolveKirictlInvocation(context, ['claude-hook', 'pre-tool-use']),
-    'permission-request': yield* resolveKirictlInvocation(context, ['claude-hook', 'permission-request']),
-    'post-tool-use': yield* resolveKirictlInvocation(context, ['claude-hook', 'post-tool-use']),
+    'session-start': yield* resolveKiriHookInvocation(context, ['claude-hook', 'session-start']),
+    'user-prompt-submit': yield* resolveKiriHookInvocation(context, ['claude-hook', 'user-prompt-submit']),
+    stop: yield* resolveKiriHookInvocation(context, ['claude-hook', 'stop']),
+    'session-end': yield* resolveKiriHookInvocation(context, ['claude-hook', 'session-end']),
+    'pre-tool-use': yield* resolveKiriHookInvocation(context, ['claude-hook', 'pre-tool-use']),
+    'permission-request': yield* resolveKiriHookInvocation(context, ['claude-hook', 'permission-request']),
+    'post-tool-use': yield* resolveKiriHookInvocation(context, ['claude-hook', 'post-tool-use']),
   }
   const settings = claudeHookSettings((event) => hookInvocations[event])
   const settingsPath = join(config.sessionDir, 'claude-hooks-settings.json')
@@ -353,7 +354,7 @@ function codexLaunch(config: TerminalAgentLaunchConfig, context: TerminalLaunchC
     : []
   args.push(...codexKiriConfigArgs(config.id, yield* buildKiriMcpServerConfig(context)))
   if (codexHooksSupported(command, context)) {
-    args.push(...codexSessionStartHookArgs(yield* resolveKirictlInvocation(context, ['codex-hook', 'session-start'])))
+    args.push(...codexSessionStartHookArgs(yield* resolveKiriHookInvocation(context, ['codex-hook', 'session-start'])))
   }
   args.push('--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen')
   if (config.model) args.push('--model', config.model)
@@ -473,8 +474,36 @@ function shellTerminalEnv(cwd: string, context: TerminalLaunchContext) {
   return withTerminalShimPath(env, {
     homeDir: context.homeDir,
     baseInvocation: yield* resolveKirictlInvocation(context, []),
+    hookInvocation: yield* resolveKiriHookInvocation(context, []),
     mcpConfig: yield* buildKiriMcpServerConfig(context),
   })
+  })
+}
+
+function resolveKiriHookInvocation(
+  context: TerminalLaunchContext,
+  args: readonly string[],
+): Effect.Effect<KiriHookInvocation, RuntimeBinaryError> {
+  return Effect.gen(function* () {
+  const override = context.env.KIRI_HOOK_BIN?.trim()
+  if (override) {
+    return { command: override, args: [...args] }
+  }
+
+  const packagedBin = context.resourcesPath ? join(context.resourcesPath, 'bin', 'kiri-mcp') : undefined
+  if (packagedBin && context.exists(packagedBin)) {
+    return { command: packagedBin, args: [...args] }
+  }
+
+  const builtHook = resolve(context.processCwd, 'dist/cli/kiri-hook.mjs')
+  if (!preferSourceKirictl(context) && context.exists(builtHook)) {
+    return { command: context.execPath, args: [builtHook, ...args] }
+  }
+
+  return {
+    command: yield* resolveExecutable(context, 'pnpm'),
+    args: ['--dir', context.processCwd, 'exec', 'tsx', resolve(context.processCwd, 'src/cli/kiri-hook.ts'), ...args],
+  }
   })
 }
 

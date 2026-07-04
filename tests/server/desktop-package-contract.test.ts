@@ -93,6 +93,7 @@ describe('desktop package contract', () => {
       expect(hasAsarPath(header, ['dist', 'client'])).toBe(true)
       expect(hasAsarPath(header, ['dist', 'server'])).toBe(true)
       expect(hasAsarPath(header, ['dist', 'cli', 'kirictl.mjs'])).toBe(true)
+      expect(hasAsarPath(header, ['dist', 'cli', 'kiri-hook.mjs'])).toBe(true)
       expect(hasAsarPath(header, ['src', 'desktop', 'main.mjs'])).toBe(true)
       expect(hasAsarPath(header, ['settings.json'])).toBe(true)
       expect(hasAsarPath(header, ['package.json'])).toBe(true)
@@ -104,6 +105,11 @@ describe('desktop package contract', () => {
 
 function isExecutable(path: string) {
   return existsSync(path) && (statSync(path).mode & 0o111) !== 0
+}
+
+function objectProperty(value: unknown, key: string) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return (value as Record<string, unknown>)[key]
 }
 
 async function expectKiriTermdRuns(binary: string) {
@@ -123,12 +129,13 @@ async function expectKiriTermdRuns(binary: string) {
       signal: AbortSignal.timeout(5_000),
     })
     expect(health.ok, `${binary} health status`).toBe(true)
-    await expect(health.json()).resolves.toMatchObject({
+    const healthBody: unknown = await health.json()
+    expect(healthBody).toMatchObject({
       ok: true,
-      pid: expect.any(Number),
       version,
       sessions: 0,
     })
+    expect(objectProperty(healthBody, 'pid')).toEqual(expect.any(Number))
     await expectPackagedShellEcho(record)
     await fetch(`http://${record.host}:${record.port}/api/shutdown`, {
       method: 'POST',

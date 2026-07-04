@@ -126,7 +126,11 @@ describe('kirictl call', () => {
     const root = mkdtempSync(join(tmpdir(), 'kirictl-proxy-'))
     tempRoots.push(root)
     const token = 'test-token'
-    const requests: Array<{ authorization: string | undefined; body: unknown }> = []
+    const requests: Array<{
+      authorization: string | undefined
+      controlVersion: string | undefined
+      body: unknown
+    }> = []
     const server = createServer((request, response) => {
       let body = ''
       request.on('data', (chunk: Buffer) => {
@@ -136,6 +140,7 @@ describe('kirictl call', () => {
         const parsedBody: unknown = JSON.parse(body)
         requests.push({
           authorization: request.headers.authorization,
+          controlVersion: request.headers['x-kiri-control-version'] as string | undefined,
           body: parsedBody,
         })
         response.writeHead(200, { 'content-type': 'application/json' })
@@ -206,6 +211,7 @@ describe('kirictl call', () => {
       })
       expect(requests).toEqual([{
         authorization: `Bearer ${token}`,
+        controlVersion: '1',
         body: {
           operation: 'workflow.dispatch',
           params: { id: 'workflow-proxy' },
